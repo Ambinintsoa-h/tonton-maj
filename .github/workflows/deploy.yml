@@ -1,0 +1,54 @@
+name: Deploy to n0c
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build React app
+        run: npm run build
+        env:
+          GENERATE_SOURCEMAP: false
+          CI: false
+
+      - name: Upload files to n0c
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.N0C_HOST }}
+          username: ${{ secrets.N0C_USERNAME }}
+          key: ${{ secrets.N0C_DEPLOY_KEY }}
+          port: ${{ secrets.N0C_PORT }}
+          source: "proxy.js,package.json,package-lock.json,build/"
+          target: "/home/${{ secrets.N0C_USERNAME }}/maj.stomos.net/"
+
+      - name: Install deps + deploy sur n0c
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.N0C_HOST }}
+          username: ${{ secrets.N0C_USERNAME }}
+          key: ${{ secrets.N0C_DEPLOY_KEY }}
+          port: ${{ secrets.N0C_PORT }}
+          script: |
+            source ~/nodevenv/maj.stomos.net/22/bin/activate
+            cd ~/maj.stomos.net
+            npm install --omit=dev
+            chmod -R 755 build/
+            cp -rv build/* public/
+            touch tmp/restart.txt
+            echo "✅ Déploiement terminé"
