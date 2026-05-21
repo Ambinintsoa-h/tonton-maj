@@ -1,0 +1,29 @@
+# Dépendances
+node_modules/
+
+# Build (généré par GitHub Actions)
+build/
+build.zip
+
+# Secrets — NE JAMAIS committer
+.env
+.env.production
+.env.local
+.env.*.local
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Claude Desktop
+claude-path.json
+
+# Cache
+.cache/
+
+# Anciennes copies locales
+proddddd/

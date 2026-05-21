@@ -1,0 +1,373 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #f0f0f0;
+  min-height: 100vh;
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/70 backdrop-blur-sm border border-white/80 rounded-2xl shadow-glass;
+  }
+  .glass-card-dark {
+    @apply bg-black/85 backdrop-blur-sm border border-white/10 rounded-2xl shadow-glass-lg;
+  }
+  .btn-primary {
+    @apply bg-black text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-gray-800 transition-all duration-200 flex items-center gap-2;
+  }
+  .btn-secondary {
+    @apply bg-white/80 border border-gray-200 text-gray-700 rounded-xl px-4 py-2 text-sm font-medium hover:bg-white transition-all duration-200 flex items-center gap-2;
+  }
+  .btn-ghost {
+    @apply text-gray-500 rounded-xl px-3 py-2 text-sm font-medium hover:bg-black/5 transition-all duration-200 flex items-center gap-2;
+  }
+  .input-glass {
+    @apply w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-gray-300 transition-all duration-200;
+  }
+  .sidebar-item {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-600 hover:bg-black/5 hover:text-gray-900 transition-all duration-200 cursor-pointer;
+  }
+  .sidebar-item-active {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium bg-black text-white cursor-pointer;
+  }
+  .deleted-content {
+    @apply line-through text-gray-400 bg-gray-100;
+  }
+  .updated-content {
+    @apply bg-sage-100 text-gray-800 rounded px-0.5;
+  }
+}
+
+/* ── Skeleton shimmer (style Facebook) ────────────────────────────────────── */
+.skeleton-bone {
+  background: linear-gradient(
+    90deg,
+    rgba(0,0,0,0.06) 25%,
+    rgba(0,0,0,0.03) 50%,
+    rgba(0,0,0,0.06) 75%
+  );
+  background-size: 300% 100%;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  0%   { background-position: 100% 50%; }
+  100% { background-position: -100% 50%; }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.25); }
+
+/* TipTap editor */
+.tiptap { outline: none; min-height: 200px; }
+.tiptap p { margin: 0.5em 0; }
+.tiptap h1, .tiptap h2, .tiptap h3 { font-weight: 600; margin: 1em 0 0.5em; }
+.tiptap ul, .tiptap ol { padding-left: 1.5em; }
+.tiptap li { margin: 0.25em 0; }
+.tiptap mark { background: #b8d4b8; border-radius: 2px; padding: 0 2px; }
+.tiptap code { background: #f3f4f6; border-radius: 3px; padding: 1px 5px; font-size: 0.85em; font-family: monospace; }
+.tiptap pre { background: #f3f4f6; border-radius: 8px; padding: 0.75em 1em; font-size: 0.85em; font-family: monospace; overflow-x: auto; margin: 0.75em 0; }
+.tiptap blockquote { border-left: 3px solid #d1d5db; padding-left: 1em; color: #6b7280; margin: 0.75em 0; font-style: italic; }
+
+/* Skills/Knowledge preview */
+.skill-editor-preview blockquote {
+  border-left: 3px solid #d1d5db; padding-left: 1em; color: #6b7280; margin: 0.75em 0; font-style: italic;
+}
+.skill-editor-preview pre {
+  background: #f3f4f6; border-radius: 6px; padding: 0.6em 0.9em; font-size: 0.82em; font-family: monospace; overflow-x: auto; margin: 0.5em 0;
+}
+.skill-editor-preview li { margin: 0.2em 0; }
+
+/* ── Médias dans les vues article (diff + finale + historique) ───────────────
+   Images responsives, iframes 16:9, non-éditables dans contentEditable        */
+
+/* Image à la une */
+.article-diff-content figure[data-featured],
+.md-content figure[data-featured] {
+  margin: 0 0 20px 0;
+  padding: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  line-height: 0;
+}
+.article-diff-content figure[data-featured] img,
+.md-content figure[data-featured] img {
+  width: 100%;
+  height: auto;
+  max-height: 420px;
+  object-fit: cover;
+  border-radius: 12px;
+  margin: 0;
+}
+
+/* Images */
+.article-diff-content img,
+.md-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 10px 0;
+  display: block;
+  cursor: default;
+}
+
+/* Wrapper iframe 16:9 responsive */
+[data-media="iframe-wrapper"],
+.article-diff-content [data-media="iframe-wrapper"],
+.md-content [data-media="iframe-wrapper"] {
+  position: relative;
+  width: 100%;
+  padding-bottom: 56.25%; /* 16:9 */
+  height: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  margin: 14px 0;
+  background: #000;
+}
+[data-media="iframe-wrapper"] iframe {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  border: 0;
+}
+
+/* Video native */
+.article-diff-content video,
+.md-content video {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 10px 0;
+  display: block;
+}
+
+/* Empêcher l'édition accidentelle des médias dans le contentEditable */
+.article-diff-content img,
+.article-diff-content [data-media="iframe-wrapper"],
+.article-diff-content video {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Diff article ─────────────────────────────────────────────────────────────
+   Styles avec haute spécificité pour ne pas être écrasés par prose/navigateur */
+
+/* Texte supprimé : fond rose-rouge, barré, grisé */
+.article-diff-content del,
+.article-diff-content .deleted-content {
+  text-decoration: line-through !important;
+  text-decoration-thickness: 2px !important;
+  color: #9ca3af !important;
+  background-color: #fee2e2 !important;
+  border-radius: 3px !important;
+  padding: 1px 4px !important;
+  font-style: normal !important;
+  transition: background-color 0.15s;
+}
+
+.article-diff-content del:hover,
+.article-diff-content .deleted-content:hover {
+  background-color: #fecaca !important;
+}
+
+/* Texte ajouté : fond vert sauge vif, texte vert foncé, demi-gras */
+.article-diff-content mark,
+.article-diff-content .updated-content {
+  background-color: #bbf7d0 !important;
+  color: #14532d !important;
+  border-radius: 3px !important;
+  padding: 1px 4px !important;
+  font-style: normal !important;
+  font-weight: 500 !important;
+  text-decoration: none !important;
+  cursor: help;
+  transition: background-color 0.15s;
+}
+
+.article-diff-content mark:hover,
+.article-diff-content .updated-content:hover {
+  background-color: #86efac !important;
+}
+
+/* Skills editor */
+.skill-editor-preview { line-height: 1.7; }
+.skill-editor-preview h1, .skill-editor-preview h2, .skill-editor-preview h3 {
+  font-weight: 600; margin: 0.75em 0 0.4em;
+}
+.skill-editor-preview ul, .skill-editor-preview ol { padding-left: 1.5em; }
+.skill-editor-preview code {
+  background: #f3f4f6; border-radius: 3px; padding: 1px 4px; font-size: 0.85em; font-family: monospace;
+}
+
+/* ── Rendu Markdown / contenu riche — .md-content ─────────────────────────────
+   Utilisé dans toutes les cartes de connaissances, skills, historique
+   Styles propres et lisibles sans être trop lourds visuellement */
+
+.md-content {
+  font-size: 0.8125rem;   /* 13px */
+  line-height: 1.75;
+  color: #374151;         /* gray-700 */
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* ── Titres ── */
+.md-content h1 { font-size: 1.1em;  font-weight: 700; color: #111827; margin: 1.1em 0 0.5em; padding-bottom: 0.3em; border-bottom: 2px solid #f3f4f6; }
+.md-content h2 { font-size: 1em;    font-weight: 700; color: #111827; margin: 1em 0 0.4em;   padding-bottom: 0.2em; border-bottom: 1px solid #f3f4f6; }
+.md-content h3 { font-size: 0.95em; font-weight: 600; color: #1f2937; margin: 0.9em 0 0.35em; }
+.md-content h4 { font-size: 0.9em;  font-weight: 600; color: #374151; margin: 0.75em 0 0.3em; }
+.md-content h1:first-child, .md-content h2:first-child,
+.md-content h3:first-child, .md-content h4:first-child { margin-top: 0; }
+
+/* ── Paragraphes ── */
+.md-content p { margin: 0.55em 0; }
+.md-content p:first-child { margin-top: 0; }
+.md-content p:last-child  { margin-bottom: 0; }
+/* Fallback : certains sites utilisent <div> comme paragraphes */
+.md-content > div { margin: 0.55em 0; }
+.md-content > div:first-child { margin-top: 0; }
+.md-content > div:last-child  { margin-bottom: 0; }
+
+/* ── Listes ── */
+.md-content ul, .md-content ol { padding-left: 1.4em; margin: 0.5em 0; }
+.md-content li { margin: 0.25em 0; }
+.md-content li > p { margin: 0; }
+.md-content ul li { list-style-type: disc; }
+.md-content ul li::marker { color: #9ca3af; }
+.md-content ol li { list-style-type: decimal; }
+
+/* ── Tableaux ─────────────────────────────────────────────────────────────── */
+.md-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75em 0;
+  font-size: 0.8em;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  display: block;
+  overflow-x: auto;
+}
+.md-content thead { background: #f9fafb; }
+.md-content thead tr { border-bottom: 2px solid #e5e7eb; }
+.md-content th {
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #374151;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.md-content td {
+  padding: 7px 12px;
+  color: #4b5563;
+  border-top: 1px solid #f3f4f6;
+  vertical-align: top;
+  max-width: 280px;
+}
+.md-content tbody tr:nth-child(even) { background: #fafafa; }
+.md-content tbody tr:hover { background: #f0f9ff; transition: background 0.12s; }
+.md-content td:empty { color: #d1d5db; }
+.md-content td:empty::after { content: '—'; }
+
+/* ── Code inline ── */
+.md-content code {
+  background: #f1f5f9;
+  color: #0f172a;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.85em;
+  font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+  border: 1px solid #e2e8f0;
+}
+
+/* ── Bloc de code ── */
+.md-content pre {
+  background: #1e293b;
+  color: #e2e8f0;
+  border-radius: 10px;
+  padding: 0.9em 1.1em;
+  font-size: 0.82em;
+  font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+  overflow-x: auto;
+  margin: 0.75em 0;
+  line-height: 1.6;
+}
+.md-content pre code {
+  background: none;
+  color: inherit;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* ── Blockquote ── */
+.md-content blockquote {
+  border-left: 3px solid #6366f1;
+  background: #f5f3ff;
+  color: #4b5563;
+  margin: 0.75em 0;
+  padding: 0.6em 1em;
+  border-radius: 0 8px 8px 0;
+  font-style: italic;
+}
+.md-content blockquote p { margin: 0; }
+
+/* ── Séparateur ── */
+.md-content hr {
+  border: none;
+  border-top: 2px solid #f3f4f6;
+  margin: 1em 0;
+}
+
+/* ── Liens ── */
+.md-content a {
+  color: #2563eb;
+  text-decoration: none;
+  border-bottom: 1px solid #bfdbfe;
+  transition: color 0.15s, border-color 0.15s;
+}
+.md-content a:hover { color: #1d4ed8; border-color: #93c5fd; }
+
+/* ── Texte fort / italique ── */
+.md-content strong { font-weight: 600; color: #111827; }
+.md-content em     { font-style: italic; color: #4b5563; }
+.md-content del    { color: #9ca3af; text-decoration: line-through; }
+
+/* Quand article-diff-content et md-content sont combinés, les balises diff
+   (deleted-content / updated-content) prennent la priorité sur les styles md-content */
+.article-diff-content.md-content del.deleted-content {
+  color: #b91c1c !important;
+  background-color: #fee2e2 !important;
+  text-decoration: line-through !important;
+}
+.article-diff-content.md-content mark.updated-content {
+  background-color: #bbf7d0 !important;
+  color: #14532d !important;
+}
+
+/* ── Fade du contenu tronqué ── */
+.md-content-fade {
+  position: relative;
+  max-height: 260px;
+  overflow: hidden;
+}
+.md-content-fade::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 64px;
+  background: linear-gradient(to bottom, transparent, rgba(255,255,255,0.95));
+  pointer-events: none;
+}

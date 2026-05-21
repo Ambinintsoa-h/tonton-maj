@@ -1,0 +1,48 @@
+========================================
+  ArticleAI — Lancement du projet
+========================================
+
+UNE SEULE COMMANDE :
+
+    cd "D:\PUBLITHINGS\TRANSITION IA\MAJ\article-updater"
+    npm start
+
+C'est tout.
+
+  → Authentification : AUTOMATIQUE
+    Le proxy lit et déchiffre ton token OAuth Claude Desktop.
+    Aucune connexion manuelle requise, tant que Claude Desktop est installé.
+
+  → Si le port 3001 est déjà occupé (session précédente) :
+    Le proxy libère automatiquement le port et redémarre.
+
+  → Modèle utilisé en mode local (token OAuth) :
+    claude-haiku-4-5 (seul modèle accessible sans clé API)
+    Pour utiliser claude-sonnet (meilleure qualité), entre une clé API
+    Anthropic dans Paramètres.
+
+========================================
+  Ce qui démarre automatiquement
+========================================
+
+  [0] Proxy Claude local  → http://localhost:3001  (Auth DPAPI automatique)
+  [1] Application React   → http://localhost:3000
+
+  Le navigateur s'ouvre sur http://localhost:3000
+
+========================================
+  Pour arrêter
+========================================
+
+  Ctrl+C dans le terminal
+
+========================================
+  Upgrade vers Sonnet (optionnel)
+========================================
+
+  1. Va sur https://console.anthropic.com
+  2. Crée une clé API
+  3. Dans l'app → Paramètres → colle ta clé Anthropic
+  4. L'agent utilisera automatiquement claude-sonnet-4-6
+
+========================================

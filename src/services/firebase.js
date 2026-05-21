@@ -1,0 +1,224 @@
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query } from 'firebase/firestore';
+import { getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject } from 'firebase/storage';
+
+let app = null;
+let db = null;
+let storage = null;
+
+export const initFirebase = (config) => {
+  try {
+    // Réutiliser l'instance existante si déjà initialisée (évite l'erreur HMR/double-init)
+    app = getApps().length > 0 ? getApp() : initializeApp(config);
+    db = getFirestore(app);
+    storage = getStorage(app);
+    return true;
+  } catch (e) {
+    console.error('[firebase] Erreur init :', e.message);
+    return false;
+  }
+};
+
+export const getDb = () => db;
+export const getStorageRef = () => storage;
+
+// Skills
+export const getSkills = async () => {
+  if (!db) return [];
+  const q = query(collection(db, 'skills'), orderBy('createdAt', 'desc'));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const saveSkill = async (skill) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  if (skill.id) {
+    await updateDoc(doc(db, 'skills', skill.id), { ...skill, updatedAt: Date.now() });
+    return skill.id;
+  }
+  const ref = await addDoc(collection(db, 'skills'), { ...skill, createdAt: Date.now() });
+  return ref.id;
+};
+
+export const deleteSkill = async (id) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  await deleteDoc(doc(db, 'skills', id));
+};
+
+// ── Storage helpers ──────────────────────────────────────────────────────────
+
+// Upload d'un fichier HTML vers Firebase Storage.
+// Retourne l'URL de téléchargement, ou null si Storage indisponible / erreur.
+const uploadHtml = async (path, html) => {
+  if (!storage || !html) return null;
+  try {
+    const r = storageRef(storage, path);
+    const timeoutMs = 25000;
+    const timer = new Promise((_, rej) =>
+      setTimeout(() => rej(new Error('Firebase Storage timeout')), timeoutMs)
+    );
+    await Promise.race([
+      uploadString(r, html, 'raw', { contentType: 'text/html; charset=utf-8' }),
+      timer,
+    ]);
+    return await getDownloadURL(r);
+  } catch {
+    return null;
+  }
+};
+
+// Télécharge un fichier HTML depuis une URL Firebase Storage (ou toute URL publique).
+export const fetchArticleHtml = async (url) => {
+  if (!url) return '';
+  try {
+    const res = await fetch(url);
+    return res.ok ? await res.text() : '';
+  } catch {
+    return '';
+  }
+};
+
+// Articles history
+export const getArticles = async () => {
+  if (!db) return [];
+  const q = query(collection(db, 'articles'), orderBy('createdAt', 'desc'));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+// Sauvegarde un article : HTML → Firebase Storage, métadonnées + URLs → Firestore.
+// Retourne { id, originalContentUrl, updatedContentUrl }
+export const saveArticle = async (article) => {
+  if (!db) throw new Error('Firebase non initialisé');
+
+  const { originalContent, updatedContent, ...metadata } = article;
+
+  // Pré-générer un ID pour construire le chemin Storage avant d'écrire Firestore
+  const docRef = article.id
+    ? doc(db, 'articles', article.id)
+    : doc(collection(db, 'articles'));
+  const docId = docRef.id;
+
+  // Upload HTML vers Storage en parallèle
+  const [originalContentUrl, updatedContentUrl] = await Promise.all([
+    uploadHtml(`articles/${docId}/original.html`, originalContent),
+    uploadHtml(`articles/${docId}/updated.html`, updatedContent),
+  ]);
+
+  // Firestore : URLs si Storage OK, sinon HTML inline en fallback
+  const firestoreData = {
+    ...metadata,
+    ...(originalContentUrl ? { originalContentUrl }
+        : originalContent  ? { originalContent   } : {}),
+    ...(updatedContentUrl  ? { updatedContentUrl  }
+        : updatedContent   ? { updatedContent     } : {}),
+  };
+
+  if (article.id) {
+    await updateDoc(docRef, { ...firestoreData, updatedAt: Date.now() });
+  } else {
+    await setDoc(docRef, { ...firestoreData, createdAt: Date.now() });
+  }
+
+  return { id: docId, originalContentUrl, updatedContentUrl };
+};
+
+export const deleteArticle = async (id) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  await deleteDoc(doc(db, 'articles', id));
+  // Nettoyage Storage (best-effort — ignorer les erreurs si fichiers absents)
+  if (storage) {
+    await Promise.allSettled([
+      deleteObject(storageRef(storage, `articles/${id}/original.html`)),
+      deleteObject(storageRef(storage, `articles/${id}/updated.html`)),
+    ]);
+  }
+};
+
+// WordPress sites
+export const getWordPressSites = async () => {
+  if (!db) return [];
+  const snap = await getDocs(collection(db, 'wordpress_sites'));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const saveWordPressSite = async (site) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  // Le mot de passe Application Password ne doit jamais être persisté en cloud.
+  // Il reste uniquement dans localStorage côté client, jamais dans Firestore.
+  // eslint-disable-next-line no-unused-vars
+  const { password, ...safeData } = site;
+  if (site.id) {
+    await updateDoc(doc(db, 'wordpress_sites', site.id), safeData);
+    return site.id;
+  }
+  const ref = await addDoc(collection(db, 'wordpress_sites'), { ...safeData, createdAt: Date.now() });
+  return ref.id;
+};
+
+export const deleteWordPressSite = async (id) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  await deleteDoc(doc(db, 'wordpress_sites', id));
+};
+
+// Knowledge base
+export const getKnowledge = async () => {
+  if (!db) return [];
+  const q = query(collection(db, 'knowledge'), orderBy('createdAt', 'desc'));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const saveKnowledge = async (item) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  if (item.id) {
+    await updateDoc(doc(db, 'knowledge', item.id), { ...item, updatedAt: Date.now() });
+    return item.id;
+  }
+  const ref = await addDoc(collection(db, 'knowledge'), { ...item, createdAt: Date.now() });
+  return ref.id;
+};
+
+export const deleteKnowledge = async (id) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  await deleteDoc(doc(db, 'knowledge', id));
+};
+
+// Settings
+export const getSettings = async () => {
+  if (!db) return {};
+  const snap = await getDoc(doc(db, 'settings', 'main'));
+  return snap.exists() ? snap.data() : {};
+};
+
+// Équipe (membres)
+export const getUsers = async () => {
+  if (!db) return [];
+  const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const saveUser = async (user) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  if (user.id) {
+    await updateDoc(doc(db, 'users', user.id), { ...user, updatedAt: Date.now() });
+    return user.id;
+  }
+  const ref = await addDoc(collection(db, 'users'), { ...user, createdAt: Date.now() });
+  return ref.id;
+};
+
+export const deleteUser = async (id) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  await deleteDoc(doc(db, 'users', id));
+};
+
+export const saveSettings = async (settings) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  // Ne jamais persister les clés API en cloud Firestore — elles restent dans localStorage.
+  // Seule la config Firebase elle-même est utile à synchroniser.
+  // eslint-disable-next-line no-unused-vars
+  const { anthropicKey, braveKey, tavilyKey, groqKey, ...safeSettings } = settings;
+  await setDoc(doc(db, 'settings', 'main'), safeSettings, { merge: true });
+};

@@ -1,0 +1,1269 @@
+/**
+ * Proxy local ArticleAI
+ * Auth : déchiffrement OSCrypt (Chromium/Electron) du token OAuth Claude Desktop
+ * → appel direct API Anthropic sans spawner claude.exe
+ * Fallback : claude.exe CLI si DPAPI indisponible
+ */
+const express = require('express');
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+const helmet = require('helmet');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+const net = require('net');
+const { spawn, execSync } = require('child_process');
+const { createDecipheriv } = require('crypto');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const multer = require('multer');
+const FormData = require('form-data');
+const axios = require('axios');
+const { Readability } = require('@mozilla/readability');
+const { JSDOM } = require('jsdom');
+
+const app = express();
+
+// ─── CORS restreint selon l'environnement ────────────────────────────────────
+const IS_PROD = process.env.NODE_ENV === 'production';
+app.use(cors({
+  origin: IS_PROD
+    ? ['https://maj.stomos.net']
+    : ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+app.use(express.json({ limit: '2mb' }));
+
+// ─── Headers de sécurité HTTP ──────────────────────────────────────────────────
+app.use(helmet({
+  crossOriginResourcePolicy: false,  // autoriser les images cross-origin dans le frontend
+  contentSecurityPolicy: false,      // le frontend React gère son propre CSP
+}));
+
+// ─── Protection SSRF : bloque les IPs internes / loopback / link-local ────────
+// Sans cette validation, /api/scrape et /api/wordpress permettent de faire fetcher
+// au proxy n'importe quelle URL interne (127.x, 192.168.x, 169.254.x, AWS metadata…).
+const isPrivateHost = (hostname) => {
+  // Résolution IPv4 directe
+  if (net.isIPv4(hostname)) {
+    const [a, b] = hostname.split('.').map(Number);
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254)  // link-local / AWS IMDS
+    );
+  }
+  // IPv6 loopback / ULA / link-local
+  if (net.isIPv6(hostname)) {
+    const h = hostname.toLowerCase();
+    return h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80');
+  }
+  // Noms d'hôtes locaux
+  const h = hostname.toLowerCase();
+  return h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || h.endsWith('.localhost');
+};
+
+const assertSafeUrl = (raw, label = 'URL') => {
+  let parsed;
+  try { parsed = new URL(raw); } catch { throw new Error(`${label} invalide`); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`Protocole non autorisé : ${parsed.protocol}`);
+  }
+  if (isPrivateHost(parsed.hostname)) {
+    throw new Error(`Accès réseau interne interdit (${parsed.hostname})`);
+  }
+  return parsed;
+};
+
+// ─── Fichiers statiques React (production uniquement) ────────────────────────
+if (IS_PROD) {
+  app.use(express.static(path.join(__dirname, 'build')));
+}
+
+// ─── Route de login (publique — pas d'auth requise) ──────────────────────────
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) {
+    return res.status(400).json({ success: false, error: 'username et password requis' });
+  }
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    const token = jwt.sign(
+      { username, role: 'admin' },
+      JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+    return res.json({ success: true, token, role: 'admin', username });
+  }
+  // Délai pour ralentir le bruteforce
+  setTimeout(() => {
+    res.status(401).json({ success: false, error: 'Identifiants incorrects' });
+  }, 500);
+});
+
+// ─── Rate limiter intégré (sans dépendance externe) ──────────────────────────
+// 60 requêtes/minute par IP. Protège contre les boucles d'appel et le bruteforce.
+const _rl = new Map();
+const rateLimiter = (req, res, next) => {
+  const key = req.ip || 'local';
+  const now = Date.now();
+  const e = _rl.get(key) || { n: 0, t: now };
+  if (now - e.t > 60_000) { _rl.set(key, { n: 1, t: now }); return next(); }
+  if (e.n >= 60) return res.status(429).json({ error: 'Trop de requêtes — réessayez dans une minute.' });
+  e.n++;
+  next();
+};
+app.use('/api/', rateLimiter);
+
+// ─── Multer — stockage mémoire pour les uploads audio ─────────────────────────
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB max (limite Groq Whisper)
+});
+
+const PORT = process.env.PORT || 3001;
+
+// ─── Auth JWT ─────────────────────────────────────────────────────────────────
+const JWT_SECRET = process.env.JWT_SECRET || 'tonton-dev-secret-change-me-in-production';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
+
+const requireAuth = (req, res, next) => {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Non authentifié — connectez-vous sur /login' });
+  }
+  try {
+    req.user = jwt.verify(auth.slice(7), JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Token JWT invalide ou expiré' });
+  }
+};
+
+// ─── Sécurité globale : empêche le proxy de crasher sur exceptions non gérées ─
+process.on('uncaughtException', (err) => {
+  console.error('[proxy] ⚠ Exception non gérée (processus maintenu) :', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[proxy] ⚠ Promesse rejetée non gérée :', reason?.message || reason);
+});
+
+// ─── Résolution du binaire claude (fallback) ──────────────────────────────────
+const resolveClaude = () => {
+  if (process.env.CLAUDE_CODE_EXECPATH) return process.env.CLAUDE_CODE_EXECPATH;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'claude-path.json'), 'utf8'));
+    if (cfg.path) return cfg.path;
+  } catch {}
+  return 'claude';
+};
+const CLAUDE_BIN = resolveClaude();
+
+// ─── Résolution du dossier de données Claude Desktop ─────────────────────────
+const resolveClaudeDataDir = () => {
+  const candidates = [];
+
+  if (CLAUDE_BIN && CLAUDE_BIN !== 'claude') {
+    const parts = CLAUDE_BIN.split(path.sep);
+    const claudeIdx = parts.lastIndexOf('Claude');
+    if (claudeIdx !== -1) {
+      candidates.push(parts.slice(0, claudeIdx + 1).join(path.sep));
+    }
+  }
+
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  const pkgDir = path.join(localAppData, 'Packages');
+  try {
+    const entries = fs.readdirSync(pkgDir);
+    const claudePkg = entries.find(e => e.startsWith('Claude_'));
+    if (claudePkg) {
+      candidates.push(path.join(pkgDir, claudePkg, 'LocalCache', 'Roaming', 'Claude'));
+    }
+  } catch {}
+
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  candidates.push(path.join(appData, 'Claude'));
+
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(path.join(dir, 'Local State'))) {
+        console.log(`[proxy] Dossier Claude Desktop : ${dir}`);
+        return dir;
+      }
+    } catch {}
+  }
+
+  return candidates[0];
+};
+
+const CLAUDE_DATA_DIR = resolveClaudeDataDir();
+const LOCAL_STATE_PATH = path.join(CLAUDE_DATA_DIR, 'Local State');
+const CONFIG_PATH = path.join(CLAUDE_DATA_DIR, 'config.json');
+
+// ─── Cache token ──────────────────────────────────────────────────────────────
+let aesKeyCache = null;
+let tokenCache = { token: null, expiresAt: 0 };
+
+function getAesKey() {
+  if (aesKeyCache) return aesKeyCache;
+
+  const localState = JSON.parse(fs.readFileSync(LOCAL_STATE_PATH, 'utf8'));
+  const encKeyB64 = localState.os_crypt?.encrypted_key;
+  if (!encKeyB64) throw new Error('Pas de encrypted_key dans Local State');
+
+  const ps1File = path.join(os.tmpdir(), `aes_key_${Date.now()}.ps1`);
+  const outFile = path.join(os.tmpdir(), `aes_out_${Date.now()}.txt`);
+
+  const ps1 = `Add-Type -AssemblyName System.Security\n$bytes = [System.Convert]::FromBase64String('${encKeyB64.replace(/'/g, "''")}')\n$enc = $bytes[5..($bytes.Length-1)]\n$scope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser\n$key = [System.Security.Cryptography.ProtectedData]::Unprotect($enc,$null,$scope)\n[System.Convert]::ToBase64String($key) | Set-Content '${outFile.replace(/\\/g, '/')}' -Encoding UTF8`;
+
+  try {
+    fs.writeFileSync(ps1File, ps1, 'utf8');
+    execSync(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${ps1File}"`, { timeout: 8000, stdio: 'pipe' });
+    aesKeyCache = Buffer.from(fs.readFileSync(outFile, 'utf8').trim(), 'base64');
+    return aesKeyCache;
+  } finally {
+    try { fs.unlinkSync(ps1File); } catch {}
+    try { fs.unlinkSync(outFile); } catch {}
+  }
+}
+
+function getOAuthToken() {
+  if (tokenCache.token && Date.now() < tokenCache.expiresAt - 5 * 60 * 1000) {
+    return tokenCache.token;
+  }
+
+  const aesKey = getAesKey();
+  const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+  const encTokenB64 = config['oauth:tokenCache'];
+  if (!encTokenB64) throw new Error('Pas de oauth:tokenCache dans config.json');
+
+  const encToken = Buffer.from(encTokenB64, 'base64');
+  const iv = encToken.slice(3, 15);
+  const authTag = encToken.slice(encToken.length - 16);
+  const ciphertext = encToken.slice(15, encToken.length - 16);
+
+  const decipher = createDecipheriv('aes-256-gcm', aesKey, iv);
+  decipher.setAuthTag(authTag);
+  const data = JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8'));
+
+  const anthropicEntry = Object.entries(data).find(([k]) => k.includes('api.anthropic.com'));
+  if (!anthropicEntry) throw new Error('Pas de token api.anthropic.com dans le cache');
+
+  const entry = anthropicEntry[1];
+  const token = entry.token || entry.accessToken || entry.access_token;
+  if (!token) throw new Error("Champ token introuvable dans l'entrée Anthropic");
+
+  tokenCache = {
+    token,
+    expiresAt: entry.expiresAt || (Date.now() + 60 * 60 * 1000),
+  };
+
+  console.log(`[proxy] Token OAuth lu (expire ${new Date(tokenCache.expiresAt).toLocaleTimeString()})`);
+  return token;
+}
+
+// ─── Catalogue de modèles ─────────────────────────────────────────────────────
+const MODEL_CASCADE = [
+  'claude-opus-4-5',
+  'claude-sonnet-4-5',
+  'claude-haiku-4-5',
+];
+const MODEL_FALLBACK = 'claude-haiku-4-5';
+
+// ─── Appel API Anthropic via clé API (x-api-key) ─────────────────────────────
+// Utilisé quand le client fournit sa propre clé Anthropic plutôt que le token OAuth.
+// Le call est fait côté serveur (Node.js) — la clé ne transite jamais vers Anthropic
+// depuis le navigateur, ce qui évite son exposition dans les DevTools du navigateur.
+const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, reject) => {
+  const requestBody = {
+    model: bodyObj.model,
+    max_tokens: bodyObj.max_tokens || 4096,
+    messages: bodyObj.messages,
+  };
+  if (bodyObj.system) requestBody.system = bodyObj.system;
+  if (bodyObj.tools?.length) requestBody.tools = bodyObj.tools;
+  const payload = JSON.stringify(requestBody);
+  const req = https.request({
+    hostname: 'api.anthropic.com',
+    path: '/v1/messages',
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload),
+    },
+  }, (res) => {
+    let data = '';
+    res.on('data', d => { data += d; });
+    res.on('end', () => {
+      try {
+        const json = JSON.parse(data);
+        if (res.statusCode === 401 || res.statusCode === 403) return reject(new Error('Clé API Anthropic invalide ou expirée'));
+        if (res.statusCode === 429) return reject(new Error('RATE_LIMITED'));
+        if (res.statusCode !== 200) return reject(new Error(json.error?.message || `HTTP ${res.statusCode}`));
+        const text = json.content?.[0]?.text || '';
+        const usage = json.usage || {};
+        resolve({ text, modelUsed: json.model || bodyObj.model, usage });
+      } catch (e) { reject(new Error('Réponse API invalide')); }
+    });
+  });
+  const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>120s)')); }, 120000);
+  req.on('close', () => clearTimeout(timer));
+  req.on('error', reject);
+  req.write(payload);
+  req.end();
+});
+
+// ─── Appel API Anthropic direct ───────────────────────────────────────────────
+// Passe `system` comme paramètre top-level (meilleure qualité qu'intégrer dans le user content)
+// Retourne la réponse complète incluant `usage` pour le suivi des tokens
+const callAnthropicDirect = (token, bodyObj) => new Promise((resolve, reject) => {
+  // Construire le corps de la requête avec system en top-level si fourni
+  const requestBody = {
+    model: bodyObj.model,
+    max_tokens: bodyObj.max_tokens || 4096,
+    messages: bodyObj.messages,
+  };
+  if (bodyObj.system) requestBody.system = bodyObj.system;
+  if (bodyObj.tools?.length) requestBody.tools = bodyObj.tools;
+
+  const payload = JSON.stringify(requestBody);
+  const req = https.request({
+    hostname: 'api.anthropic.com',
+    path: '/v1/messages',
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'Content-Length': Buffer.byteLength(payload),
+    },
+  }, (res) => {
+    let data = '';
+    res.on('data', d => { data += d; });
+    res.on('end', () => {
+      try {
+        const json = JSON.parse(data);
+        if (res.statusCode === 401 || res.statusCode === 403) {
+          tokenCache = { token: null, expiresAt: 0 };
+          return reject(new Error('AUTH_REQUIRED'));
+        }
+        if (res.statusCode === 429) {
+          return reject(new Error('RATE_LIMITED'));
+        }
+        if (res.statusCode !== 200) {
+          return reject(new Error(json.error?.message || `HTTP ${res.statusCode}: ${data}`));
+        }
+        resolve(json); // réponse complète avec usage inclus
+      } catch (e) { reject(new Error('Réponse API invalide: ' + data.substring(0, 100))); }
+    });
+  });
+  const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>120s)')); }, 120000);
+  req.on('close', () => clearTimeout(timer));
+  req.on('error', reject);
+  req.write(payload);
+  req.end();
+});
+
+/**
+ * Tente d'appeler l'API avec le modèle demandé, puis cascade automatiquement
+ * vers des modèles moins coûteux si le modèle est indisponible (HTTP 429).
+ * Retourne { text, modelUsed, usage }.
+ */
+const callWithModelCascade = async (token, bodyObj) => {
+  const requestedModel = bodyObj.model || MODEL_FALLBACK;
+
+  const cascadeIdx = MODEL_CASCADE.indexOf(requestedModel);
+  const toTry = cascadeIdx === -1
+    ? [requestedModel, MODEL_FALLBACK]
+    : MODEL_CASCADE.slice(cascadeIdx);
+
+  const modelsToTry = [...new Set(toTry)];
+
+  for (const model of modelsToTry) {
+    try {
+      const result = await callAnthropicDirect(token, { ...bodyObj, model });
+      // Extraire text + usage depuis la réponse complète
+      const text = result.content?.[0]?.text || '';
+      const usage = result.usage || {};
+      if (model !== requestedModel) {
+        console.log(`[proxy] Cascade : ${requestedModel} → ${model} (utilisé)`);
+      } else {
+        console.log(`[proxy] Modèle : ${model}`);
+      }
+      return { text, modelUsed: model, usage };
+    } catch (e) {
+      if (e.message === 'RATE_LIMITED') {
+        console.log(`[proxy] Modèle ${model} indisponible (429), cascade...`);
+        continue;
+      }
+      throw e;
+    }
+  }
+
+  throw new Error(`Tous les modèles ont échoué (cascade depuis ${requestedModel})`);
+};
+
+// ─── Fallback : claude.exe CLI ────────────────────────────────────────────────
+const callClaude = (prompt) => new Promise((resolve, reject) => {
+  const tmp = path.join(os.tmpdir(), `claude_${Date.now()}.txt`);
+  try { fs.writeFileSync(tmp, prompt, 'utf8'); }
+  catch (e) { return reject(new Error('Fichier temp: ' + e.message)); }
+
+  const bin = CLAUDE_BIN.replace(/'/g, "''");
+  const tmpPs = tmp.replace(/'/g, "''");
+  const ps1 = `$p = Get-Content -Raw -Path '${tmpPs}'; & '${bin}' -p $p --output-format text`;
+
+  const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps1], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    env: { ...process.env },
+  });
+
+  let stdout = '', stderr = '';
+  proc.stdout.on('data', d => { stdout += d.toString(); });
+  proc.stderr.on('data', d => { stderr += d.toString(); });
+
+  const timer = setTimeout(() => {
+    try { proc.kill(); } catch {}
+    try { fs.unlinkSync(tmp); } catch {}
+    reject(new Error('Timeout CLI (>120s)'));
+  }, 120000);
+
+  proc.on('close', (code) => {
+    clearTimeout(timer);
+    try { fs.unlinkSync(tmp); } catch {}
+    const errMsg = (stderr + stdout).toLowerCase();
+    if (errMsg.includes('not logged') || errMsg.includes('/login') || errMsg.includes('run /login')) {
+      return reject(new Error('AUTH_REQUIRED'));
+    }
+    if (code !== 0) return reject(new Error(stderr || `Code ${code}`));
+    const text = stdout.trim();
+    if (!text) return reject(new Error('Réponse vide'));
+    resolve(text);
+  });
+
+  proc.on('error', (e) => { clearTimeout(timer); try { fs.unlinkSync(tmp); } catch {} reject(e); });
+});
+
+// ─── Route principale ──────────────────────────────────────────────────────────
+app.post('/api/claude', requireAuth, async (req, res) => {
+  const { system, messages, max_tokens = 4096, model, apiKey: clientApiKey } = req.body;
+  if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
+
+  // Prompt CLI (seulement si OAuth échoue — le CLI reçoit le tout en une chaîne)
+  const systemBlock = system ? `[SYSTEM]\n${system}\n\n[USER]\n` : '';
+  const cliContent = systemBlock + messages.map(m => m.content).join('\n');
+
+  const requestedModel = model || MODEL_FALLBACK;
+
+  // ── Stratégie 0 : clé API fournie par le client ────────────────────────────
+  // Le call est fait ici côté serveur (Node.js) → la clé Anthropic ne transite
+  // jamais vers api.anthropic.com depuis le navigateur (invisible dans DevTools).
+  if (clientApiKey && clientApiKey !== 'local') {
+    try {
+      const toTry = (() => {
+        const idx = MODEL_CASCADE.indexOf(requestedModel);
+        return idx === -1 ? [requestedModel, MODEL_FALLBACK] : MODEL_CASCADE.slice(idx);
+      })();
+      for (const m of [...new Set(toTry)]) {
+        try {
+          const { text, modelUsed, usage } = await callAnthropicWithApiKey(clientApiKey, { model: m, max_tokens, system, messages });
+          return res.json({ content: [{ text }], modelUsed, usage });
+        } catch (e) {
+          if (e.message === 'RATE_LIMITED') { console.log(`[proxy] Cascade clé API : ${m} → suivant`); continue; }
+          throw e;
+        }
+      }
+      return res.status(429).json({ error: 'Tous les modèles en rate-limit (clé API)' });
+    } catch (e) {
+      console.error('[proxy] Erreur clé API fournie :', e.message);
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  try {
+    // Stratégie 1 : OAuth token DPAPI → API directe avec cascade de modèles
+    // Le system prompt est passé comme paramètre top-level (meilleure qualité)
+    try {
+      const token = getOAuthToken();
+      const { text, modelUsed, usage } = await callWithModelCascade(token, {
+        model: requestedModel,
+        max_tokens,
+        system,    // ← top-level system parameter (pas intégré dans user content)
+        messages,  // ← messages d'origine (structure correcte)
+      });
+      // Retourner la réponse avec usage pour le suivi des tokens
+      return res.json({
+        content: [{ text }],
+        modelUsed,
+        usage,  // ← { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens }
+      });
+    } catch (e) {
+      if (e.message !== 'AUTH_REQUIRED') {
+        console.error('[proxy] API OAuth échouée:', e.message);
+        return res.status(500).json({ error: `Erreur API: ${e.message}` });
+      }
+      console.log('[proxy] Token OAuth invalide, tentative CLI...');
+    }
+
+    // Stratégie 2 : claude.exe CLI (fallback auth uniquement)
+    const text = await callClaude(cliContent);
+    return res.json({ content: [{ text }], modelUsed: 'cli-fallback', usage: {} });
+
+  } catch (e) {
+    if (e.message === 'AUTH_REQUIRED') {
+      return res.status(401).json({
+        error: `Claude non connecté.\n\nOuvre un terminal PowerShell et lance :\n"${CLAUDE_BIN}" login\n\nPuis relance npm start.`,
+      });
+    }
+    console.error('[proxy] Erreur:', e.message);
+    // Toujours retourner une réponse HTTP, ne jamais laisser Express crasher
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message });
+    }
+  }
+});
+
+// ─── Transcription Groq Whisper ───────────────────────────────────────────────
+
+/** Envoie un buffer audio à Groq Whisper et retourne la transcription */
+async function transcribeWithGroq(audioBuffer, filename, groqKey, language = 'fr') {
+  const formData = new FormData();
+  // Groq accepte : flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm
+  const ext = (filename || 'audio.webm').split('.').pop().toLowerCase();
+  const mime = ext === 'webm' ? 'audio/webm'
+    : ext === 'mp3' ? 'audio/mpeg'
+    : ext === 'mp4' ? 'audio/mp4'
+    : ext === 'wav' ? 'audio/wav'
+    : ext === 'ogg' ? 'audio/ogg'
+    : 'audio/webm';
+
+  formData.append('file', audioBuffer, { filename: filename || 'audio.webm', contentType: mime });
+  formData.append('model', 'whisper-large-v3-turbo');
+  formData.append('language', language);
+  formData.append('response_format', 'text');
+
+  const resp = await axios.post(
+    'https://api.groq.com/openai/v1/audio/transcriptions',
+    formData,
+    {
+      headers: { 'Authorization': `Bearer ${groqKey}`, ...formData.getHeaders() },
+      timeout: 120000,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    }
+  );
+
+  return typeof resp.data === 'string' ? resp.data.trim()
+    : (resp.data?.text || '').trim();
+}
+
+/**
+ * POST /api/transcribe/file  (multipart/form-data)
+ * Champs : audio (fichier), groqKey, language?
+ * Transcrit un fichier audio/vidéo uploadé directement.
+ */
+app.post('/api/transcribe/file', requireAuth, upload.single('audio'), async (req, res) => {
+  const { groqKey, language = 'fr' } = req.body;
+  if (!req.file)  return res.status(400).json({ error: 'Fichier audio requis' });
+  if (!groqKey)   return res.status(400).json({ error: 'Clé API Groq requise' });
+
+  try {
+    console.log(`[transcribe] ↑ Fichier local : ${req.file.originalname} (${(req.file.size / 1024 / 1024).toFixed(1)} Mo)`);
+    const transcript = await transcribeWithGroq(req.file.buffer, req.file.originalname, groqKey, language);
+    console.log(`[transcribe] ✓ ${transcript.length} caractères`);
+    res.json({ transcript, chars: transcript.length, mb: (req.file.size / 1024 / 1024).toFixed(1) });
+  } catch (e) {
+    console.error('[transcribe/file]', e.message);
+    const msg = e.response?.data ? JSON.stringify(e.response.data) : e.message;
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ─── Scraping article ──────────────────────────────────────────────────────────
+// Utilise @mozilla/readability (même algo que le mode lecture Firefox)
+// pour n'extraire que le contenu de l'article : titre + corps, sans nav/footer/pub
+app.post('/api/scrape', requireAuth, async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL manquante' });
+
+  // Protection SSRF : rejette les URLs pointant vers des ressources internes
+  try { assertSafeUrl(url, 'URL de l\'article'); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+
+  try {
+    // 1. Fetch du HTML brut
+    const response = await axios.get(url, {
+      timeout: 20000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+      },
+      maxRedirects: 0,
+    });
+
+    // 2. Extraire l'image à la une AVANT que Readability modifie le DOM
+    //    Ordre de priorité : og:image → twitter:image → première grande image de la page
+    const rawDom = new JSDOM(response.data, { url });
+    const rawDoc = rawDom.window.document;
+    const baseUrl = new URL(url);
+
+    const toAbs = (src) => {
+      if (!src) return '';
+      if (src.startsWith('http') || src.startsWith('//')) return src.startsWith('//') ? 'https:' + src : src;
+      try { return new URL(src, baseUrl).href; } catch { return ''; }
+    };
+
+    let featuredImageUrl = '';
+    // og:image
+    const ogImg = rawDoc.querySelector('meta[property="og:image"], meta[name="og:image"]');
+    if (ogImg) featuredImageUrl = toAbs(ogImg.getAttribute('content') || '');
+    // twitter:image
+    if (!featuredImageUrl) {
+      const twImg = rawDoc.querySelector('meta[name="twitter:image"], meta[name="twitter:image:src"]');
+      if (twImg) featuredImageUrl = toAbs(twImg.getAttribute('content') || '');
+    }
+    // Première grande image du document (largeur >= 300 ou sans attribut width)
+    if (!featuredImageUrl) {
+      const imgs = Array.from(rawDoc.querySelectorAll('img[src]'));
+      for (const img of imgs) {
+        const src = toAbs(img.getAttribute('src') || img.getAttribute('data-src') || '');
+        if (!src || src.includes('logo') || src.includes('icon') || src.includes('avatar') || src.includes('data:image')) continue;
+        const w = parseInt(img.getAttribute('width') || '0', 10);
+        if (!w || w >= 300) { featuredImageUrl = src; break; }
+      }
+    }
+
+    // 3. Parsing DOM + extraction Readability
+    const dom = new JSDOM(response.data, { url });
+    const reader = new Readability(dom.window.document, {
+      charThreshold: 100,
+      keepClasses: true,
+    });
+    const article = reader.parse();
+
+    if (!article || !article.textContent || article.textContent.trim().length < 100) {
+      return res.status(422).json({ error: 'Impossible d\'extraire l\'article depuis cette page.' });
+    }
+
+    // 3. Nettoyage du HTML : supprimer scripts/styles inline mais garder la structure
+    //    (tableaux, titres, listes, gras, italique, liens, images, iframes vidéos…)
+    const cleanDom = new JSDOM(article.content, { url });
+    const doc = cleanDom.window.document;
+
+    // Supprimer les éléments inutiles — on conserve iframe (YouTube/Vimeo) et video
+    ['script', 'style', 'form', 'button', 'input', 'svg', 'noscript', 'canvas'].forEach(tag => {
+      doc.querySelectorAll(tag).forEach(el => el.remove());
+    });
+
+    // ── Absolutiser les URLs relatives (img, iframe, a, video, source) ──────────
+    const absolutize = (el, attr) => {
+      const val = el.getAttribute(attr);
+      if (!val || val.startsWith('http') || val.startsWith('//') ||
+          val.startsWith('data:') || val.startsWith('#') || val.startsWith('mailto:')) return;
+      try { el.setAttribute(attr, new URL(val, baseUrl).href); } catch {}
+    };
+    doc.querySelectorAll('img').forEach(el => {
+      // Récupérer le src réel pour les images lazy-loaded (data-src, data-lazy…)
+      const lazySrc = el.getAttribute('data-src')
+        || el.getAttribute('data-lazy')
+        || el.getAttribute('data-original')
+        || el.getAttribute('data-lazy-src');
+      const currentSrc = el.getAttribute('src') || '';
+      if (lazySrc && (!currentSrc || currentSrc.includes('data:image') || currentSrc.length < 10)) {
+        try { el.setAttribute('src', new URL(lazySrc, baseUrl).href); } catch {}
+      } else {
+        absolutize(el, 'src');
+      }
+      // Non-éditable dans le contentEditable de la vue diff
+      el.setAttribute('contenteditable', 'false');
+      el.setAttribute('loading', 'lazy');
+    });
+    doc.querySelectorAll('iframe').forEach(el => absolutize(el, 'src'));
+    doc.querySelectorAll('a[href]').forEach(el => absolutize(el, 'href'));
+    doc.querySelectorAll('video[src], source[src]').forEach(el => absolutize(el, 'src'));
+
+    // ── Wrapper responsive pour les iframes (YouTube, Vimeo, etc.) ──────────────
+    // On enveloppe chaque iframe dans un div 16:9 pour qu'elles s'adaptent au
+    // conteneur sans débordement, et on les marque non-éditables.
+    doc.querySelectorAll('iframe').forEach(el => {
+      const src = el.getAttribute('src') || '';
+      if (!src) { el.remove(); return; }      // iframe sans src = inutile
+      const wrapper = doc.createElement('div');
+      wrapper.setAttribute('data-media', 'iframe-wrapper');
+      wrapper.setAttribute('contenteditable', 'false');
+      el.setAttribute('contenteditable', 'false');
+      el.setAttribute('allowfullscreen', '');
+      el.parentNode.insertBefore(wrapper, el);
+      wrapper.appendChild(el);
+    });
+
+    // ── Garder uniquement les attributs utiles ──────────────────────────────────
+    const KEEP_ATTRS = new Set([
+      'href', 'src', 'srcset', 'sizes', 'alt', 'title',
+      'colspan', 'rowspan', 'scope', 'headers',
+      'width', 'height', 'frameborder', 'allowfullscreen', 'allow',
+      'controls', 'autoplay', 'loop', 'muted', 'poster', 'preload', 'type',
+      'loading', 'target', 'data-media', 'data-featured', 'contenteditable',
+    ]);
+    doc.querySelectorAll('*').forEach(el => {
+      Array.from(el.attributes).forEach(attr => {
+        if (!KEEP_ATTRS.has(attr.name)) el.removeAttribute(attr.name);
+      });
+    });
+
+    // Supprimer les éléments vides (sauf médias et tableaux)
+    const STRUCTURAL = new Set(['table', 'thead', 'tbody', 'tr', 'td', 'th', 'img', 'iframe', 'video', 'source', 'br', 'hr']);
+    doc.querySelectorAll('*').forEach(el => {
+      if (!STRUCTURAL.has(el.tagName.toLowerCase()) && !el.textContent.trim() && el.children.length === 0) {
+        el.remove();
+      }
+    });
+
+    // Convertir les <div> "feuilles" (sans enfants block) en <p>
+    const BLOCK_TAGS = new Set(['p','h1','h2','h3','h4','h5','h6','div','ul','ol','table','blockquote','pre','figure','section','article','iframe','video','img']);
+    doc.querySelectorAll('div:not([data-media])').forEach(div => {
+      const hasBlockChild = Array.from(div.children).some(c => BLOCK_TAGS.has(c.tagName.toLowerCase()));
+      if (!hasBlockChild && div.textContent.trim()) {
+        const p = doc.createElement('p');
+        p.innerHTML = div.innerHTML;
+        if (div.parentNode) div.parentNode.replaceChild(p, div);
+      }
+    });
+
+    let htmlContent = doc.body ? doc.body.innerHTML.trim() : article.content;
+
+    const hasBlocks = /<(p|h[1-6]|table|ul|ol|img|iframe|video)\b/i.test(htmlContent);
+    if (!hasBlocks) {
+      htmlContent = article.textContent
+        .trim()
+        .split(/\n{2,}/)
+        .map(chunk => chunk.trim().replace(/\n/g, '<br>'))
+        .filter(Boolean)
+        .map(chunk => `<p>${chunk}</p>`)
+        .join('\n');
+    }
+
+    // ── Injecter l'image à la une en tête si elle n'est pas déjà dans le contenu ──
+    if (featuredImageUrl) {
+      const alreadyPresent = htmlContent.includes(featuredImageUrl)
+        || htmlContent.includes(featuredImageUrl.split('?')[0]); // ignorer les query strings
+      if (!alreadyPresent) {
+        const featuredImgHtml = `<figure data-featured="true"><img src="${featuredImageUrl}" alt="${article.title || ''}" contenteditable="false" loading="lazy" /></figure>`;
+        htmlContent = featuredImgHtml + '\n' + htmlContent;
+      }
+    }
+
+    // ── TextContent enrichi pour Claude (texte brut + références médias) ────────
+    const mediaRefs = [];
+    doc.querySelectorAll('img[src]').forEach(el => {
+      const alt = (el.getAttribute('alt') || '').trim();
+      mediaRefs.push(alt ? `[Image: "${alt}"]` : '[Image sans légende]');
+    });
+    doc.querySelectorAll('[data-media="iframe-wrapper"] iframe[src]').forEach(el => {
+      const src = el.getAttribute('src') || '';
+      const label = /youtube|youtu\.be/i.test(src) ? 'Vidéo YouTube'
+                  : /vimeo/i.test(src)             ? 'Vidéo Vimeo'
+                  : 'Vidéo intégrée';
+      mediaRefs.push(`[${label}: ${src}]`);
+    });
+
+    const rawText = article.textContent
+      .replace(/\r\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+
+    const textContent = mediaRefs.length > 0
+      ? `${rawText}\n\n--- Médias présents dans l'article ---\n${mediaRefs.join('\n')}`
+      : rawText;
+
+    return res.json({
+      success: true,
+      title:       article.title    || '',
+      content:     htmlContent,      // ← HTML structuré (tableaux, titres, listes…)
+      textContent: textContent,      // ← texte brut (fallback / usage Claude)
+      byline:      article.byline   || '',
+      siteName:    article.siteName || '',
+      length:      textContent.length,
+    });
+
+  } catch (err) {
+    console.error('[scrape]', err.message);
+    const status = err.response?.status;
+    if (status === 403 || status === 401) {
+      return res.status(403).json({ error: 'Ce site bloque le scraping (403). Copiez-collez le contenu manuellement.' });
+    }
+    return res.status(500).json({ error: `Erreur de récupération : ${err.message}` });
+  }
+});
+
+// ─── Proxy Jina AI (scraping & search) ───────────────────────────────────────
+// Jina est appelé ici côté serveur pour que le navigateur n'expose pas les URLs
+// des articles traités directement à un service tiers (confidentialité).
+app.post('/api/jina', requireAuth, async (req, res) => {
+  const { url, mode = 'reader' } = req.body;  // mode: 'reader' | 'search'
+  if (!url) return res.status(400).json({ error: 'url manquante' });
+  // Jina reader accepte n'importe quelle URL publique — pas besoin de vérifier SSRF ici
+  // car Jina lui-même fait la résolution, mais on vérifie le protocole minimum.
+  if (!url.startsWith('http://') && !url.startsWith('https://') && mode === 'reader') {
+    return res.status(400).json({ error: 'URL invalide' });
+  }
+  try {
+    const base = mode === 'search' ? 'https://s.jina.ai/' : 'https://r.jina.ai/';
+    const response = await axios.get(`${base}${encodeURIComponent(url)}`, {
+      headers: {
+        'Accept': mode === 'search' ? 'application/json' : 'text/plain',
+        'X-Return-Format': mode === 'search' ? 'json' : 'text',
+      },
+      timeout: 30000,
+    });
+    return res.json({ success: true, data: response.data });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ─── Traitement du HTML WordPress (contenu brut de l'API REST) ───────────────
+// Le contenu `content.rendered` de l'API WP n'est pas passé par Readability.
+// On applique les mêmes traitements que le scraper :
+//   • Résolution lazy-loading (data-src → src)
+//   • Wrapper responsive 16:9 pour les iframes
+//   • contenteditable="false" sur les médias
+const processWpHtml = (html, siteUrl) => {
+  if (!html) return '';
+  let dom;
+  try { dom = new JSDOM(html, { url: siteUrl }); } catch { return html; }
+  const doc = dom.window.document;
+  const base = (() => { try { return new URL(siteUrl); } catch { return null; } })();
+
+  const toAbs = (src) => {
+    if (!src || src.startsWith('http') || src.startsWith('//')) return src;
+    if (!base) return src;
+    try { return new URL(src, base).href; } catch { return src; }
+  };
+
+  // Résolution lazy-loading + absolutisation
+  doc.querySelectorAll('img').forEach(el => {
+    const lazySrc = el.getAttribute('data-src') || el.getAttribute('data-lazy-src')
+      || el.getAttribute('data-original') || el.getAttribute('data-lazy')
+      || el.getAttribute('data-srcset');
+    const currentSrc = el.getAttribute('src') || '';
+    if (lazySrc && (!currentSrc || currentSrc.includes('data:image') || currentSrc.length < 10)) {
+      el.setAttribute('src', toAbs(lazySrc));
+    } else if (currentSrc && !currentSrc.startsWith('http') && !currentSrc.startsWith('data:')) {
+      el.setAttribute('src', toAbs(currentSrc));
+    }
+    // Résoudre aussi srcset si relatif
+    const srcset = el.getAttribute('srcset') || el.getAttribute('data-srcset') || '';
+    if (srcset && !el.getAttribute('srcset')) el.setAttribute('srcset', srcset);
+    el.setAttribute('contenteditable', 'false');
+    el.setAttribute('loading', 'lazy');
+  });
+
+  // Wrapper responsive 16:9 pour les iframes (YouTube, Vimeo, etc.)
+  doc.querySelectorAll('iframe').forEach(el => {
+    const src = el.getAttribute('src') || '';
+    if (!src) { el.remove(); return; }
+    // Déjà wrappé
+    if (el.parentNode?.getAttribute?.('data-media') === 'iframe-wrapper') return;
+    const wrapper = doc.createElement('div');
+    wrapper.setAttribute('data-media', 'iframe-wrapper');
+    wrapper.setAttribute('contenteditable', 'false');
+    el.setAttribute('contenteditable', 'false');
+    el.setAttribute('allowfullscreen', '');
+    el.parentNode.insertBefore(wrapper, el);
+    wrapper.appendChild(el);
+  });
+
+  // Non-éditabilité des vidéos
+  doc.querySelectorAll('video').forEach(el => {
+    el.setAttribute('contenteditable', 'false');
+  });
+
+  return doc.body ? doc.body.innerHTML.trim() : html;
+};
+
+// ─── MCP WordPress : exécution d'outils ──────────────────────────────────────
+// Appelé soit directement (/api/wp-tool) soit depuis la boucle /api/claude-tools.
+// wpSites : liste des sites configurés dans l'app, avec credentials complets.
+async function executeWpTool(toolName, toolInput, wpSites = []) {
+  const getSite = (siteId) => {
+    const site = (wpSites || []).find(s => s.id === siteId);
+    if (!site) throw new Error(`Site WordPress "${siteId}" non trouvé`);
+    return site;
+  };
+
+  const wpApi = async (site, method, wpPath, body = null) => {
+    assertSafeUrl(site.url, 'URL du site WP');
+    const url = `${site.url.replace(/\/$/, '')}${wpPath}`;
+    const auth = Buffer.from(`${site.username}:${site.password}`).toString('base64');
+    const resp = await axios({
+      method, url,
+      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+      data: body || undefined,
+      timeout: 20000,
+    });
+    return resp.data;
+  };
+
+  switch (toolName) {
+
+    case 'wp_get_post': {
+      const { site_id, post_url } = toolInput;
+      const site = getSite(site_id);
+
+      let slug = '';
+      try {
+        const parts = new URL(post_url).pathname.replace(/\/$/, '').split('/').filter(Boolean);
+        slug = parts.pop() || '';
+      } catch {
+        slug = post_url.split('?')[0].replace(/\/$/, '').split('/').pop() || '';
+      }
+      if (!slug) return { error: 'Impossible d\'extraire le slug depuis l\'URL' };
+
+      let post = null;
+      for (const type of ['posts', 'pages']) {
+        try {
+          const rows = await wpApi(site, 'GET',
+            `/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,title,content,featured_media,status,link,type`);
+          if (Array.isArray(rows) && rows.length > 0) { post = { ...rows[0], postType: type }; break; }
+        } catch {}
+      }
+      if (!post) return { error: `Aucun article trouvé pour le slug "${slug}"` };
+
+      let featuredMediaUrl = null;
+      if (post.featured_media) {
+        try {
+          const media = await wpApi(site, 'GET',
+            `/wp-json/wp/v2/media/${post.featured_media}?_fields=id,source_url,alt_text`);
+          featuredMediaUrl = media.source_url || null;
+        } catch {}
+      }
+
+      let processedContent = processWpHtml(post.content?.rendered || '', site.url);
+      // Injecter l'image à la une en tête — même logique que le scraper (ligne ~706)
+      if (featuredMediaUrl) {
+        const alreadyIn = processedContent.includes(featuredMediaUrl.split('?')[0]);
+        if (!alreadyIn) {
+          processedContent = `<figure data-featured="true"><img src="${featuredMediaUrl}" alt="" contenteditable="false" loading="lazy" /></figure>\n` + processedContent;
+        }
+      }
+
+      return {
+        post_id:            post.id,
+        title:              post.title?.rendered || '',
+        content:            processedContent,
+        status:             post.status,
+        post_type:          post.postType,
+        link:               post.link,
+        featured_media_id:  post.featured_media || null,
+        featured_media_url: featuredMediaUrl,
+      };
+    }
+
+    case 'wp_upload_media': {
+      const { site_id, image_url, alt_text = '' } = toolInput;
+      const site = getSite(site_id);
+      assertSafeUrl(image_url, 'URL image');
+
+      const imgResp = await axios.get(image_url, {
+        responseType: 'arraybuffer', timeout: 30000,
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      });
+      const contentType = imgResp.headers['content-type'] || 'image/jpeg';
+      const ext = contentType.split('/')[1]?.split(';')[0] || 'jpg';
+      const fname = `featured-${Date.now()}.${ext}`;
+
+      const auth = Buffer.from(`${site.username}:${site.password}`).toString('base64');
+      // L'API REST WP attend du binaire brut + Content-Disposition, pas du multipart
+      const uploadResp = await axios.post(
+        `${site.url.replace(/\/$/, '')}/wp-json/wp/v2/media`,
+        Buffer.from(imgResp.data),
+        {
+          headers: {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': contentType,
+            'Content-Disposition': `attachment; filename="${fname}"`,
+            ...(alt_text ? { 'X-WP-Alt-Text': alt_text } : {}),
+          },
+          timeout: 60000,
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+        }
+      );
+      return { media_id: uploadResp.data.id, url: uploadResp.data.source_url };
+    }
+
+    case 'wp_update_post': {
+      const { site_id, post_id, content, featured_media_id, title, status } = toolInput;
+      const site = getSite(site_id);
+
+      const body = {};
+      if (content          !== undefined) body.content        = content;
+      if (title            !== undefined) body.title          = title;
+      if (status           !== undefined) body.status         = status;
+      if (featured_media_id !== undefined) body.featured_media = featured_media_id;
+
+      // Détection du type (post ou page)
+      let postType = 'posts';
+      try { await wpApi(site, 'GET', `/wp-json/wp/v2/posts/${post_id}?_fields=id`); }
+      catch { postType = 'pages'; }
+
+      const result = await wpApi(site, 'POST', `/wp-json/wp/v2/${postType}/${post_id}`, body);
+      return { post_id: result.id, link: result.link, status: result.status, featured_media: result.featured_media };
+    }
+
+    default:
+      throw new Error(`Outil MCP inconnu : ${toolName}`);
+  }
+}
+
+// ─── POST /api/wp-tool — exécution directe d'un outil WordPress (sans Claude) ─
+app.post('/api/wp-tool', requireAuth, async (req, res) => {
+  const { toolName, toolInput, wpSites = [] } = req.body;
+  if (!toolName) return res.status(400).json({ success: false, error: 'toolName requis' });
+  try {
+    const result = await executeWpTool(toolName, toolInput || {}, wpSites);
+    res.json({ success: true, result });
+  } catch (e) {
+    console.error('[proxy] /api/wp-tool erreur:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ─── POST /api/wp-upload-file — upload d'un fichier local vers la médiathèque WP ─
+// Accepte multipart/form-data : file (image), site (JSON site object).
+// Utilisé pour le téléversement direct depuis le PC (bouton "Parcourir") dans l'UI.
+app.post('/api/wp-upload-file', requireAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, error: 'Fichier image requis' });
+
+  let site;
+  try { site = JSON.parse(req.body.site || '{}'); } catch { return res.status(400).json({ success: false, error: 'Paramètre site invalide' }); }
+  if (!site.url || !site.username || !site.password) {
+    return res.status(400).json({ success: false, error: 'Paramètres site incomplets (url, username, password)' });
+  }
+
+  try {
+    assertSafeUrl(site.url, 'URL du site WP');
+    const auth     = Buffer.from(`${site.username}:${site.password}`).toString('base64');
+    const fname    = req.file.originalname || `image-${Date.now()}.jpg`;
+    const mime     = req.file.mimetype     || 'image/jpeg';
+
+    // L'API REST WordPress exige du binaire brut + Content-Disposition (pas multipart)
+    const uploadResp = await axios.post(
+      `${site.url.replace(/\/$/, '')}/wp-json/wp/v2/media`,
+      req.file.buffer,
+      {
+        headers: {
+          'Authorization':   `Basic ${auth}`,
+          'Content-Type':    mime,
+          'Content-Disposition': `attachment; filename="${fname}"`,
+        },
+        timeout: 60000,
+        maxContentLength: Infinity,
+        maxBodyLength:    Infinity,
+      }
+    );
+    res.json({ success: true, media_id: uploadResp.data.id, url: uploadResp.data.source_url });
+  } catch (e) {
+    const msg = e.response?.data?.message || e.response?.data?.code || e.message;
+    console.error('[proxy] /api/wp-upload-file erreur:', e.response?.status, msg);
+    res.status(500).json({ success: false, error: msg });
+  }
+});
+
+// ─── POST /api/claude-tools — boucle agentique Claude + outils WordPress MCP ──
+// Gère la boucle tool_use → exécution → tool_result jusqu'à end_turn.
+// Accepte les mêmes paramètres que /api/claude + { tools, wpSites }.
+app.post('/api/claude-tools', requireAuth, async (req, res) => {
+  const { system, messages, max_tokens = 4096, model, apiKey: clientApiKey, tools = [], wpSites = [] } = req.body;
+  if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
+
+  const requestedModel = model || MODEL_FALLBACK;
+  const toolCallLog = [];
+  let currentMessages = [...messages];
+  let totalUsage = { input_tokens: 0, output_tokens: 0 };
+  let finalText = '';
+  let finalModel = requestedModel;
+
+  try {
+    for (let iter = 0; iter < 10; iter++) {
+      let response;
+      if (clientApiKey && clientApiKey !== 'local') {
+        response = await callAnthropicWithApiKey(clientApiKey, {
+          model: requestedModel, max_tokens, system, messages: currentMessages, tools,
+        });
+        // callAnthropicWithApiKey retourne { text, modelUsed, usage } — si tool_use, il faut la réponse brute
+        // On utilise callAnthropicDirect à la place pour avoir le stop_reason
+        const token = (() => { try { return getOAuthToken(); } catch { return null; } })();
+        if (token) {
+          response = await callAnthropicDirect(token, {
+            model: requestedModel, max_tokens, system, messages: currentMessages, tools,
+          });
+        } else {
+          // Pas d'OAuth : on ne peut pas faire la boucle tool_use avec clé API seule pour l'instant
+          finalText = response.text || '';
+          finalModel = response.modelUsed || requestedModel;
+          totalUsage = response.usage || totalUsage;
+          break;
+        }
+      } else {
+        const token = getOAuthToken();
+        response = await callAnthropicDirect(token, {
+          model: requestedModel, max_tokens, system, messages: currentMessages, tools,
+        });
+      }
+
+      totalUsage.input_tokens  += response.usage?.input_tokens  || 0;
+      totalUsage.output_tokens += response.usage?.output_tokens || 0;
+      finalModel = response.model || requestedModel;
+
+      if (response.stop_reason !== 'tool_use') {
+        finalText = response.content?.find(c => c.type === 'text')?.text || '';
+        break;
+      }
+
+      // Exécution des outils demandés par Claude
+      const tuBlocks = (response.content || []).filter(c => c.type === 'tool_use');
+      const toolResults = [];
+      for (const tu of tuBlocks) {
+        toolCallLog.push({ name: tu.name, input: tu.input });
+        try {
+          const r = await executeWpTool(tu.name, tu.input, wpSites);
+          toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(r) });
+        } catch (e) {
+          toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify({ error: e.message }), is_error: true });
+        }
+      }
+
+      currentMessages = [
+        ...currentMessages,
+        { role: 'assistant', content: response.content },
+        { role: 'user',      content: toolResults },
+      ];
+    }
+
+    res.json({
+      content:     [{ text: finalText }],
+      modelUsed:   finalModel,
+      usage:       totalUsage,
+      toolCallLog,
+    });
+  } catch (e) {
+    console.error('[proxy] /api/claude-tools erreur:', e.message);
+    if (e.message === 'AUTH_REQUIRED')
+      return res.status(401).json({ error: 'Claude non connecté. Lance `claude login` puis relance npm start.' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Proxy WordPress REST API ─────────────────────────────────────────────────
+// Toutes les requêtes WP passent par ici pour éviter les blocages CORS du navigateur.
+// Le proxy Node.js n'a pas de restriction cross-origin → les appels avec Authorization
+// header fonctionnent même si le site WP n'a pas configuré CORS.
+app.post('/api/wordpress', requireAuth, async (req, res) => {
+  const { wpUrl, username, password, method = 'GET', path: wpPath, body } = req.body;
+  const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH']);
+  if (!ALLOWED_METHODS.has((method || '').toUpperCase())) {
+    return res.status(400).json({ success: false, error: 'Méthode HTTP non autorisée' });
+  }
+  if (!wpUrl || !username || !password || !wpPath) {
+    return res.status(400).json({ success: false, error: 'Paramètres manquants (wpUrl, username, password, path)' });
+  }
+
+  // Protection SSRF : le wpUrl ne doit pas pointer vers des ressources internes
+  try { assertSafeUrl(wpUrl, 'URL du site WordPress'); }
+  catch (e) { return res.status(400).json({ success: false, error: e.message }); }
+
+  // Validation du chemin : doit commencer par /wp-json/ et ne pas contenir
+  // de séquences de traversal (..) ni de caractères de contrôle (header injection)
+  if (!wpPath.startsWith('/wp-json/')) {
+    return res.status(400).json({ success: false, error: 'Chemin WP invalide — doit commencer par /wp-json/' });
+  }
+  if (/[^\x20-\x7E]/.test(wpPath) || wpPath.includes('..')) {
+    return res.status(400).json({ success: false, error: 'Caractères non autorisés dans le chemin WP' });
+  }
+
+  const token = Buffer.from(`${username}:${password}`).toString('base64');
+  const fullUrl = `${wpUrl.replace(/\/$/, '')}${wpPath}`;
+
+  try {
+    const response = await axios({
+      method,
+      url: fullUrl,
+      headers: {
+        'Authorization': `Basic ${token}`,
+        'Content-Type': 'application/json',
+      },
+      data: body || undefined,
+      timeout: 15000,
+    });
+    return res.json({ success: true, data: response.data });
+  } catch (e) {
+    const status  = e.response?.status;
+    const message = e.response?.data?.message || e.message;
+    return res.status(status || 500).json({ success: false, error: message });
+  }
+});
+
+// ─── Route racine ─────────────────────────────────────────────────────────────
+app.get('/', (req, res) => {
+  if (IS_PROD) {
+    res.sendFile(path.join(__dirname, 'build', 'index.html'));
+  } else {
+    res.redirect(302, 'http://localhost:3000');
+  }
+});
+
+// ─── Health check ─────────────────────────────────────────────────────────────
+app.get('/health', (_, res) => {
+  res.json({
+    status: 'ok',
+    modelFallback: MODEL_FALLBACK,
+    cascade: MODEL_CASCADE,
+    auth: aesKeyCache ? 'oauth-dpapi' : 'cli-fallback',
+  });
+});
+
+// ─── SPA fallback (prod) — toute route non-API renvoie index.html ─────────────
+// Doit être APRÈS toutes les routes /api/* pour ne pas les intercepter.
+// app.use() sans chemin = catch-all compatible toutes versions de path-to-regexp.
+if (IS_PROD) {
+  app.use((_, res) => {
+    res.sendFile(path.join(__dirname, 'build', 'index.html'));
+  });
+}
+
+// ─── Démarrage ─────────────────────────────────────────────────────────────────
+const HOST = IS_PROD ? '0.0.0.0' : '127.0.0.1';
+const server = app.listen(PORT, HOST, () => {
+  let authOk = false;
+  try { getOAuthToken(); authOk = true; } catch {}
+  console.log(`\n  ✓ Proxy ArticleAI actif → http://localhost:${PORT}`);
+  if (authOk) {
+    console.log(`  Auth : OAuth Claude Desktop (déchiffrement DPAPI) ✓`);
+    console.log(`  Aucune configuration supplémentaire requise.\n`);
+  } else {
+    console.log(`  Auth : fallback CLI → ${CLAUDE_BIN}`);
+    console.log(`\n  ⚠ Si l'agent échoue avec une erreur d'auth :`);
+    console.log(`  → Ouvre un terminal et lance : "${CLAUDE_BIN}" login\n`);
+  }
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n  ✗ Port ${PORT} déjà occupé. Libère le port et relance.\n`);
+    process.exit(1);
+  } else {
+    console.error('\n  ✗ Erreur serveur proxy :', err.message);
+    process.exit(1);
+  }
+});

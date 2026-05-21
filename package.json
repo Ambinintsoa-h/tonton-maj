@@ -1,0 +1,78 @@
+{
+  "name": "article-updater",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@headlessui/react": "^2.2.10",
+    "@mozilla/readability": "^0.6.0",
+    "@reduxjs/toolkit": "^2.12.0",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^13.5.0",
+    "@tiptap/extension-color": "^3.23.4",
+    "@tiptap/extension-highlight": "^3.23.4",
+    "@tiptap/extension-text-align": "^3.23.4",
+    "@tiptap/extension-text-style": "^3.23.4",
+    "@tiptap/extension-underline": "^3.23.4",
+    "@tiptap/pm": "^3.23.4",
+    "@tiptap/react": "^3.23.4",
+    "@tiptap/starter-kit": "^3.23.4",
+    "axios": "^1.16.1",
+    "cors": "^2.8.6",
+    "dompurify": "^3.4.5",
+    "dotenv": "^16.6.1",
+    "express": "^5.2.1",
+    "firebase": "^12.13.0",
+    "form-data": "^4.0.5",
+    "framer-motion": "^12.38.0",
+    "helmet": "^8.1.0",
+    "jsdom": "^29.1.1",
+    "jsonwebtoken": "^9.0.3",
+    "lucide-react": "^1.16.0",
+    "mammoth": "^1.12.0",
+    "marked": "^18.0.3",
+    "multer": "^2.1.1",
+    "pdfjs-dist": "^5.7.284",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-dropzone": "^15.0.0",
+    "react-hot-toast": "^2.6.0",
+    "react-redux": "^9.3.0",
+    "react-router-dom": "^7.15.1",
+    "react-scripts": "5.0.1",
+    "web-vitals": "^2.1.4",
+    "xlsx": "^0.18.5"
+  },
+  "proxy": "http://localhost:3001",
+  "scripts": {
+    "start": "concurrently --kill-others \"node proxy.js\" \"react-scripts start\"",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.5.0",
+    "concurrently": "^9.2.1",
+    "postcss": "^8.5.14",
+    "tailwindcss": "^3.4.19"
+  }
+}

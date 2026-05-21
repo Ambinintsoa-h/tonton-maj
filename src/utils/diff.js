@@ -1,0 +1,220 @@
+// ── Utilitaires de diff partagés entre Articles.jsx et ArticleResult.jsx ────
+
+export const normalizeText = (str) =>
+  str
+    .replace(/ /g, " ")
+    .replace(/ /g, " ")
+    .replace(/'/g, "'").replace(/'/g, "'")
+    .replace(/"/g, '"').replace(/"/g, '"')
+    .replace(/–/g, "-").replace(/—/g, "--")
+    .replace(/\s+/g, " ")
+    .trim();
+
+export const escRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Tente de localiser `original` dans `html` et l'entoure des balises diff.
+ * 4 stratégies par ordre de précision décroissante.
+ * @returns {{ html: string, matched: boolean }}
+ */
+export const applyDiff = (html, original, updated, reason) => {
+  const safeReason = (reason || "").replace(/"/g, "'");
+  const replacement = (matched) =>
+    `<del class="deleted-content">${matched}</del><mark class="updated-content" title="${safeReason}">${updated}</mark>`;
+
+  // Stratégie 1 : correspondance exacte
+  try {
+    const rx = new RegExp(escRx(original), "g");
+    if (rx.test(html)) return { html: html.replace(rx, replacement(original)), matched: true };
+  } catch {}
+
+  // Stratégie 2 : regex flexible sur HTML original
+  // Gère apostrophes/guillemets typographiques, espaces insécables, tirets/tirets longs
+  try {
+    const normOrig = normalizeText(original);
+    const flexPattern = escRx(normOrig)
+      .replace(/\\ /g, "[\\s\\u00a0\\u202f]+")
+      .replace(/'/g, "[\\u0027\\u2018\\u2019]")
+      .replace(/"/g, "[\\u0022\\u201c\\u201d\\u00ab\\u00bb]")
+      // Bug fix : normalizeText convertit — en -- (2 chars), ce qui devient [-–—][-–—]
+      // dans le pattern → ne matche pas un — unique dans le HTML.
+      // On re-collapse les paires de tirets en un seul class de tiret.
+      .replace(/(?:[-–—]){1,2}/g, "[-\\u2013\\u2014]");
+    const rxFlex = new RegExp(flexPattern, "gi");
+    const res2 = html.replace(rxFlex, (m) => replacement(m));
+    if (res2 !== html) return { html: res2, matched: true };
+  } catch {}
+
+  // Stratégie 2.5 : tous les mots avec gaps souples
+  // Cas typique : str. 1 et 2 échouent (variation de chars, balise HTML entre les mots),
+  // mais le texte existe dans le HTML à peu près intact.
+  // Utilise TOUS les mots (y compris <4 chars comme "les", "de", "un") → <del> couvre
+  // l'original COMPLET, pas seulement les mots-clés ≥4 chars.
+  // Gap : [^\n\r]{0,20}? — accepte balises HTML inline (<em>, <strong>…) mais s'arrête
+  // aux sauts de ligne (pas de match cross-paragraphe).
+  try {
+    const allWordsArr = normalizeText(original).split(/\s+/).filter(Boolean);
+    if (allWordsArr.length >= 2 && allWordsArr.length <= 30 && original.length < 600) {
+      const pat25 = allWordsArr.map((w) => escRx(w)).join("[^\\n\\r]{0,20}?");
+      const rx25  = new RegExp(pat25, "i");
+      const res25 = html.replace(rx25, (m) => replacement(m));
+      if (res25 !== html) return { html: res25, matched: true };
+    }
+  } catch {}
+
+  // Stratégie 3 : mots-clés ordonnés, phrases simples
+  // ≥4 mots de ≥4 chars — deux variantes selon la densité HTML du contenu
+  try {
+    const words = normalizeText(original).split(/\s+/).filter((w) => w.length >= 4);
+    if (words.length >= 4) {
+      // Variante A : gap texte pur, sans balises (rapide, précis)
+      const GAP_PURE = "[^\\n\\r.!?<]{0,25}?";
+      const pattern3a = words.map((w) => escRx(w)).join(GAP_PURE);
+      const rx3a = new RegExp(pattern3a, "i");
+      const res3a = html.replace(rx3a, (m) => replacement(m));
+      if (res3a !== html) return { html: res3a, matched: true };
+
+      // Variante B : gap peut traverser une balise HTML (passe 2 sur HTML marqué)
+      // GAP_HTML simplifié — un seul quantificateur plat pour éviter le backtracking catastrophique
+      // Autorise jusqu'à 60 chars dont d'éventuelles balises <mark>/<del> insérées par la passe 1
+      const GAP_HTML = "[\\s\\S]{0,60}?";
+      const pattern3b = words.map((w) => escRx(w)).join(GAP_HTML);
+      const rx3b = new RegExp(pattern3b, "i");
+      const res3b = html.replace(rx3b, (m) => replacement(m));
+      if (res3b !== html) return { html: res3b, matched: true };
+    }
+  } catch {}
+
+  // Stratégie 4 : ancres début + fin pour originaux multi-phrases
+  // 3 premiers mots + 3 derniers mots, span plafonné à 600 chars pour éviter les freezes
+  try {
+    const allWords = normalizeText(original).split(/\s+/).filter((w) => w.length >= 4);
+    if (allWords.length >= 8) {
+      const firstWords = allWords.slice(0, 3);
+      const lastWords  = allWords.slice(-3);
+      // Plafonner maxInner : évite les regex catastrophiques sur de très longs originaux
+      const maxInner   = Math.min(Math.round(original.length * 1.5), 600);
+      const startPat   = firstWords.map((w) => escRx(w)).join("[\\s\\S]{0,20}?");
+      const endPat     = lastWords.map((w) => escRx(w)).join("[\\s\\S]{0,20}?");
+      const fullPat    = `${startPat}[\\s\\S]{0,${maxInner}}?${endPat}`;
+      const rx4 = new RegExp(fullPat, "i");
+      const res4 = html.replace(rx4, (m) => replacement(m));
+      if (res4 !== html) return { html: res4, matched: true };
+    }
+  } catch {}
+
+  return { html, matched: false };
+};
+
+/**
+ * Corrige les résidus dupliqués après </mark> quand l'agent a tronqué "original".
+ *
+ * Problème : Claude écrit original="20 ans" mais le texte complet est
+ * "20 ans de franchise (2005-2025)". Le diff produit alors :
+ *
+ *   <del>20 ans</del>
+ *   <mark>20 ans de franchise (2005-2025), avec 21 ans en cours</mark>
+ *   de franchise (2005-2025)   ← résidu visible non barré
+ *
+ * Solution : trouver mot par mot le plus long préfixe de ce résidu
+ * qui est contenu dans le <mark>, puis l'intégrer dans le <del> :
+ *
+ *   <del>20 ans de franchise (2005-2025)</del>
+ *   <mark>20 ans de franchise (2005-2025), avec 21 ans en cours</mark>
+ *
+ * Algo : pour chaque mot du texte après </mark>, on accumule mot par mot
+ * tant que le cumul (normalisé sans ponctuation) est contenu dans le texte
+ * normalisé du <mark>. Quand ça casse, la partie accumulée est le vrai
+ * résidu → on l'intègre dans le <del>.
+ *
+ * La normalisation retire la ponctuation pour la comparaison uniquement,
+ * ce qui gère les décalages de ponctuation entre l'article ("(2005-2025).")
+ * et le <mark> ("(2005-2025),").
+ */
+
+// Regex : capture <del>...</del><mark>...</mark> + texte brut qui suit (jusqu'au prochain tag/newline)
+const RESIDUAL_RX = /(<del class="deleted-content">)([\s\S]*?)(<\/del>)(<mark class="updated-content"[^>]*>)([\s\S]*?)(<\/mark>)([^\n<]*)/g;
+
+// Retire ponctuation et espaces multiples pour la comparaison de résidus uniquement.
+// Permet de matcher "(2005-2025)." du texte contre "(2005-2025)," du <mark>.
+const normForCheck = (s) => s.replace(/[.,;:!?»"'()[\]–—]+/g, "").replace(/\s+/g, " ").trim();
+
+const residualPass = (html) => {
+  let changed = false;
+  const newHtml = html.replace(
+    RESIDUAL_RX,
+    (match, delOpen, delContent, delClose, markOpen, markContent, markClose, after) => {
+      // Texte brut du <mark> normalisé pour comparaison
+      const markText = markContent.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+      // Texte après </mark> nettoyé
+      const afterTrimmed = after.replace(/\s+/g, " ").trim();
+      if (!afterTrimmed || !markText) return match;
+
+      const markNorm = normForCheck(markText);
+
+      // Trouver le plus long préfixe (mot par mot) de afterTrimmed contenu dans markNorm.
+      // La comparaison se fait sans ponctuation pour gérer les décalages de ponctuation.
+      // Ex: "de franchise (2005-2025)." matche "de franchise (2005-2025)," dans le <mark>.
+      const afterWords = afterTrimmed.split(/\s+/);
+      let residual = "";
+      let cumulative = "";
+      for (let i = 0; i < afterWords.length; i++) {
+        const next = cumulative ? cumulative + " " + afterWords[i] : afterWords[i];
+        if (markNorm.includes(normForCheck(next))) {
+          cumulative = next;
+        } else {
+          break;
+        }
+      }
+      residual = cumulative;
+
+      // Seuil : un seul mot court commun (ex: "de", "le") n'est pas un vrai résidu
+      if (residual.length < 8) return match;
+
+      changed = true;
+
+      // Étendre le <del> pour inclure le résidu → toute la phrase originale est barrée
+      const sep         = /\s$/.test(delContent) ? "" : " ";
+      const extendedDel = delContent.trimEnd() + sep + residual;
+
+      // Reconstruit la partie après : retirer le résidu, conserver la suite
+      const remainder = afterTrimmed.substring(residual.length).trimStart();
+      // Préserver l'espace de tête du after original
+      const leadingWs = after.match(/^(\s*)/)?.[1] || "";
+      const trailingPart = remainder ? (" " + remainder) : "";
+
+      return delOpen + extendedDel + delClose + markOpen + markContent + markClose + leadingWs + trailingPart;
+    }
+  );
+  return { html: newHtml, changed };
+};
+
+export const cleanResiduals = (html) => {
+  let result = html;
+  for (let pass = 0; pass < 5; pass++) {
+    const { html: newHtml, changed } = residualPass(result);
+    result = newHtml;
+    if (!changed) break;
+  }
+  return result;
+};
+
+/**
+ * Applique une liste de mises à jour sur un HTML, retourne le HTML annoté
+ * et les updates avec leur flag applied + pass.
+ */
+export const applyAllDiffs = (html, updates, passNumber = 1) => {
+  let updatedHtml = html;
+  const withStatus = (updates || []).map((update) => {
+    if (!update.original || !update.updated) return { ...update, applied: false, pass: passNumber };
+    const { html: newHtml, matched } = applyDiff(updatedHtml, update.original, update.updated, update.reason);
+    if (matched) {
+      updatedHtml = newHtml;
+      return { ...update, applied: true, pass: passNumber };
+    }
+    console.warn(`[diff p${passNumber}] Non localisé :`, update.original.substring(0, 70));
+    return { ...update, applied: false, pass: passNumber };
+  });
+  updatedHtml = cleanResiduals(updatedHtml);
+  return { html: updatedHtml, updates: withStatus };
+};
