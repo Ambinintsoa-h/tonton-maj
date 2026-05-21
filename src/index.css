@@ -198,6 +198,24 @@ body {
   background-color: #86efac !important;
 }
 
+/* Nouveau paragraphe ajouté (enrichissement actualités) : fond bleu, bordure gauche */
+.article-diff-content ins.added-content {
+  display: block !important;
+  background-color: #dbeafe !important;
+  border-left: 3px solid #3b82f6 !important;
+  border-radius: 0 6px 6px 0 !important;
+  padding: 10px 14px !important;
+  margin: 10px 0 !important;
+  color: #1e3a5f !important;
+  text-decoration: none !important;
+  font-style: normal !important;
+  transition: background-color 0.15s;
+}
+
+.article-diff-content ins.added-content:hover {
+  background-color: #bfdbfe !important;
+}
+
 /* Skills editor */
 .skill-editor-preview { line-height: 1.7; }
 .skill-editor-preview h1, .skill-editor-preview h2, .skill-editor-preview h3 {

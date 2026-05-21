@@ -311,6 +311,19 @@ CORRECT :  "original": "La formule d'entrée débute à 12,40 EUR par mois."
 Si un tableau reprend les mêmes données que le texte, mettre à jour les deux.
 
 ## Format de réponse — JSON valide UNIQUEMENT, sans markdown ni texte autour
+
+### Type par défaut : remplacement d'un segment existant
+\`\`\`
+{ "original": "copie EXACTE mot-pour-mot", "updated": "texte actualisé", "reason": "...", "source": "..." }
+\`\`\`
+
+### Type "addition" — Nouveau paragraphe (actualité absente de l'article)
+Utilise ce type UNIQUEMENT quand les sources web révèlent une information VRAIMENT nouvelle sur le sujet, non encore présente dans l'article (ex : annonce récente, nouveau produit, chiffre de marché 2024-2025).
+- \`"type": "addition"\`
+- \`"anchor"\` : copie EXACTE d'une courte phrase de l'article (20-40 mots) identifiant le paragraphe APRÈS lequel insérer
+- \`"updated"\` : contenu HTML du nouveau paragraphe (enveloppé dans \`<p>...</p>\`)
+- \`"original"\` : laisser vide \`""\`
+
 {
   "analysis": "Synthèse : état de l'article + skills appliqués + documents de la base de connaissances consultés + impact SEO",
   "updates": [
@@ -319,6 +332,14 @@ Si un tableau reprend les mêmes données que le texte, mettre à jour les deux.
       "updated": "texte de remplacement avec données actualisées",
       "reason": "justification — citer le document source si issu de la base de connaissances",
       "source": "URL ou nom de la source ou 'Base de connaissances n°X'"
+    },
+    {
+      "type": "addition",
+      "anchor": "courte phrase EXACTE de l'article après laquelle insérer le nouveau paragraphe",
+      "original": "",
+      "updated": "<p>Nouveau contenu avec actualité récente.</p>",
+      "reason": "Nouvelle information absente de l'article : ...",
+      "source": "URL de la source"
     }
   ],
   "sources": [
@@ -643,6 +664,16 @@ const buildReviewSystemPrompt = (skills, knowledge = []) => {
 - "updates: []" acceptable SEULEMENT si tout est parfait et à jour
 
 ## Format — JSON valide UNIQUEMENT
+
+### Type par défaut : remplacement
+\`\`\`
+{ "original": "copie EXACTE", "updated": "texte actualisé", "reason": "...", "source": "..." }
+\`\`\`
+
+### Type "addition" — Nouveau paragraphe (actualité absente de l'article)
+Utilise ce type quand les sources révèlent une information vraiment nouvelle, non présente dans l'article.
+- \`"type": "addition"\`, \`"anchor"\` : phrase EXACTE de l'article indiquant où insérer, \`"updated"\` : HTML \`<p>...</p>\`, \`"original"\` : \`""\`
+
 {
   "analysis": "Ce que la passe 2 a ajouté : skills vérifiés, documents base de connaissances appliqués, compléments SEO",
   "updates": [

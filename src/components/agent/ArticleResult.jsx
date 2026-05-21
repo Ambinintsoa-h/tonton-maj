@@ -83,14 +83,19 @@ export default function ArticleResult() {
     // 2. Supprimer tous les blocs <del> (texte supprimé) via le DOM
     tmp.querySelectorAll('del').forEach(el => el.remove());
 
-    // 3. Débaliser les <mark> : conserver le contenu, supprimer la balise
+    // 3. Débaliser les <mark> et <ins class="added-content"> : conserver le contenu
     tmp.querySelectorAll('mark').forEach(el => {
       const frag = document.createDocumentFragment();
       while (el.firstChild) frag.appendChild(el.firstChild);
       if (el.parentNode) el.parentNode.replaceChild(frag, el);
     });
+    tmp.querySelectorAll('ins.added-content').forEach(el => {
+      const frag = document.createDocumentFragment();
+      while (el.firstChild) frag.appendChild(el.firstChild);
+      if (el.parentNode) el.parentNode.replaceChild(frag, el);
+    });
 
-    // 4. Filet de sécurité regex — capture les <del>/<mark> résiduels que le DOM
+    // 4. Filet de sécurité regex — capture les <del>/<mark>/<ins> résiduels que le DOM
     //    n'aurait pas rattrapés (ex: balises cassées par une édition dans contentEditable,
     //    HTML encodé différemment, attributs inattendus…)
     let html = tmp.innerHTML;
@@ -103,6 +108,8 @@ export default function ArticleResult() {
       prev = html;
       html = html.replace(/<mark\b[^>]*>([\s\S]*?)<\/mark>/gi, '$1');
     }
+    // Débaliser tout <ins class="added-content">…</ins> résiduel
+    html = html.replace(/<ins\b[^>]*class="added-content"[^>]*>([\s\S]*?)<\/ins>/gi, '$1');
 
     // 5. Nettoyage cosmétique sur le HTML résultant
     return html
@@ -262,9 +269,9 @@ export default function ArticleResult() {
   // Navigation entre les modifications dans l'article
   const jumpToChange = useCallback((dir) => {
     if (!articleRef.current) return;
-    const marks = Array.from(articleRef.current.querySelectorAll('mark.updated-content, del.deleted-content'));
-    // Grouper del+mark adjacents : ne naviguer que sur les mark (ajouts)
-    const targets = marks.filter(el => el.tagName === 'MARK');
+    const marks = Array.from(articleRef.current.querySelectorAll('mark.updated-content, del.deleted-content, ins.added-content'));
+    // Naviguer sur les mark (remplacement) et ins (addition), pas les del
+    const targets = marks.filter(el => el.tagName === 'MARK' || el.tagName === 'INS');
     if (!targets.length) return;
     changeIdxRef.current = (changeIdxRef.current + dir + targets.length) % targets.length;
     const target = targets[changeIdxRef.current];
@@ -1034,6 +1041,12 @@ export default function ArticleResult() {
                         mis à jour
                       </span>
                     </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-1.5 py-0.5 rounded text-[11px] font-medium"
+                        style={{ background: '#dbeafe', color: '#1e40af', borderLeft: '2px solid #3b82f6' }}>
+                        ajouté
+                      </span>
+                    </div>
                   </>
                 )}
 
@@ -1196,10 +1209,12 @@ export default function ArticleResult() {
             {updates.map((u, i) => {
               const isApplied = u.applied !== false;
               const isPass2 = u.pass === 2;
+              const isAddition = u.type === 'addition';
               return (
                 <div key={i} className={`rounded-xl p-4 border transition-colors ${
                   isApplied
-                    ? isPass2 ? 'bg-purple-50/40 border-purple-100' : 'bg-green-50/40 border-green-100'
+                    ? isAddition ? 'bg-blue-50/40 border-blue-100'
+                    : isPass2 ? 'bg-purple-50/40 border-purple-100' : 'bg-green-50/40 border-green-100'
                     : 'bg-amber-50/30 border-amber-100'
                 }`}>
                   <div className="flex items-start gap-3 text-sm">
@@ -1207,13 +1222,14 @@ export default function ArticleResult() {
                     <div className="flex flex-col items-center gap-1 flex-shrink-0">
                       <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold ${
                         isApplied
-                          ? isPass2 ? 'bg-purple-600 text-white' : 'bg-black text-white'
+                          ? isAddition ? 'bg-blue-500 text-white'
+                          : isPass2 ? 'bg-purple-600 text-white' : 'bg-black text-white'
                           : 'bg-amber-200 text-amber-800'
                       }`}>
                         {i + 1}
                       </span>
                       {isApplied
-                        ? <CheckCircle2 size={11} className={isPass2 ? 'text-purple-500' : 'text-green-500'} />
+                        ? <CheckCircle2 size={11} className={isAddition ? 'text-blue-500' : isPass2 ? 'text-purple-500' : 'text-green-500'} />
                         : <AlertTriangle size={11} className="text-amber-500" />
                       }
                     </div>
@@ -1222,13 +1238,19 @@ export default function ArticleResult() {
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         {isApplied ? (
                           <span className={`text-[10px] font-semibold rounded-full px-2 py-0.5 ${
-                            isPass2 ? 'text-purple-700 bg-purple-100' : 'text-green-600 bg-green-100'
+                            isAddition ? 'text-blue-700 bg-blue-100'
+                            : isPass2 ? 'text-purple-700 bg-purple-100' : 'text-green-600 bg-green-100'
                           }`}>
-                            ✓ Appliquée dans l'article
+                            ✓ {isAddition ? 'Paragraphe ajouté' : 'Appliquée dans l\'article'}
                           </span>
                         ) : (
                           <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 rounded-full px-2 py-0.5">
                             ⚠ Non localisée dans le texte
+                          </span>
+                        )}
+                        {isAddition && (
+                          <span className="text-[10px] font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5">
+                            + Nouveau
                           </span>
                         )}
                         {isPass2 && (
@@ -1237,10 +1259,17 @@ export default function ArticleResult() {
                           </span>
                         )}
                       </div>
-                      <p className="text-gray-400 line-through text-xs leading-relaxed break-words">{u.original}</p>
+                      {isAddition ? (
+                        <p className="text-[11px] text-gray-400 italic">Inséré après : « {u.anchor?.substring(0, 80)}{(u.anchor?.length ?? 0) > 80 ? '…' : ''} »</p>
+                      ) : (
+                        <p className="text-gray-400 line-through text-xs leading-relaxed break-words">{u.original}</p>
+                      )}
                       <div className="flex items-start gap-1.5">
-                        <ArrowRight size={12} className="text-sage-500 flex-shrink-0 mt-0.5" />
-                        <p className="text-xs leading-relaxed font-medium break-words" style={{ color: '#2d6a2d' }}>{u.updated}</p>
+                        <ArrowRight size={12} className={`flex-shrink-0 mt-0.5 ${isAddition ? 'text-blue-400' : 'text-sage-500'}`} />
+                        <p className="text-xs leading-relaxed font-medium break-words"
+                          style={{ color: isAddition ? '#1d4ed8' : '#2d6a2d' }}
+                          dangerouslySetInnerHTML={{ __html: u.updated }}
+                        />
                       </div>
                       {u.reason && <p className="text-[11px] text-gray-400 italic pt-0.5">{u.reason}</p>}
                       {u.source && (

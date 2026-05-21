@@ -200,12 +200,68 @@ export const cleanResiduals = (html) => {
 };
 
 /**
+ * Insère `updated` après le bloc contenant `anchor`.
+ * Utilisé pour les updates de type "addition" (nouveaux paragraphes).
+ * @returns {{ html: string, matched: boolean }}
+ */
+export const applyAddition = (html, anchor, updated) => {
+  if (!anchor || !updated) return { html, matched: false };
+
+  // Localiser l'anchor avec correspondance flexible (même algo que applyDiff str.2)
+  let anchorEnd = -1;
+  try {
+    const normAnchor = normalizeText(anchor);
+    const flexPat = escRx(normAnchor)
+      .replace(/\\ /g, "[\\s\\u00a0\\u202f]+")
+      .replace(/'/g, "[\\u0027\\u2018\\u2019]")
+      .replace(/"/g, "[\\u0022\\u201c\\u201d\\u00ab\\u00bb]")
+      .replace(/(?:[-–—]){1,2}/g, "[-\\u2013\\u2014]");
+    const rx = new RegExp(flexPat, 'i');
+    const m = rx.exec(html);
+    if (m) anchorEnd = m.index + m[0].length;
+  } catch {}
+
+  // Fallback : correspondance exacte
+  if (anchorEnd < 0) {
+    const idx = html.indexOf(anchor);
+    if (idx >= 0) anchorEnd = idx + anchor.length;
+  }
+
+  if (anchorEnd < 0) return { html, matched: false };
+
+  // Trouver la prochaine balise fermante de bloc après la position de l'anchor
+  const tail = html.slice(anchorEnd);
+  const blockCloseRx = /<\/(p|h[1-6]|li|blockquote|div|section|article|td|th)>/i;
+  const blockMatch = blockCloseRx.exec(tail);
+  if (!blockMatch) return { html, matched: false };
+
+  const insertPos = anchorEnd + blockMatch.index + blockMatch[0].length;
+  const newHtml =
+    html.slice(0, insertPos) +
+    `<ins class="added-content">${updated}</ins>` +
+    html.slice(insertPos);
+  return { html: newHtml, matched: true };
+};
+
+/**
  * Applique une liste de mises à jour sur un HTML, retourne le HTML annoté
  * et les updates avec leur flag applied + pass.
  */
 export const applyAllDiffs = (html, updates, passNumber = 1) => {
   let updatedHtml = html;
   const withStatus = (updates || []).map((update) => {
+    // Nouveau paragraphe (enrichissement actualités)
+    if (update.type === 'addition') {
+      if (!update.updated) return { ...update, applied: false, pass: passNumber };
+      const { html: newHtml, matched } = applyAddition(updatedHtml, update.anchor || '', update.updated);
+      if (matched) {
+        updatedHtml = newHtml;
+        return { ...update, applied: true, pass: passNumber };
+      }
+      console.warn(`[diff p${passNumber}] Addition non localisée (anchor):`, (update.anchor || '').substring(0, 70));
+      return { ...update, applied: false, pass: passNumber };
+    }
+    // Remplacement classique
     if (!update.original || !update.updated) return { ...update, applied: false, pass: passNumber };
     const { html: newHtml, matched } = applyDiff(updatedHtml, update.original, update.updated, update.reason);
     if (matched) {
