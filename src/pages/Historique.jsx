@@ -378,11 +378,12 @@ export default function Historique() {
     a.keyword?.toLowerCase().includes(q)
   );
 
-  const handleDelete = async (id) => {
-    if (firebaseReady) { try { await deleteArticle(id); } catch {} }
+  const handleDelete = (id) => {
     dispatch(removeFromHistory(id));
     toast.success('Supprimé de l\'historique');
     if (preview?.id === id) setPreview(null);
+    // Nettoyage Firestore en arrière-plan (non bloquant — comme handleRequeue)
+    if (firebaseReady) deleteArticle(id).catch(() => {});
   };
 
   const handleRequeue = (article) => {
