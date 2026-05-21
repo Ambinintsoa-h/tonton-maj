@@ -164,6 +164,58 @@ export const generateAltText = async (imageUrl, apiKey) => {
   }
 };
 
+// ── Vérification de cohérence (Haiku) ────────────────────────────────────────
+/**
+ * Passe de validation automatique : vérifie que chaque update proposé est cohérent.
+ * Critères : original présent dans l'article, remplacement non-dupliqué, pas de contradiction.
+ * Retourne les updates enrichis d'un flag `coherent` et d'un champ `coherenceIssue`.
+ * Silencieux en cas d'erreur — ne bloque jamais l'affichage des résultats.
+ */
+const checkCoherence = async (articleHtml, updates, apiKey) => {
+  if (!updates?.length || !apiKey) return updates;
+
+  // Texte brut de l'article (2000 chars suffisent pour le contexte)
+  const articleText = articleHtml
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .substring(0, 2000);
+
+  // Envoyer uniquement les champs utiles pour économiser les tokens
+  const payload = updates.slice(0, 25).map((u, i) => ({
+    i,
+    original: (u.original || '').substring(0, 180),
+    updated:  (u.updated  || '').substring(0, 250),
+    reason:   (u.reason   || '').substring(0, 80),
+    type:     u.type || 'replacement',
+  }));
+
+  const { text } = await callClaude(apiKey, {
+    system: `Tu valides des modifications d'article proposées par un agent IA. Pour chaque update :
+- "valid": true si la modification semble correcte et cohérente avec l'article
+- "valid": false si : le texte "original" ne semble pas issu de l'article, le "updated" introduit un doublon évident, ou la modification est incohérente / contra-factuelle
+- "issue": courte raison (max 60 chars) si invalid
+Réponds UNIQUEMENT avec le JSON : {"results":[{"i":0,"valid":true},{"i":1,"valid":false,"issue":"raison"},...]}`,
+    model: MODELS.FAST,
+    max_tokens: 800,
+    messages: [{
+      role: 'user',
+      content: `Article (extrait) :\n${articleText}\n\nModifications à valider :\n${JSON.stringify(payload)}`,
+    }],
+  });
+
+  const { results = [] } = parseJsonResponse(text, { results: [] }, '[coherence]');
+  const byIndex = new Map(results.map(r => [r.i, r]));
+
+  return updates.map((u, i) => {
+    const check = byIndex.get(i);
+    if (!check) return u;
+    return check.valid
+      ? { ...u, coherent: true }
+      : { ...u, coherent: false, coherenceIssue: check.issue || 'Incohérence détectée' };
+  });
+};
+
 // ── Helpers partagés ─────────────────────────────────────────────────────────
 
 /** Déduplique un tableau d'objets par la propriété `url`. */
@@ -520,9 +572,11 @@ ${content.substring(0, 5000)}`,
   onProgress(42);
 
   // Sources avec contenu déjà présent (Tavily / Jina)
-  const resultsWithContent = searchResults.filter(r => r.content && r.content.length > 100);
+  // Capper à 4 entrées : au-delà le gain d'information est marginal mais le contexte
+  // envoyé à Claude explose (ex: Tavily → 15 résultats × 2000 chars = 30 000 chars).
+  const resultsWithContent = searchResults.filter(r => r.content && r.content.length > 100).slice(0, 4);
   for (const r of resultsWithContent) {
-    scrapedSources.push({ url: r.url, title: r.title, content: r.content.substring(0, 3000) });
+    scrapedSources.push({ url: r.url, title: r.title, content: r.content.substring(0, 2000) });
   }
 
   // Scraping des top URLs sans contenu (Brave, SearXNG)
@@ -562,7 +616,7 @@ ${content.substring(0, 5000)}`,
   onStep(`Analyse et rédaction des mises à jour (${modelLabel})...`);
   onProgress(65);
 
-  const sourcesSnippets = searchResults.slice(0, 12).map(s =>
+  const sourcesSnippets = searchResults.slice(0, 8).map(s =>
     `- [${s.title}](${s.url})${s.age ? ` — ${s.age}` : ''}\n  ${s.description || ''}`
   ).join('\n');
 
@@ -634,6 +688,17 @@ ${content}
     { analysis: '', updates: [], sources: [], _parseFailed: true },
     '[agent] JSON parse failed — réponse brute:'
   );
+
+  // ── Étape 4 : Vérification de cohérence ──────────────────────────────────────
+  if ((result.updates || []).length > 0) {
+    onStep('Vérification de cohérence des modifications...');
+    onProgress(93);
+    try {
+      result.updates = await checkCoherence(content, result.updates, anthropicKey);
+    } catch (e) {
+      console.warn('[coherence] Échec de la vérification :', e.message);
+    }
+  }
 
   onProgress(100);
   onStep('Analyse terminée !');

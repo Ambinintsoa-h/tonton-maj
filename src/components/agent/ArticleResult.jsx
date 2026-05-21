@@ -1276,6 +1276,7 @@ export default function ArticleResult() {
               const isApplied = u.applied !== false;
               const isPass2 = u.pass === 2;
               const isAddition = u.type === 'addition';
+              const isIncoherent = u.coherent === false;
               return (
                 <div key={i} className={`rounded-xl p-4 border transition-colors ${
                   isApplied
@@ -1319,6 +1320,11 @@ export default function ArticleResult() {
                             + Nouveau
                           </span>
                         )}
+                        {isIncoherent && (
+                          <span className="text-[10px] font-semibold text-orange-600 bg-orange-50 border border-orange-200 rounded-full px-2 py-0.5 flex items-center gap-0.5">
+                            <AlertTriangle size={9} /> À vérifier
+                          </span>
+                        )}
                         {isPass2 && (
                           <span className="text-[10px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 rounded-full px-2 py-0.5 flex items-center gap-0.5">
                             <Sparkles size={9} /> Passe 2
@@ -1338,6 +1344,11 @@ export default function ArticleResult() {
                         />
                       </div>
                       {u.reason && <p className="text-[11px] text-gray-400 italic pt-0.5">{u.reason}</p>}
+                      {isIncoherent && u.coherenceIssue && (
+                        <p className="text-[11px] text-orange-600 font-medium flex items-center gap-1 pt-0.5">
+                          <AlertTriangle size={10} className="flex-shrink-0" />{u.coherenceIssue}
+                        </p>
+                      )}
                       {u.source && (
                         <p className="text-[11px] text-gray-400 flex items-center gap-1 pt-0.5">
                           <Link size={10} className="flex-shrink-0" />{u.source}
