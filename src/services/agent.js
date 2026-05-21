@@ -573,8 +573,8 @@ ${content.substring(0, 5000)}`,
   onStep(`${searchResults.length} résultat${searchResults.length > 1 ? 's' : ''} web trouvé${searchResults.length > 1 ? 's' : ''} — lecture des sources...`);
   onProgress(42);
 
-  // Sources avec contenu déjà présent (Tavily / Jina)
-  const resultsWithContent = searchResults.filter(r => r.content && r.content.length > 100);
+  // Sources avec contenu déjà présent (Tavily / Jina) — cap explicite à 15, 3000 chars/source
+  const resultsWithContent = searchResults.filter(r => r.content && r.content.length > 100).slice(0, 15);
   for (const r of resultsWithContent) {
     scrapedSources.push({ url: r.url, title: r.title, content: r.content.substring(0, 3000) });
   }
