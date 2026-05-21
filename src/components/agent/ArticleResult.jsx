@@ -463,45 +463,68 @@ export default function ArticleResult() {
   const [terminant, setTerminant] = useState(false);
 
   const handleTerminer = async () => {
-    if (!cqItem) return;
     setTerminant(true);
     const finalHtml = getFinalHtml();
-    const r = cqItem.majResult || {};
-    const articleData = {
-      title:           r.articleTitle    || cqItem.title  || '',
-      originalContent: r.originalContent || agent.originalContent || '',
-      updatedContent:  finalHtml,
-      updates:         agent.diff        || r.updates     || [],
-      sources:         agent.sources     || r.sources     || [],
-      analysis:        agent.analysis    || r.analysis    || '',
-      url:             cqItem.url        || '',
-      keyword:         cqItem.keyword    || '',
-      priority:        cqItem.priority   || 'normale',
-      assigneeId:      cqItem.assigneeId || null,
-      createdAt:       new Date().toISOString(),
-      tokenUsage:      agent.tokenUsage  || null,
-    };
 
-    try {
-      if (firebaseReady) {
-        try {
-          const { id, originalContentUrl, updatedContentUrl } = await saveArticle(articleData);
-          const { originalContent, updatedContent, ...meta } = articleData;
-          dispatch(addToHistory({
-            ...meta,
-            id,
-            ...(originalContentUrl ? { originalContentUrl } : { originalContent }),
-            ...(updatedContentUrl  ? { updatedContentUrl  } : { updatedContent  }),
-          }));
-        } catch {
+    // ── Mode validation CQ (article depuis MajEnAttente) ──────────────────────
+    if (cqItem) {
+      const r = cqItem.majResult || {};
+      const articleData = {
+        title:           r.articleTitle    || cqItem.title  || '',
+        originalContent: r.originalContent || agent.originalContent || '',
+        updatedContent:  finalHtml,
+        updates:         agent.diff        || r.updates     || [],
+        sources:         agent.sources     || r.sources     || [],
+        analysis:        agent.analysis    || r.analysis    || '',
+        url:             cqItem.url        || '',
+        keyword:         cqItem.keyword    || '',
+        priority:        cqItem.priority   || 'normale',
+        assigneeId:      cqItem.assigneeId || null,
+        createdAt:       new Date().toISOString(),
+        tokenUsage:      agent.tokenUsage  || null,
+      };
+      try {
+        if (firebaseReady) {
+          try {
+            const { id, originalContentUrl, updatedContentUrl } = await saveArticle(articleData);
+            const { originalContent, updatedContent, ...meta } = articleData;
+            dispatch(addToHistory({
+              ...meta,
+              id,
+              ...(originalContentUrl ? { originalContentUrl } : { originalContent }),
+              ...(updatedContentUrl  ? { updatedContentUrl  } : { updatedContent  }),
+            }));
+          } catch {
+            dispatch(addToHistory({ ...articleData, id: Date.now().toString() }));
+          }
+        } else {
           dispatch(addToHistory({ ...articleData, id: Date.now().toString() }));
         }
-      } else {
-        dispatch(addToHistory({ ...articleData, id: Date.now().toString() }));
+        dispatch(removePendingItem(cqItem.id));
+        toast.success('Article validé et archivé dans l\'historique !', { icon: '✅' });
+        navigate('/maj-en-attente');
+      } catch (e) {
+        toast.error('Erreur : ' + e.message);
+      } finally {
+        setTerminant(false);
       }
-      dispatch(removePendingItem(cqItem.id));
-      toast.success('Article validé et archivé dans l\'historique !', { icon: '✅' });
-      navigate('/maj-en-attente');
+      return;
+    }
+
+    // ── Flow normal (article depuis Articles) ─────────────────────────────────
+    // L'article est déjà dans Historique (ajouté lors de l'analyse).
+    // On met à jour l'entrée avec le HTML final propre (sans balises diff).
+    if (!agent.currentArticleId) { setTerminant(false); return; }
+    try {
+      dispatch(updateInHistory({
+        id:             agent.currentArticleId,
+        updatedContent: finalHtml,
+        updates:        agent.diff    || [],
+        sources:        agent.sources || [],
+        finishedAt:     new Date().toISOString(),
+      }));
+      toast.success('Article archivé dans l\'historique !', { icon: '✅' });
+      navigate('/historique');
     } catch (e) {
       toast.error('Erreur : ' + e.message);
     } finally {
@@ -625,7 +648,18 @@ export default function ArticleResult() {
 
     if (!result.success) {
       toast.error(`Erreur WordPress : ${result.error}`, { duration: 8000 });
+    } else if (agent.currentArticleId) {
+      // ── Auto-archivage dans Historique après publication réussie ────────────
+      dispatch(updateInHistory({
+        id:             agent.currentArticleId,
+        updatedContent: getFinalHtml(),
+        updates:        agent.diff    || [],
+        sources:        agent.sources || [],
+        publishedAt:    new Date().toISOString(),
+        publishedUrl:   result.link   || articleUrl || '',
+      }));
     }
+
     setPublishing(false);
     setShowWP(null);
     setWpFoundPost(null);
@@ -801,8 +835,8 @@ export default function ArticleResult() {
 
           <div className="flex items-center gap-2 py-3">
 
-            {/* Bouton Terminer — mode validation CQ IA uniquement */}
-            {cqItem && (
+            {/* Bouton Terminer — CQ validation + flow normal */}
+            {(cqItem || agent.currentArticleId) && (
               <button
                 onClick={handleTerminer}
                 disabled={terminant}
