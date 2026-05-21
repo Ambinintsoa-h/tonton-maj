@@ -13,7 +13,7 @@ import {
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
 import BubbleToolbar from './BubbleToolbar';
-import { runReviewAgent } from '../../services/agent';
+import { runReviewAgent, generateAltText } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs } from '../../utils/diff';
 import { setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData } from '../../store/slices/agentSlice';
@@ -191,7 +191,16 @@ export default function ArticleResult() {
     setShowImgReplace(false);
     setNewImgInput('');
     if (!wpMcpData?.siteId) toast.success('Image à la une mise à jour dans la preview');
-  }, [newImgInput, wpMcpData, wpSites, dispatch]);
+
+    // Génération automatique du texte ALT via Claude Vision
+    if (settings.anthropicKey) {
+      generateAltText(url, settings.anthropicKey).then(altText => {
+        if (!altText || !articleRef.current) return;
+        const img = articleRef.current.querySelector('figure[data-featured] img');
+        if (img) { img.alt = altText; contentRef.current = articleRef.current.innerHTML; }
+      }).catch(() => {});
+    }
+  }, [newImgInput, wpMcpData, wpSites, dispatch, settings.anthropicKey]);
 
   // Upload fichier local → médiathèque WP → met à jour featured_media
   const handleFileUpload = useCallback(async (e) => {
@@ -227,6 +236,15 @@ export default function ArticleResult() {
         }
         if (newUrl) setFeaturedImgUrl(newUrl);
         toast.success(`Image téléversée (ID ${resp.data.media_id})`);
+
+        // Génération automatique du texte ALT via Claude Vision
+        if (newUrl && settings.anthropicKey) {
+          generateAltText(newUrl, settings.anthropicKey).then(altText => {
+            if (!altText || !articleRef.current) return;
+            const img = articleRef.current.querySelector('figure[data-featured] img');
+            if (img) { img.alt = altText; contentRef.current = articleRef.current.innerHTML; }
+          }).catch(() => {});
+        }
       } else {
         toast.error('Upload échoué : ' + (resp.data.error || 'erreur inconnue'));
       }
@@ -234,7 +252,7 @@ export default function ArticleResult() {
       toast.error('Erreur upload : ' + (err.response?.data?.error || err.message));
     }
     setUploadingImg(false);
-  }, [wpMcpData, wpSites, dispatch]);
+  }, [wpMcpData, wpSites, dispatch, settings.anthropicKey]);
 
   // Sync DOM quand une nouvelle analyse arrive — pas de re-render sur les frappes
   useEffect(() => {
@@ -1209,7 +1227,21 @@ export default function ArticleResult() {
         {/* Barre flottante de mise en forme — portail vers document.body pour éviter
             les interférences avec les transforms CSS de Framer Motion */}
         {diffMode && (
-          <BubbleToolbar articleEl={articleEl} contentRef={contentRef} />
+          <BubbleToolbar
+            articleEl={articleEl}
+            contentRef={contentRef}
+            onImageInserted={settings.anthropicKey ? (url) => {
+              generateAltText(url, settings.anthropicKey).then(altText => {
+                if (!altText || !articleRef.current) return;
+                const imgs = articleRef.current.querySelectorAll(`img[src="${CSS.escape(url)}"]`);
+                if (imgs.length) {
+                  imgs[imgs.length - 1].alt = altText;
+                  contentRef.current = articleRef.current.innerHTML;
+                  toast.success('Texte ALT généré automatiquement', { duration: 2500 });
+                }
+              }).catch(() => {});
+            } : undefined}
+          />
         )}
       </div>
 

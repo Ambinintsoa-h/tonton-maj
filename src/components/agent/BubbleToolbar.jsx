@@ -13,7 +13,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Bold, Italic, Underline, Strikethrough,
-  Heading2, Heading3, Type,
+  Heading1, Heading2, Heading3, Heading4, Type,
   List, ListOrdered,
   Palette, Highlighter,
   Link, Unlink2,
@@ -184,7 +184,7 @@ const Swatch = ({ color, label, onClick }) => (
 
 // ── Composant principal ───────────────────────────────────────────────────────
 
-export default function BubbleToolbar({ articleEl, contentRef }) {
+export default function BubbleToolbar({ articleEl, contentRef, onImageInserted }) {
   const [visible, setVisible]   = useState(false);
   const [pos, setPos]           = useState({ top: 0, left: 0, below: false });
   const [panel, setPanel]       = useState(null);
@@ -303,9 +303,12 @@ export default function BubbleToolbar({ articleEl, contentRef }) {
 
   const insertImage = useCallback(() => {
     if (!inputVal.trim()) { setPanel(null); return; }
+    const url = inputVal.trim();
     // data-media-type permet la détection du clic pour le bouton supprimer
-    insertAtSaved('insertHTML', `<img src="${inputVal.trim()}" alt="" data-media-type="image" style="max-width:100%;height:auto;display:block;margin:1em auto;" /><br>`);
-  }, [inputVal, insertAtSaved]);
+    insertAtSaved('insertHTML', `<img src="${url}" alt="" data-media-type="image" style="max-width:100%;height:auto;display:block;margin:1em auto;" /><br>`);
+    // Notifier ArticleResult pour la génération automatique du texte ALT
+    onImageInserted?.(url);
+  }, [inputVal, insertAtSaved, onImageInserted]);
 
   const insertVideo = useCallback(() => {
     if (!inputVal.trim()) { setPanel(null); return; }
@@ -501,8 +504,10 @@ export default function BubbleToolbar({ articleEl, contentRef }) {
         <Sep />
 
         {/* Structure */}
+        <Btn onClick={() => format('formatBlock', 'h1')} title="Titre H1"><Heading1 size={13} /></Btn>
         <Btn onClick={() => format('formatBlock', 'h2')} title="Titre H2"><Heading2 size={13} /></Btn>
         <Btn onClick={() => format('formatBlock', 'h3')} title="Titre H3"><Heading3 size={13} /></Btn>
+        <Btn onClick={() => format('formatBlock', 'h4')} title="Titre H4"><Heading4 size={13} /></Btn>
         <Btn onClick={() => format('formatBlock', 'p')}  title="Paragraphe normal"><Type size={13} /></Btn>
 
         <Sep />

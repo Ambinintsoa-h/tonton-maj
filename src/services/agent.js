@@ -137,6 +137,33 @@ const callClaude = async (apiKey, { system, messages, max_tokens = 2048, model =
   }
 };
 
+// ── Génération automatique du texte ALT via Claude Vision ────────────────────
+/**
+ * Génère un texte ALT SEO pour une image à partir de son URL.
+ * Utilise Claude vision (Haiku — rapide et économique).
+ * Retourne "" en cas d'échec (pas d'interruption de l'UI).
+ */
+export const generateAltText = async (imageUrl, apiKey) => {
+  if (!imageUrl || !apiKey) return '';
+  try {
+    const { text } = await callClaude(apiKey, {
+      system: 'Tu génères uniquement du texte ALT SEO pour des images web. Réponds avec SEULEMENT le texte ALT, sans guillemets, sans ponctuation finale, sans explication. Maximum 125 caractères.',
+      model: MODELS.FAST,
+      max_tokens: 80,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'url', url: imageUrl } },
+          { type: 'text',  text: 'Génère un texte ALT SEO concis et descriptif pour cette image, en français.' },
+        ],
+      }],
+    });
+    return text.trim().replace(/^["']|["']$/g, '');
+  } catch {
+    return '';
+  }
+};
+
 // ── Helpers partagés ─────────────────────────────────────────────────────────
 
 /** Déduplique un tableau d'objets par la propriété `url`. */
