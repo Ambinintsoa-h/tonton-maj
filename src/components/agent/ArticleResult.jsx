@@ -56,6 +56,12 @@ export default function ArticleResult() {
   const [wpNotFoundReason, setWpNotFoundReason] = useState(''); // raison si non trouvé
   const [hasContent, setHasContent] = useState(false);
   const [diffMode, setDiffMode] = useState(true);
+  // Titre éditable de l'article
+  const [editedTitle, setEditedTitle] = useState('');
+  useEffect(() => {
+    setEditedTitle(cqItem?.title || currentArticle?.title || '');
+  }, [cqItem?.title, currentArticle?.title]);
+
   // Image à la une — remplacement inline
   const [featuredImgUrl, setFeaturedImgUrl] = useState('');
   const [showImgReplace, setShowImgReplace] = useState(false);
@@ -536,6 +542,7 @@ export default function ArticleResult() {
     try {
       dispatch(updateInHistory({
         id:             agent.currentArticleId,
+        title:          editedTitle || currentArticle?.title || '',
         updatedContent: finalHtml,
         updates:        agent.diff    || [],
         sources:        agent.sources || [],
@@ -637,7 +644,7 @@ export default function ArticleResult() {
       htmlContent = tmp.innerHTML;
     }
 
-    const title = wpFoundPost?.title?.rendered || currentArticle?.title || 'Article mis à jour';
+    const title = editedTitle || wpFoundPost?.title?.rendered || currentArticle?.title || 'Article mis à jour';
     let result;
 
     if (mode === 'update' && wpFoundPost) {
@@ -1001,6 +1008,21 @@ export default function ArticleResult() {
               initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}
               className="p-5 space-y-3"
             >
+              {/* ── Champ titre — au-dessus de l'image à la une ─────────────── */}
+              {(cqItem || agent.currentArticleId) && (
+                <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-xs">
+                  <span className="text-base shrink-0">📝</span>
+                  <span className="text-[11px] font-medium text-gray-500 shrink-0 whitespace-nowrap">Titre</span>
+                  <input
+                    type="text"
+                    value={editedTitle}
+                    onChange={e => setEditedTitle(e.target.value)}
+                    placeholder="Titre de l'article..."
+                    className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black/20 min-w-0"
+                  />
+                </div>
+              )}
+
               {/* ── Barre image à la une — pleine largeur, tout en haut ──────── */}
               <input ref={fileImgInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
               <AnimatePresence>

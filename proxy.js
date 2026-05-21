@@ -563,6 +563,141 @@ app.post('/api/claude', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Route streaming Claude — SSE token counter ──────────────────────────────
+// Même interface que /api/claude mais retourne des Server-Sent Events.
+// Le client reçoit en temps réel :
+//   data: {"type":"delta","chars":N}          ← progression (N chars reçus)
+//   data: {"type":"done","text":"…","usage":{…}}   ← fin de génération
+//   data: {"type":"error","error":"…"}        ← erreur
+app.post('/api/claude-stream', requireAuth, (req, res) => {
+  const { system, messages, max_tokens = 32000, model, apiKey: clientApiKey } = req.body;
+  if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
+
+  // ── SSE headers ──────────────────────────────────────────────────────────────
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // désactive le buffering nginx/reverse-proxy
+  res.flushHeaders();
+
+  const send = (data) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`); };
+
+  // ── Corps de la requête Anthropic (streaming activé) ──────────────────────────
+  const requestedModel = model || MODEL_FALLBACK;
+  const requestBody = { model: requestedModel, max_tokens, messages, stream: true };
+  if (system) requestBody.system = system;
+  const payload = JSON.stringify(requestBody);
+
+  // ── Auth : clé API fournie par le client OU token OAuth serveur ───────────────
+  let authHeaders;
+  if (clientApiKey && clientApiKey !== 'local') {
+    authHeaders = { 'x-api-key': clientApiKey };
+  } else {
+    try {
+      authHeaders = { 'Authorization': `Bearer ${getOAuthToken()}` };
+    } catch {
+      send({ type: 'error', error: 'AUTH_REQUIRED' });
+      return res.end();
+    }
+  }
+
+  let fullText = '';
+  let charCount = 0;
+  let lastSentAt = 0;
+  let usage = {};
+  let sseBuffer = '';
+
+  const apiReq = https.request({
+    hostname: 'api.anthropic.com',
+    path: '/v1/messages',
+    method: 'POST',
+    headers: {
+      ...authHeaders,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload),
+    },
+  }, (apiRes) => {
+    // Erreur HTTP de l'API Anthropic
+    if (apiRes.statusCode !== 200) {
+      let errData = '';
+      apiRes.on('data', d => { errData += d; });
+      apiRes.on('end', () => {
+        try {
+          const j = JSON.parse(errData);
+          send({ type: 'error', error: j.error?.message || `HTTP ${apiRes.statusCode}` });
+        } catch { send({ type: 'error', error: `HTTP ${apiRes.statusCode}` }); }
+        res.end();
+      });
+      return;
+    }
+
+    // Lecture du flux SSE Anthropic
+    apiRes.on('data', (chunk) => {
+      sseBuffer += chunk.toString();
+      const lines = sseBuffer.split('\n');
+      sseBuffer = lines.pop() || ''; // conserver la ligne incomplète
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        if (raw === '[DONE]') continue;
+        try {
+          const event = JSON.parse(raw);
+          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+            const delta = event.delta.text || '';
+            fullText += delta;
+            charCount += delta.length;
+            // Throttle : envoyer au max toutes les 120 chars (~30 tokens)
+            if (charCount - lastSentAt >= 120) {
+              lastSentAt = charCount;
+              send({ type: 'delta', chars: charCount });
+            }
+          } else if (event.type === 'message_start' && event.message?.usage) {
+            usage.input_tokens = event.message.usage.input_tokens || 0;
+          } else if (event.type === 'message_delta' && event.usage) {
+            usage.output_tokens = event.usage.output_tokens || 0;
+          }
+        } catch { /* ligne SSE mal formée — ignorée */ }
+      }
+    });
+
+    apiRes.on('end', () => {
+      send({
+        type: 'done',
+        text: fullText,
+        usage: {
+          input_tokens:  usage.input_tokens  || 0,
+          output_tokens: usage.output_tokens || Math.round(charCount / 4),
+          model: requestedModel,
+        },
+      });
+      res.end();
+    });
+
+    apiRes.on('error', (e) => { send({ type: 'error', error: e.message }); res.end(); });
+  });
+
+  const timer = setTimeout(() => {
+    apiReq.destroy();
+    send({ type: 'error', error: 'Timeout 5min dépassé' });
+    res.end();
+  }, 300000);
+
+  apiReq.on('close', () => clearTimeout(timer));
+  apiReq.on('error', (e) => {
+    clearTimeout(timer);
+    send({ type: 'error', error: e.message });
+    if (!res.writableEnded) res.end();
+  });
+
+  // Libérer si le navigateur ferme la connexion
+  req.on('close', () => { clearTimeout(timer); apiReq.destroy(); });
+
+  apiReq.write(payload);
+  apiReq.end();
+});
+
 // ─── Transcription Groq Whisper ───────────────────────────────────────────────
 
 /** Envoie un buffer audio à Groq Whisper et retourne la transcription */

@@ -102,6 +102,113 @@ const calcCost = (calls) => calls.reduce((t, c) => {
   return t + (c.input / 1_000_000) * p.input + (c.output / 1_000_000) * p.output;
 }, 0);
 
+// ── Token JWT local (sessionStorage) ─────────────────────────────────────────
+const LOCAL_TOKEN_KEY = 'tonton_auth_token';
+const getLocalToken = () => {
+  try { return sessionStorage.getItem(LOCAL_TOKEN_KEY) || ''; } catch { return ''; }
+};
+
+// ── Appel Claude streaming — SSE → token counter en temps réel ────────────────
+// Utilise /api/claude-stream (SSE). Appelle onCharUpdate(charCount) à chaque delta.
+// Retourne { text, usage } une fois le flux terminé — même interface que callClaude.
+const callClaudeStream = async (apiKey, { system, messages, max_tokens = 32000, model = MODELS.SMART }, onCharUpdate) => {
+  const response = await fetch(LOCAL_PROXY + '-stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${getLocalToken()}`,
+    },
+    body: JSON.stringify({
+      model, max_tokens, system, messages,
+      ...(apiKey && apiKey !== 'local' ? { apiKey } : {}),
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let fullText = '';
+  let usage = {};
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const ev = JSON.parse(line.slice(6));
+        if (ev.type === 'delta') {
+          onCharUpdate?.(ev.chars);
+        } else if (ev.type === 'done') {
+          fullText = ev.text;
+          usage = ev.usage || {};
+        } else if (ev.type === 'error') {
+          throw new Error(ev.error || 'Erreur streaming');
+        }
+      } catch (e) {
+        if (e.message && e.message !== 'Unexpected end of JSON input') throw e;
+      }
+    }
+  }
+
+  return {
+    text: fullText,
+    usage: {
+      input_tokens:  usage.input_tokens  || 0,
+      output_tokens: usage.output_tokens || 0,
+      model,
+    },
+  };
+};
+
+// ── Pré-filtrage des sources par Haiku ────────────────────────────────────────
+// Si > 5 sources, demande à Haiku de scorer chacune (0-10) pour n'envoyer
+// que les 7 plus pertinentes à Sonnet → contexte plus court, génération plus rapide.
+// Silencieux en cas d'erreur (fallback = toutes les sources).
+const filterSourcesWithHaiku = async (articleContent, sources, apiKey) => {
+  if (sources.length <= 5 || !apiKey) return sources;
+
+  const articlePreview = articleContent
+    .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 500);
+
+  const payload = sources.map((s, i) => ({
+    i,
+    title:   (s.title   || '').substring(0, 80),
+    preview: (s.content || '').substring(0, 200),
+  }));
+
+  try {
+    const { text } = await callClaude(apiKey, {
+      model: MODELS.FAST,
+      max_tokens: 350,
+      system: 'Tu scores des sources web selon leur pertinence pour mettre à jour un article. Réponds UNIQUEMENT avec le JSON demandé.',
+      messages: [{
+        role: 'user',
+        content: `Article (extrait) :\n${articlePreview}\n\nSources à scorer (0-10 selon pertinence) :\n${JSON.stringify(payload)}\n\nRéponds UNIQUEMENT : {"scores":[{"i":0,"score":8},{"i":1,"score":3},...]}`,
+      }],
+    });
+
+    const { scores = [] } = parseJsonResponse(text, { scores: [] }, '[filter-haiku]');
+    const top = scores
+      .filter(s => s && typeof s.i === 'number' && sources[s.i])
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, 7)
+      .map(s => sources[s.i]);
+
+    return top.length >= 3 ? top : sources; // fallback si trop peu de résultats
+  } catch {
+    return sources; // jamais bloquer sur une erreur de filtrage
+  }
+};
+
 // ── Appel Claude ──────────────────────────────────────────────────────────────
 const callClaude = async (apiKey, { system, messages, max_tokens = 2048, model = MODELS.FAST }) => {
   // Toujours passer par le proxy local — ne jamais appeler api.anthropic.com depuis
@@ -605,12 +712,22 @@ ${content.substring(0, 5000)}`,
   if (!hasWebData) {
     onStep('Aucune source web — analyse basée sur les connaissances du modèle...');
   } else {
-    onStep(`${scrapedSources.length} source${scrapedSources.length > 1 ? 's' : ''} analysée${scrapedSources.length > 1 ? 's' : ''} sur ${searchResults.length} résultat${searchResults.length > 1 ? 's' : ''} — rédaction des mises à jour...`);
+    onStep(`${scrapedSources.length} source${scrapedSources.length > 1 ? 's' : ''} analysée${scrapedSources.length > 1 ? 's' : ''} sur ${searchResults.length} résultat${searchResults.length > 1 ? 's' : ''} — sélection des meilleures sources...`);
   }
 
-  onProgress(58);
+  onProgress(56);
 
-  // ── Étape 3 : Génération des mises à jour ─────────────────────────────────────
+  // ── Pré-filtrage Haiku — garde les 7 sources les plus pertinentes ─────────────
+  // Réduit le contexte envoyé à Sonnet → génération plus rapide, même qualité.
+  let filteredScraped = scrapedSources;
+  if (scrapedSources.length > 5 && anthropicKey) {
+    try {
+      filteredScraped = await filterSourcesWithHaiku(content, scrapedSources, anthropicKey);
+    } catch { /* silencieux — on garde toutes les sources */ }
+  }
+  onProgress(60);
+
+  // ── Étape 3 : Génération des mises à jour (Sonnet streaming) ─────────────────
   const model3 = selectModel('update_generation');
   const modelLabel = model3.includes('sonnet') ? 'Sonnet' : model3.includes('opus') ? 'Opus' : 'Haiku';
   onStep(`Analyse et rédaction des mises à jour (${modelLabel})...`);
@@ -620,7 +737,7 @@ ${content.substring(0, 5000)}`,
     `- [${s.title}](${s.url})${s.age ? ` — ${s.age}` : ''}\n  ${s.description || ''}`
   ).join('\n');
 
-  const scrapedContext = scrapedSources.map(s =>
+  const scrapedContext = filteredScraped.map(s =>
     `### ${s.title}\nURL : ${s.url}\n${s.content}`
   ).join('\n\n---\n\n');
 
@@ -671,12 +788,15 @@ ${content}
 - "original" = copie EXACTE mot-pour-mot du texte de l'article
 - Réponds UNIQUEMENT avec le JSON valide, sans markdown ni texte autour`;
 
-  const { text: finalText, usage: u3 } = await callClaude(anthropicKey, {
-    system: buildSystemPrompt(skills, knowledge),
-    max_tokens: 32000,
-    model: model3,
-    messages: [{ role: 'user', content: userMessage }],
-  });
+  // Streaming : affiche le compteur de tokens en temps réel pendant la génération
+  const { text: finalText, usage: u3 } = await callClaudeStream(
+    anthropicKey,
+    { system: buildSystemPrompt(skills, knowledge), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
+    (chars) => {
+      const approxTokens = Math.round(chars / 4);
+      onStep(`Génération en cours... ~${approxTokens.toLocaleString()} tokens`);
+    }
+  );
   trackCall(u3);
 
   onStep('Finalisation des résultats...');
