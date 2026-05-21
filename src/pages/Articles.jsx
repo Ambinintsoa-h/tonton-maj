@@ -41,8 +41,9 @@ export default function Articles() {
     dispatch(resetAgent());
     dispatch(setStatus('running'));
 
-    let articleContent = '';   // texte brut → envoyé à Claude + applyAllDiffs
-    let articleHtml    = '';   // HTML structuré → affiché dans l'UI (tableaux, titres…)
+    let articleContent   = '';    // texte brut → envoyé à Claude + applyAllDiffs
+    let articleHtml      = '';    // HTML structuré → affiché dans l'UI (tableaux, titres…)
+    let prefetchedWpData = null;  // données WP déjà récupérées — évite un 2e appel MCP
 
     if (tab === TAB_URL) {
       setScraping(true);
@@ -70,7 +71,7 @@ export default function Articles() {
             articleContent = r.content;
             // Stocker immédiatement les données WP (image à la une incluse)
             // sans attendre la fin de runAgent — la barre image s'affiche dès le début
-            dispatch(setWpData({
+            prefetchedWpData = {
               siteId:          matchingSite.id,
               siteName:        matchingSite.name,
               postId:          r.post_id,
@@ -78,7 +79,8 @@ export default function Articles() {
               featuredMediaId: r.featured_media_id  || null,
               featuredMediaUrl:r.featured_media_url || null,
               postLink:        r.link || null,
-            }));
+            };
+            dispatch(setWpData(prefetchedWpData));
             dispatch(addStep(`WordPress MCP ✓ — article lu directement (ID ${r.post_id})`));
             wpFetched = true;
           }
@@ -116,11 +118,12 @@ export default function Articles() {
         content: articleContent,   // texte brut pour Claude
         skills,
         knowledge,
-        anthropicKey: settings.anthropicKey,
-        braveKey:     settings.braveKey,
-        tavilyKey:    settings.tavilyKey,
-        articleUrl:   tab === TAB_URL ? url : '',
+        anthropicKey:    settings.anthropicKey,
+        braveKey:        settings.braveKey,
+        tavilyKey:       settings.tavilyKey,
+        articleUrl:      tab === TAB_URL ? url : '',
         wpSites,
+        existingWpData:  prefetchedWpData,  // évite un 2e appel WP MCP dans runAgent
         onStep:     (s) => dispatch(addStep(s)),
         onProgress: (p) => dispatch(setProgress(p)),
       });

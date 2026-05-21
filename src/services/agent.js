@@ -431,12 +431,13 @@ Utilise ce type UNIQUEMENT quand les sources web révèlent une information VRAI
 export const runAgent = async ({
   content,
   skills,
-  knowledge = [],
+  knowledge      = [],
   anthropicKey,
   braveKey,
   tavilyKey,
-  articleUrl = '',
-  wpSites    = [],
+  articleUrl     = '',
+  wpSites        = [],
+  existingWpData = null,  // déjà récupéré par Articles.jsx — évite un 2e appel MCP
   onStep,
   onProgress,
 }) => {
@@ -448,9 +449,11 @@ export const runAgent = async ({
   // ── Accumulateur de tokens ─────────────────────────────────────────────────
   const { acc: tokenAcc, track: trackCall } = makeTokenTracker();
 
-  // ── Phase 0 : Connexion WordPress MCP (si l'URL correspond à un site configuré) ──
-  let wpData = null;
-  if (articleUrl && wpSites?.length) {
+  // ── Phase 0 : Données WordPress MCP ──────────────────────────────────────
+  // Si Articles.jsx a déjà récupéré les données WP lors du chargement de l'article,
+  // on les réutilise directement — pas de deuxième appel MCP wp_get_post.
+  let wpData = existingWpData || null;
+  if (!wpData && articleUrl && wpSites?.length) {
     try {
       const articleHostname = new URL(articleUrl).hostname.replace(/^www\./, '');
       const matchingSite = wpSites.find(site => {
@@ -482,7 +485,6 @@ export const runAgent = async ({
         }
       }
     } catch (e) {
-      // Non-fatal : on continue sans les données WP
       console.warn('[agent] MCP wp_get_post:', e.message);
     }
   }
@@ -572,11 +574,9 @@ ${content.substring(0, 5000)}`,
   onProgress(42);
 
   // Sources avec contenu déjà présent (Tavily / Jina)
-  // Capper à 4 entrées : au-delà le gain d'information est marginal mais le contexte
-  // envoyé à Claude explose (ex: Tavily → 15 résultats × 2000 chars = 30 000 chars).
-  const resultsWithContent = searchResults.filter(r => r.content && r.content.length > 100).slice(0, 4);
+  const resultsWithContent = searchResults.filter(r => r.content && r.content.length > 100);
   for (const r of resultsWithContent) {
-    scrapedSources.push({ url: r.url, title: r.title, content: r.content.substring(0, 2000) });
+    scrapedSources.push({ url: r.url, title: r.title, content: r.content.substring(0, 3000) });
   }
 
   // Scraping des top URLs sans contenu (Brave, SearXNG)
@@ -616,7 +616,7 @@ ${content.substring(0, 5000)}`,
   onStep(`Analyse et rédaction des mises à jour (${modelLabel})...`);
   onProgress(65);
 
-  const sourcesSnippets = searchResults.slice(0, 8).map(s =>
+  const sourcesSnippets = searchResults.slice(0, 12).map(s =>
     `- [${s.title}](${s.url})${s.age ? ` — ${s.age}` : ''}\n  ${s.description || ''}`
   ).join('\n');
 
