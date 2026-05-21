@@ -263,11 +263,15 @@ function Toolbar({ editor }) {
 function SkillEditor({ skill, onSave, onCancel }) {
   const [name, setName]             = useState(skill.name || '');
   const [viewMode, setViewMode]     = useState('edit');
-  const [htmlContent, setHtmlContent] = useState(skill.content || '');
+
+  // Convertit le markdown en HTML si besoin (skills importés depuis .md)
+  // La vue lecture utilise renderMarkdown — on fait pareil ici pour cohérence
+  const initialHtml = renderMarkdown(skill.content || '');
+  const [htmlContent, setHtmlContent] = useState(initialHtml);
 
   const editor = useEditor({
     extensions: [StarterKit],
-    content: skill.content || '',
+    content: initialHtml,
     onUpdate: ({ editor }) => setHtmlContent(editor.getHTML()),
   });
 
@@ -370,11 +374,14 @@ function SkillEditor({ skill, onSave, onCancel }) {
 function KnowledgeEditor({ item, onSave, onCancel }) {
   const [name, setName]               = useState(item?.name || '');
   const [viewMode, setViewMode]       = useState('edit');
-  const [htmlContent, setHtmlContent] = useState(item?.content || '');
+
+  // Convertit le markdown en HTML si besoin (documents importés depuis fichiers)
+  const initialHtml = renderMarkdown(item?.content || '');
+  const [htmlContent, setHtmlContent] = useState(initialHtml);
 
   const editor = useEditor({
     extensions: [StarterKit],
-    content: item?.content || '',
+    content: initialHtml,
     onUpdate: ({ editor }) => setHtmlContent(editor.getHTML()),
   });
 
