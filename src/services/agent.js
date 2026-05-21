@@ -117,7 +117,7 @@ const callClaude = async (apiKey, { system, messages, max_tokens = 2048, model =
         // Le proxy l'utilisera pour appeler Anthropic côté serveur (jamais exposé au browser).
         ...(apiKey && apiKey !== 'local' ? { apiKey } : {}),
       },
-      { headers: { 'content-type': 'application/json' }, timeout: 120000 }
+      { headers: { 'content-type': 'application/json' }, timeout: 300000 }
     );
     const data = response.data;
     const actualModel = data.modelUsed || data.model || model;
