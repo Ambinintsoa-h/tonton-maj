@@ -214,6 +214,46 @@ export const deleteUser = async (id) => {
   await deleteDoc(doc(db, 'users', id));
 };
 
+// Pending items (file d'attente partagée entre membres de l'équipe)
+export const getPendingItems = async () => {
+  if (!db) return [];
+  const q = query(collection(db, 'pending'), orderBy('createdAt', 'desc'));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+// Remplace la totalité de la liste pending en Firestore (full-replace debounced)
+export const savePendingList = async (items) => {
+  if (!db || !Array.isArray(items)) return;
+  const snap = await getDocs(collection(db, 'pending'));
+  // Supprimer les docs qui ne sont plus dans la liste
+  const currentIds = new Set(items.map(i => String(i.id)));
+  await Promise.all(snap.docs.filter(d => !currentIds.has(d.id)).map(d => deleteDoc(d.ref)));
+  // Upsert tous les items courants
+  await Promise.all(items.map(item =>
+    setDoc(doc(db, 'pending', String(item.id)), { ...item })
+  ));
+};
+
+// Stats globales (document unique partagé par toute l'équipe)
+export const getStats = async () => {
+  if (!db) return null;
+  const snap = await getDoc(doc(db, 'stats', 'main'));
+  return snap.exists() ? snap.data() : null;
+};
+
+export const saveStats = async (stats) => {
+  if (!db) return;
+  await setDoc(doc(db, 'stats', 'main'), {
+    totalArticles:     stats.totalArticles     || 0,
+    totalInputTokens:  stats.totalInputTokens  || 0,
+    totalOutputTokens: stats.totalOutputTokens || 0,
+    totalCostUsd:      stats.totalCostUsd      || 0,
+    history:           stats.history           || [],
+    updatedAt: Date.now(),
+  });
+};
+
 export const saveSettings = async (settings) => {
   if (!db) throw new Error('Firebase non initialisé');
   // Ne jamais persister les clés API en cloud Firestore — elles restent dans localStorage.

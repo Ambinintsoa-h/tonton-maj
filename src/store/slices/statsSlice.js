@@ -14,6 +14,8 @@ const statsSlice = createSlice({
     history: load('articleai_stats_history', []), // [{id, title, inputTokens, outputTokens, costUsd, createdAt, pass}]
   },
   reducers: {
+    setStats: (state, action) => ({ ...state, ...action.payload }),
+
     addArticleStat: (state, action) => {
       const { id, title, inputTokens, outputTokens, costUsd, createdAt, pass = 1 } = action.payload;
       const existingIdx = state.history.findIndex(h => h.id === id && h.pass === pass);
@@ -45,5 +47,5 @@ const statsSlice = createSlice({
   },
 });
 
-export const { addArticleStat, resetStats } = statsSlice.actions;
+export const { setStats, addArticleStat, resetStats } = statsSlice.actions;
 export default statsSlice.reducer;

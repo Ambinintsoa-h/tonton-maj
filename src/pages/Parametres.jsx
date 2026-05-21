@@ -105,16 +105,28 @@ export default function Parametres() {
       firebaseConfig,
     };
 
+    // 1. Init Firebase si config fournie
     if (firebaseConfig.apiKey && firebaseConfig.projectId) {
       const ok = initFirebase(firebaseConfig);
       dispatch(setFirebaseReady(ok));
       if (ok) { try { await saveSettings(newSettings); } catch {} }
     }
 
+    // 2. Sauvegarde côté serveur (partagée entre tous les membres de l'équipe)
+    try {
+      await axios.post('/api/settings', newSettings);
+    } catch (e) {
+      toast.error('Erreur sauvegarde serveur : ' + (e.response?.data?.error || e.message));
+      setSaving(false);
+      return;
+    }
+
+    // 3. Mise à jour du store Redux + cache localStorage (firebaseConfig seulement)
     dispatch(setSettings(newSettings));
-    localStorage.setItem('articleai_settings', JSON.stringify(newSettings));
+    localStorage.setItem('articleai_settings', JSON.stringify({ firebaseConfig }));
+
     setSaving(false);
-    toast.success('Paramètres enregistrés !');
+    toast.success('Paramètres enregistrés pour toute l\'équipe !');
   };
 
   // Détection automatique du proxy au chargement
@@ -133,34 +145,24 @@ export default function Parametres() {
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Charge depuis localStorage au montage
+  // Synchronise le formulaire depuis le store Redux quand les settings sont chargés
+  // (SettingsLoader les récupère du serveur après authentification)
   useEffect(() => {
-    const saved = localStorage.getItem('articleai_settings');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        dispatch(setSettings(parsed));
-        setForm(f => ({
-          ...f,
-          anthropicKey:              parsed.anthropicKey === 'local' ? '' : (parsed.anthropicKey || ''),
-          useLocalProxy:             parsed.useLocalProxy || false,
-          braveKey:                  parsed.braveKey || '',
-          tavilyKey:                 parsed.tavilyKey || '',
-          groqKey:                   parsed.groqKey || '',
-          firebaseApiKey:            parsed.firebaseConfig?.apiKey || '',
-          firebaseAuthDomain:        parsed.firebaseConfig?.authDomain || '',
-          firebaseProjectId:         parsed.firebaseConfig?.projectId || '',
-          firebaseStorageBucket:     parsed.firebaseConfig?.storageBucket || '',
-          firebaseMessagingSenderId: parsed.firebaseConfig?.messagingSenderId || '',
-          firebaseAppId:             parsed.firebaseConfig?.appId || '',
-        }));
-        if (parsed.firebaseConfig?.apiKey) {
-          const ok = initFirebase(parsed.firebaseConfig);
-          dispatch(setFirebaseReady(ok));
-        }
-      } catch {}
-    }
-  }, [dispatch]); // eslint-disable-line react-hooks/exhaustive-deps
+    setForm(f => ({
+      ...f,
+      anthropicKey:              stored.anthropicKey === 'local' ? '' : (stored.anthropicKey || ''),
+      useLocalProxy:             stored.useLocalProxy || false,
+      braveKey:                  stored.braveKey || '',
+      tavilyKey:                 stored.tavilyKey || '',
+      groqKey:                   stored.groqKey || '',
+      firebaseApiKey:            stored.firebaseConfig?.apiKey || '',
+      firebaseAuthDomain:        stored.firebaseConfig?.authDomain || '',
+      firebaseProjectId:         stored.firebaseConfig?.projectId || '',
+      firebaseStorageBucket:     stored.firebaseConfig?.storageBucket || '',
+      firebaseMessagingSenderId: stored.firebaseConfig?.messagingSenderId || '',
+      firebaseAppId:             stored.firebaseConfig?.appId || '',
+    }));
+  }, [stored]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-6 animate-fade-in max-w-2xl">

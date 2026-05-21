@@ -27,3 +27,6 @@ claude-path.json
 
 # Anciennes copies locales
 proddddd/
+
+# Paramètres serveur (clés API — ne jamais committer)
+data/

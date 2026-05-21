@@ -48,6 +48,7 @@ jobs:
             source ~/nodevenv/maj.stomos.net/22/bin/activate
             cd ~/maj.stomos.net
             npm install --omit=dev
+            mkdir -p data
             chmod -R 755 build/
             cp -rv build/* public/
             touch tmp/restart.txt

@@ -144,6 +144,39 @@ const requireAuth = (req, res, next) => {
   }
 };
 
+// ─── Paramètres serveur (clés API partagées entre utilisateurs) ──────────────
+// Stockés dans data/settings.json (gitignorés — jamais versionnés)
+const DATA_DIR = path.join(__dirname, 'data');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+
+const readServerSettings = () => {
+  try {
+    if (!fs.existsSync(SETTINGS_FILE)) return {};
+    return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+  } catch { return {}; }
+};
+
+const writeServerSettings = (payload) => {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(payload, null, 2), 'utf8');
+};
+
+// GET /api/settings — retourne les paramètres partagés (clés API de l'équipe)
+app.get('/api/settings', requireAuth, (req, res) => {
+  res.json(readServerSettings());
+});
+
+// POST /api/settings — sauvegarde les paramètres partagés (admin seulement)
+app.post('/api/settings', requireAuth, (req, res) => {
+  try {
+    writeServerSettings(req.body || {});
+    console.log('[settings] ✓ Paramètres équipe sauvegardés');
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Sécurité globale : empêche le proxy de crasher sur exceptions non gérées ─
 process.on('uncaughtException', (err) => {
   console.error('[proxy] ⚠ Exception non gérée (processus maintenu) :', err.message);

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useDispatch } from 'react-redux';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Provider, useSelector } from 'react-redux';
 import { Toaster } from 'react-hot-toast';
@@ -21,7 +22,12 @@ import { setSkills } from './store/slices/skillsSlice';
 import { setHistory } from './store/slices/articlesSlice';
 import { setSites } from './store/slices/wordpressSlice';
 import { setUsers } from './store/slices/usersSlice';
-import { initFirebase, getSkills, getArticles, getWordPressSites, getUsers } from './services/firebase';
+import { setPending } from './store/slices/pendingSlice';
+import { setStats } from './store/slices/statsSlice';
+import {
+  initFirebase, getSkills, getArticles, getWordPressSites, getUsers,
+  getPendingItems, getStats, savePendingList, saveStats,
+} from './services/firebase';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Intercepteurs axios — niveau module, s'appliquent à toutes les requêtes
@@ -92,11 +98,13 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
 
   // Charger les données Firestore (ne remplace le localStorage que si Firestore a des données)
   try {
-    const [skills, articles, sites, users] = await Promise.all([
+    const [skills, articles, sites, users, pending, stats] = await Promise.all([
       getSkills().catch(() => []),
       getArticles().catch(() => []),
       getWordPressSites().catch(() => []),
       getUsers().catch(() => []),
+      getPendingItems().catch(() => []),
+      getStats().catch(() => null),
     ]);
 
     if (skills.length > 0) {
@@ -118,10 +126,88 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
       dispatch(setUsers(users));
       console.log(`[firebase] ${users.length} membre(s) d'équipe chargé(s)`);
     }
+    if (pending.length > 0) {
+      dispatch(setPending(pending));
+      localStorage.setItem('articleai_pending', JSON.stringify(pending));
+      console.log(`[firebase] ${pending.length} article(s) en attente chargé(s)`);
+    }
+    if (stats) {
+      dispatch(setStats(stats));
+      console.log('[firebase] Statistiques chargées');
+    }
   } catch (e) {
     console.error('[firebase] Erreur chargement données :', e.message);
   }
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chargement des paramètres serveur après authentification
+// Les clés API (Anthropic, Brave, Tavily, Groq) sont stockées côté serveur dans
+// data/settings.json (gitignorés). Tous les membres de l'équipe reçoivent
+// les mêmes clés dès qu'ils sont connectés — plus besoin de les saisir chacun.
+// ─────────────────────────────────────────────────────────────────────────────
+function SettingsLoader() {
+  const dispatch = useDispatch();
+  const isAuthenticated = useSelector(s => s.auth.isAuthenticated);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    axios.get('/api/settings')
+      .then(res => {
+        if (res.data && Object.keys(res.data).length > 0) {
+          dispatch(setSettings(res.data));
+          // Cache du firebaseConfig en localStorage uniquement (pour le bootstrap au prochain chargement)
+          if (res.data.firebaseConfig) {
+            const existing = JSON.parse(localStorage.getItem('articleai_settings') || '{}');
+            localStorage.setItem('articleai_settings', JSON.stringify({
+              ...existing,
+              firebaseConfig: res.data.firebaseConfig,
+            }));
+          }
+          console.log('[settings] ✓ Paramètres équipe chargés depuis le serveur');
+        }
+      })
+      .catch(() => {
+        // Fallback silencieux — l'utilisateur peut configurer via Paramètres
+      });
+  }, [isAuthenticated, dispatch]);
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Synchronisation Firestore pour pending et stats
+// Debounce : pending toutes les 3s, stats toutes les 8s après un changement.
+// Full-replace pour pending (liste courte), setDoc pour stats.
+// ─────────────────────────────────────────────────────────────────────────────
+function FirestoreSync() {
+  const pending       = useSelector(s => s.pending.list);
+  const stats         = useSelector(s => s.stats);
+  const firebaseReady = useSelector(s => s.settings.firebaseReady);
+
+  const pendingTimer = useRef(null);
+  const statsTimer   = useRef(null);
+
+  useEffect(() => {
+    if (!firebaseReady) return;
+    clearTimeout(pendingTimer.current);
+    pendingTimer.current = setTimeout(() => {
+      savePendingList(pending).catch(() => {});
+    }, 3000);
+    return () => clearTimeout(pendingTimer.current);
+  }, [pending, firebaseReady]);
+
+  useEffect(() => {
+    if (!firebaseReady) return;
+    clearTimeout(statsTimer.current);
+    statsTimer.current = setTimeout(() => {
+      saveStats(stats).catch(() => {});
+    }, 8000);
+    return () => clearTimeout(statsTimer.current);
+  }, [stats, firebaseReady]);
+
+  return null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Détection du proxy local — dans un useEffect car besoin du store via dispatch,
@@ -247,7 +333,9 @@ export default function App() {
     <Provider store={store}>
       <BrowserRouter>
         <SplashRemover />
+        <SettingsLoader />
         <ProxyDetector />
+        <FirestoreSync />
         <LocalStorageSync />
         <AppRoutes />
       </BrowserRouter>
