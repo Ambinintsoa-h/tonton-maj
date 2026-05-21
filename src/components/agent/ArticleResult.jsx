@@ -16,7 +16,7 @@ import BubbleToolbar from './BubbleToolbar';
 import { runReviewAgent, generateAltText } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs } from '../../utils/diff';
-import { setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData } from '../../store/slices/agentSlice';
+import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
@@ -541,6 +541,7 @@ export default function ArticleResult() {
         sources:        agent.sources || [],
         finishedAt:     new Date().toISOString(),
       }));
+      dispatch(resetAgent());
       toast.success('Article archivé dans l\'historique !', { icon: '✅' });
       navigate('/historique');
     } catch (e) {
