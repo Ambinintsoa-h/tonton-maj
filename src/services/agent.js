@@ -102,71 +102,26 @@ const calcCost = (calls) => calls.reduce((t, c) => {
   return t + (c.input / 1_000_000) * p.input + (c.output / 1_000_000) * p.output;
 }, 0);
 
-// ── Token JWT local (sessionStorage) ─────────────────────────────────────────
-const LOCAL_TOKEN_KEY = 'tonton_auth_token';
-const getLocalToken = () => {
-  try { return sessionStorage.getItem(LOCAL_TOKEN_KEY) || ''; } catch { return ''; }
-};
+// ── Appel Claude avec compteur de tokens simulé ───────────────────────────────
+// Lance callClaude normalement (sans SSE) et met à jour onStep toutes les 700ms
+// avec un compteur qui s'incrémente pour donner un retour visuel de progression.
+// Retourne { text, usage } — même interface que callClaude.
+const callClaudeWithProgress = async (apiKey, params, onStep, stepLabel) => {
+  let fakeTokens = 0;
+  // Incrément aléatoire : ~90-160 tokens/700ms ≈ vitesse Sonnet réelle
+  const timer = setInterval(() => {
+    fakeTokens += Math.round(90 + Math.random() * 70);
+    onStep(`${stepLabel}... ~${fakeTokens.toLocaleString()} tokens`);
+  }, 700);
 
-// ── Appel Claude streaming — SSE → token counter en temps réel ────────────────
-// Utilise /api/claude-stream (SSE). Appelle onCharUpdate(charCount) à chaque delta.
-// Retourne { text, usage } une fois le flux terminé — même interface que callClaude.
-const callClaudeStream = async (apiKey, { system, messages, max_tokens = 32000, model = MODELS.SMART }, onCharUpdate) => {
-  const response = await fetch(LOCAL_PROXY + '-stream', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${getLocalToken()}`,
-    },
-    body: JSON.stringify({
-      model, max_tokens, system, messages,
-      ...(apiKey && apiKey !== 'local' ? { apiKey } : {}),
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP ${response.status}`);
+  try {
+    const result = await callClaude(apiKey, params);
+    clearInterval(timer);
+    return result;
+  } catch (e) {
+    clearInterval(timer);
+    throw e;
   }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  let fullText = '';
-  let usage = {};
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() || '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      try {
-        const ev = JSON.parse(line.slice(6));
-        if (ev.type === 'delta') {
-          onCharUpdate?.(ev.chars);
-        } else if (ev.type === 'done') {
-          fullText = ev.text;
-          usage = ev.usage || {};
-        } else if (ev.type === 'error') {
-          throw new Error(ev.error || 'Erreur streaming');
-        }
-      } catch (e) {
-        if (e.message && e.message !== 'Unexpected end of JSON input') throw e;
-      }
-    }
-  }
-
-  return {
-    text: fullText,
-    usage: {
-      input_tokens:  usage.input_tokens  || 0,
-      output_tokens: usage.output_tokens || 0,
-      model,
-    },
-  };
 };
 
 // ── Pré-filtrage des sources par Haiku ────────────────────────────────────────
@@ -788,14 +743,12 @@ ${content}
 - "original" = copie EXACTE mot-pour-mot du texte de l'article
 - Réponds UNIQUEMENT avec le JSON valide, sans markdown ni texte autour`;
 
-  // Streaming : affiche le compteur de tokens en temps réel pendant la génération
-  const { text: finalText, usage: u3 } = await callClaudeStream(
+  // Génération avec compteur de tokens simulé (feedback visuel temps réel)
+  const { text: finalText, usage: u3 } = await callClaudeWithProgress(
     anthropicKey,
     { system: buildSystemPrompt(skills, knowledge), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
-    (chars) => {
-      const approxTokens = Math.round(chars / 4);
-      onStep(`Génération en cours... ~${approxTokens.toLocaleString()} tokens`);
-    }
+    onStep,
+    `Génération en cours (${modelLabel})`
   );
   trackCall(u3);
 
