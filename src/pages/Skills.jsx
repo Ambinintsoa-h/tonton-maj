@@ -646,6 +646,14 @@ const GDRIVE_VIDEOS = [
   { label: 'video n°15 — Vidéo YouTube récente', filename: 'video n°15 Good video youtube.webm', url: null },
   { label: 'video n°16 — Intégrer une vidéo en anglais', filename: 'video n°16 intégration et introduction d\'une vidéo en anglais.webm', url: null },
   { label: 'Tuto — Correction image Gemini', filename: 'Tuto correction image générée sur Gemini.webm', url: null },
+  { label: 'video n°19 - présentation MAJ down&stream', filename: 'video n°19 présentation MAJ down&stream.webm', url: null },
+  { label: 'video n°20 - format titre', filename: 'video n°20 format titre.webm', url: null },
+  { label: 'video n°21 - url du site', filename: 'video n°21 url du site.webm', url: null },
+  { label: 'video n°22 - image à la une', filename: 'video n°22 image à la une.webm', url: null },
+  { label: 'video n°23 - changement de titre', filename: 'video n°23 changement de titre.webm', url: null },
+  { label: 'video n°24 - liens internes des sites du même type', filename: 'video n°24 liens internes des sites du même type.webm', url: null },
+  { label: 'video n°25 - captures', filename: 'video n°25 captures.webm', url: null },
+  { label: 'video n°26 - F.A.R', filename: 'video n°26 F.A.R.webm', url: null },
 ];
 
 function VideoTranscriber({ groqKey, onSaveTranscript, knowledge = [] }) {
