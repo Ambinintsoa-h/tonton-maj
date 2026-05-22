@@ -648,7 +648,7 @@ const GDRIVE_VIDEOS = [
   { label: 'Tuto — Correction image Gemini', filename: 'Tuto correction image générée sur Gemini.webm', url: null },
 ];
 
-function VideoTranscriber({ groqKey, onSaveTranscript }) {
+function VideoTranscriber({ groqKey, onSaveTranscript, knowledge = [] }) {
   const [mode, setMode]             = useState('list');  // 'list' | 'file'
   const [customName, setCustomName] = useState('');
   const [localFile, setLocalFile]   = useState(null);
@@ -658,6 +658,11 @@ function VideoTranscriber({ groqKey, onSaveTranscript }) {
   const [error, setError]           = useState('');
   const [language, setLanguage]     = useState('fr');
   const [selectedVideo, setSelectedVideo] = useState(null);
+
+  // Noms des vidéos déjà transcrites en base de connaissances
+  const transcribedLabels = new Set(
+    knowledge.filter(k => k.source === 'transcript').map(k => k.name)
+  );
 
   const transcribeFile = async () => {
     if (!localFile) return;
@@ -756,28 +761,42 @@ function VideoTranscriber({ groqKey, onSaveTranscript }) {
               Téléchargez la vidéo depuis votre Drive, puis utilisez l'onglet <strong>Uploader</strong> pour la transcrire.
             </p>
             <div className="max-h-64 overflow-y-auto space-y-1 pr-1">
-              {GDRIVE_VIDEOS.map((v, i) => (
-                <button key={i} type="button"
-                  onClick={() => {
-                    setSelectedVideo(v);
-                    setCustomName(v.label);
-                    setMode('file');
-                  }}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left text-xs transition-all hover:bg-gray-50 border ${
-                    selectedVideo?.filename === v.filename ? 'border-blue-200 bg-blue-50' : 'border-transparent'
-                  }`}>
-                  <div className="w-6 h-6 rounded-lg bg-gray-200 flex items-center justify-center flex-shrink-0 text-gray-500 text-[10px] font-bold">
-                    {i + 1}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-gray-800 truncate">{v.label}</p>
-                    <p className="text-[10px] text-gray-400">{v.filename}</p>
-                  </div>
-                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 flex-shrink-0">
-                    Upload
-                  </span>
-                </button>
-              ))}
+              {GDRIVE_VIDEOS.map((v, i) => {
+                const isDone = transcribedLabels.has(v.label);
+                return (
+                  <button key={i} type="button"
+                    onClick={() => {
+                      if (isDone) return;
+                      setSelectedVideo(v);
+                      setCustomName(v.label);
+                      setMode('file');
+                    }}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left text-xs transition-all border ${
+                      isDone
+                        ? 'border-green-200 bg-green-50/60 cursor-default'
+                        : selectedVideo?.filename === v.filename
+                          ? 'border-blue-200 bg-blue-50'
+                          : 'border-transparent hover:bg-gray-50'
+                    }`}>
+                    <div className={`w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 text-[10px] font-bold ${
+                      isDone ? 'bg-green-100 text-green-600' : 'bg-gray-200 text-gray-500'
+                    }`}>
+                      {isDone ? '✓' : i + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`font-medium truncate ${isDone ? 'text-green-700' : 'text-gray-800'}`}>{v.label}</p>
+                      <p className="text-[10px] text-gray-400">{v.filename}</p>
+                    </div>
+                    {isDone ? (
+                      <CheckCircle2 size={14} className="text-green-500 flex-shrink-0" />
+                    ) : (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 flex-shrink-0">
+                        Upload
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -1207,6 +1226,7 @@ export default function Skills() {
         <VideoTranscriber
           groqKey={groqKey}
           onSaveTranscript={handleSaveTranscript}
+          knowledge={knowledge}
         />
 
         {/* Dropzone import */}
