@@ -345,7 +345,7 @@ const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, rejec
       } catch (e) { reject(new Error('Réponse API invalide')); }
     });
   });
-  const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>120s)')); }, 120000);
+  const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>5min)')); }, 300000);
   req.on('close', () => clearTimeout(timer));
   req.on('error', reject);
   req.write(payload);
@@ -396,7 +396,7 @@ const callAnthropicDirect = (token, bodyObj) => new Promise((resolve, reject) =>
       } catch (e) { reject(new Error('Réponse API invalide: ' + data.substring(0, 100))); }
     });
   });
-  const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>120s)')); }, 120000);
+  const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>5min)')); }, 300000);
   req.on('close', () => clearTimeout(timer));
   req.on('error', reject);
   req.write(payload);
@@ -465,8 +465,8 @@ const callClaude = (prompt) => new Promise((resolve, reject) => {
   const timer = setTimeout(() => {
     try { proc.kill(); } catch {}
     try { fs.unlinkSync(tmp); } catch {}
-    reject(new Error('Timeout CLI (>120s)'));
-  }, 120000);
+    reject(new Error('Timeout CLI (>5min)'));
+  }, 300000);
 
   proc.on('close', (code) => {
     clearTimeout(timer);

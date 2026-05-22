@@ -37,8 +37,21 @@ const agentSlice = createSlice({
     },
     setStatus: (state, action) => { state.status = action.payload; },
     addStep: (state, action) => {
-      state.steps.push({ text: action.payload, ts: Date.now() });
-      state.currentStep = action.payload;
+      const text = action.payload;
+      const last = state.steps[state.steps.length - 1];
+      // Si le nouveau step et le précédent ont le même préfixe avant "..."
+      // (ex : "Génération en cours (Sonnet)... ~1 234 tokens"), remplacer au lieu d'empiler.
+      if (last && text.includes('...') && last.text.includes('...')) {
+        const newPrefix  = text.split('...')[0];
+        const lastPrefix = last.text.split('...')[0];
+        if (newPrefix === lastPrefix) {
+          state.steps[state.steps.length - 1] = { text, ts: Date.now() };
+          state.currentStep = text;
+          return;
+        }
+      }
+      state.steps.push({ text, ts: Date.now() });
+      state.currentStep = text;
     },
     setProgress: (state, action) => { state.progress = action.payload; },
     setOriginalContent: (state, action) => { state.originalContent = action.payload; },
