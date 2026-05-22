@@ -19,6 +19,7 @@ import MajEnAttente from './pages/MajEnAttente';
 import Equipe from './pages/Equipe';
 import { setSettings, setFirebaseReady, DEFAULT_FIREBASE_CONFIG } from './store/slices/settingsSlice';
 import { setSkills } from './store/slices/skillsSlice';
+import { setKnowledge } from './store/slices/knowledgeSlice';
 import { setHistory } from './store/slices/articlesSlice';
 import { setSites } from './store/slices/wordpressSlice';
 import { setUsers } from './store/slices/usersSlice';
@@ -26,7 +27,7 @@ import { setPending } from './store/slices/pendingSlice';
 import { setStats } from './store/slices/statsSlice';
 import {
   initFirebase, getSkills, getArticles, getWordPressSites, getUsers,
-  getPendingItems, getStats, savePendingList, saveStats,
+  getPendingItems, getStats, savePendingList, saveStats, getKnowledge,
 } from './services/firebase';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,13 +99,14 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
 
   // Charger les données Firestore (ne remplace le localStorage que si Firestore a des données)
   try {
-    const [skills, articles, sites, users, pending, stats] = await Promise.all([
+    const [skills, articles, sites, users, pending, stats, knowledge] = await Promise.all([
       getSkills().catch(() => []),
       getArticles().catch(() => []),
       getWordPressSites().catch(() => []),
       getUsers().catch(() => []),
       getPendingItems().catch(() => []),
       getStats().catch(() => null),
+      getKnowledge().catch(() => []),
     ]);
 
     if (skills.length > 0) {
@@ -134,6 +136,11 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     if (stats) {
       dispatch(setStats(stats));
       console.log('[firebase] Statistiques chargées');
+    }
+    if (knowledge.length > 0) {
+      dispatch(setKnowledge(knowledge));
+      localStorage.setItem('articleai_knowledge', JSON.stringify(knowledge));
+      console.log(`[firebase] ${knowledge.length} doc(s) de connaissance chargé(s)`);
     }
   } catch (e) {
     console.error('[firebase] Erreur chargement données :', e.message);
@@ -242,15 +249,20 @@ function ProxyDetector() {
 // Sauvegarde automatique dans localStorage à chaque changement du store
 // ─────────────────────────────────────────────────────────────────────────────
 function LocalStorageSync() {
-  const skills  = useSelector(s => s.skills.list);
-  const history = useSelector(s => s.articles.history);
-  const sites   = useSelector(s => s.wordpress.sites);
-  const users   = useSelector(s => s.users.list);
-  const stats   = useSelector(s => s.stats);
+  const skills     = useSelector(s => s.skills.list);
+  const knowledge  = useSelector(s => s.knowledge.list);
+  const history    = useSelector(s => s.articles.history);
+  const sites      = useSelector(s => s.wordpress.sites);
+  const users      = useSelector(s => s.users.list);
+  const stats      = useSelector(s => s.stats);
 
   useEffect(() => {
     localStorage.setItem('articleai_skills', JSON.stringify(skills));
   }, [skills]);
+
+  useEffect(() => {
+    localStorage.setItem('articleai_knowledge', JSON.stringify(knowledge));
+  }, [knowledge]);
 
   useEffect(() => {
     localStorage.setItem('articleai_history', JSON.stringify(history));
