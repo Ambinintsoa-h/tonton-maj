@@ -38,19 +38,16 @@ const agentSlice = createSlice({
     setStatus: (state, action) => { state.status = action.payload; },
     addStep: (state, action) => {
       const text = action.payload;
-      const last = state.steps[state.steps.length - 1];
-      // Si le nouveau step et le précédent ont le même préfixe avant "..."
-      // (ex : "Génération en cours (Sonnet)... ~1 234 tokens"), remplacer au lieu d'empiler.
-      if (last && text.includes('...') && last.text.includes('...')) {
-        const newPrefix  = text.split('...')[0];
-        const lastPrefix = last.text.split('...')[0];
-        if (newPrefix === lastPrefix) {
-          state.steps[state.steps.length - 1] = { text, ts: Date.now() };
-          state.currentStep = text;
-          return;
-        }
-      }
       state.steps.push({ text, ts: Date.now() });
+      state.currentStep = text;
+    },
+    replaceLastStep: (state, action) => {
+      const text = action.payload;
+      if (state.steps.length > 0) {
+        state.steps[state.steps.length - 1] = { text, ts: Date.now() };
+      } else {
+        state.steps.push({ text, ts: Date.now() });
+      }
       state.currentStep = text;
     },
     setProgress: (state, action) => { state.progress = action.payload; },
@@ -68,7 +65,7 @@ const agentSlice = createSlice({
 });
 
 export const {
-  resetAgent, setStatus, addStep, setProgress,
+  resetAgent, setStatus, addStep, replaceLastStep, setProgress,
   setOriginalContent, setUpdatedContent, setDiff, setSources,
   setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
   setWpData,

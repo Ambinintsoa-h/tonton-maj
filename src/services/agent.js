@@ -105,13 +105,18 @@ const calcCost = (calls) => calls.reduce((t, c) => {
 // ── Appel Claude avec compteur de tokens simulé ───────────────────────────────
 // Lance callClaude normalement (sans SSE) et met à jour onStep toutes les 700ms
 // avec un compteur qui s'incrémente pour donner un retour visuel de progression.
+// onStep    : callback pour AJOUTER un nouveau step (premier tick)
+// onReplace : callback pour REMPLACER le dernier step (ticks suivants)
 // Retourne { text, usage } — même interface que callClaude.
-const callClaudeWithProgress = async (apiKey, params, onStep, stepLabel) => {
+const callClaudeWithProgress = async (apiKey, params, onStep, onReplace, stepLabel) => {
   let fakeTokens = 0;
+  let firstTick = true;
   // Incrément aléatoire : ~90-160 tokens/700ms ≈ vitesse Sonnet réelle
   const timer = setInterval(() => {
     fakeTokens += Math.round(90 + Math.random() * 70);
-    onStep(`${stepLabel}... ~${fakeTokens.toLocaleString()} tokens`);
+    const text = `${stepLabel} — ~${fakeTokens.toLocaleString()} tokens`;
+    if (firstTick) { onStep(text); firstTick = false; }
+    else            { onReplace(text); }
   }, 700);
 
   try {
@@ -501,6 +506,7 @@ export const runAgent = async ({
   wpSites        = [],
   existingWpData = null,  // déjà récupéré par Articles.jsx — évite un 2e appel MCP
   onStep,
+  onReplace,
   onProgress,
 }) => {
   const { iso, fr, year, prevYear, month, cutoffIso } = getDateContext();
@@ -748,6 +754,7 @@ ${content}
     anthropicKey,
     { system: buildSystemPrompt(skills, knowledge), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
     onStep,
+    onReplace,
     `Génération en cours (${modelLabel})`
   );
   trackCall(u3);
