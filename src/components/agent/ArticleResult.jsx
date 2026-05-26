@@ -59,8 +59,10 @@ export default function ArticleResult() {
   // Titre éditable de l'article
   const [editedTitle, setEditedTitle] = useState('');
   useEffect(() => {
-    setEditedTitle(cqItem?.title || currentArticle?.title || '');
-  }, [cqItem?.title, currentArticle?.title]);
+    // Priorité : titre WP réel (via API REST) > titre CQ item > vide
+    // Ne jamais utiliser currentArticle.title qui est le slug d'URL
+    setEditedTitle(wpMcpData?.wpTitle || cqItem?.title || '');
+  }, [wpMcpData?.wpTitle, cqItem?.title]);
 
   // Image à la une — remplacement inline
   const [featuredImgUrl, setFeaturedImgUrl] = useState('');
@@ -644,11 +646,15 @@ export default function ArticleResult() {
       htmlContent = tmp.innerHTML;
     }
 
-    const title = editedTitle || wpFoundPost?.title?.rendered || currentArticle?.title || 'Article mis à jour';
     let result;
 
     if (mode === 'update' && wpFoundPost) {
-      const postData = { title, content: htmlContent, status: 'publish' };
+      // Mise à jour d'un article existant :
+      // • Ne jamais changer l'auteur (non inclus dans le body)
+      // • Ne jamais changer le titre sauf si l'utilisateur l'a édité manuellement
+      // • Ne jamais toucher aux champs SEO (SEOPRESS, Yoast…) — non inclus
+      const postData = { content: htmlContent, status: 'publish' };
+      if (editedTitle) postData.title = editedTitle;
       // MCP : inclure featured_media pour mettre à jour l'image à la une WordPress
       if (hasFeaturedMedia) {
         postData.featured_media = wpMcpData.featuredMediaId;
@@ -667,8 +673,9 @@ export default function ArticleResult() {
         if (result.link) window.open(result.link, '_blank');
       }
     } else {
-      // Création d'un nouveau brouillon
-      result = await publishToWordPress(site, { title, content: htmlContent, status: 'draft' });
+      // Création d'un nouveau brouillon — le titre vient de l'édition manuelle ou du H1 de l'article
+      const draftTitle = editedTitle || currentArticle?.title || 'Article';
+      result = await publishToWordPress(site, { title: draftTitle, content: htmlContent, status: 'draft' });
       if (result.success) toast.success(`Brouillon créé sur ${site.name} !`);
     }
 

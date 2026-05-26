@@ -928,6 +928,7 @@ export default function MajEnAttente() {
                 featuredMediaId: r.featured_media_id  || null,
                 featuredMediaUrl:r.featured_media_url || null,
                 postLink:        r.link || null,
+                wpTitle:         r.title || '',   // titre réel WP (pas le slug)
               }));
               step(`WordPress MCP ✓ — article lu directement (ID ${r.post_id})`);
               wpFetched = true;
@@ -978,7 +979,15 @@ export default function MajEnAttente() {
       dispatch(setStatus('done'));
 
       // ── Étape 4 : Stats tokens ────────────────────────────────────────────
-      const articleTitle = item.title && item.title !== item.url ? item.title : item.url;
+      // Extraire le H1 comme titre lisible (pas le slug/URL)
+      const extractH1 = (html) => {
+        try {
+          const tmp = document.createElement('div');
+          tmp.innerHTML = html;
+          return tmp.querySelector('h1')?.textContent?.trim() || '';
+        } catch { return ''; }
+      };
+      const articleTitle = extractH1(articleHtml) || (item.title && item.title !== item.url ? item.title : item.url);
 
       if (result.tokenUsage) {
         dispatch(setTokenUsage(result.tokenUsage));

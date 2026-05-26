@@ -79,6 +79,7 @@ export default function Articles() {
               featuredMediaId: r.featured_media_id  || null,
               featuredMediaUrl:r.featured_media_url || null,
               postLink:        r.link || null,
+              wpTitle:         r.title || '',   // titre réel WP (pas le slug)
             };
             dispatch(setWpData(prefetchedWpData));
             dispatch(addStep(`WordPress MCP ✓ — article lu directement (ID ${r.post_id})`));
@@ -153,10 +154,17 @@ export default function Articles() {
       dispatch(setParseFailed(result.parseFailed === true));
       dispatch(setStatus('done'));
 
-      // Save to history — pour les URL on extrait un titre lisible depuis l'URL (pas l'URL brute)
+      // Save to history — extraire le H1 comme titre (pas le slug d'URL)
+      const extractH1 = (html) => {
+        try {
+          const tmp = document.createElement('div');
+          tmp.innerHTML = html;
+          return tmp.querySelector('h1')?.textContent?.trim() || '';
+        } catch { return ''; }
+      };
       const articleTitle = tab === TAB_URL
-        ? (url.replace(/\/$/, '').split('/').pop() || url)
-        : articleContent.substring(0, 60) + '...';
+        ? (extractH1(articleHtml) || url.replace(/\/$/, '').split('/').pop() || url)
+        : (extractH1(articleHtml) || articleContent.substring(0, 60) + '...');
       const articleData = {
         title: articleTitle,
         originalContent: articleHtml,   // HTML pour affichage fidèle (tableaux, titres…)
