@@ -34,14 +34,13 @@ export const WP_MCP_TOOLS = [
   },
   {
     name: 'wp_update_post',
-    description: 'Met à jour un article WordPress (contenu HTML et/ou image à la une). Utilise l\'ID retourné par wp_get_post.',
+    description: 'Met à jour le contenu d\'un article WordPress. Ne modifie jamais le titre, l\'auteur ni les champs SEO.',
     input_schema: {
       type: 'object',
       properties: {
         site_id:           { type: 'string',  description: 'ID du site WordPress' },
         post_id:           { type: 'integer', description: 'ID de l\'article WordPress' },
         content:           { type: 'string',  description: 'Nouveau contenu HTML' },
-        title:             { type: 'string',  description: 'Nouveau titre' },
         featured_media_id: { type: 'integer', description: 'ID de la nouvelle image à la une dans la médiathèque' },
         status:            { type: 'string',  enum: ['publish', 'draft', 'pending'] },
       },

@@ -77,12 +77,18 @@ export const findPostByUrl = async (site, articleUrl) => {
 export const updatePost = async (site, postId, postData, postType = 'posts') => {
   const type = postType === 'pages' ? 'pages' : 'posts';
   const body = {
-    title:   postData.title,
     content: postData.content,
     status:  postData.status || 'draft',
   };
-  // Inclure featured_media si fourni (support MCP)
+  // Titre : uniquement si explicitement fourni (modifié par l'utilisateur)
+  // Ne pas envoyer de titre = WordPress conserve le titre existant
+  if (postData.title !== undefined) body.title = postData.title;
+  // Image à la une MCP
   if (postData.featured_media !== undefined) body.featured_media = postData.featured_media;
+  // Sécurité : jamais d'auteur ni de champs SEO dans une mise à jour
+  delete body.author;
+  delete body.meta;
+
   const result = await wpRequest(site, 'POST', `/wp-json/wp/v2/${type}/${postId}`, body);
   if (!result.success) return result;
   return { success: true, postId: result.data.id, link: result.data.link };

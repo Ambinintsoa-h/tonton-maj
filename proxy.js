@@ -1342,13 +1342,16 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
     }
 
     case 'wp_update_post': {
-      const { site_id, post_id, content, featured_media_id, title, status } = toolInput;
+      const { site_id, post_id, content, featured_media_id, status } = toolInput;
       const site = getSite(site_id);
 
+      // Règles de mise à jour :
+      // • Jamais de `title`  — le titre WP est conservé tel quel
+      // • Jamais de `author` — l'auteur de l'article ne change jamais
+      // • Jamais de champs SEO (meta, _seopress_*, _yoast_*) — gérés par SEOPRESS séparément
       const body = {};
-      if (content          !== undefined) body.content        = content;
-      if (title            !== undefined) body.title          = title;
-      if (status           !== undefined) body.status         = status;
+      if (content           !== undefined) body.content        = content;
+      if (status            !== undefined) body.status         = status;
       if (featured_media_id !== undefined) body.featured_media = featured_media_id;
 
       // Détection du type (post ou page)
