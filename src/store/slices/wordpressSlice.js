@@ -1,4 +1,5 @@
 import { createSlice } from '@reduxjs/toolkit';
+import { STORAGE_KEYS } from '../../constants/storage';
 
 const load = (key) => {
   try { return JSON.parse(localStorage.getItem(key) || 'null') || []; }
@@ -7,7 +8,7 @@ const load = (key) => {
 
 const wordpressSlice = createSlice({
   name: 'wordpress',
-  initialState: { sites: load('articleai_wp_sites'), loading: false },
+  initialState: { sites: load(STORAGE_KEYS.wpSites), loading: false },
   reducers: {
     setSites: (state, action) => { state.sites = action.payload; },
     addSite: (state, action) => { state.sites.push(action.payload); },

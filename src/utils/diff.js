@@ -22,6 +22,11 @@ export const applyDiff = (html, original, updated, reason) => {
   const replacement = (matched) =>
     `<del class="deleted-content">${matched}</del><mark class="updated-content" title="${safeReason}">${updated}</mark>`;
 
+  // Guard : sur les articles très longs (>150 000 chars), bypasser les stratégies
+  // avec quantificateurs flexibles (gap) pour éviter le backtracking catastrophique.
+  const LONG_ARTICLE_THRESHOLD = 150000;
+  const isLongArticle = html.length > LONG_ARTICLE_THRESHOLD;
+
   // Stratégie 1 : correspondance exacte
   try {
     const rx = new RegExp(escRx(original), "g");
@@ -52,7 +57,7 @@ export const applyDiff = (html, original, updated, reason) => {
   // l'original COMPLET, pas seulement les mots-clés ≥4 chars.
   // Gap : [^\n\r]{0,20}? — accepte balises HTML inline (<em>, <strong>…) mais s'arrête
   // aux sauts de ligne (pas de match cross-paragraphe).
-  try {
+  if (!isLongArticle) try {
     const allWordsArr = normalizeText(original).split(/\s+/).filter(Boolean);
     if (allWordsArr.length >= 2 && allWordsArr.length <= 30 && original.length < 600) {
       const pat25 = allWordsArr.map((w) => escRx(w)).join("[^\\n\\r]{0,20}?");
@@ -77,16 +82,21 @@ export const applyDiff = (html, original, updated, reason) => {
       // Variante B : gap peut traverser une balise HTML (passe 2 sur HTML marqué)
       // GAP_HTML simplifié — un seul quantificateur plat pour éviter le backtracking catastrophique
       // Autorise jusqu'à 60 chars dont d'éventuelles balises <mark>/<del> insérées par la passe 1
-      const GAP_HTML = "[\\s\\S]{0,60}?";
-      const pattern3b = words.map((w) => escRx(w)).join(GAP_HTML);
-      const rx3b = new RegExp(pattern3b, "i");
-      const res3b = html.replace(rx3b, (m) => replacement(m));
-      if (res3b !== html) return { html: res3b, matched: true };
+      // Bypasser sur les articles longs pour éviter les freezes regex
+      if (!isLongArticle) {
+        const GAP_HTML = "[\\s\\S]{0,60}?";
+        const pattern3b = words.map((w) => escRx(w)).join(GAP_HTML);
+        const rx3b = new RegExp(pattern3b, "i");
+        const res3b = html.replace(rx3b, (m) => replacement(m));
+        if (res3b !== html) return { html: res3b, matched: true };
+      }
     }
   } catch {}
 
   // Stratégie 4 : ancres début + fin pour originaux multi-phrases
   // 3 premiers mots + 3 derniers mots, span plafonné à 600 chars pour éviter les freezes
+  // Bypasser sur les articles longs ([\s\S] flexible sur un très long haystack = freeze)
+  if (isLongArticle) return { html, matched: false };
   try {
     const allWords = normalizeText(original).split(/\s+/).filter((w) => w.length >= 4);
     if (allWords.length >= 8) {

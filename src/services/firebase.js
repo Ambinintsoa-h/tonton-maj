@@ -106,12 +106,19 @@ export const saveArticle = async (article) => {
   ]);
 
   // Firestore : URLs si Storage OK, sinon HTML inline en fallback
+  // Sécurité : si le contenu dépasse 800 000 chars, ne pas l'inclure en fallback inline
+  const MAX_INLINE_SIZE = 800000;
+  const origTooLarge = (originalContent || '').length > MAX_INLINE_SIZE;
+  const updTooLarge  = (updatedContent  || '').length > MAX_INLINE_SIZE;
+  if (origTooLarge) console.warn('[firebase] originalContent trop volumineux (>800 000 chars) — exclut du fallback Firestore');
+  if (updTooLarge)  console.warn('[firebase] updatedContent trop volumineux (>800 000 chars) — exclut du fallback Firestore');
+
   const firestoreData = {
     ...metadata,
     ...(originalContentUrl ? { originalContentUrl }
-        : originalContent  ? { originalContent   } : {}),
+        : (originalContent && !origTooLarge) ? { originalContent } : {}),
     ...(updatedContentUrl  ? { updatedContentUrl  }
-        : updatedContent   ? { updatedContent     } : {}),
+        : (updatedContent  && !updTooLarge)  ? { updatedContent  } : {}),
   };
 
   if (article.id) {

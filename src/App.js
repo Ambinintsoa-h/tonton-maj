@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { STORAGE_KEYS } from './constants/storage';
 import { useDispatch } from 'react-redux';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Provider, useSelector } from 'react-redux';
@@ -74,7 +75,7 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
   // Lire les settings sauvegardés
   let parsed = {};
   try {
-    const saved = localStorage.getItem('articleai_settings');
+    const saved = localStorage.getItem(STORAGE_KEYS.settings);
     if (saved) parsed = JSON.parse(saved);
   } catch {}
 
@@ -111,17 +112,17 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
 
     if (skills.length > 0) {
       dispatch(setSkills(skills));
-      localStorage.setItem('articleai_skills', JSON.stringify(skills));
+      localStorage.setItem(STORAGE_KEYS.skills, JSON.stringify(skills));
       console.log(`[firebase] ${skills.length} skill(s) chargé(s)`);
     }
     if (articles.length > 0) {
       dispatch(setHistory(articles));
-      localStorage.setItem('articleai_history', JSON.stringify(articles));
+      localStorage.setItem(STORAGE_KEYS.history, JSON.stringify(articles));
       console.log(`[firebase] ${articles.length} article(s) chargé(s)`);
     }
     if (sites.length > 0) {
       dispatch(setSites(sites));
-      localStorage.setItem('articleai_wp_sites', JSON.stringify(sites));
+      localStorage.setItem(STORAGE_KEYS.wpSites, JSON.stringify(sites));
       console.log(`[firebase] ${sites.length} site(s) WP chargé(s)`);
     }
     if (users.length > 0) {
@@ -130,7 +131,7 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     }
     if (pending.length > 0) {
       dispatch(setPending(pending));
-      localStorage.setItem('articleai_pending', JSON.stringify(pending));
+      localStorage.setItem(STORAGE_KEYS.pending, JSON.stringify(pending));
       console.log(`[firebase] ${pending.length} article(s) en attente chargé(s)`);
     }
     if (stats) {
@@ -139,7 +140,7 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     }
     if (knowledge.length > 0) {
       dispatch(setKnowledge(knowledge));
-      localStorage.setItem('articleai_knowledge', JSON.stringify(knowledge));
+      localStorage.setItem(STORAGE_KEYS.knowledge, JSON.stringify(knowledge));
       console.log(`[firebase] ${knowledge.length} doc(s) de connaissance chargé(s)`);
     }
   } catch (e) {
@@ -165,8 +166,8 @@ function SettingsLoader() {
           dispatch(setSettings(res.data));
           // Cache du firebaseConfig en localStorage uniquement (pour le bootstrap au prochain chargement)
           if (res.data.firebaseConfig) {
-            const existing = JSON.parse(localStorage.getItem('articleai_settings') || '{}');
-            localStorage.setItem('articleai_settings', JSON.stringify({
+            const existing = JSON.parse(localStorage.getItem(STORAGE_KEYS.settings) || '{}');
+            localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify({
               ...existing,
               firebaseConfig: res.data.firebaseConfig,
             }));
@@ -232,8 +233,8 @@ function ProxyDetector() {
     axios.get('http://localhost:3001/health', { timeout: 5000 })
       .then(() => {
         store.dispatch(setSettings({ anthropicKey: 'local', useLocalProxy: true }));
-        const existing = JSON.parse(localStorage.getItem('articleai_settings') || '{}');
-        localStorage.setItem('articleai_settings', JSON.stringify({
+        const existing = JSON.parse(localStorage.getItem(STORAGE_KEYS.settings) || '{}');
+        localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify({
           ...existing, anthropicKey: 'local', useLocalProxy: true,
         }));
       })
@@ -257,31 +258,31 @@ function LocalStorageSync() {
   const stats      = useSelector(s => s.stats);
 
   useEffect(() => {
-    localStorage.setItem('articleai_skills', JSON.stringify(skills));
+    localStorage.setItem(STORAGE_KEYS.skills, JSON.stringify(skills));
   }, [skills]);
 
   useEffect(() => {
-    localStorage.setItem('articleai_knowledge', JSON.stringify(knowledge));
+    localStorage.setItem(STORAGE_KEYS.knowledge, JSON.stringify(knowledge));
   }, [knowledge]);
 
   useEffect(() => {
-    localStorage.setItem('articleai_history', JSON.stringify(history));
+    localStorage.setItem(STORAGE_KEYS.history, JSON.stringify(history));
   }, [history]);
 
   useEffect(() => {
-    localStorage.setItem('articleai_wp_sites', JSON.stringify(sites));
+    localStorage.setItem(STORAGE_KEYS.wpSites, JSON.stringify(sites));
   }, [sites]);
 
   useEffect(() => {
-    localStorage.setItem('articleai_users', JSON.stringify(users));
+    localStorage.setItem(STORAGE_KEYS.users, JSON.stringify(users));
   }, [users]);
 
   useEffect(() => {
-    localStorage.setItem('articleai_stats_articles', JSON.stringify(stats.totalArticles));
-    localStorage.setItem('articleai_stats_input',    JSON.stringify(stats.totalInputTokens));
-    localStorage.setItem('articleai_stats_output',   JSON.stringify(stats.totalOutputTokens));
-    localStorage.setItem('articleai_stats_cost',     JSON.stringify(stats.totalCostUsd));
-    localStorage.setItem('articleai_stats_history',  JSON.stringify(stats.history));
+    localStorage.setItem(STORAGE_KEYS.statsArticles, JSON.stringify(stats.totalArticles));
+    localStorage.setItem(STORAGE_KEYS.statsInput,    JSON.stringify(stats.totalInputTokens));
+    localStorage.setItem(STORAGE_KEYS.statsOutput,   JSON.stringify(stats.totalOutputTokens));
+    localStorage.setItem(STORAGE_KEYS.statsCost,     JSON.stringify(stats.totalCostUsd));
+    localStorage.setItem(STORAGE_KEYS.statsHistory,  JSON.stringify(stats.history));
   }, [stats]);
 
   return null;

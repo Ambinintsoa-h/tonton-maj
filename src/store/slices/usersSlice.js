@@ -1,7 +1,8 @@
 import { createSlice } from '@reduxjs/toolkit';
+import { STORAGE_KEYS } from '../../constants/storage';
 
 const load = () => {
-  try { return JSON.parse(localStorage.getItem('articleai_users') || 'null') || []; }
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEYS.users) || 'null') || []; }
   catch { return []; }
 };
 

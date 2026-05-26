@@ -486,8 +486,15 @@ const callClaude = (prompt) => new Promise((resolve, reject) => {
 
 // ─── Route principale ──────────────────────────────────────────────────────────
 app.post('/api/claude', requireAuth, async (req, res) => {
-  const { system, messages, max_tokens = 4096, model, apiKey: clientApiKey } = req.body;
+  const { system, messages, max_tokens = 4096, model, apiKey: bodyApiKey } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
+
+  // Clé Anthropic : lire depuis data/settings.json en priorité, fallback sur la clé du body.
+  const serverSettings = readServerSettings();
+  const serverApiKey = serverSettings.anthropicKey && serverSettings.anthropicKey !== 'local'
+    ? serverSettings.anthropicKey
+    : null;
+  const clientApiKey = serverApiKey || bodyApiKey;
 
   // Prompt CLI (seulement si OAuth échoue — le CLI reçoit le tout en une chaîne)
   const systemBlock = system ? `[SYSTEM]\n${system}\n\n[USER]\n` : '';
@@ -495,7 +502,7 @@ app.post('/api/claude', requireAuth, async (req, res) => {
 
   const requestedModel = model || MODEL_FALLBACK;
 
-  // ── Stratégie 0 : clé API fournie par le client ────────────────────────────
+  // ── Stratégie 0 : clé API fournie par le client ou le serveur ─────────────
   // Le call est fait ici côté serveur (Node.js) → la clé Anthropic ne transite
   // jamais vers api.anthropic.com depuis le navigateur (invisible dans DevTools).
   if (clientApiKey && clientApiKey !== 'local') {
@@ -570,8 +577,15 @@ app.post('/api/claude', requireAuth, async (req, res) => {
 //   data: {"type":"done","text":"…","usage":{…}}   ← fin de génération
 //   data: {"type":"error","error":"…"}        ← erreur
 app.post('/api/claude-stream', requireAuth, (req, res) => {
-  const { system, messages, max_tokens = 32000, model, apiKey: clientApiKey } = req.body;
+  const { system, messages, max_tokens = 32000, model, apiKey: bodyApiKey } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
+
+  // Clé Anthropic : lire depuis data/settings.json en priorité, fallback sur la clé du body.
+  const serverSettings = readServerSettings();
+  const serverApiKey = serverSettings.anthropicKey && serverSettings.anthropicKey !== 'local'
+    ? serverSettings.anthropicKey
+    : null;
+  const clientApiKey = serverApiKey || bodyApiKey;
 
   // ── SSE headers ──────────────────────────────────────────────────────────────
   res.setHeader('Content-Type', 'text/event-stream');
@@ -1252,7 +1266,10 @@ app.post('/api/wp-upload-file', requireAuth, upload.single('file'), async (req, 
 // Gère la boucle tool_use → exécution → tool_result jusqu'à end_turn.
 // Accepte les mêmes paramètres que /api/claude + { tools, wpSites }.
 app.post('/api/claude-tools', requireAuth, async (req, res) => {
-  const { system, messages, max_tokens = 4096, model, apiKey: clientApiKey, tools = [], wpSites = [] } = req.body;
+  const { system, messages, max_tokens = 4096, model, apiKey: bodyApiKey, tools = [], wpSites = [] } = req.body;
+  // Clé Anthropic : lire depuis data/settings.json en priorité, fallback sur la clé du body.
+  const { anthropicKey: _sak } = readServerSettings();
+  const clientApiKey = (_sak && _sak !== 'local') ? _sak : bodyApiKey;
   if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
 
   const requestedModel = model || MODEL_FALLBACK;

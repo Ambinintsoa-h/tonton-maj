@@ -1,4 +1,5 @@
 import { configureStore } from '@reduxjs/toolkit';
+import { STORAGE_KEYS } from '../constants/storage';
 import settingsReducer from './slices/settingsSlice';
 import skillsReducer from './slices/skillsSlice';
 import articlesReducer from './slices/articlesSlice';
@@ -30,16 +31,16 @@ const persistMiddleware = (storeAPI) => (next) => (action) => {
     type.startsWith('stats/')
   ) {
     const s = storeAPI.getState();
-    trySet('articleai_skills',    s.skills.list);
-    trySet('articleai_knowledge', s.knowledge.list);
-    trySet('articleai_history',   s.articles.history);
-    if (type.startsWith('pending/')) trySet('articleai_pending', s.pending.list);
+    trySet(STORAGE_KEYS.skills,    s.skills.list);
+    trySet(STORAGE_KEYS.knowledge, s.knowledge.list);
+    trySet(STORAGE_KEYS.history,   s.articles.history);
+    if (type.startsWith('pending/')) trySet(STORAGE_KEYS.pending, s.pending.list);
     if (type.startsWith('stats/')) {
-      trySet('articleai_stats_articles', s.stats.totalArticles);
-      trySet('articleai_stats_input',    s.stats.totalInputTokens);
-      trySet('articleai_stats_output',   s.stats.totalOutputTokens);
-      trySet('articleai_stats_cost',     s.stats.totalCostUsd);
-      trySet('articleai_stats_history',  s.stats.history);
+      trySet(STORAGE_KEYS.statsArticles, s.stats.totalArticles);
+      trySet(STORAGE_KEYS.statsInput,    s.stats.totalInputTokens);
+      trySet(STORAGE_KEYS.statsOutput,   s.stats.totalOutputTokens);
+      trySet(STORAGE_KEYS.statsCost,     s.stats.totalCostUsd);
+      trySet(STORAGE_KEYS.statsHistory,  s.stats.history);
     }
   }
   return result;

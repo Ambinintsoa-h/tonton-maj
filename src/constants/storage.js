@@ -1,0 +1,14 @@
+export const STORAGE_KEYS = {
+  settings:      'articleai_settings',
+  skills:        'articleai_skills',
+  knowledge:     'articleai_knowledge',
+  history:       'articleai_history',
+  wpSites:       'articleai_wp_sites',
+  users:         'articleai_users',
+  pending:       'articleai_pending',
+  statsArticles: 'articleai_stats_articles',
+  statsInput:    'articleai_stats_input',
+  statsOutput:   'articleai_stats_output',
+  statsCost:     'articleai_stats_cost',
+  statsHistory:  'articleai_stats_history',
+};

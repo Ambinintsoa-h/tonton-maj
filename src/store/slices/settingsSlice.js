@@ -1,4 +1,5 @@
 import { createSlice } from '@reduxjs/toolkit';
+import { STORAGE_KEYS } from '../../constants/storage';
 
 // Config Firebase par défaut (projet tonton-ai-c8196)
 // Exportée pour AppInit — la sécurité vient des règles Firestore, pas de cette config.
@@ -14,7 +15,7 @@ export const DEFAULT_FIREBASE_CONFIG = {
 // Charge les paramètres sauvegardés depuis localStorage au démarrage.
 const loadSavedSettings = () => {
   try {
-    const saved = localStorage.getItem('articleai_settings');
+    const saved = localStorage.getItem(STORAGE_KEYS.settings);
     if (!saved) return {};
     const parsed = JSON.parse(saved);
     return {

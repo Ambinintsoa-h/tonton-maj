@@ -1,4 +1,5 @@
 import { createSlice } from '@reduxjs/toolkit';
+import { STORAGE_KEYS } from '../../constants/storage';
 
 const load = (key, def) => {
   try { return JSON.parse(localStorage.getItem(key) || 'null') ?? def; } catch { return def; }
@@ -7,11 +8,11 @@ const load = (key, def) => {
 const statsSlice = createSlice({
   name: 'stats',
   initialState: {
-    totalArticles: load('articleai_stats_articles', 0),
-    totalInputTokens: load('articleai_stats_input', 0),
-    totalOutputTokens: load('articleai_stats_output', 0),
-    totalCostUsd: load('articleai_stats_cost', 0),
-    history: load('articleai_stats_history', []), // [{id, title, inputTokens, outputTokens, costUsd, createdAt, pass}]
+    totalArticles: load(STORAGE_KEYS.statsArticles, 0),
+    totalInputTokens: load(STORAGE_KEYS.statsInput, 0),
+    totalOutputTokens: load(STORAGE_KEYS.statsOutput, 0),
+    totalCostUsd: load(STORAGE_KEYS.statsCost, 0),
+    history: load(STORAGE_KEYS.statsHistory, []), // [{id, title, inputTokens, outputTokens, costUsd, createdAt, pass}]
   },
   reducers: {
     setStats: (state, action) => ({ ...state, ...action.payload }),

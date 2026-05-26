@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { STORAGE_KEYS } from '../constants/storage';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -123,7 +124,7 @@ export default function Parametres() {
 
     // 3. Mise à jour du store Redux + cache localStorage (firebaseConfig seulement)
     dispatch(setSettings(newSettings));
-    localStorage.setItem('articleai_settings', JSON.stringify({ firebaseConfig }));
+    localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify({ firebaseConfig }));
 
     setSaving(false);
     toast.success('Paramètres enregistrés pour toute l\'équipe !');
@@ -136,8 +137,8 @@ export default function Parametres() {
         setProxyStatus('ok');
         setForm(f => ({ ...f, useLocalProxy: true }));
         dispatch(setSettings({ anthropicKey: 'local', useLocalProxy: true }));
-        localStorage.setItem('articleai_settings', JSON.stringify({
-          ...JSON.parse(localStorage.getItem('articleai_settings') || '{}'),
+        localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify({
+          ...JSON.parse(localStorage.getItem(STORAGE_KEYS.settings) || '{}'),
           anthropicKey: 'local',
           useLocalProxy: true,
         }));

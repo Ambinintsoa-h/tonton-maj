@@ -1,4 +1,5 @@
 import { createSlice } from '@reduxjs/toolkit';
+import { STORAGE_KEYS } from '../../constants/storage';
 
 const load = (key) => {
   try { return JSON.parse(localStorage.getItem(key) || 'null') || []; }
@@ -8,7 +9,7 @@ const load = (key) => {
 const articlesSlice = createSlice({
   name: 'articles',
   initialState: {
-    history: load('articleai_history'),
+    history: load(STORAGE_KEYS.history),
     current: null,
     loading: false,
   },

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { STORAGE_KEYS } from '../constants/storage';
 import axios from 'axios';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -942,8 +943,8 @@ export default function Skills() {
   const [showNewKnowledge, setShowNewKnowledge]  = useState(false);
   const [importing,        setImporting]         = useState(false); // état de chargement import
 
-  useEffect(() => { persist('articleai_knowledge', knowledge); }, [knowledge]);
-  useEffect(() => { persist('articleai_skills',    skills);    }, [skills]);
+  useEffect(() => { persist(STORAGE_KEYS.knowledge, knowledge); }, [knowledge]);
+  useEffect(() => { persist(STORAGE_KEYS.skills,    skills);    }, [skills]);
 
   /* ── Firebase helpers ── */
   const fbSaveKnowledge = async (item, dispatchFn) => {

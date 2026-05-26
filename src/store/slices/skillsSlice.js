@@ -1,4 +1,5 @@
 import { createSlice } from '@reduxjs/toolkit';
+import { STORAGE_KEYS } from '../../constants/storage';
 
 const load = (key) => {
   try { return JSON.parse(localStorage.getItem(key) || 'null') || []; }
@@ -7,7 +8,7 @@ const load = (key) => {
 
 const skillsSlice = createSlice({
   name: 'skills',
-  initialState: { list: load('articleai_skills'), loading: false },
+  initialState: { list: load(STORAGE_KEYS.skills), loading: false },
   reducers: {
     setSkills: (state, action) => { state.list = action.payload; },
     addSkill: (state, action) => { state.list.unshift(action.payload); },

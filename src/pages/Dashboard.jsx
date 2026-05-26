@@ -8,6 +8,7 @@ import {
   Sparkles, RefreshCw, Calendar, ArrowRight,
 } from 'lucide-react';
 import { resetStats } from '../store/slices/statsSlice';
+import { ROLE_COLORS } from '../constants/theme';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -30,12 +31,6 @@ const fmtDate = (iso) => {
 const extractDomain = (url) => {
   try { return new URL(url).hostname.replace(/^www\./, ''); }
   catch { return url || '?'; }
-};
-
-const ROLE_COLORS = {
-  cq_ia:       'bg-blue-100 text-blue-700',
-  manager:     'bg-purple-100 text-purple-700',
-  super_admin: 'bg-gray-900 text-white',
 };
 
 // ── Composants ────────────────────────────────────────────────────────────────
