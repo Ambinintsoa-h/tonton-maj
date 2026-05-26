@@ -21,6 +21,9 @@ const FormData = require('form-data');
 const axios = require('axios');
 const { Readability } = require('@mozilla/readability');
 const { JSDOM } = require('jsdom');
+const speakeasy = require('speakeasy');
+const QRCode    = require('qrcode');
+const nodemailer = require('nodemailer');
 
 const app = express();
 
@@ -30,7 +33,7 @@ app.use(cors({
   origin: IS_PROD
     ? ['https://maj.stomos.net']
     : ['http://localhost:3000', 'http://127.0.0.1:3000'],
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json({ limit: '2mb' }));
@@ -84,24 +87,77 @@ if (IS_PROD) {
   app.use(express.static(path.join(__dirname, 'build')));
 }
 
+// ─── 2FA — stockage local dans data/2fa/{username}.json ─────────────────────
+const TFA_DIR = path.join(__dirname, 'data', '2fa');
+const read2fa  = (u) => { try { return JSON.parse(fs.readFileSync(path.join(TFA_DIR, `${u}.json`), 'utf8')); } catch { return {}; } };
+const write2fa = (u, d) => { if (!fs.existsSync(TFA_DIR)) fs.mkdirSync(TFA_DIR, { recursive: true }); fs.writeFileSync(path.join(TFA_DIR, `${u}.json`), JSON.stringify(d, null, 2), 'utf8'); };
+
+// ─── Profil utilisateur — data/profiles/{username}.json ─────────────────────
+const PROFILES_DIR = path.join(__dirname, 'data', 'profiles');
+const readProfile  = (u) => { try { return JSON.parse(fs.readFileSync(path.join(PROFILES_DIR, `${u}.json`), 'utf8')); } catch { return {}; } };
+const writeProfile = (u, d) => { if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true }); fs.writeFileSync(path.join(PROFILES_DIR, `${u}.json`), JSON.stringify(d, null, 2), 'utf8'); };
+
+// ─── Envoi email OTP ──────────────────────────────────────────────────────────
+const sendEmailOtp = async (toEmail, code) => {
+  const s = readServerSettings();
+  if (!s.smtpHost || !s.smtpUser || !s.smtpPass) throw new Error('SMTP non configuré dans les paramètres');
+  const transporter = nodemailer.createTransport({
+    host: s.smtpHost, port: s.smtpPort || 587, secure: (s.smtpPort || 587) === 465,
+    auth: { user: s.smtpUser, pass: s.smtpPass },
+  });
+  await transporter.sendMail({
+    from: s.smtpFrom || s.smtpUser,
+    to: toEmail,
+    subject: 'TONTON AI — Code de connexion',
+    text: `Votre code de vérification : ${code}\n\nCe code expire dans 10 minutes.`,
+    html: `<p style="font-size:16px">Votre code de vérification :</p><p style="font-size:32px;font-weight:bold;letter-spacing:8px">${code}</p><p style="color:#999;font-size:13px">Ce code expire dans 10 minutes.</p>`,
+  });
+};
+
 // ─── Route de login (publique — pas d'auth requise) ──────────────────────────
-app.post('/api/auth/login', (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) {
-    return res.status(400).json({ success: false, error: 'username et password requis' });
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password, twoFaCode, tempToken } = req.body || {};
+
+  // ── Étape 2 : vérification du code 2FA ──────────────────────────────────────
+  if (tempToken && twoFaCode) {
+    let decoded;
+    try { decoded = jwt.verify(tempToken, JWT_SECRET); } catch { return res.status(401).json({ error: 'Session 2FA expirée — reconnectez-vous' }); }
+    if (decoded.type !== 'tfa_pending') return res.status(401).json({ error: 'Token invalide' });
+    const tfa = read2fa(decoded.username);
+    let valid = false;
+    if (tfa.method === 'totp') {
+      valid = speakeasy.totp.verify({ secret: tfa.totpSecret, encoding: 'base32', token: twoFaCode.replace(/\s/g, ''), window: 1 });
+    } else if (tfa.method === 'email') {
+      valid = twoFaCode === tfa.emailCode && Date.now() < (tfa.emailCodeExpiry || 0);
+    }
+    if (!valid) return setTimeout(() => res.status(401).json({ error: 'Code incorrect' }), 500);
+    const token = jwt.sign({ username: decoded.username, role: decoded.role }, JWT_SECRET, { expiresIn: '8h' });
+    return res.json({ success: true, token, role: decoded.role, username: decoded.username });
   }
+
+  // ── Étape 1 : username + password ───────────────────────────────────────────
+  if (!username || !password) return res.status(400).json({ success: false, error: 'username et password requis' });
+
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-    const token = jwt.sign(
-      { username, role: 'admin' },
-      JWT_SECRET,
-      { expiresIn: '8h' }
-    );
+    const tfa = read2fa(username);
+    if (tfa.enabled) {
+      // Email OTP : générer et envoyer le code
+      if (tfa.method === 'email') {
+        const profile = readProfile(username);
+        const email = profile.email || tfa.email;
+        if (!email) return res.status(400).json({ error: 'Aucune adresse email configurée pour la 2FA' });
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        write2fa(username, { ...tfa, emailCode: code, emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
+        try { await sendEmailOtp(email, code); } catch (e) { return res.status(500).json({ error: `Échec envoi email : ${e.message}` }); }
+      }
+      const tempToken = jwt.sign({ username, role: 'admin', type: 'tfa_pending' }, JWT_SECRET, { expiresIn: '5m' });
+      return res.json({ success: true, requires2fa: true, method: tfa.method, tempToken });
+    }
+    const token = jwt.sign({ username, role: 'admin' }, JWT_SECRET, { expiresIn: '8h' });
     return res.json({ success: true, token, role: 'admin', username });
   }
   // Délai pour ralentir le bruteforce
-  setTimeout(() => {
-    res.status(401).json({ success: false, error: 'Identifiants incorrects' });
-  }, 500);
+  setTimeout(() => res.status(401).json({ success: false, error: 'Identifiants incorrects' }), 500);
 });
 
 // ─── Rate limiter intégré (sans dépendance externe) ──────────────────────────
@@ -160,6 +216,107 @@ const writeServerSettings = (payload) => {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(payload, null, 2), 'utf8');
 };
+
+// ─── Compte utilisateur ───────────────────────────────────────────────────────
+// GET  /api/account — profil du compte connecté
+app.get('/api/account', requireAuth, (req, res) => {
+  const profile = readProfile(req.user.username);
+  const tfa = read2fa(req.user.username);
+  res.json({
+    username: req.user.username,
+    role: req.user.role || 'admin',
+    nom:       profile.nom       || '',
+    prenom:    profile.prenom    || '',
+    email:     profile.email     || '',
+    avatarUrl: profile.avatarUrl || '',
+    twoFaEnabled: !!tfa.enabled,
+    twoFaMethod:  tfa.method || 'none',
+  });
+});
+
+// PUT  /api/account — mettre à jour nom, prénom, email, avatarUrl
+app.put('/api/account', requireAuth, (req, res) => {
+  const { nom, prenom, email, avatarUrl } = req.body || {};
+  const existing = readProfile(req.user.username);
+  writeProfile(req.user.username, { ...existing, nom, prenom, email, avatarUrl, updatedAt: Date.now() });
+  res.json({ success: true });
+});
+
+// POST /api/account/avatar — upload d'une photo de profil (retourne data URL)
+const avatarUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
+app.post('/api/account/avatar', requireAuth, avatarUpload.single('avatar'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Aucun fichier reçu' });
+  const mime = req.file.mimetype;
+  if (!mime.startsWith('image/')) return res.status(400).json({ error: 'Fichier image requis' });
+  const dataUrl = `data:${mime};base64,${req.file.buffer.toString('base64')}`;
+  res.json({ success: true, avatarUrl: dataUrl });
+});
+
+// ─── 2FA endpoints ────────────────────────────────────────────────────────────
+// POST /api/2fa/setup-totp — génère un secret TOTP + QR code (non activé)
+app.post('/api/2fa/setup-totp', requireAuth, async (req, res) => {
+  const username = req.user.username;
+  const profile  = readProfile(username);
+  const secret   = speakeasy.generateSecret({ name: `TONTON AI (${username})`, length: 20 });
+  const tfa = read2fa(username);
+  // Stocker le secret en attente (pas encore activé)
+  write2fa(username, { ...tfa, pendingTotpSecret: secret.base32 });
+  try {
+    const qrDataUrl = await QRCode.toDataURL(secret.otpauth_url);
+    res.json({ success: true, secret: secret.base32, qrCode: qrDataUrl });
+  } catch (e) {
+    res.status(500).json({ error: 'Erreur génération QR code' });
+  }
+});
+
+// POST /api/2fa/enable-totp — vérifie le code TOTP et active
+app.post('/api/2fa/enable-totp', requireAuth, (req, res) => {
+  const { code } = req.body || {};
+  const username = req.user.username;
+  const tfa = read2fa(username);
+  if (!tfa.pendingTotpSecret) return res.status(400).json({ error: 'Aucun secret TOTP en attente — relancez la configuration' });
+  const valid = speakeasy.totp.verify({ secret: tfa.pendingTotpSecret, encoding: 'base32', token: (code || '').replace(/\s/g, ''), window: 1 });
+  if (!valid) return res.status(400).json({ error: 'Code incorrect — vérifiez votre application authenticator' });
+  write2fa(username, { enabled: true, method: 'totp', totpSecret: tfa.pendingTotpSecret });
+  res.json({ success: true });
+});
+
+// POST /api/2fa/setup-email — envoie un code de vérification par email
+app.post('/api/2fa/setup-email', requireAuth, async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'Email requis' });
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const username = req.user.username;
+  const tfa = read2fa(username);
+  write2fa(username, { ...tfa, pendingEmail: email, pendingEmailCode: code, pendingEmailExpiry: Date.now() + 10 * 60 * 1000 });
+  try {
+    await sendEmailOtp(email, code);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: `Échec envoi email : ${e.message}` });
+  }
+});
+
+// POST /api/2fa/enable-email — vérifie le code email et active
+app.post('/api/2fa/enable-email', requireAuth, (req, res) => {
+  const { code } = req.body || {};
+  const username = req.user.username;
+  const tfa = read2fa(username);
+  if (!tfa.pendingEmailCode) return res.status(400).json({ error: 'Aucun code en attente — relancez la configuration' });
+  if (code !== tfa.pendingEmailCode || Date.now() > (tfa.pendingEmailExpiry || 0)) {
+    return res.status(400).json({ error: 'Code incorrect ou expiré' });
+  }
+  const profile = readProfile(username);
+  writeProfile(username, { ...profile, email: tfa.pendingEmail });
+  write2fa(username, { enabled: true, method: 'email', email: tfa.pendingEmail });
+  res.json({ success: true });
+});
+
+// DELETE /api/2fa — désactiver la 2FA
+app.delete('/api/2fa', requireAuth, (req, res) => {
+  write2fa(req.user.username, { enabled: false, method: 'none' });
+  res.json({ success: true });
+});
 
 // GET /api/settings — retourne les paramètres partagés (clés API de l'équipe)
 app.get('/api/settings', requireAuth, (req, res) => {

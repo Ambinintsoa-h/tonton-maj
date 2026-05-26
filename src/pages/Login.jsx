@@ -30,13 +30,24 @@ export default function Login() {
   const [error,        setError]        = useState('');
   const [showLoader,   setShowLoader]   = useState(false);
 
+  // Étape 2FA
+  const [twoFaStep,   setTwoFaStep]   = useState(false);
+  const [twoFaMethod, setTwoFaMethod] = useState('');
+  const [tempToken,   setTempToken]   = useState('');
+  const [twoFaCode,   setTwoFaCode]   = useState('');
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
       const { data } = await axios.post('/api/auth/login', { username, password });
-      if (data.token) {
+      if (data.requires2fa) {
+        setTwoFaStep(true);
+        setTwoFaMethod(data.method);
+        setTempToken(data.tempToken);
+        setLoading(false);
+      } else if (data.token) {
         dispatch(loginSuccess({ token: data.token, username, role: data.role ?? null }));
         setShowLoader(true);
       } else {
@@ -45,6 +56,25 @@ export default function Login() {
       }
     } catch {
       setError('Identifiants incorrects');
+      setLoading(false);
+    }
+  };
+
+  const handle2faSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const { data } = await axios.post('/api/auth/login', { tempToken, twoFaCode });
+      if (data.token) {
+        dispatch(loginSuccess({ token: data.token, username, role: data.role ?? null }));
+        setShowLoader(true);
+      } else {
+        setError('Code incorrect');
+        setLoading(false);
+      }
+    } catch {
+      setError('Code incorrect ou expiré');
       setLoading(false);
     }
   };
@@ -133,59 +163,92 @@ export default function Login() {
           </p>
 
           {/* ── Formulaire ── */}
-          <form onSubmit={handleSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <input
-              type="text"
-              autoComplete="username"
-              required
-              value={username}
-              onChange={e => setUsername(e.target.value)}
-              disabled={loading}
-              placeholder="Identifiant"
-              style={INPUT}
-              onFocus={e => { e.target.style.borderColor = '#111'; }}
-              onBlur={e => { e.target.style.borderColor = '#e0e0e0'; }}
-            />
-
-            <div style={{ position: 'relative' }}>
+          {!twoFaStep ? (
+            <form onSubmit={handleSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <input
-                type={showPassword ? 'text' : 'password'}
-                autoComplete="current-password"
+                type="text"
+                autoComplete="username"
                 required
-                value={password}
-                onChange={e => setPassword(e.target.value)}
+                value={username}
+                onChange={e => setUsername(e.target.value)}
                 disabled={loading}
-                placeholder="Mot de passe"
-                style={{ ...INPUT, paddingRight: 44 }}
+                placeholder="Identifiant"
+                style={INPUT}
                 onFocus={e => { e.target.style.borderColor = '#111'; }}
                 onBlur={e => { e.target.style.borderColor = '#e0e0e0'; }}
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(v => !v)}
-                tabIndex={-1}
-                style={{
-                  position: 'absolute', right: 14, top: '50%',
-                  transform: 'translateY(-50%)',
-                  background: 'none', border: 'none',
-                  color: '#bbb', cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', padding: 0,
-                }}
-              >
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
 
-            {error && (
-              <div style={{
-                padding: '10px 14px',
-                background: '#fef2f2', border: '1px solid #fecaca',
-                borderRadius: 10, fontSize: 13, color: '#dc2626',
-              }}>
-                {error}
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  disabled={loading}
+                  placeholder="Mot de passe"
+                  style={{ ...INPUT, paddingRight: 44 }}
+                  onFocus={e => { e.target.style.borderColor = '#111'; }}
+                  onBlur={e => { e.target.style.borderColor = '#e0e0e0'; }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  tabIndex={-1}
+                  style={{
+                    position: 'absolute', right: 14, top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none', border: 'none',
+                    color: '#bbb', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', padding: 0,
+                  }}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
               </div>
-            )}
-          </form>
+
+              {error && (
+                <div style={{
+                  padding: '10px 14px',
+                  background: '#fef2f2', border: '1px solid #fecaca',
+                  borderRadius: 10, fontSize: 13, color: '#dc2626',
+                }}>
+                  {error}
+                </div>
+              )}
+            </form>
+          ) : (
+            /* ── Étape 2FA ── */
+            <form onSubmit={handle2faSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ padding: '10px 14px', background: '#f5f3ff', border: '1px solid #e9d5ff', borderRadius: 10, fontSize: 13, color: '#7c3aed', lineHeight: 1.5 }}>
+                {twoFaMethod === 'totp'
+                  ? 'Saisissez le code à 6 chiffres de votre application authenticator.'
+                  : 'Un code à 6 chiffres a été envoyé à votre adresse email.'}
+              </div>
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={6}
+                required
+                value={twoFaCode}
+                onChange={e => setTwoFaCode(e.target.value.replace(/\D/g, ''))}
+                disabled={loading}
+                placeholder="000000"
+                style={{ ...INPUT, fontSize: 24, letterSpacing: 10, textAlign: 'center', fontFamily: 'monospace' }}
+                autoFocus
+              />
+              {error && (
+                <div style={{ padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, fontSize: 13, color: '#dc2626' }}>
+                  {error}
+                </div>
+              )}
+              <button type="button" onClick={() => { setTwoFaStep(false); setTwoFaCode(''); setError(''); }}
+                style={{ background: 'none', border: 'none', color: '#999', fontSize: 12, cursor: 'pointer', textAlign: 'left', padding: 0 }}>
+                ← Retour
+              </button>
+            </form>
+          )}
 
           {/* ── Étiquettes agents — fond neutre, pas de bordure = pas bouton ── */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 20 }}>
@@ -215,8 +278,8 @@ export default function Login() {
             <button
               type="submit"
               form=""
-              onClick={handleSubmit}
-              disabled={loading || !username || !password}
+              onClick={twoFaStep ? handle2faSubmit : handleSubmit}
+              disabled={loading || (!twoFaStep && (!username || !password)) || (twoFaStep && twoFaCode.length < 6)}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 9,
                 padding: '12px 24px',
@@ -224,10 +287,10 @@ export default function Login() {
                 color: '#fff',
                 border: 'none', borderRadius: 999,
                 fontSize: 14, fontWeight: 700,
-                cursor: (loading || !username || !password) ? 'not-allowed' : 'pointer',
+                cursor: (loading || (!twoFaStep && (!username || !password)) || (twoFaStep && twoFaCode.length < 6)) ? 'not-allowed' : 'pointer',
                 letterSpacing: '0.01em', fontFamily: 'inherit',
                 transition: 'background 0.15s',
-                opacity: (loading || !username || !password) ? 0.55 : 1,
+                opacity: (loading || (!twoFaStep && (!username || !password)) || (twoFaStep && twoFaCode.length < 6)) ? 0.55 : 1,
               }}
             >
               {/* Point vert animé — comme dans le template */}
@@ -237,7 +300,7 @@ export default function Login() {
                 boxShadow: '0 0 0 2px rgba(110,231,183,0.3)',
                 animation: 'pulse 2s infinite',
               }} />
-              {loading ? 'Connexion…' : 'Se connecter'}
+              {loading ? 'Vérification…' : twoFaStep ? 'Vérifier le code' : 'Se connecter'}
             </button>
 
             {/* Badge PUBLITHINGS — pill noir, comme le bouton secondaire du template */}

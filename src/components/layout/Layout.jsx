@@ -1,4 +1,5 @@
 import Sidebar from './Sidebar';
+import Header from './Header';
 
 export default function Layout({ children }) {
   return (
@@ -9,11 +10,14 @@ export default function Layout({ children }) {
       }}
     >
       <Sidebar />
-      <main className="flex-1 overflow-auto">
-        <div className="p-8 max-w-6xl mx-auto">
-          {children}
-        </div>
-      </main>
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <Header />
+        <main className="flex-1 overflow-auto">
+          <div className="p-8 max-w-6xl mx-auto">
+            {children}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

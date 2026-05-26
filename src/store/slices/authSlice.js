@@ -9,6 +9,13 @@ const getInitialState = () => {
     token: token || null,
     username: null,
     role: null,
+    // Profil utilisateur (chargé après connexion)
+    nom:       '',
+    prenom:    '',
+    email:     '',
+    avatarUrl: '',
+    twoFaEnabled: false,
+    twoFaMethod:  'none',
   };
 };
 
@@ -24,15 +31,30 @@ const authSlice = createSlice({
       state.role = role;
       sessionStorage.setItem(TOKEN_KEY, token);
     },
+    setProfile(state, action) {
+      const { nom, prenom, email, avatarUrl, twoFaEnabled, twoFaMethod } = action.payload;
+      if (nom       !== undefined) state.nom       = nom;
+      if (prenom    !== undefined) state.prenom    = prenom;
+      if (email     !== undefined) state.email     = email;
+      if (avatarUrl !== undefined) state.avatarUrl = avatarUrl;
+      if (twoFaEnabled !== undefined) state.twoFaEnabled = twoFaEnabled;
+      if (twoFaMethod  !== undefined) state.twoFaMethod  = twoFaMethod;
+    },
     logout(state) {
       state.isAuthenticated = false;
       state.token = null;
       state.username = null;
       state.role = null;
+      state.nom = '';
+      state.prenom = '';
+      state.email = '';
+      state.avatarUrl = '';
+      state.twoFaEnabled = false;
+      state.twoFaMethod = 'none';
       sessionStorage.removeItem(TOKEN_KEY);
     },
   },
 });
 
-export const { loginSuccess, logout } = authSlice.actions;
+export const { loginSuccess, setProfile, logout } = authSlice.actions;
 export default authSlice.reducer;
