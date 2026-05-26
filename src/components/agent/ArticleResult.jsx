@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { useSelector, useDispatch } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -566,6 +566,24 @@ export default function ArticleResult() {
   const p2Updates = updates.filter(u => u.pass === 2);
   const sources = agent.sources || [];
   const parseFailed = agent.parseFailed === true;
+
+  // ── Comptage de mots ─────────────────────────────────────────────────────
+  const countWords = (html) => {
+    if (!html) return 0;
+    return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().split(/\s+/).filter(Boolean).length;
+  };
+  // Mots retirés / ajoutés = cumul des champs original/updated des updates appliqués
+  const wordsRemoved = useMemo(
+    () => appliedUpdates.reduce((sum, u) => sum + countWords(u.original || ''), 0),
+    [appliedUpdates]
+  );
+  const wordsAdded = useMemo(
+    () => appliedUpdates.reduce((sum, u) => sum + countWords(u.updated || ''), 0),
+    [appliedUpdates]
+  );
+  // Total mots dans l'article final
+  const totalWords = useMemo(() => countWords(agent.updatedContent || ''), [agent.updatedContent]);
+  const showWordStats = !!(agent.updatedContent && appliedUpdates.length > 0);
   const [copiedIdx, setCopiedIdx] = useState(null);
 
   const copyMissed = async (text, idx) => {
@@ -737,6 +755,52 @@ export default function ArticleResult() {
           <span className="font-bold text-gray-900">{sources.length}</span>
           {' '}source{sources.length !== 1 ? 's' : ''} vérifiée{sources.length !== 1 ? 's' : ''}
         </div>
+
+        {/* ── Compteur de mots ── */}
+        {showWordStats && (
+          <>
+            <div className="h-4 w-px bg-gray-200 hidden sm:block" />
+            <div className="flex items-center gap-3 text-xs">
+              <span className="text-red-500 font-medium" title="Mots retirés par TONTON AI">
+                −{wordsRemoved} retirés
+              </span>
+              <span className="text-emerald-600 font-medium" title="Mots ajoutés par TONTON AI">
+                +{wordsAdded} ajoutés
+              </span>
+              <span className="text-gray-500" title="Total de mots dans l'article mis à jour">
+                {totalWords.toLocaleString()} mots
+              </span>
+              {/* Indicateur objectif +200 */}
+              {(wordsAdded - wordsRemoved) < 200 ? (
+                <span
+                  title="Objectif recommandé : +200 mots nets pour une MAJ plus efficace"
+                  style={{
+                    fontSize: 10, fontWeight: 700,
+                    background: '#fef3c7', color: '#d97706',
+                    border: '1px solid #fcd34d',
+                    borderRadius: 99, padding: '1px 7px',
+                    cursor: 'help', whiteSpace: 'nowrap',
+                  }}
+                >
+                  objectif +200
+                </span>
+              ) : (
+                <span
+                  title="Objectif +200 mots nets atteint ✓"
+                  style={{
+                    fontSize: 10, fontWeight: 700,
+                    background: '#d1fae5', color: '#059669',
+                    border: '1px solid #6ee7b7',
+                    borderRadius: 99, padding: '1px 7px',
+                    cursor: 'help', whiteSpace: 'nowrap',
+                  }}
+                >
+                  +200 ✓
+                </span>
+              )}
+            </div>
+          </>
+        )}
         {updates.length === 0 && (
           <>
             <div className="h-4 w-px bg-gray-200 hidden sm:block" />
