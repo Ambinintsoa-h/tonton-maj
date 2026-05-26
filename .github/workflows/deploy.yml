@@ -7,8 +7,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout code
@@ -38,23 +36,23 @@ jobs:
 
       - name: Upload files via SCP
         run: |
+          scp -P ${{ secrets.N0C_PORT }} -i ~/.ssh/id_rsa \
+            proxy.js package.json package-lock.json \
+            ${{ secrets.N0C_USERNAME }}@${{ secrets.N0C_HOST }}:~/maj.stomos.net/
           scp -P ${{ secrets.N0C_PORT }} -i ~/.ssh/id_rsa -r \
-            proxy.js package.json package-lock.json build \
+            build \
             ${{ secrets.N0C_USERNAME }}@${{ secrets.N0C_HOST }}:~/maj.stomos.net/
 
       - name: Install deps + restart sur n0c
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.N0C_HOST }}
-          username: ${{ secrets.N0C_USERNAME }}
-          key: ${{ secrets.N0C_DEPLOY_KEY }}
-          port: ${{ secrets.N0C_PORT }}
-          script: |
-            source ~/nodevenv/maj.stomos.net/22/bin/activate
-            cd ~/maj.stomos.net
-            npm install --omit=dev
-            mkdir -p data
-            chmod -R 755 build/
-            cp -rv build/* public/
-            touch tmp/restart.txt
-            echo "✅ Déploiement terminé"
+        run: |
+          ssh -p ${{ secrets.N0C_PORT }} -i ~/.ssh/id_rsa \
+            ${{ secrets.N0C_USERNAME }}@${{ secrets.N0C_HOST }} << 'ENDSSH'
+          source ~/nodevenv/maj.stomos.net/22/bin/activate
+          cd ~/maj.stomos.net
+          npm install --omit=dev
+          mkdir -p data
+          chmod -R 755 build/
+          cp -rv build/* public/
+          touch tmp/restart.txt
+          echo "✅ Déploiement terminé"
+          ENDSSH
