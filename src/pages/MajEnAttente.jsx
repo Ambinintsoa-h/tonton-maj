@@ -1045,9 +1045,12 @@ export default function MajEnAttente() {
       return;
     }
 
+    // Feedback visuel immédiat — le bouton MAJ disparaît dès le clic
+    const slotIndex = runStates.size;
+    updateRunState(item.id, { step: slotIndex > 0 ? 'Démarrage dans quelques secondes…' : '', progress: 0 });
+
     // Stagger : décaler le démarrage selon le nombre de slots déjà actifs
     // pour éviter un burst simultané sur l'API Anthropic
-    const slotIndex = runStates.size;
     if (slotIndex > 0) {
       await new Promise(r => setTimeout(r, slotIndex * SLOT_STAGGER_MS));
     }
