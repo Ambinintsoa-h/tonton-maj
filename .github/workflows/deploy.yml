@@ -27,32 +27,39 @@ jobs:
           GENERATE_SOURCEMAP: false
           CI: false
 
-      - name: Setup SSH
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.N0C_DEPLOY_KEY }}" > ~/.ssh/id_rsa
+          printf '%s\n' "${{ secrets.N0C_DEPLOY_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H -p ${{ secrets.N0C_PORT }} ${{ secrets.N0C_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          cat >> ~/.ssh/config << EOF
+          Host n0c
+            HostName ${{ secrets.N0C_HOST }}
+            Port ${{ secrets.N0C_PORT }}
+            User ${{ secrets.N0C_USERNAME }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking no
+            ConnectTimeout 30
+          EOF
 
       - name: Upload files via SCP
         run: |
-          scp -P ${{ secrets.N0C_PORT }} -i ~/.ssh/id_rsa \
+          scp -F ~/.ssh/config \
             proxy.js package.json package-lock.json \
-            ${{ secrets.N0C_USERNAME }}@${{ secrets.N0C_HOST }}:~/maj.stomos.net/
-          scp -P ${{ secrets.N0C_PORT }} -i ~/.ssh/id_rsa -r \
-            build \
-            ${{ secrets.N0C_USERNAME }}@${{ secrets.N0C_HOST }}:~/maj.stomos.net/
+            n0c:~/maj.stomos.net/
+          scp -F ~/.ssh/config -r build \
+            n0c:~/maj.stomos.net/
 
       - name: Install deps + restart sur n0c
         run: |
-          ssh -p ${{ secrets.N0C_PORT }} -i ~/.ssh/id_rsa \
-            ${{ secrets.N0C_USERNAME }}@${{ secrets.N0C_HOST }} << 'ENDSSH'
-          source ~/nodevenv/maj.stomos.net/22/bin/activate
-          cd ~/maj.stomos.net
-          npm install --omit=dev
-          mkdir -p data
-          chmod -R 755 build/
-          cp -rv build/* public/
-          touch tmp/restart.txt
-          echo "✅ Déploiement terminé"
-          ENDSSH
+          ssh -F ~/.ssh/config n0c bash << 'SCRIPT'
+            set -e
+            source ~/nodevenv/maj.stomos.net/22/bin/activate
+            cd ~/maj.stomos.net
+            npm install --omit=dev
+            mkdir -p data
+            chmod -R 755 build/
+            cp -rv build/* public/
+            touch tmp/restart.txt
+            echo "Déploiement terminé"
+          SCRIPT
