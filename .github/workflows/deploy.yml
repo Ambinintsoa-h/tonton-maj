@@ -29,17 +29,20 @@ jobs:
           GENERATE_SOURCEMAP: false
           CI: false
 
-      - name: Upload files to n0c
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.N0C_HOST }}
-          username: ${{ secrets.N0C_USERNAME }}
-          key: ${{ secrets.N0C_DEPLOY_KEY }}
-          port: ${{ secrets.N0C_PORT }}
-          source: "proxy.js,package.json,package-lock.json,build/"
-          target: "/home/${{ secrets.N0C_USERNAME }}/maj.stomos.net/"
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.N0C_DEPLOY_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H -p ${{ secrets.N0C_PORT }} ${{ secrets.N0C_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Install deps + deploy sur n0c
+      - name: Upload files via SCP
+        run: |
+          scp -P ${{ secrets.N0C_PORT }} -i ~/.ssh/id_rsa -r \
+            proxy.js package.json package-lock.json build \
+            ${{ secrets.N0C_USERNAME }}@${{ secrets.N0C_HOST }}:~/maj.stomos.net/
+
+      - name: Install deps + restart sur n0c
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.N0C_HOST }}
