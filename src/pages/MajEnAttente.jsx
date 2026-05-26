@@ -42,6 +42,9 @@ const STATUS_META = {
 
 const PRIORITY_ORDER = ['haute', 'normale', 'basse'];
 
+const CONCURRENCY = 3;        // Nombre max de MAJ simultanées
+const SLOT_STAGGER_MS = 4000; // Décalage entre le démarrage de chaque slot
+
 // Détecte automatiquement les colonnes du fichier importé
 const detectColumns = (headers) => {
   const h = headers.map(s => (s || '').toString().toLowerCase().trim());
@@ -810,9 +813,21 @@ export default function MajEnAttente() {
   const [filter,        setFilter]        = useState('Tous');
   // Enrichissement automatique après import : { total, done, errors }
   const [enriching, setEnriching] = useState(null);
-  // Suivi de l'item en cours de traitement : { step, progress } ou null
-  const [runningId,  setRunningId]  = useState(null);
-  const [runState,   setRunState]   = useState({ step: '', progress: 0 });
+  // Suivi des items en cours : Map<id, { step, progress }>
+  const [runStates,   setRunStates]   = useState(new Map());
+  // Ref pour accès synchrone à la liste d'items dans les closures async
+  const itemsRef = useRef(items);
+  useEffect(() => { itemsRef.current = items; }, [items]);
+
+  // Met à jour (ou supprime si null) l'état de progression d'un item
+  const updateRunState = useCallback((id, update) => {
+    setRunStates(prev => {
+      const next = new Map(prev);
+      if (update === null) { next.delete(id); }
+      else { next.set(id, { ...(prev.get(id) || { step: '', progress: 0 }), ...update }); }
+      return next;
+    });
+  }, []);
 
   // Purge les anciens items "done" au montage (migration : avant, ils restaient dans la liste)
   useEffect(() => { dispatch(clearDone()); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -878,22 +893,13 @@ export default function MajEnAttente() {
     });
   };
 
-  const handleRunMaj = async (item) => {
-    if (!settings.anthropicKey) {
-      toast.error('Clé API Anthropic manquante — vérifiez les Paramètres');
-      return;
-    }
-    if (runningId) {
-      toast('Une mise à jour est déjà en cours', { icon: 'ℹ️' });
-      return;
-    }
+  // ── Traitement core d'un article (sans navigation, sans reset global) ────────
+  const processItem = async (item) => {
+    const step     = (s) => updateRunState(item.id, { step: s });
+    const progress = (p) => updateRunState(item.id, { progress: p });
 
-    setRunningId(item.id);
-    const step = (s) => setRunState(prev => ({ ...prev, step: s }));
-    const progress = (p) => setRunState(prev => ({ ...prev, progress: p }));
-
-    dispatch(resetAgent());
-    dispatch(setStatus('running'));
+    dispatch(updatePendingItem({ id: item.id, status: 'in_progress' }));
+    updateRunState(item.id, { step: '', progress: 0 });
 
     try {
       // ── Étape 1 : Récupération article (MCP WP prioritaire, sinon scraping) ─
@@ -919,8 +925,10 @@ export default function MajEnAttente() {
               const r = resp.data.result;
               articleHtml    = r.content;
               articleContent = r.content;
-              // Stocker immédiatement les données WP (image à la une incluse)
-              dispatch(setWpData({
+              step(`WordPress MCP ✓ — article lu directement (ID ${r.post_id})`);
+              wpFetched = true;
+              // Données WP pour le single-item flow (retournées dans result)
+              item._wpData = {
                 siteId:          matchingSite.id,
                 siteName:        matchingSite.name,
                 postId:          r.post_id,
@@ -928,10 +936,8 @@ export default function MajEnAttente() {
                 featuredMediaId: r.featured_media_id  || null,
                 featuredMediaUrl:r.featured_media_url || null,
                 postLink:        r.link || null,
-                wpTitle:         r.title || '',   // titre réel WP (pas le slug)
-              }));
-              step(`WordPress MCP ✓ — article lu directement (ID ${r.post_id})`);
-              wpFetched = true;
+                wpTitle:         r.title || '',
+              };
             }
           }
         } catch { /* non-fatal */ }
@@ -941,19 +947,15 @@ export default function MajEnAttente() {
         step('Récupération de l\'article…');
         const scrapeResult = await scrapeUrl(item.url);
         if (!scrapeResult.success) {
-          toast.error(scrapeResult.error || 'Impossible de récupérer l\'article');
-          dispatch(setError(scrapeResult.error));
-          setRunningId(null);
-          return;
+          throw new Error(scrapeResult.error || 'Impossible de récupérer l\'article');
         }
         articleHtml    = scrapeResult.content;
         articleContent = scrapeResult.textContent || scrapeResult.content;
       }
-      dispatch(setOriginalContent(articleHtml));
 
       // ── Étape 2 : Agent IA ────────────────────────────────────────────────
       const result = await runAgent({
-        content:    articleContent,
+        content:      articleContent,
         skills,
         knowledge,
         anthropicKey: settings.anthropicKey,
@@ -964,22 +966,13 @@ export default function MajEnAttente() {
         onStep:     (s) => { dispatch(addStep(s)); step(s); },
         onProgress: (p) => { dispatch(setProgress(p)); progress(p); },
       });
-      if (result.wpData) dispatch(setWpData(result.wpData));
 
       // ── Étape 3 : Application des diffs ───────────────────────────────────
       const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1);
       const hasBlockStructure = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(rawHtml);
       const updatedHtml = hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>');
 
-      dispatch(setUpdatedContent(updatedHtml));
-      dispatch(setDiff(allUpdatesWithStatus));
-      dispatch(setSources(result.sources || []));
-      dispatch(setAnalysis(result.analysis || ''));
-      dispatch(setParseFailed(result.parseFailed === true));
-      dispatch(setStatus('done'));
-
       // ── Étape 4 : Stats tokens ────────────────────────────────────────────
-      // Extraire le H1 comme titre lisible (pas le slug/URL)
       const extractH1 = (html) => {
         try {
           const tmp = document.createElement('div');
@@ -1002,7 +995,7 @@ export default function MajEnAttente() {
         }));
       }
 
-      // ── Étape 5 : Passer en statut "À valider" + naviguer vers la page de review ──
+      // ── Étape 5 : Passer en statut "À valider" ────────────────────────────
       dispatch(updatePendingItem({
         id:     item.id,
         status: 'a_valider',
@@ -1016,25 +1009,67 @@ export default function MajEnAttente() {
         },
       }));
 
-      // currentArticleId = item.id → la page Articles sait qu'on est en mode validation CQ
-      dispatch(setCurrentArticleId(item.id));
-
       const applied = allUpdatesWithStatus.filter(u => u.applied).length;
       const total   = allUpdatesWithStatus.length;
       toast.success(`MAJ prête — ${applied}/${total} modif. appliquées`, { icon: '🔍' });
 
-      // Naviguer vers la page Articles pour review + validation
-      navigate('/');
+      return {
+        originalContent: articleHtml,
+        updatedContent:  updatedHtml,
+        updates:         allUpdatesWithStatus,
+        sources:         result.sources || [],
+        analysis:        result.analysis || '',
+        parseFailed:     result.parseFailed === true,
+        wpData:          item._wpData || result.wpData || null,
+      };
 
     } catch (e) {
       console.error('[maj]', e);
       toast.error('Erreur : ' + e.message);
       dispatch(setError(e.message));
+      dispatch(updatePendingItem({ id: item.id, status: 'error' }));
+      return null;
+    } finally {
+      updateRunState(item.id, null);
+    }
+  };
+
+  // ── Lancement single item → navigate vers la review ───────────────────────
+  const handleRunMaj = async (item) => {
+    if (!settings.anthropicKey) {
+      toast.error('Clé API Anthropic manquante — vérifiez les Paramètres');
+      return;
+    }
+    if (runStates.size >= CONCURRENCY) {
+      toast(`Limite de ${CONCURRENCY} MAJ simultanées — attendez qu'un article se termine`, { icon: 'ℹ️' });
+      return;
     }
 
-    setRunningId(null);
-    setRunState({ step: '', progress: 0 });
+    // Stagger : décaler le démarrage selon le nombre de slots déjà actifs
+    // pour éviter un burst simultané sur l'API Anthropic
+    const slotIndex = runStates.size;
+    if (slotIndex > 0) {
+      await new Promise(r => setTimeout(r, slotIndex * SLOT_STAGGER_MS));
+    }
+
+    dispatch(resetAgent());
+    dispatch(setStatus('running'));
+
+    const data = await processItem(item);
+    if (!data) return;
+
+    dispatch(setOriginalContent(data.originalContent || ''));
+    dispatch(setUpdatedContent(data.updatedContent   || ''));
+    dispatch(setDiff(data.updates   || []));
+    dispatch(setSources(data.sources || []));
+    dispatch(setAnalysis(data.analysis || ''));
+    dispatch(setParseFailed(data.parseFailed === true));
+    if (data.wpData) dispatch(setWpData(data.wpData));
+    dispatch(setCurrentArticleId(item.id));
+    dispatch(setStatus('done'));
+    navigate('/');
   };
+
 
   const handleDelete         = (id) => dispatch(removePendingItem(id));
   const handleAssign         = (id, assigneeId) => dispatch(updatePendingItem({ id, assigneeId }));
@@ -1190,17 +1225,15 @@ export default function MajEnAttente() {
             ))}
           </div>
           <div className="flex items-center gap-2">
-            {activeItems.length > 0 && (
-              <button
-                onClick={() => {
-                  if (window.confirm('Vider toute la liste ?')) dispatch(clearAll());
-                }}
-                className="btn-ghost text-xs text-red-400 hover:text-red-600 hover:bg-red-50 flex items-center gap-1"
-              >
-                <Trash2 size={12} />
-                Tout supprimer
-              </button>
-            )}
+            <button
+              onClick={() => {
+                if (window.confirm('Vider toute la liste ?')) dispatch(clearAll());
+              }}
+              className="btn-ghost text-xs text-red-400 hover:text-red-600 hover:bg-red-50 flex items-center gap-1"
+            >
+              <Trash2 size={12} />
+              Tout supprimer
+            </button>
           </div>
         </div>
       )}
@@ -1253,7 +1286,7 @@ export default function MajEnAttente() {
                     onAssign={handleAssign}
                     onPriorityChange={handlePriorityChange}
                     onViewDiff={handleViewDiff}
-                    running={runningId === item.id ? runState : null}
+                    running={runStates.get(item.id) || null}
                     teamMembers={teamMembers}
                   />
                 ))}
