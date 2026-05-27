@@ -69,6 +69,19 @@ try {
 
 // ─── CORS restreint selon l'environnement ────────────────────────────────────
 const IS_PROD = process.env.NODE_ENV === 'production';
+
+// ─── Vérifications de sécurité au démarrage ───────────────────────────────────
+if (IS_PROD) {
+  if (JWT_SECRET === 'tonton-dev-secret-change-me-in-production') {
+    console.error('[SECURITY] ✗ JWT_SECRET non configuré — définissez JWT_SECRET dans .env en production');
+    process.exit(1);
+  }
+  if (ADMIN_PASSWORD === 'admin') {
+    console.error('[SECURITY] ✗ ADMIN_PASSWORD par défaut — définissez ADMIN_PASSWORD dans .env en production');
+    process.exit(1);
+  }
+}
+
 app.use(cors({
   origin: IS_PROD
     ? ['https://maj.stomos.net']
@@ -224,8 +237,30 @@ const sendInviteEmail = async ({ toEmail, firstName, username, password }) => {
   console.log(`[invite] ✓ Email d'invitation envoyé à ${toEmail}`);
 };
 
+// ─── Rate limiter intégré ─────────────────────────────────────────────────────
+// Enregistré ICI, avant les routes auth, pour couvrir /api/auth/login etc.
+// Limite générale : 60 req/min/IP. Limite auth : 10 req/min/IP (anti brute-force).
+const _rl     = new Map();
+const _rlAuth = new Map();
+
+const makeRateLimiter = (store, max) => (req, res, next) => {
+  const key = req.ip || 'local';
+  const now = Date.now();
+  const e = store.get(key) || { n: 0, t: now };
+  if (now - e.t > 60_000) { store.set(key, { n: 1, t: now }); return next(); }
+  if (e.n >= max) return res.status(429).json({ error: 'Trop de requêtes — réessayez dans une minute.' });
+  e.n++;
+  store.set(key, e);
+  next();
+};
+
+const rateLimiter     = makeRateLimiter(_rl,     60);
+const authRateLimiter = makeRateLimiter(_rlAuth, 10);
+
+app.use('/api/', rateLimiter);
+
 // ─── Route de login (publique — pas d'auth requise) ──────────────────────────
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   const { username, password, twoFaCode, tempToken } = req.body || {};
 
   // ── Étape 2 : vérification du code 2FA ──────────────────────────────────────
@@ -277,13 +312,13 @@ app.get('/api/auth/resolve-username', async (req, res) => {
   if (!username) return res.status(400).json({ error: 'Paramètre u requis' });
   try {
     const snap = await firebaseAdmin.firestore().collection('users').where('username', '==', username).limit(1).get();
-    if (snap.empty) return res.status(404).json({ error: 'Utilisateur introuvable' });
-    return res.json({ email: snap.docs[0].data().email });
+    // Toujours 200 — évite l'énumération de comptes valides via code HTTP différent
+    return res.json({ email: snap.empty ? null : snap.docs[0].data().email });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
 // ─── Échanger un Firebase ID token contre un JWT interne ──────────────────────
-app.post('/api/auth/firebase-login', async (req, res) => {
+app.post('/api/auth/firebase-login', authRateLimiter, async (req, res) => {
   if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   const { idToken } = req.body || {};
   if (!idToken) return res.status(400).json({ error: 'idToken requis' });
@@ -330,20 +365,6 @@ app.delete('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager')
     return res.json({ success: true });
   } catch (e) { return res.status(400).json({ error: e.message }); }
 });
-
-// ─── Rate limiter intégré (sans dépendance externe) ──────────────────────────
-// 60 requêtes/minute par IP. Protège contre les boucles d'appel et le bruteforce.
-const _rl = new Map();
-const rateLimiter = (req, res, next) => {
-  const key = req.ip || 'local';
-  const now = Date.now();
-  const e = _rl.get(key) || { n: 0, t: now };
-  if (now - e.t > 60_000) { _rl.set(key, { n: 1, t: now }); return next(); }
-  if (e.n >= 60) return res.status(429).json({ error: 'Trop de requêtes — réessayez dans une minute.' });
-  e.n++;
-  next();
-};
-app.use('/api/', rateLimiter);
 
 // ─── Multer — stockage mémoire pour les uploads audio ─────────────────────────
 const upload = multer({
@@ -475,7 +496,7 @@ app.get('/api/settings', requireAuth, (req, res) => {
 });
 
 // POST /api/settings — sauvegarde les paramètres partagés (super_admin seulement)
-app.post('/api/settings', requireAuth, requireRole('super_admin', 'admin'), (req, res) => {
+app.post('/api/settings', requireAuth, requireRole('super_admin'), (req, res) => {
   try {
     writeServerSettings(req.body || {});
     console.log('[settings] ✓ Paramètres équipe sauvegardés');
@@ -1060,9 +1081,11 @@ async function transcribeWithGroq(audioBuffer, filename, groqKey, language = 'fr
  * Transcrit un fichier audio/vidéo uploadé directement.
  */
 app.post('/api/transcribe/file', requireAuth, upload.single('audio'), async (req, res) => {
-  const { groqKey, language = 'fr' } = req.body;
-  if (!req.file)  return res.status(400).json({ error: 'Fichier audio requis' });
-  if (!groqKey)   return res.status(400).json({ error: 'Clé API Groq requise' });
+  const { groqKey: bodyGroqKey, language = 'fr' } = req.body;
+  // Clé Groq : lire depuis data/settings.json en priorité (partagé équipe), fallback body
+  const groqKey = readServerSettings().groqKey || bodyGroqKey;
+  if (!req.file) return res.status(400).json({ error: 'Fichier audio requis' });
+  if (!groqKey)  return res.status(400).json({ error: 'Clé API Groq requise — configurez-la dans Paramètres' });
 
   try {
     console.log(`[transcribe] ↑ Fichier local : ${req.file.originalname} (${(req.file.size / 1024 / 1024).toFixed(1)} Mo)`);
@@ -1301,11 +1324,9 @@ app.post('/api/scrape', requireAuth, async (req, res) => {
 app.post('/api/jina', requireAuth, async (req, res) => {
   const { url, mode = 'reader' } = req.body;  // mode: 'reader' | 'search'
   if (!url) return res.status(400).json({ error: 'url manquante' });
-  // Jina reader accepte n'importe quelle URL publique — pas besoin de vérifier SSRF ici
-  // car Jina lui-même fait la résolution, mais on vérifie le protocole minimum.
-  if (!url.startsWith('http://') && !url.startsWith('https://') && mode === 'reader') {
-    return res.status(400).json({ error: 'URL invalide' });
-  }
+  // Vérification SSRF sur tous les modes (reader et search)
+  try { assertSafeUrl(url, 'URL Jina'); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
   try {
     const base = mode === 'search' ? 'https://s.jina.ai/' : 'https://r.jina.ai/';
     const response = await axios.get(`${base}${encodeURIComponent(url)}`, {
@@ -1720,13 +1741,9 @@ app.get('/', (req, res) => {
 });
 
 // ─── Health check ─────────────────────────────────────────────────────────────
+// Public (utilisé par ProxyDetector avant login) — réponse minimale sans infos de config.
 app.get('/health', (_, res) => {
-  res.json({
-    status: 'ok',
-    modelFallback: MODEL_FALLBACK,
-    cascade: MODEL_CASCADE,
-    auth: aesKeyCache ? 'oauth-dpapi' : 'cli-fallback',
-  });
+  res.json({ status: 'ok' });
 });
 
 // ─── SPA fallback (prod) — toute route non-API renvoie index.html ─────────────
