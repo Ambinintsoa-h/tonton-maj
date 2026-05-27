@@ -6,7 +6,7 @@ import axios from 'axios';
 import {
   Users, Plus, Trash2, Edit3, Save, X,
   Mail, Phone, StickyNote, UserCheck, UserX, Search,
-  Bot, UserPlus, KeyRound,
+  Bot, UserPlus, KeyRound, Eye, EyeOff,
 } from 'lucide-react';
 import { addUser, updateUser, removeUser, setUsers } from '../store/slices/usersSlice';
 import { saveUser, deleteUser, getUsers } from '../services/firebase';
@@ -233,7 +233,8 @@ function UserForm({ user, onSave, onCancel }) {
 }
 
 // ─── Carte membre ─────────────────────────────────────────────────────────────
-function UserCard({ user, onEdit, onDelete }) {
+function UserCard({ user, onEdit, onDelete, isSuperAdmin }) {
+  const [showPass, setShowPass] = useState(false);
   const createdDate = user.createdAt
     ? new Date(user.createdAt).toLocaleDateString('fr-FR', {
         day: 'numeric', month: 'short', year: 'numeric',
@@ -270,6 +271,22 @@ function UserCard({ user, onEdit, onDelete }) {
             {user.email}
           </a>
         </div>
+
+        {/* Mot de passe — visible super_admin uniquement */}
+        {isSuperAdmin && user.password && (
+          <div className="flex items-center gap-1.5 mt-1">
+            <KeyRound size={12} className="text-gray-400 flex-shrink-0" />
+            <span className="text-xs font-mono text-gray-500 tracking-wide">
+              {showPass ? user.password : '••••••••'}
+            </span>
+            <button
+              onClick={() => setShowPass(v => !v)}
+              className="text-gray-400 hover:text-gray-700 transition-colors"
+            >
+              {showPass ? <EyeOff size={11} /> : <Eye size={11} />}
+            </button>
+          </div>
+        )}
 
         {/* Téléphone */}
         {user.phone && (
@@ -699,6 +716,7 @@ export default function Equipe() {
               <UserCard
                 key={user.id}
                 user={user}
+                isSuperAdmin={authRole === 'super_admin'}
                 onEdit={(u) => {
                   setEditing(u);
                   setShowNew(false);

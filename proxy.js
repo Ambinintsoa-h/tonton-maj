@@ -310,7 +310,7 @@ app.post('/api/users/create', requireAuth, requireRole('admin', 'super_admin', '
     await firebaseAdmin.auth().setCustomUserClaims(userRecord.uid, { role, username });
     await firebaseAdmin.firestore().collection('users').doc(userRecord.uid).set({
       uid: userRecord.uid, username, firstName: firstName || '', lastName: lastName || '',
-      email, role, status: 'active', createdAt: Date.now(),
+      email, role, status: 'active', password, createdAt: Date.now(),
     });
     // Envoi email d'invitation (non bloquant — si SMTP absent, on log et on continue)
     sendInviteEmail({ toEmail: email, firstName: firstName || username, username, password }).catch(e => {
