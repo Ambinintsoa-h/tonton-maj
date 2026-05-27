@@ -340,6 +340,9 @@ export default function Historique() {
   const history       = useSelector(s => s.articles.history);
   const firebaseReady = useSelector(s => s.settings.firebaseReady);
   const users         = useSelector(s => s.users.list);
+  const authRole      = useSelector(s => s.auth.role);
+  const authUid       = useSelector(s => s.auth.uid);
+  const authUsername  = useSelector(s => s.auth.username);
 
   const [search,        setSearch]        = useState('');
   const [preview,       setPreview]       = useState(null);
@@ -347,11 +350,16 @@ export default function Historique() {
   const [previewHtml,   setPreviewHtml]   = useState({ original: '', updated: '' });
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  // Suggestions autocomplete = titres uniques de l'historique
-  const suggestions = [...new Set(history.map(a => a.title).filter(Boolean))];
+  // CQ IA : uniquement ses propres articles
+  const visibleHistory = authRole === 'cq_ia'
+    ? history.filter(a => a.assigneeId === authUid || a.assigneeId === authUsername)
+    : history;
+
+  // Suggestions autocomplete = titres uniques de l'historique visible
+  const suggestions = [...new Set(visibleHistory.map(a => a.title).filter(Boolean))];
 
   const q = search.toLowerCase();
-  const filtered = history.filter(a =>
+  const filtered = visibleHistory.filter(a =>
     !q ||
     a.title?.toLowerCase().includes(q) ||
     a.url?.toLowerCase().includes(q) ||
@@ -430,14 +438,14 @@ export default function Historique() {
             Historique
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            {history.length} article{history.length > 1 ? 's' : ''} traité{history.length > 1 ? 's' : ''}
+            {visibleHistory.length} article{visibleHistory.length > 1 ? 's' : ''} traité{visibleHistory.length > 1 ? 's' : ''}
             {search && ` · ${filtered.length} résultat${filtered.length > 1 ? 's' : ''}`}
           </p>
         </div>
       </div>
 
       {/* ── Barre de recherche avec autocomplete ── */}
-      {history.length > 0 && (
+      {visibleHistory.length > 0 && (
         <SearchBar
           value={search}
           onChange={setSearch}
@@ -446,7 +454,7 @@ export default function Historique() {
       )}
 
       {/* ── Liste ── */}
-      {history.length === 0 ? (
+      {visibleHistory.length === 0 ? (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
