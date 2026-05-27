@@ -27,6 +27,31 @@ const nodemailer = require('nodemailer');
 
 const app = express();
 
+// ─── Auth JWT ─────────────────────────────────────────────────────────────────
+const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET || 'tonton-dev-secret-change-me-in-production';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
+
+const requireAuth = (req, res, next) => {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Non authentifié — connectez-vous sur /login' });
+  }
+  try {
+    req.user = jwt.verify(auth.slice(7), JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Token JWT invalide ou expiré' });
+  }
+};
+
+const requireRole = (...roles) => (req, res, next) => {
+  const r = req.user?.role;
+  if (!r || !roles.includes(r)) return res.status(403).json({ error: 'Accès refusé' });
+  next();
+};
+
 // ─── Firebase Admin SDK ───────────────────────────────────────────────────────
 let firebaseAdmin = null;
 try {
@@ -251,32 +276,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB max (limite Groq Whisper)
 });
-
-const PORT = process.env.PORT || 3001;
-
-// ─── Auth JWT ─────────────────────────────────────────────────────────────────
-const JWT_SECRET = process.env.JWT_SECRET || 'tonton-dev-secret-change-me-in-production';
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
-
-const requireAuth = (req, res, next) => {
-  const auth = req.headers.authorization;
-  if (!auth?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Non authentifié — connectez-vous sur /login' });
-  }
-  try {
-    req.user = jwt.verify(auth.slice(7), JWT_SECRET);
-    next();
-  } catch {
-    return res.status(401).json({ error: 'Token JWT invalide ou expiré' });
-  }
-};
-
-const requireRole = (...roles) => (req, res, next) => {
-  const r = req.user?.role;
-  if (!r || !roles.includes(r)) return res.status(403).json({ error: 'Accès refusé' });
-  next();
-};
 
 // ─── Paramètres serveur (clés API partagées entre utilisateurs) ──────────────
 // Stockés dans data/settings.json (gitignorés — jamais versionnés)
