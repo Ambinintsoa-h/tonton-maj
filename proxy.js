@@ -190,11 +190,11 @@ app.post('/api/auth/login', async (req, res) => {
         write2fa(username, { ...tfa, emailCode: code, emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
         try { await sendEmailOtp(email, code); } catch (e) { return res.status(500).json({ error: `Échec envoi email : ${e.message}` }); }
       }
-      const tempToken = jwt.sign({ username, role: 'admin', type: 'tfa_pending' }, JWT_SECRET, { expiresIn: '5m' });
+      const tempToken = jwt.sign({ username, role: 'super_admin', type: 'tfa_pending' }, JWT_SECRET, { expiresIn: '5m' });
       return res.json({ success: true, requires2fa: true, method: tfa.method, tempToken });
     }
-    const token = jwt.sign({ username, role: 'admin' }, JWT_SECRET, { expiresIn: '8h' });
-    return res.json({ success: true, token, role: 'admin', username });
+    const token = jwt.sign({ username, role: 'super_admin' }, JWT_SECRET, { expiresIn: '8h' });
+    return res.json({ success: true, token, role: 'super_admin', username });
   }
   // Délai pour ralentir le bruteforce
   setTimeout(() => res.status(401).json({ success: false, error: 'Identifiants incorrects' }), 500);
