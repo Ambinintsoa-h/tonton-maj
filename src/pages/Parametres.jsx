@@ -3,7 +3,7 @@ import { STORAGE_KEYS } from '../constants/storage';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Settings, Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic } from 'lucide-react';
+import { Settings, Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail } from 'lucide-react';
 import axios from 'axios';
 import { setSettings, setFirebaseReady } from '../store/slices/settingsSlice';
 import { initFirebase, saveSettings } from '../services/firebase';
@@ -54,6 +54,11 @@ export default function Parametres() {
     firebaseStorageBucket:     stored.firebaseConfig?.storageBucket || '',
     firebaseMessagingSenderId: stored.firebaseConfig?.messagingSenderId || '',
     firebaseAppId:             stored.firebaseConfig?.appId || '',
+    smtpHost:  stored.smtpHost  || '',
+    smtpPort:  stored.smtpPort  || 587,
+    smtpUser:  stored.smtpUser  || '',
+    smtpPass:  stored.smtpPass  || '',
+    smtpFrom:  stored.smtpFrom  || '',
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -104,6 +109,11 @@ export default function Parametres() {
       tavilyKey:     form.tavilyKey,
       groqKey:       form.groqKey,
       firebaseConfig,
+      smtpHost: form.smtpHost,
+      smtpPort: Number(form.smtpPort) || 587,
+      smtpUser: form.smtpUser,
+      smtpPass: form.smtpPass,
+      smtpFrom: form.smtpFrom,
     };
 
     // 1. Init Firebase si config fournie
@@ -162,6 +172,11 @@ export default function Parametres() {
       firebaseStorageBucket:     stored.firebaseConfig?.storageBucket || '',
       firebaseMessagingSenderId: stored.firebaseConfig?.messagingSenderId || '',
       firebaseAppId:             stored.firebaseConfig?.appId || '',
+      smtpHost: stored.smtpHost  || '',
+      smtpPort: stored.smtpPort  || 587,
+      smtpUser: stored.smtpUser  || '',
+      smtpPass: stored.smtpPass  || '',
+      smtpFrom: stored.smtpFrom  || '',
     }));
   }, [stored]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -360,6 +375,78 @@ export default function Parametres() {
           {testing ? <Loader size={14} className="animate-spin" /> : null}
           Tester la connexion Firebase
         </button>
+      </motion.div>
+
+      {/* SMTP — Emails d'invitation */}
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.12 }} className="glass-card p-6 space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center">
+            <Mail size={16} className="text-white" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">SMTP — Emails d'invitation</h2>
+            <p className="text-xs text-gray-400">Permet d'envoyer les identifiants aux nouveaux membres</p>
+          </div>
+          {stored.smtpHost && stored.smtpUser && <CheckCircle2 size={16} className="text-sage-400 ml-auto" />}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5 md:col-span-2">
+            <label className="text-sm font-medium text-gray-700">Hôte SMTP</label>
+            <input
+              type="text"
+              value={form.smtpHost}
+              onChange={e => set('smtpHost', e.target.value)}
+              placeholder="smtp.gmail.com"
+              className="input-glass"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-gray-700">Port</label>
+            <input
+              type="number"
+              value={form.smtpPort}
+              onChange={e => set('smtpPort', e.target.value)}
+              placeholder="587"
+              className="input-glass"
+            />
+            <p className="text-xs text-gray-400">587 (TLS) · 465 (SSL) · 25 (non chiffré)</p>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-gray-700">Adresse expéditeur (From)</label>
+            <input
+              type="email"
+              value={form.smtpFrom}
+              onChange={e => set('smtpFrom', e.target.value)}
+              placeholder="noreply@publithings.com"
+              className="input-glass"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-gray-700">Utilisateur SMTP</label>
+            <input
+              type="text"
+              value={form.smtpUser}
+              onChange={e => set('smtpUser', e.target.value)}
+              placeholder="noreply@publithings.com"
+              className="input-glass"
+            />
+          </div>
+          <SecretInput
+            label="Mot de passe SMTP"
+            value={form.smtpPass}
+            onChange={v => set('smtpPass', v)}
+            placeholder="Mot de passe ou App Password"
+            hint="Gmail : utilisez un App Password (compte → Sécurité → Mots de passe des applications)"
+          />
+        </div>
+
+        <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700 space-y-1">
+          <p className="font-semibold">Fournisseurs recommandés</p>
+          <p>• <strong>Gmail</strong> : smtp.gmail.com · port 587 · App Password requis</p>
+          <p>• <strong>OVH / Infomaniak</strong> : ssl0.ovh.net ou mail.infomaniak.com · port 587</p>
+          <p>• <strong>Brevo (gratuit)</strong> : smtp-relay.brevo.com · port 587 · 300 emails/jour</p>
+        </div>
       </motion.div>
 
       {/* Save */}
