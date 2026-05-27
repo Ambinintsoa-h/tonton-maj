@@ -28,6 +28,7 @@ import { runAgent } from '../services/agent';
 import { applyAllDiffs } from '../utils/diff';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
+import { detectAgent } from '../constants/agents';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -656,22 +657,32 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onVi
       </motion.div>
 
       {/* Barre de progression */}
-      {running && (
-        <div className="px-5 py-2 bg-blue-50/40 border-b border-blue-100/50">
-          <div className="flex items-center justify-between mb-1">
-            <p className="text-[11px] text-blue-600 font-medium truncate">{running.step}</p>
-            <span className="text-[11px] text-blue-400 tabular-nums ml-2">{running.progress}%</span>
+      {running && (() => {
+        const agent = detectAgent(running.step);
+        return (
+          <div className="px-5 py-2 bg-blue-50/40 border-b border-blue-100/50">
+            {/* Badge agent */}
+            <div className="flex items-center gap-1 mb-1">
+              <span className="text-xs leading-none">{agent.emoji}</span>
+              <span className="text-[10px] font-semibold text-gray-500">{agent.name}</span>
+              <span className="text-[10px] text-gray-300">·</span>
+              <span className="text-[10px] text-gray-400 italic">{agent.pseudo}</span>
+            </div>
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-[11px] text-blue-600 font-medium truncate">{running.step}</p>
+              <span className="text-[11px] text-blue-400 tabular-nums ml-2">{running.progress}%</span>
+            </div>
+            <div className="h-1 bg-blue-100 rounded-full overflow-hidden">
+              <motion.div
+                className="h-full rounded-full"
+                style={{ background: 'linear-gradient(90deg, #60a5fa, #3b82f6)' }}
+                animate={{ width: `${running.progress}%` }}
+                transition={{ duration: 0.4 }}
+              />
+            </div>
           </div>
-          <div className="h-1 bg-blue-100 rounded-full overflow-hidden">
-            <motion.div
-              className="h-full rounded-full"
-              style={{ background: 'linear-gradient(90deg, #60a5fa, #3b82f6)' }}
-              animate={{ width: `${running.progress}%` }}
-              transition={{ duration: 0.4 }}
-            />
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Panneau expand */}
       <AnimatePresence>

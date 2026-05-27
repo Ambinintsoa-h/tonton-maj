@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { Brain, Search, FileCheck, Sparkles, CheckCircle2, Globe } from 'lucide-react';
+import { detectAgent } from '../../constants/agents';
 
 const STEP_ICONS = {
   'Analyse':       Brain,
@@ -87,8 +88,8 @@ export default function AgentThinking({ steps, progress, status }) {
         )}
 
         {/* Steps précédents visibles */}
-        {visiblePrev.map((step, i) => {
-          const Icon = getIcon(step.text);
+        {visiblePrev.map((step) => {
+          const agent = detectAgent(step.text);
           return (
             <motion.div
               key={step.ts}
@@ -97,8 +98,8 @@ export default function AgentThinking({ steps, progress, status }) {
               transition={{ duration: 0.2 }}
               className="flex items-center gap-2 text-[11px] text-gray-400 px-1"
             >
-              <div className="w-4 h-4 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
-                <Icon size={9} className="text-gray-400" />
+              <div className="w-4 h-4 rounded-full bg-gray-100 flex items-center justify-center shrink-0 text-[9px]">
+                {agent.emoji}
               </div>
               <span className="truncate leading-tight">{step.text}</span>
             </motion.div>
@@ -108,49 +109,63 @@ export default function AgentThinking({ steps, progress, status }) {
 
       {/* Step actif — prominent */}
       <AnimatePresence mode="wait">
-        {currentStep && (
-          <motion.div
-            key={currentStep.ts}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.2 }}
-            className="flex items-center gap-3 bg-gray-50 border border-gray-100 rounded-xl px-4 py-3"
-          >
-            {/* Dot animé */}
-            {status === 'running' ? (
-              <motion.div
-                animate={{ scale: [1, 1.3, 1], opacity: [0.6, 1, 0.6] }}
-                transition={{ duration: 1, repeat: Infinity }}
-                className="w-5 h-5 rounded-full bg-black flex items-center justify-center shrink-0"
-              >
-                <div className="w-2 h-2 rounded-full bg-white" />
-              </motion.div>
-            ) : (
-              <div className="w-5 h-5 rounded-full bg-black flex items-center justify-center shrink-0">
-                <CheckCircle2 size={12} className="text-white" />
+        {currentStep && (() => {
+          const agent = detectAgent(currentStep.text);
+          return (
+            <motion.div
+              key={currentStep.ts}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.2 }}
+              className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 space-y-1.5"
+            >
+              {/* Badge agent */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm leading-none">{agent.emoji}</span>
+                <span className="text-[10px] font-semibold text-gray-500">
+                  {agent.name}
+                </span>
+                <span className="text-[10px] text-gray-300">·</span>
+                <span className="text-[10px] text-gray-400 italic">{agent.pseudo}</span>
               </div>
-            )}
 
-            <span className="text-sm font-medium text-gray-900 leading-snug">
-              {currentStep.text}
-            </span>
-
-            {/* Dots animés inline (indique activité en cours) */}
-            {status === 'running' && (
-              <div className="flex gap-1 ml-auto shrink-0">
-                {[0, 1, 2].map(i => (
+              {/* Texte du step + dot animé */}
+              <div className="flex items-center gap-3">
+                {status === 'running' ? (
                   <motion.div
-                    key={i}
-                    className="w-1 h-1 bg-gray-400 rounded-full"
-                    animate={{ y: [0, -4, 0], opacity: [0.3, 1, 0.3] }}
-                    transition={{ duration: 0.7, repeat: Infinity, delay: i * 0.12 }}
-                  />
-                ))}
+                    animate={{ scale: [1, 1.3, 1], opacity: [0.6, 1, 0.6] }}
+                    transition={{ duration: 1, repeat: Infinity }}
+                    className="w-5 h-5 rounded-full bg-black flex items-center justify-center shrink-0"
+                  >
+                    <div className="w-2 h-2 rounded-full bg-white" />
+                  </motion.div>
+                ) : (
+                  <div className="w-5 h-5 rounded-full bg-black flex items-center justify-center shrink-0">
+                    <CheckCircle2 size={12} className="text-white" />
+                  </div>
+                )}
+
+                <span className="text-sm font-medium text-gray-900 leading-snug flex-1">
+                  {currentStep.text}
+                </span>
+
+                {status === 'running' && (
+                  <div className="flex gap-1 shrink-0">
+                    {[0, 1, 2].map(i => (
+                      <motion.div
+                        key={i}
+                        className="w-1 h-1 bg-gray-400 rounded-full"
+                        animate={{ y: [0, -4, 0], opacity: [0.3, 1, 0.3] }}
+                        transition={{ duration: 0.7, repeat: Infinity, delay: i * 0.12 }}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </motion.div>
-        )}
+            </motion.div>
+          );
+        })()}
       </AnimatePresence>
     </motion.div>
   );

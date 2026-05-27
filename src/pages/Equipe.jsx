@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { addUser, updateUser, removeUser } from '../store/slices/usersSlice';
 import { saveUser, deleteUser } from '../services/firebase';
+import { IA_AGENTS } from '../constants/agents';
 
 // ─── Rôles ───────────────────────────────────────────────────────────────────
 const ROLES = {
@@ -323,57 +324,7 @@ function TeamStats({ users }) {
   );
 }
 
-// ─── Agents IA du SaaS (personnages fictifs, rôles réels) ────────────────────
-const IA_AGENTS = [
-  {
-    id:       'tonton',
-    emoji:    '🧠',
-    name:     'TONTON',
-    pseudo:   'Le Rédac\' Chef',
-    avatarCls:'bg-black text-white',
-    badgeCls: 'bg-gray-900 text-white border border-gray-900',
-    roleLabel:'Agent principal',
-    status:   'active',
-    desc:     'Lit l\'article, interroge le web, génère toutes les mises à jour et rédige la synthèse finale. Travaille en deux passes pour ne rien rater.',
-    skills:   ['Analyse d\'article', 'Génération de MAJ', 'Revue qualité (passe 2)', 'Rédaction synthèse'],
-  },
-  {
-    id:       'sherlock',
-    emoji:    '🔍',
-    name:     'SHERLOCK',
-    pseudo:   'Le Chasseur de Sources',
-    avatarCls:'bg-blue-600 text-white',
-    badgeCls: 'bg-blue-50 text-blue-700 border border-blue-200',
-    roleLabel:'Agent recherche',
-    status:   'active',
-    desc:     'Parcourt le web en cascade (Brave → Tavily → SearXNG → Jina) pour trouver les sources les plus fraîches et pertinentes. Ne lâche jamais une piste.',
-    skills:   ['Recherche multi-sources', 'Déduplication URLs', 'Scoring de pertinence', 'Fallback automatique'],
-  },
-  {
-    id:       'scrappy',
-    emoji:    '🕷️',
-    name:     'SCRAPPY',
-    pseudo:   'Le Gratteur de Pages',
-    avatarCls:'bg-emerald-600 text-white',
-    badgeCls: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
-    roleLabel:'Agent scraping',
-    status:   'active',
-    desc:     'S\'infiltre dans les pages web et en extrait le contenu propre grâce à Readability. Repasse par Jina si le site résiste. Ne recule devant aucun CMS.',
-    skills:   ['Scraping Readability', 'Fallback Jina AI', 'Extraction HTML→texte', 'Gestion anti-bot'],
-  },
-  {
-    id:       'raoul',
-    emoji:    '✍️',
-    name:     'RAOUL',
-    pseudo:   'Le Correcteur',
-    avatarCls:'bg-purple-600 text-white',
-    badgeCls: 'bg-purple-50 text-purple-700 border border-purple-200',
-    roleLabel:'Agent revue',
-    status:   'active',
-    desc:     'Reprend le travail de TONTON après la passe 1 et traque les incohérences, les chiffres périmés et les tournures trop « IA ». Qualité garantie.',
-    skills:   ['Revue passe 2', 'Détection patterns IA', 'Vérification chiffres', 'Reformulation naturelle'],
-  },
-];
+// ─── Agents IA — données centralisées dans src/constants/agents.js ───────────
 
 function AgentCard({ agent }) {
   return (
@@ -389,9 +340,14 @@ function AgentCard({ agent }) {
       </div>
 
       <div className="flex-1 min-w-0">
-        {/* Nom + badges */}
+        {/* Nom · pseudo + badges */}
         <div className="flex items-center gap-2 flex-wrap">
-          <p className="font-bold text-gray-900 text-sm">{agent.name}</p>
+          <p className="font-bold text-gray-900 text-sm">
+            {agent.name}
+            <span className="font-normal text-gray-400 ml-1">· {agent.pseudo}</span>
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap mt-1">
           <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${agent.badgeCls}`}>
             {agent.roleLabel}
           </span>
@@ -400,9 +356,6 @@ function AgentCard({ agent }) {
             En service
           </span>
         </div>
-
-        {/* Pseudo */}
-        <p className="text-xs text-gray-400 italic mt-0.5">« {agent.pseudo} »</p>
 
         {/* Description */}
         <p className="text-xs text-gray-600 mt-1.5 leading-relaxed">{agent.desc}</p>
