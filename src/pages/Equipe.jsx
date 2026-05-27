@@ -89,6 +89,7 @@ function StatusBadge({ status }) {
 function UserForm({ user, onSave, onCancel }) {
   const [form, setForm] = useState({ ...EMPTY_USER, ...user });
   const [saving, setSaving] = useState(false);
+  const [showPass, setShowPass] = useState(false);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -175,13 +176,22 @@ function UserForm({ user, onSave, onCancel }) {
             <KeyRound size={11} />
             {user.id ? 'Nouveau mot de passe' : 'Mot de passe *'}
           </label>
-          <input
-            type="password"
-            value={form.password}
-            onChange={e => set('password', e.target.value)}
-            placeholder={user.id ? 'Laisser vide pour ne pas changer' : 'Min. 6 caractères'}
-            className="input-glass"
-          />
+          <div className="relative">
+            <input
+              type={showPass ? 'text' : 'password'}
+              value={form.password}
+              onChange={e => set('password', e.target.value)}
+              placeholder={user.id ? 'Laisser vide pour ne pas changer' : 'Min. 6 caractères'}
+              className="input-glass pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPass(v => !v)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
+            </button>
+          </div>
         </div>
         <div className="space-y-1.5">
           <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Rôle *</label>
