@@ -48,8 +48,8 @@ const EMPTY_USER = {
   email:     '',
   role:      'cq_ia',
   status:    'active',
-  phone:     '',
   note:      '',
+  password:  '',
 };
 
 // ─── Avatar initiales ─────────────────────────────────────────────────────────
@@ -100,6 +100,8 @@ function UserForm({ user, onSave, onCancel }) {
       toast.error('Format email invalide');
       return;
     }
+    if (!user.id && !form.password.trim()) { toast.error('Mot de passe requis'); return; }
+    if (form.password && form.password.length < 6) { toast.error('Mot de passe trop court (6 caractères min)'); return; }
     setSaving(true);
     try {
       await onSave({ ...form, email: form.email.trim().toLowerCase() });
@@ -152,22 +154,32 @@ function UserForm({ user, onSave, onCancel }) {
           />
         </div>
         <div className="space-y-1.5">
-          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Email professionnel *</label>
+          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            Email professionnel *
+            {form.role === 'cq_ia' && (
+              <span className="ml-1.5 text-[10px] font-medium text-amber-500 normal-case tracking-normal">— non modifiable (CQ IA)</span>
+            )}
+          </label>
           <input
             type="email"
             value={form.email}
             onChange={e => set('email', e.target.value)}
             placeholder="marie.dupont@entreprise.fr"
             className="input-glass"
+            disabled={form.role === 'cq_ia'}
+            style={form.role === 'cq_ia' ? { opacity: 0.55, cursor: 'not-allowed' } : {}}
           />
         </div>
         <div className="space-y-1.5">
-          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Téléphone</label>
+          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+            <KeyRound size={11} />
+            {user.id ? 'Nouveau mot de passe' : 'Mot de passe *'}
+          </label>
           <input
-            type="tel"
-            value={form.phone}
-            onChange={e => set('phone', e.target.value)}
-            placeholder="+33 6 12 34 56 78"
+            type="password"
+            value={form.password}
+            onChange={e => set('password', e.target.value)}
+            placeholder={user.id ? 'Laisser vide pour ne pas changer' : 'Min. 6 caractères'}
             className="input-glass"
           />
         </div>
