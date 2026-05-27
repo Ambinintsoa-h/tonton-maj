@@ -154,6 +154,76 @@ const sendEmailOtp = async (toEmail, code) => {
   });
 };
 
+// ─── Envoi email d'invitation nouveau membre ──────────────────────────────────
+const sendInviteEmail = async ({ toEmail, firstName, username, password }) => {
+  const s = readServerSettings();
+  if (!s.smtpHost || !s.smtpUser || !s.smtpPass) {
+    console.warn('[invite] SMTP non configuré — email d\'invitation non envoyé');
+    return;
+  }
+  const loginUrl = IS_PROD ? 'https://maj.stomos.net' : 'http://localhost:3000';
+  const transporter = nodemailer.createTransport({
+    host: s.smtpHost, port: s.smtpPort || 587, secure: (s.smtpPort || 587) === 465,
+    auth: { user: s.smtpUser, pass: s.smtpPass },
+  });
+  await transporter.sendMail({
+    from: s.smtpFrom || s.smtpUser,
+    to: toEmail,
+    subject: 'TONTON AI — Votre accès à la plateforme',
+    text: [
+      `Bonjour ${firstName},`,
+      '',
+      'Votre compte TONTON AI a été créé. Voici vos identifiants de connexion :',
+      `  Identifiant : ${username}`,
+      `  Mot de passe : ${password}`,
+      '',
+      `Connectez-vous ici : ${loginUrl}`,
+      '',
+      'Pensez à changer votre mot de passe après votre première connexion.',
+      '',
+      'L\'équipe PUBLITHINGS',
+    ].join('\n'),
+    html: `
+      <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">
+        <!-- Header -->
+        <div style="background:#111;padding:32px 36px 24px">
+          <p style="margin:0;color:#fff;font-size:20px;font-weight:800;letter-spacing:-0.02em">TONTON AI</p>
+          <p style="margin:4px 0 0;color:#aaa;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em">PUBLITHINGS</p>
+        </div>
+        <!-- Body -->
+        <div style="padding:32px 36px">
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111">Bonjour ${firstName} 👋</p>
+          <p style="margin:0 0 24px;color:#555;font-size:14px;line-height:1.6">
+            Votre compte a été créé sur la plateforme TONTON AI.<br>
+            Voici vos identifiants de connexion :
+          </p>
+          <!-- Credentials -->
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:20px 24px;margin-bottom:24px">
+            <table style="width:100%;border-collapse:collapse">
+              <tr>
+                <td style="padding:6px 0;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.06em;width:130px">Identifiant</td>
+                <td style="padding:6px 0;font-size:15px;font-weight:700;color:#111;font-family:monospace">${username}</td>
+              </tr>
+              <tr>
+                <td style="padding:6px 0;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.06em">Mot de passe</td>
+                <td style="padding:6px 0;font-size:15px;font-weight:700;color:#111;font-family:monospace">${password}</td>
+              </tr>
+            </table>
+          </div>
+          <!-- CTA -->
+          <a href="${loginUrl}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:14px 28px;border-radius:999px;letter-spacing:0.01em">
+            Se connecter →
+          </a>
+          <p style="margin:24px 0 0;color:#aaa;font-size:12px;line-height:1.6">
+            🔐 Pensez à changer votre mot de passe après votre première connexion.
+          </p>
+        </div>
+      </div>
+    `,
+  });
+  console.log(`[invite] ✓ Email d'invitation envoyé à ${toEmail}`);
+};
+
 // ─── Route de login (publique — pas d'auth requise) ──────────────────────────
 app.post('/api/auth/login', async (req, res) => {
   const { username, password, twoFaCode, tempToken } = req.body || {};
@@ -241,6 +311,10 @@ app.post('/api/users/create', requireAuth, requireRole('admin', 'super_admin', '
     await firebaseAdmin.firestore().collection('users').doc(userRecord.uid).set({
       uid: userRecord.uid, username, firstName: firstName || '', lastName: lastName || '',
       email, role, status: 'active', createdAt: Date.now(),
+    });
+    // Envoi email d'invitation (non bloquant — si SMTP absent, on log et on continue)
+    sendInviteEmail({ toEmail: email, firstName: firstName || username, username, password }).catch(e => {
+      console.error('[invite] Échec envoi email :', e.message);
     });
     return res.json({ success: true, uid: userRecord.uid });
   } catch (e) { return res.status(400).json({ error: e.message }); }
