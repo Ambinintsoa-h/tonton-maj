@@ -24,8 +24,10 @@ const { JSDOM } = require('jsdom');
 const speakeasy = require('speakeasy');
 const QRCode    = require('qrcode');
 const nodemailer = require('nodemailer');
+const dns = require('dns').promises;
 
 const app = express();
+app.set('trust proxy', 1); // Nginx devant en prod — req.ip = vraie IP client
 
 // ─── Auth JWT ─────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
@@ -40,6 +42,10 @@ const requireAuth = (req, res, next) => {
   }
   try {
     req.user = jwt.verify(auth.slice(7), JWT_SECRET);
+    // Guard path traversal : username utilisé dans des chemins de fichiers
+    if (req.user.username && !SAFE_USERNAME_RE.test(req.user.username)) {
+      return res.status(401).json({ error: 'Token invalide' });
+    }
     next();
   } catch {
     return res.status(401).json({ error: 'Token JWT invalide ou expiré' });
@@ -82,6 +88,15 @@ if (IS_PROD) {
   }
 }
 
+// ─── Constantes de validation ─────────────────────────────────────────────────
+const VALID_ROLES       = new Set(['super_admin', 'manager', 'cq_ia']);
+const SAFE_USERNAME_RE  = /^[a-zA-Z0-9_-]{1,64}$/;
+const SETTINGS_WHITELIST = [
+  'anthropicKey', 'groqKey', 'braveKey', 'tavilyKey',
+  'smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'smtpFrom',
+  'firebaseConfig', 'useLocalProxy',
+];
+
 app.use(cors({
   origin: IS_PROD
     ? ['https://maj.stomos.net']
@@ -93,8 +108,29 @@ app.use(express.json({ limit: '2mb' }));
 
 // ─── Headers de sécurité HTTP ──────────────────────────────────────────────────
 app.use(helmet({
-  crossOriginResourcePolicy: false,  // autoriser les images cross-origin dans le frontend
-  contentSecurityPolicy: false,      // le frontend React gère son propre CSP
+  crossOriginResourcePolicy: { policy: 'same-origin' },
+  contentSecurityPolicy: IS_PROD ? {
+    directives: {
+      defaultSrc:  ["'self'"],
+      scriptSrc:   ["'self'", "'unsafe-inline'"],  // requis par le build CRA
+      styleSrc:    ["'self'", "'unsafe-inline'"],  // requis par Tailwind/inline styles
+      imgSrc:      ["'self'", 'data:', 'https:', 'blob:'],
+      connectSrc:  [
+        "'self'",
+        'https://api.anthropic.com',
+        'https://api.groq.com',
+        'https://r.jina.ai',
+        'https://s.jina.ai',
+        'https://firestore.googleapis.com',
+        'https://identitytoolkit.googleapis.com',
+        'https://securetoken.googleapis.com',
+      ],
+      fontSrc:     ["'self'", 'data:'],
+      objectSrc:   ["'none'"],
+      frameSrc:    ["'none'"],
+      upgradeInsecureRequests: [],
+    },
+  } : false,
 }));
 
 // ─── Protection SSRF : bloque les IPs internes / loopback / link-local ────────
@@ -123,7 +159,7 @@ const isPrivateHost = (hostname) => {
   return h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || h.endsWith('.localhost');
 };
 
-const assertSafeUrl = (raw, label = 'URL') => {
+const assertSafeUrl = async (raw, label = 'URL') => {
   let parsed;
   try { parsed = new URL(raw); } catch { throw new Error(`${label} invalide`); }
   if (!['http:', 'https:'].includes(parsed.protocol)) {
@@ -131,6 +167,16 @@ const assertSafeUrl = (raw, label = 'URL') => {
   }
   if (isPrivateHost(parsed.hostname)) {
     throw new Error(`Accès réseau interne interdit (${parsed.hostname})`);
+  }
+  // Résolution DNS : bloque le DNS rebinding (domaine public → IP privée)
+  try {
+    const { address } = await dns.lookup(parsed.hostname);
+    if (isPrivateHost(address)) {
+      throw new Error(`Accès réseau interne interdit via DNS (${address})`);
+    }
+  } catch (e) {
+    if (e.message.startsWith('Accès')) throw e;
+    throw new Error(`${label} : hostname non résolvable (${parsed.hostname})`);
   }
   return parsed;
 };
@@ -142,13 +188,16 @@ if (IS_PROD) {
 
 // ─── 2FA — stockage local dans data/2fa/{username}.json ─────────────────────
 const TFA_DIR = path.join(__dirname, 'data', '2fa');
-const read2fa  = (u) => { try { return JSON.parse(fs.readFileSync(path.join(TFA_DIR, `${u}.json`), 'utf8')); } catch { return {}; } };
-const write2fa = (u, d) => { if (!fs.existsSync(TFA_DIR)) fs.mkdirSync(TFA_DIR, { recursive: true }); fs.writeFileSync(path.join(TFA_DIR, `${u}.json`), JSON.stringify(d, null, 2), 'utf8'); };
+const read2fa  = (u) => { try { return JSON.parse(fs.readFileSync(path.join(TFA_DIR, `${path.basename(u)}.json`), 'utf8')); } catch { return {}; } };
+const write2fa = (u, d) => { if (!fs.existsSync(TFA_DIR)) fs.mkdirSync(TFA_DIR, { recursive: true }); fs.writeFileSync(path.join(TFA_DIR, `${path.basename(u)}.json`), JSON.stringify(d, null, 2), 'utf8'); };
 
 // ─── Profil utilisateur — data/profiles/{username}.json ─────────────────────
 const PROFILES_DIR = path.join(__dirname, 'data', 'profiles');
-const readProfile  = (u) => { try { return JSON.parse(fs.readFileSync(path.join(PROFILES_DIR, `${u}.json`), 'utf8')); } catch { return {}; } };
-const writeProfile = (u, d) => { if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true }); fs.writeFileSync(path.join(PROFILES_DIR, `${u}.json`), JSON.stringify(d, null, 2), 'utf8'); };
+const readProfile  = (u) => { try { return JSON.parse(fs.readFileSync(path.join(PROFILES_DIR, `${path.basename(u)}.json`), 'utf8')); } catch { return {}; } };
+const writeProfile = (u, d) => { if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true }); fs.writeFileSync(path.join(PROFILES_DIR, `${path.basename(u)}.json`), JSON.stringify(d, null, 2), 'utf8'); };
+
+// Hashage HMAC-SHA256 des codes OTP email avant stockage (jamais en clair sur disque)
+const hashOtp = (code) => require('crypto').createHmac('sha256', JWT_SECRET).update(String(code)).digest('hex');
 
 // ─── Envoi email OTP ──────────────────────────────────────────────────────────
 const sendEmailOtp = async (toEmail, code) => {
@@ -168,7 +217,7 @@ const sendEmailOtp = async (toEmail, code) => {
 };
 
 // ─── Envoi email d'invitation nouveau membre ──────────────────────────────────
-const sendInviteEmail = async ({ toEmail, firstName, username, password }) => {
+const sendInviteEmail = async ({ toEmail, firstName, username, resetLink }) => {
   const s = readServerSettings();
   if (!s.smtpHost || !s.smtpUser || !s.smtpPass) {
     console.warn('[invite] SMTP non configuré — email d\'invitation non envoyé');
@@ -186,9 +235,9 @@ const sendInviteEmail = async ({ toEmail, firstName, username, password }) => {
     text: [
       `Bonjour ${firstName},`,
       '',
-      'Votre compte TONTON AI a été créé. Voici vos identifiants de connexion :',
+      'Votre compte TONTON AI a été créé. Voici votre identifiant de connexion :',
       `  Identifiant : ${username}`,
-      `  Mot de passe : ${password}`,
+      resetLink ? `  Définissez votre mot de passe : ${resetLink}` : '  Contactez un administrateur pour définir votre mot de passe.',
       '',
       `Connectez-vous ici : ${loginUrl}`,
       '',
@@ -217,10 +266,10 @@ const sendInviteEmail = async ({ toEmail, firstName, username, password }) => {
                 <td style="padding:6px 0;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.06em;width:130px">Identifiant</td>
                 <td style="padding:6px 0;font-size:15px;font-weight:700;color:#111;font-family:monospace">${username}</td>
               </tr>
-              <tr>
+              ${resetLink ? `<tr>
                 <td style="padding:6px 0;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.06em">Mot de passe</td>
-                <td style="padding:6px 0;font-size:15px;font-weight:700;color:#111;font-family:monospace">${password}</td>
-              </tr>
+                <td style="padding:6px 0;font-size:15px;color:#111"><a href="${resetLink}" style="color:#111;font-weight:700">Définir mon mot de passe →</a></td>
+              </tr>` : ''}
             </table>
           </div>
           <!-- CTA -->
@@ -228,7 +277,7 @@ const sendInviteEmail = async ({ toEmail, firstName, username, password }) => {
             Se connecter →
           </a>
           <p style="margin:24px 0 0;color:#aaa;font-size:12px;line-height:1.6">
-            🔐 Pensez à changer votre mot de passe après votre première connexion.
+            🔐 Le lien de définition de mot de passe expire dans 24h.
           </p>
         </div>
       </div>
@@ -273,7 +322,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     if (tfa.method === 'totp') {
       valid = speakeasy.totp.verify({ secret: tfa.totpSecret, encoding: 'base32', token: twoFaCode.replace(/\s/g, ''), window: 1 });
     } else if (tfa.method === 'email') {
-      valid = twoFaCode === tfa.emailCode && Date.now() < (tfa.emailCodeExpiry || 0);
+      valid = hashOtp(twoFaCode) === tfa.emailCode && Date.now() < (tfa.emailCodeExpiry || 0);
     }
     if (!valid) return setTimeout(() => res.status(401).json({ error: 'Code incorrect' }), 500);
     const token = jwt.sign({ username: decoded.username, role: decoded.role }, JWT_SECRET, { expiresIn: '8h' });
@@ -292,7 +341,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
         const email = profile.email || tfa.email;
         if (!email) return res.status(400).json({ error: 'Aucune adresse email configurée pour la 2FA' });
         const code = Math.floor(100000 + Math.random() * 900000).toString();
-        write2fa(username, { ...tfa, emailCode: code, emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
+        write2fa(username, { ...tfa, emailCode: hashOtp(code), emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
         try { await sendEmailOtp(email, code); } catch (e) { return res.status(500).json({ error: `Échec envoi email : ${e.message}` }); }
       }
       const tempToken = jwt.sign({ username, role: 'super_admin', type: 'tfa_pending' }, JWT_SECRET, { expiresIn: '5m' });
@@ -306,7 +355,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
 });
 
 // ─── Résoudre username → email (public, pour le flow Firebase Auth) ───────────
-app.get('/api/auth/resolve-username', async (req, res) => {
+app.get('/api/auth/resolve-username', authRateLimiter, async (req, res) => {
   if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   const username = (req.query.u || '').trim().toLowerCase();
   if (!username) return res.status(400).json({ error: 'Paramètre u requis' });
@@ -314,7 +363,7 @@ app.get('/api/auth/resolve-username', async (req, res) => {
     const snap = await firebaseAdmin.firestore().collection('users').where('username', '==', username).limit(1).get();
     // Toujours 200 — évite l'énumération de comptes valides via code HTTP différent
     return res.json({ email: snap.empty ? null : snap.docs[0].data().email });
-  } catch (e) { return res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('[resolve-username]', e.message); return res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 // ─── Échanger un Firebase ID token contre un JWT interne ──────────────────────
@@ -324,7 +373,7 @@ app.post('/api/auth/firebase-login', authRateLimiter, async (req, res) => {
   if (!idToken) return res.status(400).json({ error: 'idToken requis' });
   try {
     const decoded = await firebaseAdmin.auth().verifyIdToken(idToken);
-    const role = decoded.role || 'cq_ia';
+    const role = VALID_ROLES.has(decoded.role) ? decoded.role : 'cq_ia';
     const username = decoded.username || decoded.email?.split('@')[0] || decoded.uid;
     const token = jwt.sign({ uid: decoded.uid, username, role }, JWT_SECRET, { expiresIn: '8h' });
     return res.json({ success: true, token, role, username, uid: decoded.uid });
@@ -340,15 +389,22 @@ app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager')
     return res.status(403).json({ error: 'Un manager ne peut créer que des comptes CQ IA' });
   }
   if (!email || !username || !password || !role) return res.status(400).json({ error: 'Champs requis : email, username, role, password' });
+  if (!SAFE_USERNAME_RE.test(username)) return res.status(400).json({ error: 'Username invalide — lettres, chiffres, tirets et underscores uniquement (1–64 caractères)' });
+  if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Rôle invalide' });
   try {
     const userRecord = await firebaseAdmin.auth().createUser({ email, password, displayName: username });
     await firebaseAdmin.auth().setCustomUserClaims(userRecord.uid, { role, username });
     await firebaseAdmin.firestore().collection('users').doc(userRecord.uid).set({
       uid: userRecord.uid, username, firstName: firstName || '', lastName: lastName || '',
-      email, role, status: 'active', password, createdAt: Date.now(),
+      email, role, status: 'active', createdAt: Date.now(),
+      // password volontairement omis — Firebase Auth gère le hash côté serveur
     });
-    // Envoi email d'invitation (non bloquant — si SMTP absent, on log et on continue)
-    sendInviteEmail({ toEmail: email, firstName: firstName || username, username, password }).catch(e => {
+    // Générer un lien de réinitialisation de mot de passe (pas d'envoi du mdp en clair)
+    let resetLink = null;
+    try { resetLink = await firebaseAdmin.auth().generatePasswordResetLink(email); } catch (e) {
+      console.warn('[invite] Impossible de générer le lien reset :', e.message);
+    }
+    sendInviteEmail({ toEmail: email, firstName: firstName || username, username, resetLink }).catch(e => {
       console.error('[invite] Échec envoi email :', e.message);
     });
     return res.json({ success: true, uid: userRecord.uid });
@@ -409,6 +465,9 @@ app.get('/api/account', requireAuth, (req, res) => {
 // PUT  /api/account — mettre à jour nom, prénom, email, avatarUrl
 app.put('/api/account', requireAuth, (req, res) => {
   const { nom, prenom, email, avatarUrl } = req.body || {};
+  if (avatarUrl && !avatarUrl.startsWith('https://') && !avatarUrl.startsWith('data:image/')) {
+    return res.status(400).json({ error: 'avatarUrl invalide — doit commencer par https:// ou data:image/' });
+  }
   const existing = readProfile(req.user.username);
   writeProfile(req.user.username, { ...existing, nom, prenom, email, avatarUrl, updatedAt: Date.now() });
   res.json({ success: true });
@@ -420,6 +479,16 @@ app.post('/api/account/avatar', requireAuth, avatarUpload.single('avatar'), (req
   if (!req.file) return res.status(400).json({ error: 'Aucun fichier reçu' });
   const mime = req.file.mimetype;
   if (!mime.startsWith('image/')) return res.status(400).json({ error: 'Fichier image requis' });
+  // Vérification par magic bytes (non contournable via Content-Type)
+  const MAGIC = [
+    [0xFF, 0xD8, 0xFF],        // JPEG
+    [0x89, 0x50, 0x4E, 0x47], // PNG
+    [0x47, 0x49, 0x46],        // GIF
+    [0x52, 0x49, 0x46, 0x46], // WebP (RIFF)
+  ];
+  const buf = req.file.buffer;
+  const isValidImage = MAGIC.some(m => m.every((b, i) => buf[i] === b));
+  if (!isValidImage) return res.status(400).json({ error: 'Format non supporté — JPEG, PNG, GIF ou WebP uniquement' });
   const dataUrl = `data:${mime};base64,${req.file.buffer.toString('base64')}`;
   res.json({ success: true, avatarUrl: dataUrl });
 });
@@ -460,7 +529,7 @@ app.post('/api/2fa/setup-email', requireAuth, async (req, res) => {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   const username = req.user.username;
   const tfa = read2fa(username);
-  write2fa(username, { ...tfa, pendingEmail: email, pendingEmailCode: code, pendingEmailExpiry: Date.now() + 10 * 60 * 1000 });
+  write2fa(username, { ...tfa, pendingEmail: email, pendingEmailCode: hashOtp(code), pendingEmailExpiry: Date.now() + 10 * 60 * 1000 });
   try {
     await sendEmailOtp(email, code);
     res.json({ success: true });
@@ -475,7 +544,7 @@ app.post('/api/2fa/enable-email', requireAuth, (req, res) => {
   const username = req.user.username;
   const tfa = read2fa(username);
   if (!tfa.pendingEmailCode) return res.status(400).json({ error: 'Aucun code en attente — relancez la configuration' });
-  if (code !== tfa.pendingEmailCode || Date.now() > (tfa.pendingEmailExpiry || 0)) {
+  if (hashOtp(code) !== tfa.pendingEmailCode || Date.now() > (tfa.pendingEmailExpiry || 0)) {
     return res.status(400).json({ error: 'Code incorrect ou expiré' });
   }
   const profile = readProfile(username);
@@ -492,17 +561,28 @@ app.delete('/api/2fa', requireAuth, (req, res) => {
 
 // GET /api/settings — retourne les paramètres partagés (clés API de l'équipe)
 app.get('/api/settings', requireAuth, (req, res) => {
-  res.json(readServerSettings());
+  const settings = readServerSettings();
+  if (req.user.role !== 'super_admin') {
+    // Clés API non exposées aux rôles inférieurs — le serveur les lit directement depuis settings.json
+    const { anthropicKey, groqKey, braveKey, tavilyKey, smtpPass, smtpUser, smtpHost, smtpFrom, smtpPort, ...safeSettings } = settings;
+    return res.json(safeSettings);
+  }
+  res.json(settings);
 });
 
 // POST /api/settings — sauvegarde les paramètres partagés (super_admin seulement)
 app.post('/api/settings', requireAuth, requireRole('super_admin'), (req, res) => {
   try {
-    writeServerSettings(req.body || {});
+    const incoming = req.body || {};
+    const filtered = {};
+    for (const key of SETTINGS_WHITELIST) {
+      if (key in incoming) filtered[key] = incoming[key];
+    }
+    writeServerSettings(filtered);
     console.log('[settings] ✓ Paramètres équipe sauvegardés');
     res.json({ success: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Erreur lors de la sauvegarde des paramètres' });
   }
 });
 
@@ -571,6 +651,7 @@ let aesKeyCache = null;
 let tokenCache = { token: null, expiresAt: 0 };
 
 function getAesKey() {
+  if (process.platform !== 'win32') throw new Error('DPAPI disponible uniquement sur Windows');
   if (aesKeyCache) return aesKeyCache;
 
   const localState = JSON.parse(fs.readFileSync(LOCAL_STATE_PATH, 'utf8'));
@@ -829,7 +910,7 @@ app.post('/api/claude', requireAuth, async (req, res) => {
   const systemBlock = system ? `[SYSTEM]\n${system}\n\n[USER]\n` : '';
   const cliContent = systemBlock + messages.map(m => m.content).join('\n');
 
-  const requestedModel = model || MODEL_FALLBACK;
+  const requestedModel = MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK;
 
   // ── Stratégie 0 : clé API fournie par le client ou le serveur ─────────────
   // Le call est fait ici côté serveur (Node.js) → la clé Anthropic ne transite
@@ -852,7 +933,7 @@ app.post('/api/claude', requireAuth, async (req, res) => {
       return res.status(429).json({ error: 'Tous les modèles en rate-limit (clé API)' });
     } catch (e) {
       console.error('[proxy] Erreur clé API fournie :', e.message);
-      return res.status(500).json({ error: e.message });
+      return res.status(500).json({ error: 'Erreur lors de l\'appel à l\'IA' });
     }
   }
 
@@ -876,7 +957,7 @@ app.post('/api/claude', requireAuth, async (req, res) => {
     } catch (e) {
       if (e.message !== 'AUTH_REQUIRED') {
         console.error('[proxy] API OAuth échouée:', e.message);
-        return res.status(500).json({ error: `Erreur API: ${e.message}` });
+        return res.status(500).json({ error: 'Erreur lors de l\'appel à l\'IA' });
       }
       console.log('[proxy] Token OAuth invalide, tentative CLI...');
     }
@@ -926,7 +1007,7 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
   const send = (data) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`); };
 
   // ── Corps de la requête Anthropic (streaming activé) ──────────────────────────
-  const requestedModel = model || MODEL_FALLBACK;
+  const requestedModel = MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK;
   const requestBody = { model: requestedModel, max_tokens, messages, stream: true };
   if (system) requestBody.system = system;
   const payload = JSON.stringify(requestBody);
@@ -1093,9 +1174,8 @@ app.post('/api/transcribe/file', requireAuth, upload.single('audio'), async (req
     console.log(`[transcribe] ✓ ${transcript.length} caractères`);
     res.json({ transcript, chars: transcript.length, mb: (req.file.size / 1024 / 1024).toFixed(1) });
   } catch (e) {
-    console.error('[transcribe/file]', e.message);
-    const msg = e.response?.data ? JSON.stringify(e.response.data) : e.message;
-    res.status(500).json({ error: msg });
+    console.error('[transcribe/file]', e.response?.data || e.message);
+    res.status(500).json({ error: 'Erreur lors de la transcription audio' });
   }
 });
 
@@ -1107,7 +1187,7 @@ app.post('/api/scrape', requireAuth, async (req, res) => {
   if (!url) return res.status(400).json({ error: 'URL manquante' });
 
   // Protection SSRF : rejette les URLs pointant vers des ressources internes
-  try { assertSafeUrl(url, 'URL de l\'article'); }
+  try { await assertSafeUrl(url, 'URL de l\'article'); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   try {
@@ -1325,7 +1405,7 @@ app.post('/api/jina', requireAuth, async (req, res) => {
   const { url, mode = 'reader' } = req.body;  // mode: 'reader' | 'search'
   if (!url) return res.status(400).json({ error: 'url manquante' });
   // Vérification SSRF sur tous les modes (reader et search)
-  try { assertSafeUrl(url, 'URL Jina'); }
+  try { await assertSafeUrl(url, 'URL Jina'); }
   catch (e) { return res.status(400).json({ error: e.message }); }
   try {
     const base = mode === 'search' ? 'https://s.jina.ai/' : 'https://r.jina.ai/';
@@ -1413,7 +1493,7 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
   };
 
   const wpApi = async (site, method, wpPath, body = null) => {
-    assertSafeUrl(site.url, 'URL du site WP');
+    await assertSafeUrl(site.url, 'URL du site WP');
     const url = `${site.url.replace(/\/$/, '')}${wpPath}`;
     const auth = Buffer.from(`${site.username}:${site.password}`).toString('base64');
     const resp = await axios({
@@ -1483,7 +1563,7 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
     case 'wp_upload_media': {
       const { site_id, image_url, alt_text = '' } = toolInput;
       const site = getSite(site_id);
-      assertSafeUrl(image_url, 'URL image');
+      await assertSafeUrl(image_url, 'URL image');
 
       const imgResp = await axios.get(image_url, {
         responseType: 'arraybuffer', timeout: 30000,
@@ -1566,7 +1646,7 @@ app.post('/api/wp-upload-file', requireAuth, upload.single('file'), async (req, 
   }
 
   try {
-    assertSafeUrl(site.url, 'URL du site WP');
+    await assertSafeUrl(site.url, 'URL du site WP');
     const auth     = Buffer.from(`${site.username}:${site.password}`).toString('base64');
     const fname    = req.file.originalname || `image-${Date.now()}.jpg`;
     const mime     = req.file.mimetype     || 'image/jpeg';
@@ -1604,7 +1684,7 @@ app.post('/api/claude-tools', requireAuth, async (req, res) => {
   const clientApiKey = (_sak && _sak !== 'local') ? _sak : bodyApiKey;
   if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
 
-  const requestedModel = model || MODEL_FALLBACK;
+  const requestedModel = MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK;
   const toolCallLog = [];
   let currentMessages = [...messages];
   let totalUsage = { input_tokens: 0, output_tokens: 0 };
@@ -1697,7 +1777,7 @@ app.post('/api/wordpress', requireAuth, async (req, res) => {
   }
 
   // Protection SSRF : le wpUrl ne doit pas pointer vers des ressources internes
-  try { assertSafeUrl(wpUrl, 'URL du site WordPress'); }
+  try { await assertSafeUrl(wpUrl, 'URL du site WordPress'); }
   catch (e) { return res.status(400).json({ success: false, error: e.message }); }
 
   // Validation du chemin : doit commencer par /wp-json/ et ne pas contenir
