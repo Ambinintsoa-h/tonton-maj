@@ -8,6 +8,7 @@ import axios from 'axios';
 import store from './store';
 import Login from './pages/Login';
 import ProtectedRoute from './components/auth/ProtectedRoute';
+import RoleGuard from './components/auth/RoleGuard';
 import { logout } from './store/slices/authSlice';
 import Layout from './components/layout/Layout';
 import Articles from './pages/Articles';
@@ -307,7 +308,11 @@ function AppRoutes() {
               <Route path="/skills"         element={<Skills />}       />
               <Route path="/wordpress"      element={<WordPress />}    />
               <Route path="/historique"     element={<Historique />}   />
-              <Route path="/parametres"     element={<Parametres />}   />
+              <Route path="/parametres"     element={
+                <RoleGuard allowedRoles={['super_admin', 'admin']}>
+                  <Parametres />
+                </RoleGuard>
+              } />
               <Route path="/dashboard"      element={<Dashboard />}    />
               <Route path="/equipe"         element={<Equipe />}       />
               <Route path="*"              element={<Navigate to="/" replace />} />

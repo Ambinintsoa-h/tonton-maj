@@ -1,10 +1,12 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query } from 'firebase/firestore';
 import { getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject } from 'firebase/storage';
+import { getAuth, signInWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
 
 let app = null;
 let db = null;
 let storage = null;
+let auth = null;
 
 export const initFirebase = (config) => {
   try {
@@ -12,6 +14,7 @@ export const initFirebase = (config) => {
     app = getApps().length > 0 ? getApp() : initializeApp(config);
     db = getFirestore(app);
     storage = getStorage(app);
+    auth = getAuth(app);
     return true;
   } catch (e) {
     console.error('[firebase] Erreur init :', e.message);
@@ -21,6 +24,37 @@ export const initFirebase = (config) => {
 
 export const getDb = () => db;
 export const getStorageRef = () => storage;
+export const getFirebaseAuth = () => auth;
+
+export const loginWithUsernameOrEmail = async (identifier, password) => {
+  if (!auth) throw new Error('Firebase Auth non initialisé');
+
+  let email = identifier;
+  // Si c'est un username (pas d'@), résoudre en email via le proxy
+  if (!identifier.includes('@')) {
+    const res = await fetch(`/api/auth/resolve-username?u=${encodeURIComponent(identifier.toLowerCase())}`);
+    if (!res.ok) throw new Error('Identifiant introuvable');
+    const data = await res.json();
+    email = data.email;
+  }
+
+  // Firebase Auth sign-in
+  const credential = await signInWithEmailAndPassword(auth, email, password);
+  const idToken = await credential.user.getIdToken();
+
+  // Échanger contre un JWT interne
+  const resp = await fetch('/api/auth/firebase-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken }),
+  });
+  if (!resp.ok) throw new Error('Échec authentification serveur');
+  return await resp.json(); // { token, role, username, uid }
+};
+
+export const firebaseLogout = async () => {
+  if (auth) await firebaseSignOut(auth);
+};
 
 // Skills
 export const getSkills = async () => {

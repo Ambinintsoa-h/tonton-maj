@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import { loginSuccess } from '../store/slices/authSlice';
 import TransitionLoader from '../components/auth/TransitionLoader';
+import { loginWithUsernameOrEmail } from '../services/firebase';
 
 const AGENTS = ['TONTON', 'SHERLOCK', 'SCRAPPY', 'RAOUL'];
 
@@ -41,14 +42,23 @@ export default function Login() {
     setError('');
     setLoading(true);
     try {
-      const { data } = await axios.post('/api/auth/login', { username, password });
+      // Essai Firebase Auth (comptes manager/cq_ia)
+      let data;
+      try {
+        data = await loginWithUsernameOrEmail(username, password);
+      } catch (fbErr) {
+        // Fallback : super_admin via settings.json
+        const resp = await axios.post('/api/auth/login', { username, password });
+        data = resp.data;
+      }
+
       if (data.requires2fa) {
         setTwoFaStep(true);
         setTwoFaMethod(data.method);
         setTempToken(data.tempToken);
         setLoading(false);
       } else if (data.token) {
-        dispatch(loginSuccess({ token: data.token, username, role: data.role ?? null }));
+        dispatch(loginSuccess({ token: data.token, username: data.username || username, role: data.role ?? null, uid: data.uid || null }));
         setShowLoader(true);
       } else {
         setError('Identifiants incorrects');

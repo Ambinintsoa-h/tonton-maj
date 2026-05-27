@@ -811,7 +811,10 @@ export default function MajEnAttente() {
   const skills    = useSelector(s => s.skills.list);
   const knowledge = useSelector(s => s.knowledge.list);
   const wpSites   = useSelector(s => s.wordpress.sites);
-  const allUsers = useSelector(s => s.users.list);
+  const allUsers  = useSelector(s => s.users.list);
+  const authRole     = useSelector(s => s.auth.role);
+  const authUid      = useSelector(s => s.auth.uid);
+  const authUsername = useSelector(s => s.auth.username);
 
   // Membres assignables : CQ IA + Manager uniquement (pas super_admin, pas agents IA)
   // Membres assignables : rôle cq_ia ou manager, actif ou sans statut (rétrocompatibilité)
@@ -844,7 +847,13 @@ export default function MajEnAttente() {
   useEffect(() => { dispatch(clearDone()); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Exclure les items "done" — ils ne doivent plus apparaître ici (ils sont dans l'historique)
-  const activeItems = items.filter(i => i.status !== 'done');
+  // CQ IA ne voit que ses articles assignés (par uid ou username)
+  const activeItems = items
+    .filter(i => i.status !== 'done')
+    .filter(i => {
+      if (authRole !== 'cq_ia') return true; // admin/manager voient tout
+      return i.assigneeId === authUid || i.assigneeId === authUsername;
+    });
 
   const counts = {
     total:       activeItems.length,

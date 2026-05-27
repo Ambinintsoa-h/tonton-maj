@@ -9,6 +9,7 @@ const getInitialState = () => {
     token: token || null,
     username: null,
     role: null,
+    uid: null,
     // Profil utilisateur (chargé après connexion)
     nom:       '',
     prenom:    '',
@@ -24,11 +25,12 @@ const authSlice = createSlice({
   initialState: getInitialState(),
   reducers: {
     loginSuccess(state, action) {
-      const { token, username, role } = action.payload;
+      const { token, username, role, uid } = action.payload;
       state.isAuthenticated = true;
       state.token = token;
       state.username = username;
       state.role = role;
+      state.uid = uid || null;
       sessionStorage.setItem(TOKEN_KEY, token);
     },
     setProfile(state, action) {
@@ -45,6 +47,7 @@ const authSlice = createSlice({
       state.token = null;
       state.username = null;
       state.role = null;
+      state.uid = null;
       state.nom = '';
       state.prenom = '';
       state.email = '';

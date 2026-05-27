@@ -27,6 +27,21 @@ const nodemailer = require('nodemailer');
 
 const app = express();
 
+// ─── Firebase Admin SDK ───────────────────────────────────────────────────────
+let firebaseAdmin = null;
+try {
+  const _admin = require('firebase-admin');
+  const saPath = path.join(__dirname, 'data', 'firebase-service-account.json');
+  if (fs.existsSync(saPath)) {
+    const sa = JSON.parse(fs.readFileSync(saPath, 'utf8'));
+    if (!_admin.apps.length) _admin.initializeApp({ credential: _admin.credential.cert(sa) });
+    firebaseAdmin = _admin;
+    console.log('[firebase-admin] ✓ Initialisé');
+  } else {
+    console.warn('[firebase-admin] ⚠ data/firebase-service-account.json manquant');
+  }
+} catch (e) { console.error('[firebase-admin] Erreur :', e.message); }
+
 // ─── CORS restreint selon l'environnement ────────────────────────────────────
 const IS_PROD = process.env.NODE_ENV === 'production';
 app.use(cors({
@@ -160,6 +175,63 @@ app.post('/api/auth/login', async (req, res) => {
   setTimeout(() => res.status(401).json({ success: false, error: 'Identifiants incorrects' }), 500);
 });
 
+// ─── Résoudre username → email (public, pour le flow Firebase Auth) ───────────
+app.get('/api/auth/resolve-username', async (req, res) => {
+  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
+  const username = (req.query.u || '').trim().toLowerCase();
+  if (!username) return res.status(400).json({ error: 'Paramètre u requis' });
+  try {
+    const snap = await firebaseAdmin.firestore().collection('users').where('username', '==', username).limit(1).get();
+    if (snap.empty) return res.status(404).json({ error: 'Utilisateur introuvable' });
+    return res.json({ email: snap.docs[0].data().email });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// ─── Échanger un Firebase ID token contre un JWT interne ──────────────────────
+app.post('/api/auth/firebase-login', async (req, res) => {
+  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
+  const { idToken } = req.body || {};
+  if (!idToken) return res.status(400).json({ error: 'idToken requis' });
+  try {
+    const decoded = await firebaseAdmin.auth().verifyIdToken(idToken);
+    const role = decoded.role || 'cq_ia';
+    const username = decoded.username || decoded.email?.split('@')[0] || decoded.uid;
+    const token = jwt.sign({ uid: decoded.uid, username, role }, JWT_SECRET, { expiresIn: '8h' });
+    return res.json({ success: true, token, role, username, uid: decoded.uid });
+  } catch (e) { return res.status(401).json({ error: 'Token Firebase invalide : ' + e.message }); }
+});
+
+// ─── Créer un compte membre (admin ou manager) ────────────────────────────────
+app.post('/api/users/create', requireAuth, requireRole('admin', 'super_admin', 'manager'), async (req, res) => {
+  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
+  const { firstName, lastName, email, username, role, password } = req.body || {};
+  // Manager ne peut créer que des cq_ia
+  if (req.user.role === 'manager' && role !== 'cq_ia') {
+    return res.status(403).json({ error: 'Un manager ne peut créer que des comptes CQ IA' });
+  }
+  if (!email || !username || !password || !role) return res.status(400).json({ error: 'Champs requis : email, username, role, password' });
+  try {
+    const userRecord = await firebaseAdmin.auth().createUser({ email, password, displayName: username });
+    await firebaseAdmin.auth().setCustomUserClaims(userRecord.uid, { role, username });
+    await firebaseAdmin.firestore().collection('users').doc(userRecord.uid).set({
+      uid: userRecord.uid, username, firstName: firstName || '', lastName: lastName || '',
+      email, role, status: 'active', createdAt: Date.now(),
+    });
+    return res.json({ success: true, uid: userRecord.uid });
+  } catch (e) { return res.status(400).json({ error: e.message }); }
+});
+
+// ─── Supprimer un compte membre ───────────────────────────────────────────────
+app.delete('/api/users/:uid', requireAuth, requireRole('admin', 'super_admin', 'manager'), async (req, res) => {
+  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
+  const { uid } = req.params;
+  try {
+    await firebaseAdmin.auth().deleteUser(uid);
+    await firebaseAdmin.firestore().collection('users').doc(uid).delete();
+    return res.json({ success: true });
+  } catch (e) { return res.status(400).json({ error: e.message }); }
+});
+
 // ─── Rate limiter intégré (sans dépendance externe) ──────────────────────────
 // 60 requêtes/minute par IP. Protège contre les boucles d'appel et le bruteforce.
 const _rl = new Map();
@@ -198,6 +270,12 @@ const requireAuth = (req, res, next) => {
   } catch {
     return res.status(401).json({ error: 'Token JWT invalide ou expiré' });
   }
+};
+
+const requireRole = (...roles) => (req, res, next) => {
+  const r = req.user?.role;
+  if (!r || !roles.includes(r)) return res.status(403).json({ error: 'Accès refusé' });
+  next();
 };
 
 // ─── Paramètres serveur (clés API partagées entre utilisateurs) ──────────────

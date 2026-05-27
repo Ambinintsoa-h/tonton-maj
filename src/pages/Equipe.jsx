@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
+import axios from 'axios';
 import {
   Users, Plus, Trash2, Edit3, Save, X,
   Mail, Phone, StickyNote, UserCheck, UserX, Search,
-  Bot,
+  Bot, UserPlus, KeyRound,
 } from 'lucide-react';
-import { addUser, updateUser, removeUser } from '../store/slices/usersSlice';
-import { saveUser, deleteUser } from '../services/firebase';
+import { addUser, updateUser, removeUser, setUsers } from '../store/slices/usersSlice';
+import { saveUser, deleteUser, getUsers } from '../services/firebase';
 import { IA_AGENTS } from '../constants/agents';
 
 // ─── Rôles ───────────────────────────────────────────────────────────────────
@@ -379,6 +380,136 @@ function AgentCard({ agent }) {
   );
 }
 
+// ─── Modal invitation Firebase ────────────────────────────────────────────────
+const EMPTY_INVITE = {
+  firstName: '',
+  lastName:  '',
+  email:     '',
+  username:  '',
+  role:      'cq_ia',
+  password:  '',
+};
+
+function InviteModal({ onClose, onCreated, authRole }) {
+  const [form, setForm]       = useState({ ...EMPTY_INVITE });
+  const [saving, setSaving]   = useState(false);
+
+  const set = (k, v) => setForm(f => {
+    const updated = { ...f, [k]: v };
+    // Auto-calcul username = prénom.nom
+    if (k === 'firstName' || k === 'lastName') {
+      const first = (k === 'firstName' ? v : f.firstName).toLowerCase().trim().replace(/\s+/g, '');
+      const last  = (k === 'lastName'  ? v : f.lastName ).toLowerCase().trim().replace(/\s+/g, '');
+      updated.username = first && last ? `${first}.${last}` : first || last;
+    }
+    return updated;
+  });
+
+  const handleCreate = async () => {
+    if (!form.firstName.trim()) { toast.error('Prénom requis'); return; }
+    if (!form.lastName.trim())  { toast.error('Nom requis');    return; }
+    if (!form.email.trim())     { toast.error('Email requis');  return; }
+    if (!form.password.trim())  { toast.error('Mot de passe temporaire requis'); return; }
+    if (form.password.length < 6) { toast.error('Mot de passe trop court (6 caractères min)'); return; }
+    setSaving(true);
+    try {
+      await axios.post('/api/users/create', {
+        firstName: form.firstName.trim(),
+        lastName:  form.lastName.trim(),
+        email:     form.email.trim().toLowerCase(),
+        username:  form.username.trim().toLowerCase(),
+        role:      form.role,
+        password:  form.password,
+      });
+      toast.success(`Compte créé pour ${form.firstName} ${form.lastName}`);
+      onCreated();
+      onClose();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Erreur création compte');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Manager ne peut créer que des cq_ia
+  const availableRoles = authRole === 'manager'
+    ? { cq_ia: ROLES.cq_ia }
+    : { cq_ia: ROLES.cq_ia, manager: ROLES.manager };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(4px)' }}
+      onClick={e => e.target === e.currentTarget && onClose()}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96 }}
+        className="glass-card p-6 w-full max-w-lg space-y-5"
+      >
+        {/* En-tête */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 bg-black rounded-lg flex items-center justify-center">
+              <UserPlus size={13} className="text-white" />
+            </div>
+            <h3 className="font-semibold text-gray-900 text-sm">Inviter un membre</h3>
+          </div>
+          <button onClick={onClose} className="btn-ghost !px-1.5 !py-1.5"><X size={16} /></button>
+        </div>
+
+        {/* Champs */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Prénom *</label>
+            <input value={form.firstName} onChange={e => set('firstName', e.target.value)} placeholder="Marie" className="input-glass" autoFocus />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Nom *</label>
+            <input value={form.lastName} onChange={e => set('lastName', e.target.value)} placeholder="Dupont" className="input-glass" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Email *</label>
+            <input type="email" value={form.email} onChange={e => set('email', e.target.value)} placeholder="marie.dupont@publithings.com" className="input-glass" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Identifiant (username)</label>
+            <input value={form.username} onChange={e => set('username', e.target.value)} placeholder="marie.dupont" className="input-glass" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Rôle *</label>
+            <select value={form.role} onChange={e => set('role', e.target.value)} className="input-glass">
+              {Object.entries(availableRoles).map(([val, cfg]) => (
+                <option key={val} value={val}>{cfg.description}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+              <KeyRound size={11} />
+              Mot de passe temporaire *
+            </label>
+            <input type="password" value={form.password} onChange={e => set('password', e.target.value)} placeholder="Min. 6 caractères" className="input-glass" />
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center justify-between pt-1 border-t border-gray-100">
+          <button onClick={onClose} className="btn-ghost">Annuler</button>
+          <button onClick={handleCreate} disabled={saving} className="btn-primary disabled:opacity-50">
+            <UserPlus size={14} />
+            {saving ? 'Création…' : 'Créer le compte'}
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ─── Page principale ──────────────────────────────────────────────────────────
 const FILTER_TABS = [
   { key: 'all',         label: 'Tous'         },
@@ -393,11 +524,13 @@ export default function Equipe() {
   const dispatch      = useDispatch();
   const users         = useSelector(s => s.users.list);
   const firebaseReady = useSelector(s => s.settings.firebaseReady);
+  const authRole      = useSelector(s => s.auth.role);
 
-  const [editing, setEditing] = useState(null);
-  const [showNew, setShowNew] = useState(false);
-  const [filter,  setFilter]  = useState('all');
-  const [search,  setSearch]  = useState('');
+  const [editing,     setEditing]     = useState(null);
+  const [showNew,     setShowNew]     = useState(false);
+  const [showInvite,  setShowInvite]  = useState(false);
+  const [filter,      setFilter]      = useState('all');
+  const [search,      setSearch]      = useState('');
 
   // ── Sauvegarde ──
   const handleSave = async (user) => {
@@ -426,6 +559,16 @@ export default function Equipe() {
     toast.success('Membre supprimé');
   };
 
+  // ── Rechargement des membres depuis Firestore après création Firebase ──
+  const handleInviteCreated = async () => {
+    if (firebaseReady) {
+      try {
+        const freshUsers = await getUsers();
+        dispatch(setUsers(freshUsers));
+      } catch {}
+    }
+  };
+
   // ── Filtrage + recherche ──
   const displayed = users.filter(u => {
     const matchFilter =
@@ -452,14 +595,35 @@ export default function Equipe() {
             Gérez les membres de votre équipe et leurs rôles
           </p>
         </div>
-        <button
-          onClick={() => { setShowNew(true); setEditing(null); }}
-          className="btn-primary"
-        >
-          <Plus size={15} />
-          Ajouter un membre
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowInvite(true)}
+            className="btn-primary"
+          >
+            <UserPlus size={15} />
+            Inviter un membre
+          </button>
+          <button
+            onClick={() => { setShowNew(true); setEditing(null); }}
+            className="btn-ghost"
+          >
+            <Plus size={15} />
+            Fiche locale
+          </button>
+        </div>
       </div>
+
+      {/* Modal invitation Firebase */}
+      <AnimatePresence>
+        {showInvite && (
+          <InviteModal
+            key="invite-modal"
+            onClose={() => setShowInvite(false)}
+            onCreated={handleInviteCreated}
+            authRole={authRole}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Stats */}
       {users.length > 0 && <TeamStats users={users} />}
