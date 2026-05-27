@@ -297,7 +297,7 @@ app.post('/api/auth/firebase-login', async (req, res) => {
 });
 
 // ─── Créer un compte membre (admin ou manager) ────────────────────────────────
-app.post('/api/users/create', requireAuth, requireRole('admin', 'super_admin', 'manager'), async (req, res) => {
+app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
   if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   const { firstName, lastName, email, username, role, password } = req.body || {};
   // Manager ne peut créer que des cq_ia
@@ -321,7 +321,7 @@ app.post('/api/users/create', requireAuth, requireRole('admin', 'super_admin', '
 });
 
 // ─── Supprimer un compte membre ───────────────────────────────────────────────
-app.delete('/api/users/:uid', requireAuth, requireRole('admin', 'super_admin', 'manager'), async (req, res) => {
+app.delete('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
   if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   const { uid } = req.params;
   try {
@@ -474,8 +474,8 @@ app.get('/api/settings', requireAuth, (req, res) => {
   res.json(readServerSettings());
 });
 
-// POST /api/settings — sauvegarde les paramètres partagés (admin seulement)
-app.post('/api/settings', requireAuth, (req, res) => {
+// POST /api/settings — sauvegarde les paramètres partagés (super_admin seulement)
+app.post('/api/settings', requireAuth, requireRole('super_admin', 'admin'), (req, res) => {
   try {
     writeServerSettings(req.body || {});
     console.log('[settings] ✓ Paramètres équipe sauvegardés');

@@ -562,8 +562,12 @@ function DashboardCqIa({ stats, history, pendingItems, navigate, authUid, authUs
         </motion.div>
       </div>
 
-      {/* Mes dernières analyses */}
-      <RecentAnalysesWidget history={stats.history} limit={8} delay={0.18} />
+      {/* Mes dernières analyses — filtrées sur l'utilisateur connecté */}
+      <RecentAnalysesWidget
+        history={stats.history.filter(h => isMe(h.assigneeId))}
+        limit={8}
+        delay={0.18}
+      />
     </div>
   );
 }

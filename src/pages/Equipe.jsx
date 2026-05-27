@@ -157,7 +157,7 @@ function UserForm({ user, onSave, onCancel }) {
         <div className="space-y-1.5">
           <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
             Email professionnel *
-            {form.role === 'cq_ia' && (
+            {!!user.id && form.role === 'cq_ia' && (
               <span className="ml-1.5 text-[10px] font-medium text-amber-500 normal-case tracking-normal">— non modifiable (CQ IA)</span>
             )}
           </label>
@@ -167,8 +167,8 @@ function UserForm({ user, onSave, onCancel }) {
             onChange={e => set('email', e.target.value)}
             placeholder="marie.dupont@entreprise.fr"
             className="input-glass"
-            disabled={form.role === 'cq_ia'}
-            style={form.role === 'cq_ia' ? { opacity: 0.55, cursor: 'not-allowed' } : {}}
+            disabled={!!user.id && form.role === 'cq_ia'}
+            style={!!user.id && form.role === 'cq_ia' ? { opacity: 0.55, cursor: 'not-allowed' } : {}}
           />
         </div>
         <div className="space-y-1.5">

@@ -25,6 +25,8 @@ export default function Articles() {
   const knowledge = useSelector(s => s.knowledge.list);
   const firebaseReady = useSelector(s => s.settings.firebaseReady);
   const wpSites = useSelector(s => s.wordpress.sites);
+  const authUid      = useSelector(s => s.auth.uid);
+  const authUsername = useSelector(s => s.auth.username);
 
   const [tab, setTab] = useState(TAB_URL);
   const [url, setUrl] = useState('');
@@ -175,6 +177,7 @@ export default function Articles() {
         url: tab === TAB_URL ? url : '',
         createdAt: new Date().toISOString(),
         tokenUsage: result.tokenUsage || null,
+        assigneeId: authUid || authUsername || null,
       };
 
       let savedId;
@@ -212,6 +215,7 @@ export default function Articles() {
           outputTokens: result.tokenUsage.output,
           costUsd: result.tokenUsage.costUsd,
           createdAt: new Date().toISOString(),
+          assigneeId: authUid || authUsername || null,
           pass: 1,
         }));
       }

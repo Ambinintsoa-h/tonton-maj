@@ -23,10 +23,10 @@ const NAV_TOP = [
 const NAV_ALL = [
   { to: '/',               label: 'Faire une MAJ',  icon: TontonIcon },
   { to: '/maj-en-attente', label: 'MAJ en attente',  icon: ListTodo, badge: true },
-  { to: '/skills',         label: 'Skills IA',       icon: Zap,      roles: ['super_admin', 'admin', 'manager'] },
-  { to: '/wordpress',      label: 'WordPress',        icon: Globe,    roles: ['super_admin', 'admin', 'manager'] },
+  { to: '/skills',         label: 'Skills IA',       icon: Zap,      roles: ['super_admin', 'manager'] },
+  { to: '/wordpress',      label: 'WordPress',        icon: Globe,    roles: ['super_admin', 'manager'] },
   { to: '/historique',     label: 'Historique',       icon: Clock },
-  { to: '/equipe',         label: 'Équipe',            icon: Users,   roles: ['super_admin', 'admin', 'manager'] },
+  { to: '/equipe',         label: 'Équipe',            icon: Users,   roles: ['super_admin', 'manager'] },
 ];
 
 function NavItem({ to, label, icon: Icon, badge }) {
@@ -116,7 +116,7 @@ export default function Sidebar() {
       {/* Settings + Déconnexion */}
       <div className="px-3 pb-6">
         <div className="border-t border-gray-100 pt-3 space-y-0.5">
-          {['super_admin', 'admin'].includes(role) && (
+          {role === 'super_admin' && (
             <NavLink to="/parametres">
               <motion.div
                 whileHover={{ x: 2 }}

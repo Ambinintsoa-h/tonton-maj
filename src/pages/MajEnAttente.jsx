@@ -1011,6 +1011,7 @@ export default function MajEnAttente() {
           outputTokens: result.tokenUsage.output,
           costUsd:      result.tokenUsage.costUsd,
           createdAt:    new Date().toISOString(),
+          assigneeId:   item.assigneeId || null,
           pass: 1,
         }));
       }

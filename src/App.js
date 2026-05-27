@@ -309,7 +309,7 @@ function AppRoutes() {
               <Route path="/wordpress"      element={<WordPress />}    />
               <Route path="/historique"     element={<Historique />}   />
               <Route path="/parametres"     element={
-                <RoleGuard allowedRoles={['super_admin', 'admin']}>
+                <RoleGuard allowedRoles={['super_admin']}>
                   <Parametres />
                 </RoleGuard>
               } />

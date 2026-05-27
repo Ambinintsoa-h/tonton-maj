@@ -18,7 +18,7 @@ const statsSlice = createSlice({
     setStats: (state, action) => ({ ...state, ...action.payload }),
 
     addArticleStat: (state, action) => {
-      const { id, title, inputTokens, outputTokens, costUsd, createdAt, pass = 1 } = action.payload;
+      const { id, title, inputTokens, outputTokens, costUsd, createdAt, assigneeId = null, pass = 1 } = action.payload;
       const existingIdx = state.history.findIndex(h => h.id === id && h.pass === pass);
 
       if (existingIdx !== -1) {
@@ -34,7 +34,7 @@ const statsSlice = createSlice({
         state.totalInputTokens  += inputTokens;
         state.totalOutputTokens += outputTokens;
         state.totalCostUsd      += costUsd;
-        state.history.unshift({ id, title, inputTokens, outputTokens, costUsd, createdAt, pass });
+        state.history.unshift({ id, title, inputTokens, outputTokens, costUsd, createdAt, assigneeId, pass });
         if (state.history.length > 200) state.history.pop();
       }
     },
