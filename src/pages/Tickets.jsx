@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
+import { useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
@@ -733,6 +734,7 @@ export default function Tickets() {
   const users = useSelector(s => s.users.list);
   const history = useSelector(s => s.articles.history);
   const tickets = useSelector(s => s.tickets.list);
+  const location = useLocation();
 
   const [loading, setLoading] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState(null);
@@ -771,6 +773,14 @@ export default function Tickets() {
       if (updated) setSelectedTicket(updated);
     }
   }, [tickets]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ouvrir automatiquement un ticket depuis une notification (location.state.openTicketId)
+  useEffect(() => {
+    const openId = location.state?.openTicketId;
+    if (!openId || tickets.length === 0) return;
+    const target = tickets.find(t => t.id === openId);
+    if (target) setSelectedTicket(target);
+  }, [location.state, tickets]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Filtrage
   const filtered = tickets.filter(t => {
