@@ -768,6 +768,9 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
   );
 }
 
+// ─── Ordre de priorité pour le tri ───────────────────────────────────────────
+const PRIORITY_ORDER = { urgent: 0, haute: 1, normale: 2, basse: 3 };
+
 // ─── Page principale ──────────────────────────────────────────────────────────
 
 export default function Tickets() {
@@ -785,12 +788,10 @@ export default function Tickets() {
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterCategory, setFilterCategory] = useState('all');
   const [filterPriority, setFilterPriority] = useState('all');
+  const [activeTab, setActiveTab] = useState('actifs');
+  const [sortBy, setSortBy] = useState('date_desc');
 
-  const currentUser = {
-    uid: auth.uid,
-    username: auth.username,
-    role: auth.role,
-  };
+  const currentUser = { uid: auth.uid, username: auth.username, role: auth.role };
 
   // Charger les tickets
   useEffect(() => {
@@ -816,29 +817,50 @@ export default function Tickets() {
     }
   }, [tickets]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Ouvrir automatiquement un ticket depuis une notification (location.state.openTicketId)
+  // Ouvrir automatiquement un ticket depuis une notification
+  // Si le ticket est fermé, basculer sur l'onglet Historique
   useEffect(() => {
     const openId = location.state?.openTicketId;
     if (!openId || tickets.length === 0) return;
     const target = tickets.find(t => t.id === openId);
-    if (target) setSelectedTicket(target);
+    if (target) {
+      if (target.status === 'closed') setActiveTab('historique');
+      setSelectedTicket(target);
+    }
   }, [location.state, tickets]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Réinitialiser filtre statut + sélection quand on change d'onglet
+  useEffect(() => {
+    setFilterStatus('all');
+    setSelectedTicket(null);
+  }, [activeTab]);
+
+  // Séparer actifs / historique
+  const activeTickets = tickets.filter(t => t.status !== 'closed');
+  const closedTickets = tickets.filter(t => t.status === 'closed');
+  const tabTickets = activeTab === 'actifs' ? activeTickets : closedTickets;
+
   // Filtrage
-  const filtered = tickets.filter(t => {
-    if (filterStatus !== 'all' && t.status !== filterStatus) return false;
+  const filtered = tabTickets.filter(t => {
+    if (activeTab === 'actifs' && filterStatus !== 'all' && t.status !== filterStatus) return false;
     if (filterCategory !== 'all' && t.category !== filterCategory) return false;
     if (filterPriority !== 'all' && t.priority !== filterPriority) return false;
     if (search && !t.title?.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
 
-  // Stats
+  // Tri
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === 'date_asc') return (a.createdAt || 0) - (b.createdAt || 0);
+    if (sortBy === 'priority') return (PRIORITY_ORDER[a.priority] ?? 2) - (PRIORITY_ORDER[b.priority] ?? 2);
+    return (b.createdAt || 0) - (a.createdAt || 0); // date_desc par défaut
+  });
+
+  // Stats (onglet actifs uniquement)
   const stats = {
-    open: tickets.filter(t => t.status === 'open').length,
-    in_progress: tickets.filter(t => t.status === 'in_progress').length,
-    resolved: tickets.filter(t => t.status === 'resolved').length,
-    closed: tickets.filter(t => t.status === 'closed').length,
+    open:        activeTickets.filter(t => t.status === 'open').length,
+    in_progress: activeTickets.filter(t => t.status === 'in_progress').length,
+    resolved:    activeTickets.filter(t => t.status === 'resolved').length,
   };
 
   const handleTicketCreated = (newTicket) => {
@@ -856,28 +878,60 @@ export default function Tickets() {
   return (
     <div className="flex flex-col h-full overflow-hidden gap-3">
 
-      {/* ── LIGNE 1 : Titre + bouton ── */}
-      <div className="flex-shrink-0 flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      {/* ── LIGNE 1 : Titre + onglets + bouton ── */}
+      <div className="flex-shrink-0 flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <Bug size={20} className="text-blue-500" />
           <h1 className="text-xl font-bold text-gray-900">Tickets</h1>
         </div>
+
+        {/* Onglets Actifs / Historique */}
+        <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1 flex-shrink-0">
+          <button
+            onClick={() => setActiveTab('actifs')}
+            className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+              activeTab === 'actifs' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Actifs
+            {activeTickets.length > 0 && (
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
+                activeTab === 'actifs' ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-500'
+              }`}>{activeTickets.length}</span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('historique')}
+            className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+              activeTab === 'historique' ? 'bg-white text-gray-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Historique
+            {closedTickets.length > 0 && (
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
+                activeTab === 'historique' ? 'bg-gray-100 text-gray-600' : 'bg-gray-200 text-gray-500'
+              }`}>{closedTickets.length}</span>
+            )}
+          </button>
+        </div>
+
+        <div className="flex-1" />
+
         {canCreate && (
           <button onClick={() => setShowModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-xl text-sm font-semibold hover:bg-blue-600 transition-colors shadow-sm">
+            className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-xl text-sm font-semibold hover:bg-blue-600 transition-colors shadow-sm flex-shrink-0">
             <Plus size={15} /> Nouveau ticket
           </button>
         )}
       </div>
 
-      {/* ── LIGNE 2 : Stats (pills compacts) + Filtres ── */}
+      {/* ── LIGNE 2 : Stats pills (actifs) + Filtres + Tri ── */}
       <div className="flex-shrink-0 flex items-center gap-2 flex-wrap">
-        {/* Stats pills */}
-        {[
-          { key: 'open',        label: 'Ouverts',   color: 'bg-yellow-50 text-yellow-700 border-yellow-200', count: stats.open },
-          { key: 'in_progress', label: 'En cours',  color: 'bg-blue-50 text-blue-700 border-blue-200',       count: stats.in_progress },
-          { key: 'resolved',    label: 'Résolus',   color: 'bg-green-50 text-green-700 border-green-200',    count: stats.resolved },
-          { key: 'closed',      label: 'Fermés',    color: 'bg-gray-50 text-gray-500 border-gray-200',       count: stats.closed },
+        {/* Stats pills — uniquement pour l'onglet Actifs */}
+        {activeTab === 'actifs' && [
+          { key: 'open',        label: 'Ouverts',  color: 'bg-yellow-50 text-yellow-700 border-yellow-200', count: stats.open },
+          { key: 'in_progress', label: 'En cours', color: 'bg-blue-50 text-blue-700 border-blue-200',       count: stats.in_progress },
+          { key: 'resolved',    label: 'Résolus',  color: 'bg-green-50 text-green-700 border-green-200',    count: stats.resolved },
         ].map(({ key, label, color, count }) => (
           <button key={key} onClick={() => setFilterStatus(filterStatus === key ? 'all' : key)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold transition-all ${color} ${filterStatus === key ? 'shadow-sm ring-1 ring-current ring-offset-1' : 'opacity-70 hover:opacity-100'}`}>
@@ -885,24 +939,35 @@ export default function Tickets() {
           </button>
         ))}
 
-        {/* Séparateur */}
         <div className="flex-1" />
 
-        {/* Filtres inline */}
+        {/* Recherche */}
         <div className="relative">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher..."
-            className="text-sm border border-gray-200 rounded-xl pl-7 pr-3 py-1.5 w-48 focus:outline-none focus:ring-2 focus:ring-blue-200" />
+            className="text-sm border border-gray-200 rounded-xl pl-7 pr-3 py-1.5 w-44 focus:outline-none focus:ring-2 focus:ring-blue-200" />
         </div>
+
+        {/* Catégorie */}
         <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)}
           className="text-sm border border-gray-200 rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
           <option value="all">Toutes catégories</option>
           {Object.entries(CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
+
+        {/* Priorité */}
         <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
           className="text-sm border border-gray-200 rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
           <option value="all">Toutes priorités</option>
           {Object.entries(PRIORITIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+
+        {/* Tri */}
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          className="text-sm border border-gray-200 rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
+          <option value="date_desc">Plus récents</option>
+          <option value="date_asc">Plus anciens</option>
+          <option value="priority">Priorité ↑</option>
         </select>
       </div>
 
@@ -916,13 +981,13 @@ export default function Tickets() {
               <RefreshCw size={18} className="animate-spin mr-2" /> Chargement...
             </div>
           )}
-          {!loading && filtered.length === 0 && (
+          {!loading && sorted.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 text-gray-400">
               <Bug size={32} className="mb-3 opacity-30" />
-              <p className="text-sm">Aucun ticket trouvé</p>
+              <p className="text-sm">{activeTab === 'historique' ? 'Aucun ticket fermé' : 'Aucun ticket trouvé'}</p>
             </div>
           )}
-          {!loading && filtered.map(ticket => (
+          {!loading && sorted.map(ticket => (
             <TicketCard key={ticket.id} ticket={ticket}
               selected={selectedTicket?.id === ticket.id}
               onClick={() => setSelectedTicket(ticket)} />
