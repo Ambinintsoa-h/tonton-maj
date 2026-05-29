@@ -174,20 +174,19 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
       };
       await addComment(commentData);
 
-      // Notifier créateur + assignee
-      const toNotify = new Set();
-      if (ticket.creatorId && ticket.creatorId !== commentData.authorId) toNotify.add(ticket.creatorId);
-      if (ticket.assigneeId && ticket.assigneeId !== commentData.authorId) toNotify.add(ticket.assigneeId);
-      for (const uid of toNotify) {
-        await createNotification({
-          toUserId: uid,
-          fromUsername: currentUser.username,
-          type: 'new_comment',
-          ticketId: ticket.id,
-          ticketTitle: ticket.title,
-          message: `${currentUser.username} a commenté le ticket "${ticket.title}"`,
-        });
-      }
+      // Notifier créateur + assignee en parallèle
+      const toNotify = [...new Set([
+        ticket.creatorId !== commentData.authorId ? ticket.creatorId : null,
+        ticket.assigneeId !== commentData.authorId ? ticket.assigneeId : null,
+      ].filter(Boolean))];
+      await Promise.all(toNotify.map(uid => createNotification({
+        toUserId: uid,
+        fromUsername: currentUser.username,
+        type: 'new_comment',
+        ticketId: ticket.id,
+        ticketTitle: ticket.title,
+        message: `${currentUser.username} a commenté le ticket "${ticket.title}"`,
+      })));
 
       setText('');
       setFiles([]);
@@ -656,19 +655,18 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
       const newTicket = { id, ...ticketData, status: 'open', level: ticketLevel, commentCount: 0, createdAt: Date.now(), updatedAt: Date.now(), resolvedAt: null, closedAt: null };
 
       // CQ IA → notifier managers + super admins | Manager → notifier super admins uniquement
+      // Promise.all : toutes les notifications en parallèle (plus rapide)
       const toNotify = isManagerCreating
         ? users.filter(u => u.role === 'super_admin')
         : users.filter(u => u.role === 'manager' || u.role === 'super_admin');
-      for (const u of toNotify) {
-        await createNotification({
-          toUserId: u.id || u.uid,
-          fromUsername: currentUser.username,
-          type: 'new_ticket',
-          ticketId: id,
-          ticketTitle: title.trim(),
-          message: `Nouveau ticket de ${currentUser.username} : "${title.trim()}"`,
-        });
-      }
+      await Promise.all(toNotify.map(u => createNotification({
+        toUserId: u.id || u.uid,
+        fromUsername: currentUser.username,
+        type: 'new_ticket',
+        ticketId: id,
+        ticketTitle: title.trim(),
+        message: `Nouveau ticket de ${currentUser.username} : "${title.trim()}"`,
+      })));
 
       onCreated(newTicket);
       toast.success('Ticket créé avec succès');

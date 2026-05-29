@@ -308,16 +308,18 @@ export const saveSettings = async (settings) => {
 
 export const getTickets = async (userId, role) => {
   if (!db) return [];
+  // Pas de combinaison where+orderBy sur des champs différents → évite l'exigence d'index composite
   let q;
   if (role === 'cq_ia') {
-    q = query(collection(db, 'tickets'),
-      where('creatorId', '==', userId),
-      orderBy('createdAt', 'desc'));
+    q = query(collection(db, 'tickets'), where('creatorId', '==', userId));
   } else {
     q = query(collection(db, 'tickets'), orderBy('createdAt', 'desc'));
   }
   const snap = await getDocs(q);
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  // Tri client-side pour cq_ia (évite l'index composite Firestore)
+  if (role === 'cq_ia') docs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  return docs;
 };
 
 export const createTicket = async (ticket) => {
@@ -342,13 +344,12 @@ export const updateTicketDoc = async (ticketId, updates) => {
 
 export const getComments = async (ticketId) => {
   if (!db) return [];
-  const q = query(
-    collection(db, 'ticket_comments'),
-    where('ticketId', '==', ticketId),
-    orderBy('createdAt', 'asc')
-  );
+  // where seul — tri client-side pour éviter l'index composite
+  const q = query(collection(db, 'ticket_comments'), where('ticketId', '==', ticketId));
   const snap = await getDocs(q);
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 };
 
 export const addComment = async (comment) => {
@@ -396,26 +397,23 @@ export const createNotification = async (notif) => {
 
 export const getNotifications = async (userId) => {
   if (!db) return [];
-  const q = query(
-    collection(db, 'notifications'),
-    where('toUserId', '==', userId),
-    orderBy('createdAt', 'desc'),
-    limit(50)
-  );
+  // where seul — tri client-side pour éviter l'index composite
+  const q = query(collection(db, 'notifications'), where('toUserId', '==', userId), limit(50));
   const snap = await getDocs(q);
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 };
 
 export const subscribeToNotifications = (userId, callback) => {
   if (!db) return () => {};
-  const q = query(
-    collection(db, 'notifications'),
-    where('toUserId', '==', userId),
-    orderBy('createdAt', 'desc'),
-    limit(50)
-  );
+  // where seul — tri client-side pour éviter l'index composite
+  const q = query(collection(db, 'notifications'), where('toUserId', '==', userId), limit(50));
   return onSnapshot(q, (snap) => {
-    callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    const sorted = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    callback(sorted);
   });
 };
 
