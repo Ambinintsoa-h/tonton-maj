@@ -94,7 +94,7 @@ const SAFE_USERNAME_RE  = /^[a-zA-Z0-9_-]{1,64}$/;
 const SETTINGS_WHITELIST = [
   'anthropicKey', 'groqKey', 'braveKey', 'tavilyKey',
   'smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'smtpFrom',
-  'firebaseConfig', 'useLocalProxy', 'modelPricing',
+  'firebaseConfig', 'useLocalProxy',
 ];
 
 app.use(cors({
@@ -584,6 +584,54 @@ app.post('/api/settings', requireAuth, requireRole('super_admin'), (req, res) =>
   } catch (e) {
     res.status(500).json({ error: 'Erreur lors de la sauvegarde des paramètres' });
   }
+});
+
+// ─── Tarification modèles Anthropic (auto depuis LiteLLM) ───────────────────
+// LiteLLM maintient une base JSON publique (mise à jour par la communauté).
+// Rafraîchie côté serveur toutes les 6h — aucune action manuelle requise.
+const ANTHROPIC_MODELS  = ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'];
+const PRICING_TTL_MS    = 6 * 60 * 60 * 1000; // 6h
+const _pricingCache     = { data: null, fetchedAt: 0 };
+
+const fetchModelPricing = async () => {
+  if (_pricingCache.data && Date.now() - _pricingCache.fetchedAt < PRICING_TTL_MS) {
+    return _pricingCache.data;
+  }
+  try {
+    const resp = await axios.get(
+      'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json',
+      { timeout: 15000 }
+    );
+    const all = resp.data || {};
+    const pricing = {};
+    for (const modelId of ANTHROPIC_MODELS) {
+      const entry = all[modelId];
+      if (entry?.input_cost_per_token != null) {
+        pricing[modelId] = {
+          input:  parseFloat(entry.input_cost_per_token)  * 1_000_000, // $/MTok
+          output: parseFloat(entry.output_cost_per_token) * 1_000_000,
+        };
+      }
+    }
+    if (Object.keys(pricing).length > 0) {
+      _pricingCache.data      = pricing;
+      _pricingCache.fetchedAt = Date.now();
+      console.log('[pricing] ✓ Tarifs LiteLLM —',
+        Object.entries(pricing).map(([k, v]) => `${k}: $${v.input}/$${v.output}`).join(' | '));
+    }
+  } catch (e) {
+    console.warn('[pricing] ⚠ LiteLLM inaccessible — fallback hardcodé :', e.message);
+  }
+  return _pricingCache.data;
+};
+
+// Fetch non bloquant au démarrage du serveur
+fetchModelPricing().catch(() => {});
+
+// GET /api/model-pricing — tarifs Anthropic à jour (tous rôles authentifiés)
+app.get('/api/model-pricing', requireAuth, async (req, res) => {
+  const pricing = await fetchModelPricing();
+  res.json({ pricing: pricing || {}, fetchedAt: _pricingCache.fetchedAt, source: 'litellm' });
 });
 
 // ─── Sécurité globale : empêche le proxy de crasher sur exceptions non gérées ─

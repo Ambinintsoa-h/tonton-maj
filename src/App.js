@@ -185,6 +185,29 @@ function SettingsLoader() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Chargement automatique des tarifs Anthropic depuis LiteLLM (via proxy)
+// Rafraîchi toutes les 6h côté serveur — aucune saisie manuelle.
+// ─────────────────────────────────────────────────────────────────────────────
+function PricingLoader() {
+  const dispatch = useDispatch();
+  const isAuthenticated = useSelector(s => s.auth.isAuthenticated);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    axios.get('/api/model-pricing')
+      .then(res => {
+        if (res.data?.pricing && Object.keys(res.data.pricing).length > 0) {
+          dispatch(setSettings({ modelPricing: res.data.pricing }));
+          console.log('[pricing] ✓ Tarifs Anthropic chargés depuis LiteLLM');
+        }
+      })
+      .catch(() => { /* Fallback silencieux — DEFAULT_MODEL_PRICING du store */ });
+  }, [isAuthenticated, dispatch]);
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Synchronisation Firestore pour pending et stats
 // Debounce : pending toutes les 3s, stats toutes les 8s après un changement.
 // Full-replace pour pending (liste courte), setDoc pour stats.
@@ -352,6 +375,7 @@ export default function App() {
       <BrowserRouter>
         <SplashRemover />
         <SettingsLoader />
+        <PricingLoader />
         <ProxyDetector />
         <FirestoreSync />
         <LocalStorageSync />

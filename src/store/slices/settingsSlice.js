@@ -33,7 +33,7 @@ const loadSavedSettings = () => {
       tavilyKey:      parsed.tavilyKey      || '',
       groqKey:        parsed.groqKey        || '',
       firebaseConfig: parsed.firebaseConfig || DEFAULT_FIREBASE_CONFIG,
-      modelPricing:   parsed.modelPricing   || DEFAULT_MODEL_PRICING,
+      // modelPricing non persisté — rechargé depuis LiteLLM via PricingLoader à chaque session
     };
   } catch { return {}; }
 };
