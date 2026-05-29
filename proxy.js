@@ -401,7 +401,15 @@ app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager')
     });
     // Générer un lien de réinitialisation de mot de passe (pas d'envoi du mdp en clair)
     let resetLink = null;
-    try { resetLink = await firebaseAdmin.auth().generatePasswordResetLink(email); } catch (e) {
+    try {
+      const appUrl = IS_PROD ? 'https://maj.stomos.net' : 'http://localhost:3000';
+      resetLink = await firebaseAdmin.auth().generatePasswordResetLink(email, {
+        url: `${appUrl}/reset-password`,
+        // handleCodeInApp: true nécessite la configuration Firebase Console
+        // Authentication → Templates → Action URL → https://maj.stomos.net/reset-password
+        // Sans cette config, Firebase redirige vers /reset-password en continueUrl après sa propre page.
+      });
+    } catch (e) {
       console.warn('[invite] Impossible de générer le lien reset :', e.message);
     }
     sendInviteEmail({ toEmail: email, firstName: firstName || username, username, resetLink }).catch(e => {

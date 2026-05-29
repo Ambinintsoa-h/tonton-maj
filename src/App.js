@@ -7,6 +7,7 @@ import { Toaster } from 'react-hot-toast';
 import axios from 'axios';
 import store from './store';
 import Login from './pages/Login';
+import ResetPassword from './pages/ResetPassword';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import RoleGuard from './components/auth/RoleGuard';
 import { logout } from './store/slices/authSlice';
@@ -319,8 +320,9 @@ function LocalStorageSync() {
 function AppRoutes() {
   return (
     <Routes>
-      {/* Route publique — accessible sans authentification */}
-      <Route path="/login" element={<Login />} />
+      {/* Routes publiques — accessibles sans authentification */}
+      <Route path="/login"          element={<Login />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
 
       {/* Routes protégées — redirige vers /login si non authentifié */}
       <Route path="/*" element={
