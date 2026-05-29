@@ -10,6 +10,8 @@ import statsReducer from './slices/statsSlice';
 import pendingReducer from './slices/pendingSlice';
 import usersReducer from './slices/usersSlice';
 import authReducer from './slices/authSlice';
+import ticketsReducer from './slices/ticketsSlice';
+import notificationsReducer from './slices/notificationsSlice';
 
 // ── Middleware de persistance localStorage ────────────────────────────────────
 // Se déclenche UNIQUEMENT sur les actions des slices skills / knowledge / articles.
@@ -58,6 +60,8 @@ export const store = configureStore({
     pending: pendingReducer,
     users:   usersReducer,
     auth:    authReducer,
+    tickets: ticketsReducer,
+    notifications: notificationsReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({ serializableCheck: false }).concat(persistMiddleware),

@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query } from 'firebase/firestore';
-import { getStorage, ref as storageRef, uploadString, getDownloadURL, deleteObject } from 'firebase/storage';
+import { getFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query, onSnapshot, where, limit } from 'firebase/firestore';
+import { getStorage, ref as storageRef, uploadString, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { getAuth, signInWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
 
 let app = null;
@@ -302,4 +302,135 @@ export const saveSettings = async (settings) => {
   // eslint-disable-next-line no-unused-vars
   const { anthropicKey, braveKey, tavilyKey, groqKey, ...safeSettings } = settings;
   await setDoc(doc(db, 'settings', 'main'), safeSettings, { merge: true });
+};
+
+// ── Tickets ──────────────────────────────────────────────────────────────────
+
+export const getTickets = async (userId, role) => {
+  if (!db) return [];
+  let q;
+  if (role === 'cq_ia') {
+    q = query(collection(db, 'tickets'),
+      where('creatorId', '==', userId),
+      orderBy('createdAt', 'desc'));
+  } else {
+    q = query(collection(db, 'tickets'), orderBy('createdAt', 'desc'));
+  }
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const createTicket = async (ticket) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  const ref = await addDoc(collection(db, 'tickets'), {
+    ...ticket,
+    status: 'open',
+    level: 1,
+    commentCount: 0,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    resolvedAt: null,
+    closedAt: null,
+  });
+  return ref.id;
+};
+
+export const updateTicketDoc = async (ticketId, updates) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  await updateDoc(doc(db, 'tickets', ticketId), { ...updates, updatedAt: Date.now() });
+};
+
+export const getComments = async (ticketId) => {
+  if (!db) return [];
+  const q = query(
+    collection(db, 'ticket_comments'),
+    where('ticketId', '==', ticketId),
+    orderBy('createdAt', 'asc')
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const addComment = async (comment) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  const ref = await addDoc(collection(db, 'ticket_comments'), {
+    ...comment,
+    createdAt: Date.now(),
+  });
+  // Incrémenter le compteur
+  const ticketRef = doc(db, 'tickets', comment.ticketId);
+  const ticketSnap = await getDoc(ticketRef);
+  if (ticketSnap.exists()) {
+    const t = ticketSnap.data();
+    const updates = { commentCount: (t.commentCount || 0) + 1, updatedAt: Date.now() };
+    // Auto in_progress si ticket open ET auteur n'est pas le créateur
+    if (t.status === 'open' && comment.authorId !== t.creatorId) {
+      updates.status = 'in_progress';
+    }
+    await updateDoc(ticketRef, updates);
+  }
+  return ref.id;
+};
+
+export const uploadTicketFile = async (ticketId, file) => {
+  if (!storage) throw new Error('Storage non initialisé');
+  const path = `ticket-attachments/${ticketId}/${Date.now()}_${file.name}`;
+  const r = storageRef(storage, path);
+  await uploadBytes(r, file);
+  const url = await getDownloadURL(r);
+  return { url, name: file.name, type: file.type, size: file.size };
+};
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+export const createNotification = async (notif) => {
+  if (!db) return;
+  try {
+    await addDoc(collection(db, 'notifications'), {
+      ...notif,
+      read: false,
+      createdAt: Date.now(),
+    });
+  } catch {}
+};
+
+export const getNotifications = async (userId) => {
+  if (!db) return [];
+  const q = query(
+    collection(db, 'notifications'),
+    where('toUserId', '==', userId),
+    orderBy('createdAt', 'desc'),
+    limit(50)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const subscribeToNotifications = (userId, callback) => {
+  if (!db) return () => {};
+  const q = query(
+    collection(db, 'notifications'),
+    where('toUserId', '==', userId),
+    orderBy('createdAt', 'desc'),
+    limit(50)
+  );
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  });
+};
+
+export const markNotificationRead = async (notifId) => {
+  if (!db) return;
+  await updateDoc(doc(db, 'notifications', notifId), { read: true });
+};
+
+export const markAllNotificationsRead = async (userId) => {
+  if (!db) return;
+  const q = query(
+    collection(db, 'notifications'),
+    where('toUserId', '==', userId),
+    where('read', '==', false)
+  );
+  const snap = await getDocs(q);
+  await Promise.all(snap.docs.map(d => updateDoc(d.ref, { read: true })));
 };

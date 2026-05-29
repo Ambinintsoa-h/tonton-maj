@@ -2,7 +2,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import { motion } from 'framer-motion';
 import {
-  Zap, Globe, Settings, Clock, ChevronRight, BarChart3, ListTodo, Users, LogOut,
+  Zap, Globe, Settings, Clock, ChevronRight, BarChart3, ListTodo, Users, LogOut, Bug,
 } from 'lucide-react';
 import { logout } from '../../store/slices/authSlice';
 
@@ -27,6 +27,7 @@ const NAV_ALL = [
   { to: '/wordpress',      label: 'WordPress',        icon: Globe,    roles: ['super_admin', 'manager'] },
   { to: '/historique',     label: 'Historique',       icon: Clock },
   { to: '/equipe',         label: 'Équipe',            icon: Users,   roles: ['super_admin', 'manager'] },
+  { to: '/tickets',        label: 'Tickets',           icon: Bug,      badge: true },
 ];
 
 function NavItem({ to, label, icon: Icon, badge }) {
@@ -59,6 +60,7 @@ export default function Sidebar() {
   const pendingCount = useSelector(s =>
     s.pending.list.filter(i => i.status === 'pending').length
   );
+  const ticketCount = useSelector(s => s.notifications?.unreadCount || 0);
   const role = useSelector(s => s.auth.role) || 'cq_ia';
   const navItems = NAV_ALL.filter(item => !item.roles || item.roles.includes(role));
 
@@ -108,7 +110,7 @@ export default function Sidebar() {
           <NavItem
             key={item.to}
             {...item}
-            badge={item.to === '/maj-en-attente' ? pendingCount : 0}
+            badge={item.to === '/tickets' ? ticketCount : item.to === '/maj-en-attente' ? pendingCount : 0}
           />
         ))}
       </nav>

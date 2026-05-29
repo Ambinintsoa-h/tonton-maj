@@ -20,6 +20,7 @@ import Parametres from './pages/Parametres';
 import Dashboard from './pages/Dashboard';
 import MajEnAttente from './pages/MajEnAttente';
 import Equipe from './pages/Equipe';
+import Tickets from './pages/Tickets';
 import { setSettings, setFirebaseReady, DEFAULT_FIREBASE_CONFIG } from './store/slices/settingsSlice';
 import { setSkills } from './store/slices/skillsSlice';
 import { setKnowledge } from './store/slices/knowledgeSlice';
@@ -31,7 +32,10 @@ import { setStats } from './store/slices/statsSlice';
 import {
   initFirebase, getSkills, getArticles, getWordPressSites, getUsers,
   getPendingItems, getStats, savePendingList, saveStats, getKnowledge,
+  subscribeToNotifications,
 } from './services/firebase';
+import { setNotifications } from './store/slices/notificationsSlice';
+import toast from 'react-hot-toast';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Intercepteurs axios — niveau module, s'appliquent à toutes les requêtes
@@ -315,6 +319,33 @@ function LocalStorageSync() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Listener temps réel pour les notifications utilisateur
+// ─────────────────────────────────────────────────────────────────────────────
+function NotificationListener() {
+  const dispatch = useDispatch();
+  const auth = useSelector(s => s.auth);
+  const prevCountRef = useRef(0);
+
+  useEffect(() => {
+    if (!auth.isAuthenticated || !auth.uid) return;
+    const userId = auth.uid || auth.username;
+    const unsub = subscribeToNotifications(userId, (notifs) => {
+      dispatch(setNotifications(notifs));
+      // Toast pour les nouvelles notifs non lues
+      const unread = notifs.filter(n => !n.read);
+      if (unread.length > prevCountRef.current) {
+        const newest = unread[0];
+        if (newest) toast(newest.message, { icon: '🔔', duration: 4000 });
+      }
+      prevCountRef.current = unread.length;
+    });
+    return () => unsub();
+  }, [auth.isAuthenticated, auth.uid, auth.username, dispatch]);
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Routes
 // ─────────────────────────────────────────────────────────────────────────────
 function AppRoutes() {
@@ -341,6 +372,7 @@ function AppRoutes() {
               } />
               <Route path="/dashboard"      element={<Dashboard />}    />
               <Route path="/equipe"         element={<Equipe />}       />
+              <Route path="/tickets"        element={<Tickets />}      />
               <Route path="*"              element={<Navigate to="/" replace />} />
             </Routes>
           </Layout>
@@ -381,6 +413,7 @@ export default function App() {
         <PricingLoader />
         <ProxyDetector />
         <FirestoreSync />
+        <NotificationListener />
         <LocalStorageSync />
         <AppRoutes />
       </BrowserRouter>
