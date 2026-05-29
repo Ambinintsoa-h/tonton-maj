@@ -172,20 +172,13 @@ const filterSourcesWithHaiku = async (articleContent, sources, apiKey) => {
 };
 
 // ── Appel Claude ──────────────────────────────────────────────────────────────
-const callClaude = async (apiKey, { system, messages, max_tokens = 2048, model = MODELS.FAST }) => {
-  // Toujours passer par le proxy local — ne jamais appeler api.anthropic.com depuis
-  // le navigateur. Cela évite d'exposer la clé API dans les DevTools (Network tab).
-  // Le proxy utilise soit le token OAuth (mode local), soit la clé API fournie
-  // en paramètre de corps (mode clé directe) — dans les deux cas côté serveur Node.js.
+const callClaude = async (_apiKey, { system, messages, max_tokens = 2048, model = MODELS.FAST }) => {
+  // _apiKey ignoré — le proxy lit la clé depuis data/settings.json côté serveur.
+  // La clé n'est plus jamais transmise dans le body HTTP (invisible dans DevTools).
   try {
     const response = await axios.post(
       LOCAL_PROXY,
-      {
-        model, max_tokens, system, messages,
-        // Passe la clé API au proxy uniquement si ce n'est pas le mode OAuth local.
-        // Le proxy l'utilisera pour appeler Anthropic côté serveur (jamais exposé au browser).
-        ...(apiKey && apiKey !== 'local' ? { apiKey } : {}),
-      },
+      { model, max_tokens, system, messages },
       { headers: { 'content-type': 'application/json' }, timeout: 300000 }
     );
     const data = response.data;
@@ -501,9 +494,6 @@ export const runAgent = async ({
   content,
   skills,
   knowledge      = [],
-  anthropicKey,
-  braveKey,
-  tavilyKey,
   articleUrl     = '',
   wpSites        = [],
   existingWpData = null,  // déjà récupéré par Articles.jsx — évite un 2e appel MCP
@@ -563,7 +553,7 @@ export const runAgent = async ({
   // ── Étape 1 : Identifier les requêtes de recherche ────────────────────────────
   let queries = [];
   try {
-    const { text: step1Text, usage: u1 } = await callClaude(anthropicKey, {
+    const { text: step1Text, usage: u1 } = await callClaude(null, {
       system: `Tu es un assistant expert SEO qui génère des requêtes de recherche Google ciblées pour trouver des informations récentes.`,
       max_tokens: 800,
       model: selectModel('query_extraction'),
@@ -623,14 +613,14 @@ ${content.substring(0, 5000)}`,
   const searchResults = [];
   const scrapedSources = [];
 
-  const engineLabel = braveKey ? 'Brave' : tavilyKey ? 'Tavily' : 'SearXNG/Jina';
-  onStep(`Interrogation de ${engineLabel} sur ${queries.length} requête${queries.length > 1 ? 's' : ''}...`);
+  // Brave/Tavily/SearXNG sélectionnés automatiquement côté serveur selon les clés configurées
+  onStep(`Recherche web sur ${queries.length} requête${queries.length > 1 ? 's' : ''}...`);
   onProgress(28);
 
   // Recherche parallèle — limité à 5 requêtes simultanées pour réduire
   // le nombre de connexions réseau en vol et les AbortError de timeout
   const allSearches = await Promise.allSettled(
-    queries.slice(0, 5).map(q => searchWeb(q, braveKey, tavilyKey))
+    queries.slice(0, 5).map(q => searchWeb(q))
   );
   for (const r of allSearches) {
     if (r.status === 'fulfilled') searchResults.push(...r.value);
@@ -684,9 +674,9 @@ ${content.substring(0, 5000)}`,
   // ── Pré-filtrage Haiku — garde les 7 sources les plus pertinentes ─────────────
   // Réduit le contexte envoyé à Sonnet → génération plus rapide, même qualité.
   let filteredScraped = scrapedSources;
-  if (scrapedSources.length > 5 && anthropicKey) {
+  if (scrapedSources.length > 5) {
     try {
-      filteredScraped = await filterSourcesWithHaiku(content, scrapedSources, anthropicKey);
+      filteredScraped = await filterSourcesWithHaiku(content, scrapedSources, null);
     } catch { /* silencieux — on garde toutes les sources */ }
   }
   onProgress(60);
@@ -754,7 +744,7 @@ ${content}
 
   // Génération avec compteur de tokens simulé (feedback visuel temps réel)
   const { text: finalText, usage: u3 } = await callClaudeWithProgress(
-    anthropicKey,
+    null,
     { system: buildSystemPrompt(skills, knowledge), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
     onStep,
     onReplace,
@@ -777,7 +767,7 @@ ${content}
     onStep('Vérification de cohérence des modifications...');
     onProgress(93);
     try {
-      result.updates = await checkCoherence(content, result.updates, anthropicKey);
+      result.updates = await checkCoherence(content, result.updates, null);
     } catch (e) {
       console.warn('[coherence] Échec de la vérification :', e.message);
     }
@@ -870,9 +860,6 @@ export const runReviewAgent = async ({
   firstPassAnalysis = '',
   skills,
   knowledge = [],
-  anthropicKey,
-  braveKey,
-  tavilyKey,
   manualSources = [],   // sources fournies manuellement par le CQ IA (déjà scrapées)
   modelPricing  = null, // tarifs depuis settings.json — null = fallback hardcodé
   onStep,
@@ -896,7 +883,7 @@ export const runReviewAgent = async ({
   // ── Étape 1 : Requêtes complémentaires ──────────────────────────────────────
   let queries = [];
   try {
-    const { text: step1Text, usage: u1 } = await callClaude(anthropicKey, {
+    const { text: step1Text, usage: u1 } = await callClaude(null, {
       system: `Tu es un expert SEO générant des requêtes de recherche complémentaires pour enrichir un article déjà partiellement mis à jour.`,
       max_tokens: 600,
       model: selectModel('query_extraction'),
@@ -932,7 +919,7 @@ ${content.substring(0, 3000)}`,
 
   if (queries.length > 0) {
     const allSearches = await Promise.allSettled(
-      queries.map(q => searchWeb(q, braveKey, tavilyKey))
+      queries.map(q => searchWeb(q))
     );
     for (const r of allSearches) {
       if (r.status === 'fulfilled') searchResults.push(...r.value);
@@ -1008,7 +995,7 @@ ${content}
 - "original" = copie EXACTE du texte ACTUEL de l'article (tel qu'il est après passe 1)
 - Réponds UNIQUEMENT avec le JSON valide, sans markdown`;
 
-  const { text: finalText, usage: u3 } = await callClaude(anthropicKey, {
+  const { text: finalText, usage: u3 } = await callClaude(null, {
     system: buildReviewSystemPrompt(skills, knowledge),
     max_tokens: 24000,
     model: model3,

@@ -565,7 +565,7 @@ app.get('/api/settings', requireAuth, (req, res) => {
   if (req.user.role !== 'super_admin') {
     // Clés API non exposées aux rôles inférieurs — le serveur les lit directement depuis settings.json
     const { anthropicKey, groqKey, braveKey, tavilyKey, smtpPass, smtpUser, smtpHost, smtpFrom, smtpPort, ...safeSettings } = settings;
-    return res.json(safeSettings);
+    return res.json({ ...safeSettings, aiConfigured: !!(settings.anthropicKey || settings.useLocalProxy) });
   }
   res.json(settings);
 });
@@ -607,10 +607,12 @@ const fetchModelPricing = async () => {
     for (const modelId of ANTHROPIC_MODELS) {
       const entry = all[modelId];
       if (entry?.input_cost_per_token != null) {
-        pricing[modelId] = {
-          input:  parseFloat(entry.input_cost_per_token)  * 1_000_000, // $/MTok
-          output: parseFloat(entry.output_cost_per_token) * 1_000_000,
-        };
+        const inVal  = parseFloat(entry.input_cost_per_token)  * 1_000_000;
+        const outVal = parseFloat(entry.output_cost_per_token) * 1_000_000;
+        // Validation de plage : rejette les valeurs aberrantes (0, NaN, > $200/MTok)
+        if (inVal > 0 && outVal > 0 && inVal < 200 && outVal < 200) {
+          pricing[modelId] = { input: inVal, output: outVal };
+        }
       }
     }
     if (Object.keys(pricing).length > 0) {
@@ -632,6 +634,73 @@ fetchModelPricing().catch(() => {});
 app.get('/api/model-pricing', requireAuth, async (req, res) => {
   const pricing = await fetchModelPricing();
   res.json({ pricing: pricing || {}, fetchedAt: _pricingCache.fetchedAt, source: 'litellm' });
+});
+
+// ─── Proxy Brave Search (clé lue depuis settings.json — jamais exposée au navigateur) ──
+app.get('/api/brave', requireAuth, async (req, res) => {
+  const { q, freshness } = req.query;
+  if (!q) return res.status(400).json({ error: 'Paramètre q requis' });
+  const braveKey = readServerSettings().braveKey;
+  if (!braveKey) return res.status(503).json({ error: 'Clé Brave Search non configurée' });
+  try {
+    const params = { q, count: 8, country: 'us', search_lang: 'en' };
+    if (freshness) params.freshness = freshness;
+    const resp = await axios.get('https://api.search.brave.com/res/v1/web/search', {
+      headers: { 'Accept': 'application/json', 'X-Subscription-Token': braveKey },
+      params,
+      timeout: 10000,
+    });
+    if (!resp.headers['content-type']?.includes('application/json')) {
+      return res.status(502).json({ error: 'Réponse Brave invalide' });
+    }
+    res.json(resp.data);
+  } catch (e) {
+    console.error('[brave]', e.message);
+    res.status(e.response?.status || 500).json({ error: 'Erreur Brave Search' });
+  }
+});
+
+// ─── Proxy Tavily (clé lue depuis settings.json — jamais exposée au navigateur) ────────
+app.post('/api/tavily', requireAuth, async (req, res) => {
+  const { query, search_depth = 'advanced', max_results = 8, days, exclude_domains = [] } = req.body;
+  if (!query) return res.status(400).json({ error: 'Paramètre query requis' });
+  const tavilyKey = readServerSettings().tavilyKey;
+  if (!tavilyKey) return res.status(503).json({ error: 'Clé Tavily non configurée' });
+  try {
+    const resp = await axios.post('https://api.tavily.com/search', {
+      api_key: tavilyKey, query, search_depth, max_results,
+      include_answer: false, include_raw_content: false,
+      ...(days ? { days } : {}),
+      exclude_domains,
+    }, { timeout: 20000 });
+    if (!resp.headers['content-type']?.includes('application/json')) {
+      return res.status(502).json({ error: 'Réponse Tavily invalide' });
+    }
+    res.json(resp.data);
+  } catch (e) {
+    console.error('[tavily]', e.message);
+    res.status(e.response?.status || 500).json({ error: 'Erreur Tavily Search' });
+  }
+});
+
+// ─── Proxy SearXNG (instances tierces — requêtes passent par le serveur, pas le navigateur) ─
+const SEARXNG_INSTANCES = ['https://searx.be', 'https://search.mdosch.de', 'https://searx.fmac.xyz'];
+app.get('/api/searxng', requireAuth, async (req, res) => {
+  const { q, time_range = 'month', language = 'en' } = req.query;
+  if (!q) return res.status(400).json({ error: 'Paramètre q requis' });
+  for (const instance of SEARXNG_INSTANCES) {
+    try {
+      const resp = await axios.get(`${instance}/search`, {
+        params: { q, format: 'json', language, time_range, categories: 'general' },
+        headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; TontonAI/1.0)' },
+        timeout: 10000,
+      });
+      if (resp.headers['content-type']?.includes('application/json') && resp.data?.results) {
+        return res.json(resp.data);
+      }
+    } catch {}
+  }
+  res.status(503).json({ error: 'SearXNG inaccessible', results: [] });
 });
 
 // ─── Sécurité globale : empêche le proxy de crasher sur exceptions non gérées ─
@@ -944,7 +1013,8 @@ const callClaude = (prompt) => new Promise((resolve, reject) => {
 
 // ─── Route principale ──────────────────────────────────────────────────────────
 app.post('/api/claude', requireAuth, async (req, res) => {
-  const { system, messages, max_tokens = 4096, model, apiKey: bodyApiKey } = req.body;
+  const { system, messages, max_tokens = 4096, model } = req.body;
+  const bodyApiKey = null; // clé API jamais acceptée depuis le client — lire uniquement settings.json
   if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
 
   // Clé Anthropic : lire depuis data/settings.json en priorité, fallback sur la clé du body.
@@ -1035,7 +1105,8 @@ app.post('/api/claude', requireAuth, async (req, res) => {
 //   data: {"type":"done","text":"…","usage":{…}}   ← fin de génération
 //   data: {"type":"error","error":"…"}        ← erreur
 app.post('/api/claude-stream', requireAuth, (req, res) => {
-  const { system, messages, max_tokens = 32000, model, apiKey: bodyApiKey } = req.body;
+  const { system, messages, max_tokens = 32000, model } = req.body;
+  const bodyApiKey = null; // clé API jamais acceptée depuis le client — lire uniquement settings.json
   if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
 
   // Clé Anthropic : lire depuis data/settings.json en priorité, fallback sur la clé du body.
@@ -1726,7 +1797,8 @@ app.post('/api/wp-upload-file', requireAuth, upload.single('file'), async (req, 
 // Gère la boucle tool_use → exécution → tool_result jusqu'à end_turn.
 // Accepte les mêmes paramètres que /api/claude + { tools, wpSites }.
 app.post('/api/claude-tools', requireAuth, async (req, res) => {
-  const { system, messages, max_tokens = 4096, model, apiKey: bodyApiKey, tools = [], wpSites = [] } = req.body;
+  const { system, messages, max_tokens = 4096, model, tools = [], wpSites = [] } = req.body;
+  const bodyApiKey = null; // clé API jamais acceptée depuis le client — lire uniquement settings.json
   // Clé Anthropic : lire depuis data/settings.json en priorité, fallback sur la clé du body.
   const { anthropicKey: _sak } = readServerSettings();
   const clientApiKey = (_sak && _sak !== 'local') ? _sak : bodyApiKey;

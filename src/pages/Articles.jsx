@@ -32,10 +32,10 @@ export default function Articles() {
   const [url, setUrl] = useState('');
   const [text, setText] = useState('');
   const [scraping, setScraping] = useState(false);
-  const canRun = settings.anthropicKey && (tab === TAB_URL ? url.trim() : text.trim());
+  const canRun = (settings.aiConfigured || settings.useLocalProxy || settings.anthropicKey) && (tab === TAB_URL ? url.trim() : text.trim());
 
   const handleRun = async () => {
-    if (!settings.anthropicKey) {
+    if (!settings.aiConfigured && !settings.useLocalProxy && !settings.anthropicKey) {
       toast.error('Clé API Anthropic manquante — vérifiez les Paramètres');
       return;
     }
@@ -121,9 +121,6 @@ export default function Articles() {
         content: articleContent,   // texte brut pour Claude
         skills,
         knowledge,
-        anthropicKey:    settings.anthropicKey,
-        braveKey:        settings.braveKey,
-        tavilyKey:       settings.tavilyKey,
         articleUrl:      tab === TAB_URL ? url : '',
         wpSites,
         existingWpData:  prefetchedWpData,  // évite un 2e appel WP MCP dans runAgent

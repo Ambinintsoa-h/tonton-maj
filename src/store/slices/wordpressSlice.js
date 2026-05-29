@@ -1,14 +1,15 @@
 import { createSlice } from '@reduxjs/toolkit';
 import { STORAGE_KEYS } from '../../constants/storage';
 
-const load = (key) => {
-  try { return JSON.parse(localStorage.getItem(key) || 'null') || []; }
+const loadFromSession = (key) => {
+  try { return JSON.parse(sessionStorage.getItem(key) || 'null') || []; }
   catch { return []; }
 };
 
 const wordpressSlice = createSlice({
   name: 'wordpress',
-  initialState: { sites: load(STORAGE_KEYS.wpSites), loading: false },
+  // sessionStorage : mots de passe WP non persistés après fermeture du navigateur
+  initialState: { sites: loadFromSession(STORAGE_KEYS.wpSites), loading: false },
   reducers: {
     setSites: (state, action) => { state.sites = action.payload; },
     addSite: (state, action) => { state.sites.push(action.payload); },

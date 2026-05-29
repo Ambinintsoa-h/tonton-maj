@@ -978,9 +978,6 @@ export default function MajEnAttente() {
         content:      articleContent,
         skills,
         knowledge,
-        anthropicKey: settings.anthropicKey,
-        braveKey:     settings.braveKey,
-        tavilyKey:    settings.tavilyKey,
         articleUrl:   item.url || '',
         wpSites,
         modelPricing: settings.modelPricing || null,
@@ -1058,7 +1055,7 @@ export default function MajEnAttente() {
 
   // ── Lancement single item → navigate vers la review ───────────────────────
   const handleRunMaj = async (item) => {
-    if (!settings.anthropicKey) {
+    if (!settings.aiConfigured && !settings.useLocalProxy && !settings.anthropicKey) {
       toast.error('Clé API Anthropic manquante — vérifiez les Paramètres');
       return;
     }
