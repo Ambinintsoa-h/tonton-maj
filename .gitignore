@@ -30,3 +30,5 @@ proddddd/
 
 # Paramètres serveur (clés API — ne jamais committer)
 data/
+.claude/MEMORY.md
+.claude/CLAUDE.md
