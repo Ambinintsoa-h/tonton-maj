@@ -315,17 +315,16 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
   const getSuperAdmins = () => users.filter(u => u.role === 'super_admin');
 
   const handleEscalate = async () => {
-    await doAction({ level: 2 }, 'Ticket escaladé au niveau 2', async () => {
-      for (const sa of getSuperAdmins()) {
-        await createNotification({
-          toUserId: sa.id || sa.uid,
-          fromUsername: currentUser.username,
-          type: 'escalade_l2',
-          ticketId: ticket.id,
-          ticketTitle: ticket.title,
-          message: `Ticket escaladé L2 : "${ticket.title}" par ${currentUser.username}`,
-        });
-      }
+    await doAction({ level: 2, assigneeId: null, assigneeUsername: null }, 'Ticket escaladé au niveau 2', async () => {
+      // Escalade → notifier tous les SA en parallèle (ticket sans assigné fixe)
+      await Promise.all(getSuperAdmins().map(sa => createNotification({
+        toUserId: sa.id || sa.uid,
+        fromUsername: currentUser.username,
+        type: 'escalade_l2',
+        ticketId: ticket.id,
+        ticketTitle: ticket.title,
+        message: `Ticket escaladé L2 par ${currentUser.username} : "${ticket.title}"`,
+      })));
     });
   };
 
@@ -363,11 +362,35 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
 
   const handleConfirmResolved = async () => {
     const now = Date.now();
-    await doAction({ status: 'closed', closedAt: now }, 'Résolution confirmée, ticket fermé');
+    await doAction({ status: 'closed', closedAt: now }, 'Résolution confirmée, ticket fermé', async () => {
+      // Notifier l'assigné que le créateur a confirmé la résolution
+      if (ticket.assigneeId) {
+        await createNotification({
+          toUserId: ticket.assigneeId,
+          fromUsername: currentUser.username,
+          type: 'status_change',
+          ticketId: ticket.id,
+          ticketTitle: ticket.title,
+          message: `${currentUser.username} a confirmé la résolution de "${ticket.title}"`,
+        });
+      }
+    });
   };
 
   const handleReopen = async () => {
-    await doAction({ status: 'open', level: 1, resolvedAt: null, closedAt: null }, 'Ticket rouvert');
+    await doAction({ status: 'open', level: 1, resolvedAt: null, closedAt: null }, 'Ticket rouvert', async () => {
+      // Notifier l'assigné que le ticket a été rouvert
+      if (ticket.assigneeId) {
+        await createNotification({
+          toUserId: ticket.assigneeId,
+          fromUsername: currentUser.username,
+          type: 'status_change',
+          ticketId: ticket.id,
+          ticketTitle: ticket.title,
+          message: `${currentUser.username} a rouvert le ticket "${ticket.title}"`,
+        });
+      }
+    });
   };
 
   const handleTakeCharge = async () => {
@@ -376,7 +399,19 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
       assigneeId: currentUser.uid || currentUser.username,
       assigneeUsername: currentUser.username,
     };
-    await doAction(updates, 'Ticket pris en charge');
+    await doAction(updates, 'Ticket pris en charge', async () => {
+      // Notifier le créateur que son ticket est pris en charge
+      if (ticket.creatorId && ticket.creatorId !== (currentUser.uid || currentUser.username)) {
+        await createNotification({
+          toUserId: ticket.creatorId,
+          fromUsername: currentUser.username,
+          type: 'status_change',
+          ticketId: ticket.id,
+          ticketTitle: ticket.title,
+          message: `${currentUser.username} a pris en charge votre ticket "${ticket.title}"`,
+        });
+      }
+    });
   };
 
   const handlePriorityChange = async (priority) => {
@@ -558,12 +593,19 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
       const id = await createTicket({ ...ticketData, level: ticketLevel });
       const newTicket = { id, ...ticketData, status: 'open', level: ticketLevel, commentCount: 0, createdAt: Date.now(), updatedAt: Date.now(), resolvedAt: null, closedAt: null };
 
-      // CQ IA → notifier managers + super admins | Manager → notifier super admins uniquement
-      // Promise.all : toutes les notifications en parallèle (plus rapide)
-      const toNotify = isManagerCreating
-        ? users.filter(u => u.role === 'super_admin')
-        : users.filter(u => u.role === 'manager' || u.role === 'super_admin');
-      await Promise.all(toNotify.map(u => createNotification({
+      // CQ IA → notifie UNIQUEMENT l'assigné (le manager désigné)
+      // Manager → notifie tous les super admins (ticket L2 sans assigné fixe)
+      // Fallback : si pas d'assigné pour CQ IA, notifie tous les managers
+      let notifTargets = [];
+      if (isManagerCreating) {
+        notifTargets = users.filter(u => u.role === 'super_admin');
+      } else if (ticketData.assigneeId) {
+        const assigned = users.find(u => (u.id || u.uid) === ticketData.assigneeId);
+        if (assigned) notifTargets = [assigned];
+      } else {
+        notifTargets = users.filter(u => u.role === 'manager');
+      }
+      await Promise.all(notifTargets.map(u => createNotification({
         toUserId: u.id || u.uid,
         fromUsername: currentUser.username,
         type: 'new_ticket',
