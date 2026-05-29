@@ -77,7 +77,7 @@ export default function Login() {
     try {
       const { data } = await axios.post('/api/auth/login', { tempToken, twoFaCode });
       if (data.token) {
-        dispatch(loginSuccess({ token: data.token, username, role: data.role ?? null }));
+        dispatch(loginSuccess({ token: data.token, username: data.username || username, role: data.role ?? null, uid: data.uid || null }));
         setShowLoader(true);
       } else {
         setError('Code incorrect');

@@ -325,8 +325,11 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       valid = hashOtp(twoFaCode) === tfa.emailCode && Date.now() < (tfa.emailCodeExpiry || 0);
     }
     if (!valid) return setTimeout(() => res.status(401).json({ error: 'Code incorrect' }), 500);
-    const token = jwt.sign({ username: decoded.username, role: decoded.role }, JWT_SECRET, { expiresIn: '8h' });
-    return res.json({ success: true, token, role: decoded.role, username: decoded.username });
+    // uid présent si le tempToken vient d'un compte Firebase (firebase-login)
+    const payload = { username: decoded.username, role: decoded.role };
+    if (decoded.uid) payload.uid = decoded.uid;
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
+    return res.json({ success: true, token, role: decoded.role, username: decoded.username, uid: decoded.uid || null });
   }
 
   // ── Étape 1 : username + password ───────────────────────────────────────────
@@ -367,17 +370,54 @@ app.get('/api/auth/resolve-username', authRateLimiter, async (req, res) => {
 });
 
 // ─── Échanger un Firebase ID token contre un JWT interne ──────────────────────
+// Gère aussi la vérification 2FA pour les comptes Firebase (manager, cq_ia).
+// Même flow que /api/auth/login : si 2FA activée → tempToken → code → JWT final.
 app.post('/api/auth/firebase-login', authRateLimiter, async (req, res) => {
   if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
-  const { idToken } = req.body || {};
+  const { idToken, tempToken, twoFaCode } = req.body || {};
+
+  // ── Étape 2 : vérification du code 2FA (Firebase users) ─────────────────────
+  if (tempToken && twoFaCode) {
+    let decoded;
+    try { decoded = jwt.verify(tempToken, JWT_SECRET); } catch { return res.status(401).json({ error: 'Session 2FA expirée — reconnectez-vous' }); }
+    if (decoded.type !== 'tfa_pending') return res.status(401).json({ error: 'Token invalide' });
+    const tfa = read2fa(decoded.username);
+    let valid = false;
+    if (tfa.method === 'totp') {
+      valid = speakeasy.totp.verify({ secret: tfa.totpSecret, encoding: 'base32', token: twoFaCode.replace(/\s/g, ''), window: 1 });
+    } else if (tfa.method === 'email') {
+      valid = hashOtp(twoFaCode) === tfa.emailCode && Date.now() < (tfa.emailCodeExpiry || 0);
+    }
+    if (!valid) return setTimeout(() => res.status(401).json({ error: 'Code incorrect' }), 500);
+    const token = jwt.sign({ uid: decoded.uid, username: decoded.username, role: decoded.role }, JWT_SECRET, { expiresIn: '8h' });
+    return res.json({ success: true, token, role: decoded.role, username: decoded.username, uid: decoded.uid });
+  }
+
+  // ── Étape 1 : vérification du Firebase idToken ───────────────────────────────
   if (!idToken) return res.status(400).json({ error: 'idToken requis' });
   try {
-    const decoded = await firebaseAdmin.auth().verifyIdToken(idToken);
-    const role = VALID_ROLES.has(decoded.role) ? decoded.role : 'cq_ia';
-    const username = decoded.username || decoded.email?.split('@')[0] || decoded.uid;
-    const token = jwt.sign({ uid: decoded.uid, username, role }, JWT_SECRET, { expiresIn: '8h' });
-    return res.json({ success: true, token, role, username, uid: decoded.uid });
-  } catch (e) { return res.status(401).json({ error: 'Token Firebase invalide : ' + e.message }); }
+    const fbDecoded = await firebaseAdmin.auth().verifyIdToken(idToken);
+    const role     = VALID_ROLES.has(fbDecoded.role) ? fbDecoded.role : 'cq_ia';
+    const username = fbDecoded.username || fbDecoded.email?.split('@')[0] || fbDecoded.uid;
+
+    // Vérifier si la 2FA est activée pour cet utilisateur
+    const tfa = read2fa(username);
+    if (tfa.enabled) {
+      if (tfa.method === 'email') {
+        const profile = readProfile(username);
+        const email   = profile.email || tfa.email;
+        if (!email) return res.status(400).json({ error: 'Aucune adresse email configurée pour la 2FA' });
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        write2fa(username, { ...tfa, emailCode: hashOtp(code), emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
+        try { await sendEmailOtp(email, code); } catch (e) { return res.status(500).json({ error: `Échec envoi email : ${e.message}` }); }
+      }
+      const tfaTempToken = jwt.sign({ uid: fbDecoded.uid, username, role, type: 'tfa_pending' }, JWT_SECRET, { expiresIn: '5m' });
+      return res.json({ success: true, requires2fa: true, method: tfa.method, tempToken: tfaTempToken });
+    }
+
+    const token = jwt.sign({ uid: fbDecoded.uid, username, role }, JWT_SECRET, { expiresIn: '8h' });
+    return res.json({ success: true, token, role, username, uid: fbDecoded.uid });
+  } catch (e) { return res.status(401).json({ error: 'Erreur d\'authentification' }); }
 });
 
 // ─── Créer un compte membre (admin ou manager) ────────────────────────────────
