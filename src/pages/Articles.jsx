@@ -333,7 +333,7 @@ export default function Articles() {
                 )}
               </AnimatePresence>
 
-              {!settings.anthropicKey && (
+              {!settings.anthropicKey && !settings.aiConfigured && !settings.useLocalProxy && (
                 <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700">
                   <AlertCircle size={15} />
                   <span>Clé API Anthropic requise — <a href="/parametres" className="underline font-medium">Paramètres</a></span>
