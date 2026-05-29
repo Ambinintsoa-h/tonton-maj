@@ -90,7 +90,7 @@ if (IS_PROD) {
 
 // ─── Constantes de validation ─────────────────────────────────────────────────
 const VALID_ROLES       = new Set(['super_admin', 'manager', 'cq_ia']);
-const SAFE_USERNAME_RE  = /^[a-zA-Z0-9_-]{1,64}$/;
+const SAFE_USERNAME_RE  = /^[a-zA-Z0-9._-]{1,64}$/; // point autorisé (colonel.sanders) — path.basename() protège du traversal
 const SETTINGS_WHITELIST = [
   'anthropicKey', 'groqKey', 'braveKey', 'tavilyKey',
   'smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'smtpFrom',
