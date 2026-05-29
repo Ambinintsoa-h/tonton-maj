@@ -455,29 +455,61 @@ const writeServerSettings = (payload) => {
 
 // ─── Compte utilisateur ───────────────────────────────────────────────────────
 // GET  /api/account — profil du compte connecté
-app.get('/api/account', requireAuth, (req, res) => {
+// Fallback Firestore : si le profil local est vide (nouveau compte Firebase),
+// on lit firstName/lastName/email/avatarUrl depuis la collection users.
+app.get('/api/account', requireAuth, async (req, res) => {
   const profile = readProfile(req.user.username);
-  const tfa = read2fa(req.user.username);
+  const tfa     = read2fa(req.user.username);
+
+  let fb = {};
+  const profileIsEmpty = !profile.nom && !profile.prenom && !profile.email;
+  if (profileIsEmpty && firebaseAdmin && req.user.uid) {
+    try {
+      const doc = await firebaseAdmin.firestore().collection('users').doc(req.user.uid).get();
+      if (doc.exists) {
+        const d = doc.data();
+        fb = { nom: d.lastName || '', prenom: d.firstName || '', email: d.email || '', avatarUrl: d.avatarUrl || '' };
+        // Persister en local pour les prochains appels (évite un aller-retour Firestore à chaque fois)
+        writeProfile(req.user.username, { ...fb, updatedAt: Date.now() });
+      }
+    } catch (e) { console.warn('[account] Firestore fallback :', e.message); }
+  }
+
   res.json({
-    username: req.user.username,
-    role: req.user.role || 'admin',
-    nom:       profile.nom       || '',
-    prenom:    profile.prenom    || '',
-    email:     profile.email     || '',
-    avatarUrl: profile.avatarUrl || '',
+    username:    req.user.username,
+    role:        req.user.role || 'cq_ia',
+    nom:         profile.nom       || fb.nom       || '',
+    prenom:      profile.prenom    || fb.prenom    || '',
+    email:       profile.email     || fb.email     || '',
+    avatarUrl:   profile.avatarUrl || fb.avatarUrl || '',
     twoFaEnabled: !!tfa.enabled,
     twoFaMethod:  tfa.method || 'none',
   });
 });
 
 // PUT  /api/account — mettre à jour nom, prénom, email, avatarUrl
-app.put('/api/account', requireAuth, (req, res) => {
+// Sync Firestore : l'avatarUrl est répercuté dans la collection users
+// pour que la page Équipe affiche la vraie photo des membres.
+app.put('/api/account', requireAuth, async (req, res) => {
   const { nom, prenom, email, avatarUrl } = req.body || {};
   if (avatarUrl && !avatarUrl.startsWith('https://') && !avatarUrl.startsWith('data:image/')) {
     return res.status(400).json({ error: 'avatarUrl invalide — doit commencer par https:// ou data:image/' });
   }
   const existing = readProfile(req.user.username);
   writeProfile(req.user.username, { ...existing, nom, prenom, email, avatarUrl, updatedAt: Date.now() });
+
+  // Sync vers Firestore (non bloquant) — page Équipe lit avatarUrl depuis la collection users
+  if (firebaseAdmin && req.user.uid) {
+    const update = {};
+    if (nom       !== undefined) update.lastName  = nom       || '';
+    if (prenom    !== undefined) update.firstName = prenom    || '';
+    if (avatarUrl !== undefined) update.avatarUrl = avatarUrl || '';
+    if (Object.keys(update).length > 0) {
+      firebaseAdmin.firestore().collection('users').doc(req.user.uid)
+        .update(update).catch(e => console.warn('[account] Firestore sync :', e.message));
+    }
+  }
+
   res.json({ success: true });
 });
 

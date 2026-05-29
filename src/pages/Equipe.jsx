@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { addUser, updateUser, removeUser, setUsers } from '../store/slices/usersSlice';
 import { saveUser, deleteUser, getUsers } from '../services/firebase';
+import { AccountAvatar } from '../components/account/MonComptePanel';
 import { IA_AGENTS } from '../constants/agents';
 
 // ─── Rôles ───────────────────────────────────────────────────────────────────
@@ -52,16 +53,17 @@ const EMPTY_USER = {
   password:  '',
 };
 
-// ─── Avatar initiales ─────────────────────────────────────────────────────────
+// ─── Avatar membre (photo uploadée > DiceBear > initiales) ───────────────────
 function Avatar({ user, size = 'md' }) {
-  const initials = [user.firstName?.[0], user.lastName?.[0]]
-    .filter(Boolean).join('').toUpperCase() || '?';
-  const role = ROLES[user.role] || ROLES.cq_ia;
-  const sizeMap = { sm: 'w-8 h-8 text-xs', md: 'w-10 h-10 text-sm', lg: 'w-12 h-12 text-base' };
+  const px = { sm: 32, md: 40, lg: 48 }[size] || 40;
   return (
-    <div className={`${sizeMap[size]} ${role.avatarClass} rounded-xl flex items-center justify-center font-bold flex-shrink-0`}>
-      {initials}
-    </div>
+    <AccountAvatar
+      avatarUrl={user.avatarUrl || ''}
+      prenom={user.firstName || ''}
+      nom={user.lastName || ''}
+      username={user.username || ''}
+      size={px}
+    />
   );
 }
 
