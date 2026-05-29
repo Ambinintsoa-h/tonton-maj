@@ -983,6 +983,7 @@ export default function MajEnAttente() {
         tavilyKey:    settings.tavilyKey,
         articleUrl:   item.url || '',
         wpSites,
+        modelPricing: settings.modelPricing || null,
         onStep:     (s) => { dispatch(addStep(s)); step(s); },
         onProgress: (p) => { dispatch(setProgress(p)); progress(p); },
       });

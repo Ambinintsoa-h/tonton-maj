@@ -3,7 +3,7 @@ import { STORAGE_KEYS } from '../constants/storage';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Settings, Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail } from 'lucide-react';
+import { Settings, Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, DollarSign } from 'lucide-react';
 import axios from 'axios';
 import { setSettings, setFirebaseReady } from '../store/slices/settingsSlice';
 import { initFirebase, saveSettings } from '../services/firebase';
@@ -42,6 +42,7 @@ export default function Parametres() {
   const [proxyStatus, setProxyStatus] = useState(null);
   const [checkingProxy, setCheckingProxy] = useState(false);
 
+  const mp = stored.modelPricing || {};
   const [form, setForm] = useState({
     anthropicKey:              stored.anthropicKey || '',
     useLocalProxy:             stored.useLocalProxy || false,
@@ -59,6 +60,13 @@ export default function Parametres() {
     smtpUser:  stored.smtpUser  || '',
     smtpPass:  stored.smtpPass  || '',
     smtpFrom:  stored.smtpFrom  || '',
+    // Tarification modèles (USD / million de tokens)
+    p_haiku_in:   mp['claude-haiku-4-5']?.input   ?? 0.80,
+    p_haiku_out:  mp['claude-haiku-4-5']?.output  ?? 4.00,
+    p_sonnet_in:  mp['claude-sonnet-4-5']?.input  ?? 3.00,
+    p_sonnet_out: mp['claude-sonnet-4-5']?.output ?? 15.00,
+    p_opus_in:    mp['claude-opus-4-5']?.input    ?? 15.00,
+    p_opus_out:   mp['claude-opus-4-5']?.output   ?? 75.00,
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -114,6 +122,11 @@ export default function Parametres() {
       smtpUser: form.smtpUser,
       smtpPass: form.smtpPass,
       smtpFrom: form.smtpFrom,
+      modelPricing: {
+        'claude-haiku-4-5':  { input: Number(form.p_haiku_in)   || 0.80,  output: Number(form.p_haiku_out)  || 4.00  },
+        'claude-sonnet-4-5': { input: Number(form.p_sonnet_in)  || 3.00,  output: Number(form.p_sonnet_out) || 15.00 },
+        'claude-opus-4-5':   { input: Number(form.p_opus_in)    || 15.00, output: Number(form.p_opus_out)   || 75.00 },
+      },
     };
 
     // 1. Init Firebase si config fournie
@@ -159,6 +172,7 @@ export default function Parametres() {
   // Synchronise le formulaire depuis le store Redux quand les settings sont chargés
   // (SettingsLoader les récupère du serveur après authentification)
   useEffect(() => {
+    const mp2 = stored.modelPricing || {};
     setForm(f => ({
       ...f,
       anthropicKey:              stored.anthropicKey === 'local' ? '' : (stored.anthropicKey || ''),
@@ -177,6 +191,12 @@ export default function Parametres() {
       smtpUser: stored.smtpUser  || '',
       smtpPass: stored.smtpPass  || '',
       smtpFrom: stored.smtpFrom  || '',
+      p_haiku_in:   mp2['claude-haiku-4-5']?.input   ?? 0.80,
+      p_haiku_out:  mp2['claude-haiku-4-5']?.output  ?? 4.00,
+      p_sonnet_in:  mp2['claude-sonnet-4-5']?.input  ?? 3.00,
+      p_sonnet_out: mp2['claude-sonnet-4-5']?.output ?? 15.00,
+      p_opus_in:    mp2['claude-opus-4-5']?.input    ?? 15.00,
+      p_opus_out:   mp2['claude-opus-4-5']?.output   ?? 75.00,
     }));
   }, [stored]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -446,6 +466,63 @@ export default function Parametres() {
           <p>• <strong>Gmail</strong> : smtp.gmail.com · port 587 · App Password requis</p>
           <p>• <strong>OVH / Infomaniak</strong> : ssl0.ovh.net ou mail.infomaniak.com · port 587</p>
           <p>• <strong>Brevo (gratuit)</strong> : smtp-relay.brevo.com · port 587 · 300 emails/jour</p>
+        </div>
+      </motion.div>
+
+      {/* Tarification modèles IA */}
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.14 }} className="glass-card p-6 space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 bg-emerald-600 rounded-xl flex items-center justify-center">
+            <DollarSign size={16} className="text-white" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">Tarification modèles IA</h2>
+            <p className="text-xs text-gray-400">Prix Anthropic en USD / million de tokens — à mettre à jour si Anthropic change ses tarifs</p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {[
+            { label: 'Claude Haiku 4.5',  inKey: 'p_haiku_in',   outKey: 'p_haiku_out',  color: 'bg-blue-100 text-blue-700' },
+            { label: 'Claude Sonnet 4.5', inKey: 'p_sonnet_in',  outKey: 'p_sonnet_out', color: 'bg-violet-100 text-violet-700' },
+            { label: 'Claude Opus 4.5',   inKey: 'p_opus_in',    outKey: 'p_opus_out',   color: 'bg-amber-100 text-amber-700' },
+          ].map(({ label, inKey, outKey, color }) => (
+            <div key={label} className="bg-gray-50 rounded-xl px-4 py-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${color}`}>{label}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-gray-500">Input ($/MTok)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={form[inKey]}
+                    onChange={e => set(inKey, e.target.value)}
+                    className="input-glass text-sm"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-gray-500">Output ($/MTok)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={form[outKey]}
+                    onChange={e => set(outKey, e.target.value)}
+                    className="input-glass text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="bg-gray-50 rounded-xl px-4 py-3 text-xs text-gray-500 space-y-1">
+          <p className="font-medium text-gray-700">Comment ça marche ?</p>
+          <p>Ces prix sont utilisés pour calculer le coût de chaque MAJ. Si Anthropic modifie ses tarifs, mettez-les à jour ici et sauvegardez — tous les nouveaux calculs utiliseront les nouveaux prix automatiquement.</p>
+          <p className="text-gray-400">Consultez les tarifs officiels sur <strong>console.anthropic.com/settings/billing</strong></p>
         </div>
       </motion.div>
 

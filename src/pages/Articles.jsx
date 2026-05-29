@@ -127,6 +127,7 @@ export default function Articles() {
         articleUrl:      tab === TAB_URL ? url : '',
         wpSites,
         existingWpData:  prefetchedWpData,  // évite un 2e appel WP MCP dans runAgent
+        modelPricing:    settings.modelPricing || null,
         onStep:     (s) => dispatch(addStep(s)),
         onReplace:  (s) => dispatch(replaceLastStep(s)),
         onProgress: (p) => dispatch(setProgress(p)),

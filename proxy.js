@@ -94,7 +94,7 @@ const SAFE_USERNAME_RE  = /^[a-zA-Z0-9_-]{1,64}$/;
 const SETTINGS_WHITELIST = [
   'anthropicKey', 'groqKey', 'braveKey', 'tavilyKey',
   'smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'smtpFrom',
-  'firebaseConfig', 'useLocalProxy',
+  'firebaseConfig', 'useLocalProxy', 'modelPricing',
 ];
 
 app.use(cors({

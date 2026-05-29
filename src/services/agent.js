@@ -91,13 +91,16 @@ const getDateContext = () => {
 };
 
 // ── Pricing tokens ────────────────────────────────────────────────────────────
-const TOKEN_PRICING = {
+// Valeurs de fallback (écrasées par modelPricing depuis settings.json via Redux).
+const TOKEN_PRICING_FALLBACK = {
   'claude-haiku-4-5':  { input: 0.80,  output: 4.00  }, // USD/MTok
   'claude-sonnet-4-5': { input: 3.00,  output: 15.00 }, // USD/MTok
   'claude-opus-4-5':   { input: 15.00, output: 75.00 }, // USD/MTok
 };
-const calcCost = (calls) => calls.reduce((t, c) => {
-  const p = TOKEN_PRICING[c.model] || TOKEN_PRICING['claude-haiku-4-5'];
+// pricing : objet { 'claude-xxx': { input, output } } — vient du Redux store settings.modelPricing
+const calcCost = (calls, pricing = TOKEN_PRICING_FALLBACK) => calls.reduce((t, c) => {
+  const table = pricing || TOKEN_PRICING_FALLBACK;
+  const p = table[c.model] || table['claude-haiku-4-5'] || TOKEN_PRICING_FALLBACK['claude-haiku-4-5'];
   return t + (c.input / 1_000_000) * p.input + (c.output / 1_000_000) * p.output;
 }, 0);
 
@@ -504,6 +507,7 @@ export const runAgent = async ({
   articleUrl     = '',
   wpSites        = [],
   existingWpData = null,  // déjà récupéré par Articles.jsx — évite un 2e appel MCP
+  modelPricing   = null,  // tarifs depuis settings.json — null = fallback hardcodé
   onStep,
   onReplace,
   onProgress,
@@ -789,7 +793,7 @@ ${content}
     ...searchResults.slice(0, 8).map(s => ({ title: s.title, url: s.url, relevance: s.description || '' })),
   ];
 
-  const costUsd = calcCost(tokenAcc.calls);
+  const costUsd = calcCost(tokenAcc.calls, modelPricing);
   return {
     ...result,
     sources: dedupeByUrl(allSources).slice(0, 12),
@@ -870,6 +874,7 @@ export const runReviewAgent = async ({
   braveKey,
   tavilyKey,
   manualSources = [],   // sources fournies manuellement par le CQ IA (déjà scrapées)
+  modelPricing  = null, // tarifs depuis settings.json — null = fallback hardcodé
   onStep,
   onProgress,
 }) => {
@@ -1030,6 +1035,6 @@ ${content}
     ...searchResults.slice(0, 5).map(s => ({ title: s.title, url: s.url, relevance: s.description || '' })),
   ];
 
-  const costUsd = calcCost(tokenAcc.calls);
+  const costUsd = calcCost(tokenAcc.calls, modelPricing);
   return { ...result, sources: dedupeByUrl(allSources).slice(0, 10), tokenUsage: { ...tokenAcc, costUsd } };
 };
