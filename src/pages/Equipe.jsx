@@ -470,10 +470,10 @@ function InviteModal({ onClose, onCreated, authRole }) {
     }
   };
 
-  // Manager ne peut créer que des cq_ia
+  // Manager ne peut créer que des cq_ia ; super_admin peut créer tous les rôles
   const availableRoles = authRole === 'manager'
     ? { cq_ia: ROLES.cq_ia }
-    : { cq_ia: ROLES.cq_ia, manager: ROLES.manager };
+    : { cq_ia: ROLES.cq_ia, manager: ROLES.manager, super_admin: ROLES.super_admin };
 
   return (
     <motion.div
