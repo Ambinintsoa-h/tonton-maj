@@ -435,11 +435,12 @@ function InviteModal({ onClose, onCreated, authRole }) {
 
   const set = (k, v) => setForm(f => {
     const updated = { ...f, [k]: v };
-    // Auto-calcul username = prénom.nom
+    // Auto-calcul username = prénom_nom (underscore — les points sont interdits)
     if (k === 'firstName' || k === 'lastName') {
-      const first = (k === 'firstName' ? v : f.firstName).toLowerCase().trim().replace(/\s+/g, '');
-      const last  = (k === 'lastName'  ? v : f.lastName ).toLowerCase().trim().replace(/\s+/g, '');
-      updated.username = first && last ? `${first}.${last}` : first || last;
+      const sanitize = (s) => s.toLowerCase().trim().replace(/\s+/g, '_').replace(/[^a-z0-9_-]/g, '');
+      const first = sanitize(k === 'firstName' ? v : f.firstName);
+      const last  = sanitize(k === 'lastName'  ? v : f.lastName);
+      updated.username = first && last ? `${first}_${last}` : first || last;
     }
     return updated;
   });
@@ -517,7 +518,7 @@ function InviteModal({ onClose, onCreated, authRole }) {
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Identifiant (username)</label>
-            <input value={form.username} onChange={e => set('username', e.target.value)} placeholder="marie.dupont" className="input-glass" />
+            <input value={form.username} onChange={e => set('username', e.target.value)} placeholder="marie_dupont" className="input-glass" />
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Rôle *</label>
