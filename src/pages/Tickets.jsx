@@ -616,9 +616,13 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
     if (!title.trim()) { toast.error('Le titre est obligatoire'); return; }
     setLoading(true);
     try {
-      // Chercher un manager pour l'assignation
-      const managers = users.filter(u => u.role === 'manager');
-      const assignee = managers[0] || null;
+      // CQ IA → assigné au premier manager disponible (niveau 1)
+      // Manager → assigné au super_admin directement (niveau 2)
+      const isManagerCreating = currentUser.role === 'manager';
+      const assigneeCandidates = isManagerCreating
+        ? users.filter(u => u.role === 'super_admin')
+        : users.filter(u => u.role === 'manager');
+      const assignee = assigneeCandidates[0] || null;
 
       // Upload pièces jointes
       const tmpId = `tmp_${Date.now()}`;
@@ -647,11 +651,14 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
         attachments,
       };
 
-      const id = await createTicket(ticketData);
-      const newTicket = { id, ...ticketData, status: 'open', level: 1, commentCount: 0, createdAt: Date.now(), updatedAt: Date.now(), resolvedAt: null, closedAt: null };
+      const ticketLevel = isManagerCreating ? 2 : 1;
+      const id = await createTicket({ ...ticketData, level: ticketLevel });
+      const newTicket = { id, ...ticketData, status: 'open', level: ticketLevel, commentCount: 0, createdAt: Date.now(), updatedAt: Date.now(), resolvedAt: null, closedAt: null };
 
-      // Notifier managers + super admins
-      const toNotify = users.filter(u => u.role === 'manager' || u.role === 'super_admin');
+      // CQ IA → notifier managers + super admins | Manager → notifier super admins uniquement
+      const toNotify = isManagerCreating
+        ? users.filter(u => u.role === 'super_admin')
+        : users.filter(u => u.role === 'manager' || u.role === 'super_admin');
       for (const u of toNotify) {
         await createNotification({
           toUserId: u.id || u.uid,
@@ -890,7 +897,8 @@ export default function Tickets() {
     setSelectedTicket(updated);
   };
 
-  const canCreate = auth.role === 'cq_ia' || auth.role === 'manager' || auth.role === 'super_admin';
+  // Le super_admin résout les tickets — il n'en crée pas
+  const canCreate = auth.role === 'cq_ia' || auth.role === 'manager';
 
   return (
     <div className="flex flex-col h-full">
