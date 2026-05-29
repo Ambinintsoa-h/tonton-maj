@@ -3,7 +3,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
-  Bug, Plus, X, Send, Paperclip, AlertCircle, Clock,
+  Bug, Plus, X, Send, Paperclip,
   CheckCircle2, RefreshCw, ArrowUpRight, MessageSquare,
   Search, User, Calendar, Link2,
 } from 'lucide-react';
@@ -123,6 +123,7 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
   const [files, setFiles] = useState([]);
   const [sending, setSending] = useState(false);
   const fileRef = useRef();
+  const bottomRef = useRef();
   const users = useSelector(s => s.users.list);
 
   const loadComments = useCallback(async () => {
@@ -144,6 +145,10 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
     setFiles([]);
     loadComments();
   }, [ticket?.id, loadComments]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [comments]);
 
   const getUserInfo = (authorId) => {
     return users.find(u => u.id === authorId || u.uid === authorId) || null;
@@ -200,26 +205,19 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
   };
 
   return (
-    <div className="mt-4 border-t border-gray-100 pt-4">
-      <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
-        <MessageSquare size={14} /> Commentaires ({comments.length})
-      </h4>
-
-      {loading && <p className="text-xs text-gray-400">Chargement...</p>}
-
-      <div className="space-y-3 mb-4 max-h-64 overflow-y-auto pr-1">
+    <div className="flex flex-col min-h-0 flex-1 border-t border-gray-100">
+      {/* Liste scrollable */}
+      <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">
+        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+          <MessageSquare size={12} /> Commentaires ({comments.length})
+        </h4>
+        {loading && <p className="text-xs text-gray-400">Chargement...</p>}
         {comments.map(c => {
           const u = getUserInfo(c.authorId);
           return (
             <div key={c.id} className="flex gap-2">
               <div className="flex-shrink-0">
-                <AccountAvatar
-                  avatarUrl={u?.avatarUrl}
-                  prenom={u?.prenom}
-                  nom={u?.nom}
-                  username={c.authorUsername}
-                  size={28}
-                />
+                <AccountAvatar avatarUrl={u?.avatarUrl} prenom={u?.prenom} nom={u?.nom} username={c.authorUsername} size={28} />
               </div>
               <div className="flex-1 bg-gray-50 rounded-xl px-3 py-2">
                 <div className="flex items-center gap-2 mb-1">
@@ -245,56 +243,45 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
         {comments.length === 0 && !loading && (
           <p className="text-xs text-gray-400 italic">Aucun commentaire pour l'instant.</p>
         )}
+        <div ref={bottomRef} />
       </div>
 
-      {/* Formulaire */}
-      <div className="flex gap-2 items-end">
-        <div className="flex-1">
-          <textarea
-            value={text}
-            onChange={e => setText(e.target.value)}
-            placeholder="Ajouter un commentaire..."
-            rows={2}
-            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-200"
-            onKeyDown={e => {
-              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSend();
-            }}
-          />
-          {files.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1">
-              {files.map((f, i) => (
-                <span key={i} className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
-                  {f.name}
-                  <button onClick={() => setFiles(files.filter((_, j) => j !== i))}><X size={10} /></button>
-                </span>
-              ))}
-            </div>
-          )}
+      {/* Formulaire fixe en bas */}
+      <div className="flex-shrink-0 border-t border-gray-100 px-5 py-3">
+        <div className="flex gap-2 items-end">
+          <div className="flex-1">
+            <textarea
+              value={text}
+              onChange={e => setText(e.target.value)}
+              placeholder="Ajouter un commentaire... (Ctrl+Entrée pour envoyer)"
+              rows={2}
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-200"
+              onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSend(); }}
+            />
+            {files.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {files.map((f, i) => (
+                  <span key={i} className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    {f.name}
+                    <button onClick={() => setFiles(files.filter((_, j) => j !== i))}><X size={10} /></button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="flex flex-col gap-1">
+            <button onClick={() => fileRef.current?.click()}
+              className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors" title="Joindre des fichiers">
+              <Paperclip size={16} />
+            </button>
+            <button onClick={handleSend} disabled={sending || (!text.trim() && files.length === 0)}
+              className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              {sending ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
+            </button>
+          </div>
+          <input ref={fileRef} type="file" multiple accept="image/*,video/*" className="hidden"
+            onChange={e => setFiles(prev => [...prev, ...Array.from(e.target.files)])} />
         </div>
-        <div className="flex flex-col gap-1">
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
-            title="Joindre des fichiers"
-          >
-            <Paperclip size={16} />
-          </button>
-          <button
-            onClick={handleSend}
-            disabled={sending || (!text.trim() && files.length === 0)}
-            className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            <Send size={16} />
-          </button>
-        </div>
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept="image/*,video/*"
-          className="hidden"
-          onChange={e => setFiles(prev => [...prev, ...Array.from(e.target.files)])}
-        />
       </div>
     </div>
   );
@@ -406,195 +393,111 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
   const prio = PRIORITIES[ticket.priority] || PRIORITIES.normale;
   const status = STATUSES[ticket.status] || STATUSES.open;
   const cat = CATEGORIES[ticket.category] || CATEGORIES.other;
-
-  const linkedArticle = ticket.linkedArticleId
-    ? history.find(a => a.id === ticket.linkedArticleId)
-    : null;
+  const linkedArticle = ticket.linkedArticleId ? history.find(a => a.id === ticket.linkedArticleId) : null;
 
   return (
     <motion.div
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 20 }}
-      className="flex flex-col h-full overflow-y-auto"
+      className="flex flex-col h-full"
     >
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3 mb-4">
-        <h2 className="text-lg font-bold text-gray-900 leading-snug flex-1">{ticket.title}</h2>
-        <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 flex-shrink-0">
-          <X size={18} />
-        </button>
-      </div>
-
-      {/* Badges */}
-      <div className="flex flex-wrap gap-1.5 mb-4">
-        <span className={`text-xs font-medium px-2 py-1 rounded-full ${status.color}`}>{status.label}</span>
-        <span className={`text-xs font-medium px-2 py-1 rounded-full ${cat.color}`}>{cat.label}</span>
-        <span className={`text-xs font-medium px-2 py-1 rounded-full ${prio.color}`}>{prio.label}</span>
-        <span className="text-xs font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-600">
-          Niveau {ticket.level || 1}
-        </span>
-      </div>
-
-      {/* Priorité modifiable */}
-      <div className="mb-4">
-        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1">Priorité</label>
-        <select
-          value={ticket.priority || 'normale'}
-          onChange={e => handlePriorityChange(e.target.value)}
-          className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
-        >
-          {Object.entries(PRIORITIES).map(([k, v]) => (
-            <option key={k} value={k}>{v.label}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Infos */}
-      <div className="grid grid-cols-2 gap-3 mb-4 text-xs text-gray-600">
-        <div className="flex items-center gap-1.5">
-          <User size={12} className="text-gray-400" />
-          <span>Créé par <strong>{ticket.creatorUsername}</strong></span>
-        </div>
-        {ticket.assigneeUsername && (
-          <div className="flex items-center gap-1.5">
-            <User size={12} className="text-blue-400" />
-            <span>Assigné à <strong>{ticket.assigneeUsername}</strong></span>
-          </div>
-        )}
-        <div className="flex items-center gap-1.5">
-          <Calendar size={12} className="text-gray-400" />
-          <span>{formatDate(ticket.createdAt)}</span>
-        </div>
-        {ticket.resolvedAt && (
-          <div className="flex items-center gap-1.5">
-            <CheckCircle2 size={12} className="text-green-500" />
-            <span>Résolu {timeAgo(ticket.resolvedAt)}</span>
-          </div>
-        )}
-      </div>
-
-      {/* Description */}
-      {ticket.description && (
-        <div className="mb-4">
-          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1">Description</label>
-          <p className="text-sm text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-xl p-3 leading-relaxed">{ticket.description}</p>
-        </div>
-      )}
-
-      {/* Article lié */}
-      {(ticket.linkedArticleId || linkedArticle) && (
-        <div className="mb-4">
-          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1">Article lié</label>
-          <a
-            href={ticket.linkedArticleUrl || '#'}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 text-sm text-blue-600 hover:underline"
-          >
-            <Link2 size={13} />
-            {ticket.linkedArticleTitle || linkedArticle?.title || ticket.linkedArticleId}
-          </a>
-        </div>
-      )}
-
-      {/* Pièces jointes */}
-      {ticket.attachments?.length > 0 && (
-        <div className="mb-4">
-          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1">
-            Pièces jointes ({ticket.attachments.length})
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {ticket.attachments.map((a, i) => (
-              <a key={i} href={a.url} target="_blank" rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs text-blue-600 hover:underline bg-blue-50 px-2 py-1 rounded-lg">
-                <Paperclip size={11} />{a.name}
-              </a>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Actions */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {/* Manager / SA : prendre en charge si open non assigné */}
-        {(role === 'manager' || role === 'super_admin') && ticket.status === 'open' && !ticket.assigneeId && (
-          <button
-            onClick={handleTakeCharge}
-            disabled={actionLoading}
-            className="px-3 py-1.5 text-xs font-semibold bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
-          >
-            Prendre en charge
+      {/* ── HEADER FIXE ─────────────────────────────────────────────────────── */}
+      <div className="flex-shrink-0 px-5 pt-4 pb-3 border-b border-gray-100 space-y-2.5">
+        {/* Titre + fermer */}
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-base font-bold text-gray-900 leading-snug flex-1">{ticket.title}</h2>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 flex-shrink-0">
+            <X size={18} />
           </button>
-        )}
+        </div>
 
-        {/* Manager : marquer résolu + escalader L2 si in_progress level 1 */}
-        {role === 'manager' && ticket.status === 'in_progress' && ticket.level === 1 && (
-          <>
-            <button
-              onClick={handleResolve}
-              disabled={actionLoading}
-              className="px-3 py-1.5 text-xs font-semibold bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"
-            >
-              <CheckCircle2 size={13} /> Marquer résolu
-            </button>
-            <button
-              onClick={handleEscalate}
-              disabled={actionLoading}
-              className="px-3 py-1.5 text-xs font-semibold bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-1"
-            >
-              <ArrowUpRight size={13} /> Escalader L2
-            </button>
-          </>
-        )}
+        {/* Badges */}
+        <div className="flex flex-wrap gap-1.5">
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${status.color}`}>{status.label}</span>
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${prio.color}`}>{prio.label}</span>
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Niveau {ticket.level || 1}</span>
+        </div>
 
-        {/* Super Admin : marquer résolu + fermer */}
-        {role === 'super_admin' && (ticket.status === 'open' || ticket.status === 'in_progress') && (
-          <>
-            <button
-              onClick={handleResolve}
-              disabled={actionLoading}
-              className="px-3 py-1.5 text-xs font-semibold bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"
-            >
-              <CheckCircle2 size={13} /> Marquer résolu
-            </button>
-            <button
-              onClick={handleClose}
-              disabled={actionLoading}
-              className="px-3 py-1.5 text-xs font-semibold bg-gray-500 text-white rounded-lg hover:bg-gray-600 disabled:opacity-50"
-            >
-              Fermer
-            </button>
-          </>
-        )}
+        {/* Meta compact : créateur, date, assigné, priorité */}
+        <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
+          <span className="flex items-center gap-1"><User size={11} /><strong>{ticket.creatorUsername}</strong></span>
+          <span className="flex items-center gap-1"><Calendar size={11} />{formatDate(ticket.createdAt)}</span>
+          {ticket.assigneeUsername && <span className="flex items-center gap-1 text-blue-600"><User size={11} />{ticket.assigneeUsername}</span>}
+          <div className="flex items-center gap-1 ml-auto">
+            <span className="text-gray-400">Priorité :</span>
+            <select value={ticket.priority || 'normale'} onChange={e => handlePriorityChange(e.target.value)}
+              className="text-xs border border-gray-200 rounded-lg px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-200 bg-white">
+              {Object.entries(PRIORITIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+          </div>
+        </div>
 
-        {/* Créateur : confirmer résolu ou rouvrir si resolved */}
-        {isCreator && ticket.status === 'resolved' && (
-          <>
-            <button
-              onClick={handleConfirmResolved}
-              disabled={actionLoading}
-              className="px-3 py-1.5 text-xs font-semibold bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"
-            >
-              <CheckCircle2 size={13} /> Confirmer résolu
-            </button>
-            <button
-              onClick={handleReopen}
-              disabled={actionLoading}
-              className="px-3 py-1.5 text-xs font-semibold bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 disabled:opacity-50 flex items-center gap-1"
-            >
-              <RefreshCw size={13} /> Rouvrir
-            </button>
-          </>
-        )}
+        {/* Boutons d'action */}
+        {(() => {
+          const buttons = [];
+          if ((role === 'manager' || role === 'super_admin') && ticket.status === 'open' && !ticket.assigneeId) {
+            buttons.push(<button key="take" onClick={handleTakeCharge} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50">Prendre en charge</button>);
+          }
+          if (role === 'manager' && ticket.status === 'in_progress' && ticket.level === 1) {
+            buttons.push(
+              <button key="resolve" onClick={handleResolve} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"><CheckCircle2 size={12} />Résolu</button>,
+              <button key="escalate" onClick={handleEscalate} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-1"><ArrowUpRight size={12} />Escalader L2</button>
+            );
+          }
+          if (role === 'super_admin' && (ticket.status === 'open' || ticket.status === 'in_progress')) {
+            buttons.push(
+              <button key="resolve" onClick={handleResolve} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"><CheckCircle2 size={12} />Résolu</button>,
+              <button key="close" onClick={handleClose} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-gray-500 text-white rounded-lg hover:bg-gray-600 disabled:opacity-50">Fermer</button>
+            );
+          }
+          if (isCreator && ticket.status === 'resolved') {
+            buttons.push(
+              <button key="confirm" onClick={handleConfirmResolved} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"><CheckCircle2 size={12} />Confirmer résolu</button>,
+              <button key="reopen" onClick={handleReopen} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 disabled:opacity-50 flex items-center gap-1"><RefreshCw size={12} />Rouvrir</button>
+            );
+          }
+          return buttons.length > 0 ? <div className="flex flex-wrap gap-2">{buttons}</div> : null;
+        })()}
       </div>
 
-      {/* Commentaires */}
-      <CommentThread
-        ticket={ticket}
-        currentUser={currentUser}
-        onCommentAdded={handleCommentAdded}
-      />
+      {/* ── BODY FIXE (description + article + pièces jointes) ─────────────── */}
+      {(ticket.description || ticket.linkedArticleId || ticket.attachments?.length > 0) && (
+        <div className="flex-shrink-0 px-5 py-3 space-y-3 border-b border-gray-100">
+          {ticket.description && (
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Description</p>
+              <p className="text-sm text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-xl px-3 py-2 leading-relaxed">{ticket.description}</p>
+            </div>
+          )}
+          {(ticket.linkedArticleId || linkedArticle) && (
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Article lié</p>
+              <a href={ticket.linkedArticleUrl || '#'} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-1.5 text-sm text-blue-600 hover:underline">
+                <Link2 size={13} />{ticket.linkedArticleTitle || linkedArticle?.title || ticket.linkedArticleId}
+              </a>
+            </div>
+          )}
+          {ticket.attachments?.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Pièces jointes ({ticket.attachments.length})</p>
+              <div className="flex flex-wrap gap-2">
+                {ticket.attachments.map((a, i) => (
+                  <a key={i} href={a.url} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-xs text-blue-600 hover:underline bg-blue-50 px-2 py-1 rounded-lg">
+                    <Paperclip size={11} />{a.name}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── COMMENTAIRES (prend le reste de la hauteur) ─────────────────────── */}
+      <CommentThread ticket={ticket} currentUser={currentUser} onCommentAdded={handleCommentAdded} />
     </motion.div>
   );
 }
@@ -899,116 +802,85 @@ export default function Tickets() {
   const canCreate = auth.role === 'cq_ia' || auth.role === 'manager';
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
+    <div className="flex flex-col h-full overflow-hidden gap-3">
+
+      {/* ── LIGNE 1 : Titre + bouton ── */}
+      <div className="flex-shrink-0 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Bug size={22} className="text-blue-500" />
-          <h1 className="text-2xl font-bold text-gray-900">Tickets</h1>
+          <Bug size={20} className="text-blue-500" />
+          <h1 className="text-xl font-bold text-gray-900">Tickets</h1>
         </div>
         {canCreate && (
-          <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-xl text-sm font-semibold hover:bg-blue-600 transition-colors shadow-sm"
-          >
-            <Plus size={16} /> Nouveau ticket
+          <button onClick={() => setShowModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-xl text-sm font-semibold hover:bg-blue-600 transition-colors shadow-sm">
+            <Plus size={15} /> Nouveau ticket
           </button>
         )}
       </div>
 
-      {/* Stats bar */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      {/* ── LIGNE 2 : Stats (pills compacts) + Filtres ── */}
+      <div className="flex-shrink-0 flex items-center gap-2 flex-wrap">
+        {/* Stats pills */}
         {[
-          { key: 'open', label: 'Ouverts', icon: AlertCircle, color: 'text-yellow-600 bg-yellow-50', count: stats.open },
-          { key: 'in_progress', label: 'En cours', icon: Clock, color: 'text-blue-600 bg-blue-50', count: stats.in_progress },
-          { key: 'resolved', label: 'Résolus', icon: CheckCircle2, color: 'text-green-600 bg-green-50', count: stats.resolved },
-          { key: 'closed', label: 'Fermés', icon: X, color: 'text-gray-500 bg-gray-50', count: stats.closed },
-        ].map(({ key, label, icon: Icon, color, count }) => (
-          <button
-            key={key}
-            onClick={() => setFilterStatus(filterStatus === key ? 'all' : key)}
-            className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-all ${
-              filterStatus === key ? 'border-current shadow-sm' : 'border-transparent'
-            } ${color} hover:shadow-sm`}
-          >
-            <Icon size={16} />
-            <div className="text-left">
-              <p className="text-lg font-bold leading-none">{count}</p>
-              <p className="text-[11px] opacity-75 leading-none mt-0.5">{label}</p>
-            </div>
+          { key: 'open',        label: 'Ouverts',   color: 'bg-yellow-50 text-yellow-700 border-yellow-200', count: stats.open },
+          { key: 'in_progress', label: 'En cours',  color: 'bg-blue-50 text-blue-700 border-blue-200',       count: stats.in_progress },
+          { key: 'resolved',    label: 'Résolus',   color: 'bg-green-50 text-green-700 border-green-200',    count: stats.resolved },
+          { key: 'closed',      label: 'Fermés',    color: 'bg-gray-50 text-gray-500 border-gray-200',       count: stats.closed },
+        ].map(({ key, label, color, count }) => (
+          <button key={key} onClick={() => setFilterStatus(filterStatus === key ? 'all' : key)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold transition-all ${color} ${filterStatus === key ? 'shadow-sm ring-1 ring-current ring-offset-1' : 'opacity-70 hover:opacity-100'}`}>
+            <span className="text-sm font-bold">{count}</span> {label}
           </button>
         ))}
-      </div>
 
-      {/* Filtres */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        <div className="relative flex-1 min-w-32">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Rechercher..."
-            className="w-full text-sm border border-gray-200 rounded-xl pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
-          />
+        {/* Séparateur */}
+        <div className="flex-1" />
+
+        {/* Filtres inline */}
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher..."
+            className="text-sm border border-gray-200 rounded-xl pl-7 pr-3 py-1.5 w-48 focus:outline-none focus:ring-2 focus:ring-blue-200" />
         </div>
-        <select
-          value={filterCategory}
-          onChange={e => setFilterCategory(e.target.value)}
-          className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
-        >
+        <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)}
+          className="text-sm border border-gray-200 rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
           <option value="all">Toutes catégories</option>
-          {Object.entries(CATEGORIES).map(([k, v]) => (
-            <option key={k} value={k}>{v.label}</option>
-          ))}
+          {Object.entries(CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
-        <select
-          value={filterPriority}
-          onChange={e => setFilterPriority(e.target.value)}
-          className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
-        >
+        <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
+          className="text-sm border border-gray-200 rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
           <option value="all">Toutes priorités</option>
-          {Object.entries(PRIORITIES).map(([k, v]) => (
-            <option key={k} value={k}>{v.label}</option>
-          ))}
+          {Object.entries(PRIORITIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
       </div>
 
-      {/* Layout liste + détail */}
-      <div className="flex gap-4 flex-1 min-h-0">
-        {/* Liste */}
-        <div className={`flex flex-col ${selectedTicket ? 'w-2/5' : 'w-full'} transition-all overflow-y-auto`}>
+      {/* ── LIGNE 3 : Contenu split (prend tout l'espace restant) ── */}
+      <div className="flex-1 min-h-0 flex gap-4 overflow-hidden">
+
+        {/* Liste des tickets */}
+        <div className={`flex flex-col gap-2 overflow-y-auto pr-1 transition-all flex-shrink-0 ${selectedTicket ? 'w-72' : 'w-full'}`}>
           {loading && (
             <div className="flex items-center justify-center py-12 text-gray-400">
-              <Clock size={20} className="animate-spin mr-2" /> Chargement...
+              <RefreshCw size={18} className="animate-spin mr-2" /> Chargement...
             </div>
           )}
           {!loading && filtered.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-              <Bug size={36} className="mb-3 opacity-30" />
+              <Bug size={32} className="mb-3 opacity-30" />
               <p className="text-sm">Aucun ticket trouvé</p>
             </div>
           )}
           {!loading && filtered.map(ticket => (
-            <TicketCard
-              key={ticket.id}
-              ticket={ticket}
+            <TicketCard key={ticket.id} ticket={ticket}
               selected={selectedTicket?.id === ticket.id}
-              onClick={() => setSelectedTicket(ticket)}
-            />
+              onClick={() => setSelectedTicket(ticket)} />
           ))}
         </div>
 
-        {/* Détail */}
+        {/* Panneau détail */}
         <AnimatePresence>
-          {selectedTicket && (
-            <motion.div
-              key={selectedTicket.id}
-              initial={{ opacity: 0, width: 0 }}
-              animate={{ opacity: 1, width: '60%' }}
-              exit={{ opacity: 0, width: 0 }}
-              className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 overflow-y-auto flex-shrink-0"
-              style={{ maxHeight: '100%' }}
-            >
+          {selectedTicket ? (
+            <div className="flex-1 min-w-0 bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
               <TicketDetail
                 ticket={selectedTicket}
                 onClose={() => setSelectedTicket(null)}
@@ -1017,7 +889,14 @@ export default function Tickets() {
                 users={users}
                 history={history}
               />
-            </motion.div>
+            </div>
+          ) : (
+            !loading && tickets.length > 0 && (
+              <div className="flex-1 flex flex-col items-center justify-center text-gray-300 gap-3">
+                <MessageSquare size={40} className="opacity-30" />
+                <p className="text-sm">Sélectionnez un ticket pour voir les détails</p>
+              </div>
+            )
           )}
         </AnimatePresence>
       </div>
