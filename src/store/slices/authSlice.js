@@ -2,21 +2,30 @@ import { createSlice } from '@reduxjs/toolkit';
 
 const TOKEN_KEY = 'tonton_auth_token';
 
+// Décode le payload JWT sans vérifier la signature (vérification faite côté serveur sur chaque appel).
+// Utilisé uniquement pour restaurer role/username/uid au rechargement de page (F5).
+const decodeJwt = (token) => {
+  try { return JSON.parse(atob(token.split('.')[1])); } catch { return null; }
+};
+
 const getInitialState = () => {
   const token = sessionStorage.getItem(TOKEN_KEY);
+  if (!token) return {
+    isAuthenticated: false, token: null,
+    username: null, role: null, uid: null,
+    nom: '', prenom: '', email: '', avatarUrl: '',
+    twoFaEnabled: false, twoFaMethod: 'none',
+  };
+  // Restaurer role/username/uid depuis le payload — évite le menu réduit après F5
+  const decoded = decodeJwt(token);
   return {
-    isAuthenticated: !!token,
-    token: token || null,
-    username: null,
-    role: null,
-    uid: null,
-    // Profil utilisateur (chargé après connexion)
-    nom:       '',
-    prenom:    '',
-    email:     '',
-    avatarUrl: '',
-    twoFaEnabled: false,
-    twoFaMethod:  'none',
+    isAuthenticated: true,
+    token,
+    username: decoded?.username || null,
+    role:     decoded?.role     || null,
+    uid:      decoded?.uid      || null,
+    nom: '', prenom: '', email: '', avatarUrl: '',
+    twoFaEnabled: false, twoFaMethod: 'none',
   };
 };
 
