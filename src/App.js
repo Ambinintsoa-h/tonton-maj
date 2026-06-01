@@ -34,6 +34,7 @@ import {
   getPendingItems, getStats, savePendingList, saveStats, getKnowledge,
   subscribeToNotifications,
 } from './services/firebase';
+import tracker from './services/activityTracker';
 import { setNotifications } from './store/slices/notificationsSlice';
 import toast from 'react-hot-toast';
 
@@ -308,6 +309,28 @@ function LocalStorageSync() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tracking invisible — manager / cq_ia uniquement, totalement transparent
+// ─────────────────────────────────────────────────────────────────────────────
+function ActivityTrackerInit() {
+  const isAuthenticated = useSelector(s => s.auth.isAuthenticated);
+  const role     = useSelector(s => s.auth.role);
+  const uid      = useSelector(s => s.auth.uid);
+  const username = useSelector(s => s.auth.username);
+  const prenom   = useSelector(s => s.auth.prenom);
+  const nom      = useSelector(s => s.auth.nom);
+
+  useEffect(() => {
+    if (!isAuthenticated || !['manager', 'cq_ia'].includes(role)) return;
+    const userId = uid || username;
+    const name   = [prenom, nom].filter(Boolean).join(' ') || username || userId;
+    tracker.init(userId, role, name);
+    return () => tracker.destroy();
+  }, [isAuthenticated, role, uid, username, prenom, nom]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Listener temps réel pour les notifications utilisateur
 // ─────────────────────────────────────────────────────────────────────────────
 function NotificationListener() {
@@ -402,6 +425,7 @@ export default function App() {
         <PricingLoader />
         <ProxyDetector />
         <FirestoreSync />
+        <ActivityTrackerInit />
         <NotificationListener />
         <LocalStorageSync />
         <AppRoutes />

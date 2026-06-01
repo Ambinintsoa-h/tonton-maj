@@ -14,6 +14,7 @@ import {
   uploadTicketFile, createNotification,
 } from '../services/firebase';
 import { AccountAvatar } from '../components/account/MonComptePanel';
+import tracker from '../services/activityTracker';
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -179,6 +180,7 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
         attachments,
       };
       await addComment(commentData);
+      tracker.trackAction('ticketsCommented');
 
       // Notifier créateur + assignee en parallèle
       const toNotify = [...new Set([
@@ -329,6 +331,7 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
   };
 
   const handleResolve = async () => {
+    tracker.trackAction('ticketsResolved');
     const now = Date.now();
     await doAction({ status: 'resolved', resolvedAt: now }, 'Ticket marqué comme résolu', async () => {
       if (ticket.creatorId) {
@@ -582,6 +585,7 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
 
       // 1. Créer le ticket d'abord pour obtenir l'ID réel
       const id = await createTicket({ ...ticketData, level: ticketLevel });
+      tracker.trackAction('ticketsCreated');
 
       // 2. Uploader les PJ avec le vrai ticketId → chemin définitif ticket-attachments/{id}/...
       let attachments = [];

@@ -1,15 +1,21 @@
+import { useState, useEffect } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
+  BarChart as RBarChart, Bar, AreaChart, Area,
+  XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+} from 'recharts';
+import {
   BarChart3, Zap, DollarSign, Trash2, Clock,
   AlertCircle, Users, CheckCircle2, TrendingUp,
   Sparkles, Calendar, ArrowRight,
-  User, ListTodo, Target,
+  User, ListTodo, Target, Activity, Award,
 } from 'lucide-react';
 import { resetStats } from '../store/slices/statsSlice';
 import { ROLE_COLORS } from '../constants/theme';
+import { getTodayActivitySessions } from '../services/firebase';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt    = (n) => (n || 0).toLocaleString('fr-FR');
@@ -267,6 +273,202 @@ const RecentAnalysesWidget = ({ history, limit = 10, delay = 0 }) => (
   </motion.div>
 );
 
+// ── Tooltip custom ────────────────────────────────────────────────────────────
+const DashTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl shadow-lg px-3 py-2 text-xs">
+      <p className="font-semibold text-gray-700 mb-1">{label}</p>
+      {payload.map((p, i) => (
+        <p key={i} style={{ color: p.color }} className="font-medium">{p.name} : {p.value}</p>
+      ))}
+    </div>
+  );
+};
+
+const fmtDuration = (min) => {
+  if (!min || min <= 0) return '—';
+  const h = Math.floor(min / 60), m = min % 60;
+  return h === 0 ? `${m}min` : m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, '0')}`;
+};
+
+// ── Widget Activité équipe (super_admin uniquement) ───────────────────────────
+const TeamActivityWidget = ({ delay = 0 }) => {
+  const [sessions, setSessions] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const ACTIVE_WINDOW = 10 * 60 * 1000; // 10 min
+
+  useEffect(() => {
+    getTodayActivitySessions()
+      .then(data => setSessions(data))
+      .catch(() => setSessions([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const now           = Date.now();
+  const activeNow     = sessions.filter(s => s.lastActivityAt && (now - s.lastActivityAt) < ACTIVE_WINDOW);
+  const totalActions  = sessions.reduce((s, d) => s + (d.actions?.total || 0), 0);
+  const totalMin      = sessions.reduce((s, d) => s + (d.totalActiveMinutes || 0), 0);
+
+  // Agrégation horaire équipe
+  const teamHourly = Array.from({ length: 24 }, (_, h) => ({
+    heure: `${h}h`,
+    activité: sessions.reduce((s, d) => s + (d.hourlyActivity?.[String(h)] || 0), 0),
+  }));
+
+  // Leaderboard
+  const leaderboard = [...sessions]
+    .sort((a, b) => (b.actions?.total || 0) - (a.actions?.total || 0))
+    .slice(0, 5);
+
+  const maxActions = Math.max(...leaderboard.map(s => s.actions?.total || 0), 1);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay }}
+      className="glass-card p-6 space-y-5"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-violet-500 to-indigo-600 rounded-xl flex items-center justify-center flex-shrink-0">
+            <Activity size={18} className="text-white" />
+          </div>
+          <div>
+            <h2 className="font-bold text-gray-900 text-sm">Activité équipe — aujourd'hui</h2>
+            <p className="text-xs text-gray-400">Tracking en temps réel</p>
+          </div>
+        </div>
+        {loading && (
+          <div className="w-4 h-4 border-2 border-gray-200 border-t-violet-500 rounded-full animate-spin" />
+        )}
+      </div>
+
+      {/* KPIs rapides */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-violet-50 rounded-xl px-4 py-3 text-center">
+          <p className="text-[11px] text-gray-400 font-medium uppercase mb-1">Actifs maintenant</p>
+          <div className="flex items-center justify-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${activeNow.length > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-gray-300'}`} />
+            <p className="text-2xl font-bold text-violet-700">{activeNow.length}</p>
+          </div>
+        </div>
+        <div className="bg-indigo-50 rounded-xl px-4 py-3 text-center">
+          <p className="text-[11px] text-gray-400 font-medium uppercase mb-1">Actions totales</p>
+          <p className="text-2xl font-bold text-indigo-700">{totalActions}</p>
+        </div>
+        <div className="bg-emerald-50 rounded-xl px-4 py-3 text-center">
+          <p className="text-[11px] text-gray-400 font-medium uppercase mb-1">Temps cumulé</p>
+          <p className="text-2xl font-bold text-emerald-700">{fmtDuration(totalMin)}</p>
+        </div>
+      </div>
+
+      {sessions.length === 0 && !loading ? (
+        <div className="text-center py-8 text-gray-400">
+          <Activity size={32} className="mx-auto mb-2 opacity-25" />
+          <p className="text-sm">Aucune activité enregistrée aujourd'hui</p>
+          <p className="text-xs mt-1 text-gray-300">Le tracking démarre dès qu'un membre se connecte</p>
+        </div>
+      ) : sessions.length > 0 && (
+        <>
+          {/* Membres actifs maintenant */}
+          {activeNow.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold text-emerald-500 uppercase tracking-widest">Connectés maintenant</p>
+              <div className="flex flex-wrap gap-2">
+                {activeNow.map(s => {
+                  const sinceMin = Math.round((now - s.lastActivityAt) / 60000);
+                  return (
+                    <div key={s.id} className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-xs font-semibold text-gray-700">{s.userName}</span>
+                      <span className="text-[10px] text-gray-400">
+                        {sinceMin === 0 ? 'à l\'instant' : `il y a ${sinceMin}min`}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Graphique activité horaire équipe */}
+          <div className="space-y-2">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Activité horaire (équipe)</p>
+            <div className="h-28">
+              <ResponsiveContainer width="100%" height="100%">
+                <RBarChart data={teamHourly} barCategoryGap="25%">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                  <XAxis
+                    dataKey="heure"
+                    tick={{ fontSize: 9, fill: '#9ca3af' }}
+                    axisLine={false}
+                    tickLine={false}
+                    interval={3}
+                  />
+                  <YAxis hide />
+                  <Tooltip content={<DashTooltip />} cursor={{ fill: '#f5f3ff' }} />
+                  <Bar dataKey="activité" fill="#8b5cf6" radius={[2, 2, 0, 0]} />
+                </RBarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Leaderboard */}
+          {leaderboard.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                <Award size={11} className="text-amber-500" />Classement du jour
+              </p>
+              <div className="space-y-2">
+                {leaderboard.map((s, i) => {
+                  const actions = s.actions?.total || 0;
+                  const pct = Math.round((actions / maxActions) * 100);
+                  const badgeCls = i === 0
+                    ? 'bg-amber-100 text-amber-700 border-amber-200'
+                    : 'bg-gray-100 text-gray-500 border-gray-200';
+                  return (
+                    <div key={s.id} className="flex items-center gap-3">
+                      <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${badgeCls}`}>
+                        {i + 1}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-xs font-semibold text-gray-800 truncate">{s.userName}</p>
+                            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${
+                              s.userRole === 'cq_ia'
+                                ? 'bg-blue-50 text-blue-600'
+                                : 'bg-purple-50 text-purple-600'
+                            }`}>
+                              {s.userRole === 'cq_ia' ? 'CQ' : 'Mgr'}
+                            </span>
+                          </div>
+                          <span className="text-xs font-bold text-gray-700 tabular-nums">{actions}</span>
+                        </div>
+                        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              s.userRole === 'cq_ia' ? 'bg-blue-400' : 'bg-purple-400'
+                            }`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </motion.div>
+  );
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // 👑 SUPER ADMIN — Vue globale
 // ══════════════════════════════════════════════════════════════════════════════
@@ -387,6 +589,9 @@ function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, di
           </div>
         </motion.div>
       )}
+
+      {/* Activité équipe — tracking temps réel */}
+      <TeamActivityWidget delay={0.17} />
 
       {/* Dernières analyses */}
       <RecentAnalysesWidget history={stats.history} limit={20} delay={0.18} />

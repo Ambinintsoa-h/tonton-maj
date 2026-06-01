@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query, onSnapshot, where, limit } from 'firebase/firestore';
+import { getFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query, onSnapshot, where, limit, increment, arrayUnion } from 'firebase/firestore';
 import { getStorage, ref as storageRef, uploadString, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { getAuth, signInWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
 
@@ -430,4 +430,99 @@ export const markAllNotificationsRead = async (userId) => {
   );
   const snap = await getDocs(q);
   await Promise.all(snap.docs.map(d => updateDoc(d.ref, { read: true })));
+};
+
+// ── Activity Tracking (invisible — manager / cq_ia uniquement) ────────────────
+
+const _localDate = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/**
+ * Crée ou met à jour (merge) le document de session du jour.
+ * setDoc + merge: true → ne remplace pas les champs existants.
+ */
+export const saveActivitySession = async (data) => {
+  if (!db) return;
+  const docId = `${data.userId}_${data.date}`;
+  await setDoc(doc(db, 'activity_sessions', docId), {
+    userId:             data.userId,
+    userRole:           data.userRole,
+    userName:           data.userName,
+    date:               data.date,
+    firstActivityAt:    data.firstActivityAt,
+    lastActivityAt:     data.lastActivityAt,
+    totalActiveMinutes: 0,
+    pauses:             [],
+    hourlyActivity:     {},
+    actions: {
+      articlesUpdated:  0,
+      ticketsCreated:   0,
+      ticketsCommented: 0,
+      ticketsResolved:  0,
+      total:            0,
+    },
+  }, { merge: true });
+};
+
+/**
+ * Heartbeat toutes les 2 min — incrémente l'activité horaire et le temps actif.
+ */
+export const updateActivityHeartbeat = async (userId, date, hour) => {
+  if (!db) return;
+  await updateDoc(doc(db, 'activity_sessions', `${userId}_${date}`), {
+    lastActivityAt:                    Date.now(),
+    totalActiveMinutes:                increment(2),
+    [`hourlyActivity.${hour}`]:        increment(1),
+  });
+};
+
+/**
+ * Enregistre une pause complète {start, end} dans le tableau Firestore.
+ */
+export const recordActivityPause = async (userId, date, pause) => {
+  if (!db) return;
+  await updateDoc(doc(db, 'activity_sessions', `${userId}_${date}`), {
+    pauses: arrayUnion(pause),
+  });
+};
+
+/**
+ * Incrémente le compteur d'une action métier spécifique + le total.
+ * actionType : 'articlesUpdated' | 'ticketsCreated' | 'ticketsCommented' | 'ticketsResolved'
+ */
+export const recordActivityAction = async (userId, date, actionType) => {
+  if (!db) return;
+  await updateDoc(doc(db, 'activity_sessions', `${userId}_${date}`), {
+    [`actions.${actionType}`]: increment(1),
+    'actions.total':           increment(1),
+    lastActivityAt:            Date.now(),
+  });
+};
+
+/**
+ * Sessions de TOUS les utilisateurs pour aujourd'hui — pour le dashboard super_admin.
+ */
+export const getTodayActivitySessions = async () => {
+  if (!db) return [];
+  const today = _localDate();
+  const snap  = await getDocs(
+    query(collection(db, 'activity_sessions'), where('date', '==', today))
+  );
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+/**
+ * Sessions récentes d'un utilisateur — pour la fiche membre.
+ */
+export const getUserActivitySessions = async (userId, days = 7) => {
+  if (!db) return [];
+  const snap = await getDocs(
+    query(collection(db, 'activity_sessions'), where('userId', '==', userId), limit(days + 3))
+  );
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, days);
 };

@@ -10,6 +10,7 @@ import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
 import { saveArticle } from '../services/firebase';
+import tracker from '../services/activityTracker';
 import AgentThinking from '../components/agent/AgentThinking';
 import ArticleResult from '../components/agent/ArticleResult';
 import { applyAllDiffs } from '../utils/diff';
@@ -204,6 +205,7 @@ export default function Articles() {
         savedId = localId;
       }
 
+      tracker.trackAction('articlesUpdated');
       if (result.tokenUsage) {
         dispatch(setTokenUsage(result.tokenUsage));
         dispatch(addArticleStat({

@@ -12,6 +12,7 @@ import { addUser, updateUser, removeUser, setUsers } from '../store/slices/users
 import { saveUser, deleteUser, getUsers } from '../services/firebase';
 import { AccountAvatar } from '../components/account/MonComptePanel';
 import { IA_AGENTS } from '../constants/agents';
+import MemberStatsPanel from '../components/stats/MemberStatsPanel';
 
 // ─── Rôles ───────────────────────────────────────────────────────────────────
 const ROLES = {
@@ -245,7 +246,7 @@ function UserForm({ user, onSave, onCancel }) {
 }
 
 // ─── Carte membre ─────────────────────────────────────────────────────────────
-function UserCard({ user, onEdit, onDelete, isSuperAdmin }) {
+function UserCard({ user, onEdit, onDelete, isSuperAdmin, onViewStats }) {
   const [showPass, setShowPass] = useState(false);
   const createdDate = user.createdAt
     ? new Date(user.createdAt).toLocaleDateString('fr-FR', {
@@ -259,7 +260,12 @@ function UserCard({ user, onEdit, onDelete, isSuperAdmin }) {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
-      className="glass-card p-5 flex items-start gap-4 group"
+      onClick={e => {
+        if (!isSuperAdmin || !onViewStats) return;
+        if (e.target.closest('button')) return;
+        onViewStats(user);
+      }}
+      className={`glass-card p-5 flex items-start gap-4 group ${isSuperAdmin && onViewStats ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}`}
     >
       <Avatar user={user} size="lg" />
 
@@ -573,6 +579,7 @@ export default function Equipe() {
   const [showInvite,  setShowInvite]  = useState(false);
   const [filter,      setFilter]      = useState('all');
   const [search,      setSearch]      = useState('');
+  const [statsUser,   setStatsUser]   = useState(null);
 
   // ── Sauvegarde ──
   const handleSave = async (user) => {
@@ -736,6 +743,8 @@ export default function Equipe() {
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 onDelete={handleDelete}
+                onViewStats={authRole === 'super_admin' && ['cq_ia', 'manager'].includes(user.role)
+                  ? setStatsUser : null}
               />
             ))}
           </AnimatePresence>
@@ -764,6 +773,17 @@ export default function Equipe() {
           <p className="text-xs mt-1">Essayez un autre filtre ou terme de recherche</p>
         </motion.div>
       )}
+
+      {/* Panel stats membre (super_admin → clic sur une carte) */}
+      <AnimatePresence>
+        {statsUser && (
+          <MemberStatsPanel
+            key={statsUser.id}
+            user={statsUser}
+            onClose={() => setStatsUser(null)}
+          />
+        )}
+      </AnimatePresence>
 
       {/* ══ Section Agents IA ══ */}
       <section className="space-y-4 pt-4">
