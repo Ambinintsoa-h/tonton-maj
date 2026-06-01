@@ -562,17 +562,8 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
         : users.filter(u => u.role === 'manager');
       const assignee = assigneeCandidates[0] || null;
 
-      // Upload pièces jointes
-      const tmpId = `tmp_${Date.now()}`;
-      let attachments = [];
-      for (const f of files) {
-        try {
-          const att = await uploadTicketFile(tmpId, f);
-          attachments.push(att);
-        } catch { /* ignore */ }
-      }
-
       const linkedArticle = history.find(a => a.id === linkedArticleId);
+      const ticketLevel = isManagerCreating ? 2 : 1;
       const ticketData = {
         title: title.trim(),
         category,
@@ -586,12 +577,27 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
         linkedArticleId: category === 'article_issue' ? linkedArticleId : null,
         linkedArticleTitle: (category === 'article_issue' && linkedArticle) ? linkedArticle.title : null,
         linkedArticleUrl: (category === 'article_issue' && linkedArticle) ? linkedArticle.url : null,
-        attachments,
+        attachments: [],
       };
 
-      const ticketLevel = isManagerCreating ? 2 : 1;
+      // 1. Créer le ticket d'abord pour obtenir l'ID réel
       const id = await createTicket({ ...ticketData, level: ticketLevel });
-      const newTicket = { id, ...ticketData, status: 'open', level: ticketLevel, commentCount: 0, createdAt: Date.now(), updatedAt: Date.now(), resolvedAt: null, closedAt: null };
+
+      // 2. Uploader les PJ avec le vrai ticketId → chemin définitif ticket-attachments/{id}/...
+      let attachments = [];
+      if (files.length > 0) {
+        const results = await Promise.allSettled(files.map(f => uploadTicketFile(id, f)));
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled') attachments.push(r.value);
+          else toast.error(`Échec upload : ${files[i].name}`);
+        });
+        // 3. Mettre à jour le doc Firestore avec les PJ si au moins une a réussi
+        if (attachments.length > 0) {
+          await updateTicketDoc(id, { attachments });
+        }
+      }
+
+      const newTicket = { id, ...ticketData, attachments, status: 'open', level: ticketLevel, commentCount: 0, createdAt: Date.now(), updatedAt: Date.now(), resolvedAt: null, closedAt: null };
 
       // CQ IA → notifie UNIQUEMENT l'assigné (le manager désigné)
       // Manager → notifie tous les super admins (ticket L2 sans assigné fixe)

@@ -327,7 +327,6 @@ export const createTicket = async (ticket) => {
   const ref = await addDoc(collection(db, 'tickets'), {
     ...ticket,
     status: 'open',
-    level: 1,
     commentCount: 0,
     createdAt: Date.now(),
     updatedAt: Date.now(),
