@@ -172,7 +172,7 @@ export default function MemberStatsPanel({ user, onClose }) {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50"
+        className="fixed inset-0 z-[200]"
         style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}
         onClick={e => e.target === e.currentTarget && onClose()}
       >
@@ -194,20 +194,28 @@ export default function MemberStatsPanel({ user, onClose }) {
             />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="font-bold text-gray-900 text-base">
-                  {user.firstName} {user.lastName}
+                <h2 className="font-bold text-gray-900 text-base leading-tight">
+                  {[user.firstName, user.lastName].filter(Boolean).join(' ')
+                    || user.username
+                    || user.email?.split('@')[0]
+                    || 'Membre'}
                 </h2>
-                <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${colors.badge}`}>
+                <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${colors.badge}`}>
                   {user.role === 'cq_ia' ? 'CQ IA' : 'Manager'}
                 </span>
                 {isActiveNow && (
-                  <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex-shrink-0">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                     Actif maintenant
                   </span>
                 )}
               </div>
-              <p className="text-xs text-gray-400 mt-0.5">{user.email}</p>
+              {user.email && (
+                <p className="text-xs text-gray-400 mt-0.5 truncate">{user.email}</p>
+              )}
+              {user.username && user.username !== user.email?.split('@')[0] && (
+                <p className="text-[11px] text-gray-300 mt-0.5">@{user.username}</p>
+              )}
             </div>
             <button onClick={onClose} className="btn-ghost !px-1.5 !py-1.5 flex-shrink-0">
               <X size={18} />
