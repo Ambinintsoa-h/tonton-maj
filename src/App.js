@@ -92,7 +92,6 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     ? parsed.firebaseConfig
     : DEFAULT_FIREBASE_CONFIG;
 
-  console.log('[firebase] Connexion au projet :', fbConfig.projectId);
 
   const ok = initFirebase(fbConfig);
   dispatch(setFirebaseReady(ok));
@@ -102,7 +101,6 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     return;
   }
 
-  console.log('[firebase] ✓ Connecté —', fbConfig.projectId);
 
   // Charger les données Firestore (ne remplace le localStorage que si Firestore a des données)
   try {
@@ -119,35 +117,28 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     if (skills.length > 0) {
       dispatch(setSkills(skills));
       localStorage.setItem(STORAGE_KEYS.skills, JSON.stringify(skills));
-      console.log(`[firebase] ${skills.length} skill(s) chargé(s)`);
     }
     if (articles.length > 0) {
       dispatch(setHistory(articles));
       localStorage.setItem(STORAGE_KEYS.history, JSON.stringify(articles));
-      console.log(`[firebase] ${articles.length} article(s) chargé(s)`);
     }
     if (sites.length > 0) {
       dispatch(setSites(sites));
       sessionStorage.setItem(STORAGE_KEYS.wpSites, JSON.stringify(sites));
-      console.log(`[firebase] ${sites.length} site(s) WP chargé(s)`);
     }
     if (users.length > 0) {
       dispatch(setUsers(users));
-      console.log(`[firebase] ${users.length} membre(s) d'équipe chargé(s)`);
     }
     if (pending.length > 0) {
       dispatch(setPending(pending));
       localStorage.setItem(STORAGE_KEYS.pending, JSON.stringify(pending));
-      console.log(`[firebase] ${pending.length} article(s) en attente chargé(s)`);
     }
     if (stats) {
       dispatch(setStats(stats));
-      console.log('[firebase] Statistiques chargées');
     }
     if (knowledge.length > 0) {
       dispatch(setKnowledge(knowledge));
       localStorage.setItem(STORAGE_KEYS.knowledge, JSON.stringify(knowledge));
-      console.log(`[firebase] ${knowledge.length} doc(s) de connaissance chargé(s)`);
     }
   } catch (e) {
     console.error('[firebase] Erreur chargement données :', e.message);
@@ -178,7 +169,6 @@ function SettingsLoader() {
               firebaseConfig: res.data.firebaseConfig,
             }));
           }
-          console.log('[settings] ✓ Paramètres équipe chargés depuis le serveur');
         }
       })
       .catch(() => {
@@ -203,7 +193,6 @@ function PricingLoader() {
       .then(res => {
         if (res.data?.pricing && Object.keys(res.data.pricing).length > 0) {
           dispatch(setSettings({ modelPricing: res.data.pricing }));
-          console.log('[pricing] ✓ Tarifs Anthropic chargés depuis LiteLLM');
         }
       })
       .catch(() => { /* Fallback silencieux — DEFAULT_MODEL_PRICING du store */ });
