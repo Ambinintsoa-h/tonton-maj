@@ -503,12 +503,23 @@ export const recordActivityAction = async (userId, date, actionType) => {
 
 /**
  * Sessions de TOUS les utilisateurs pour aujourd'hui — pour le dashboard super_admin.
+ * @deprecated Utiliser getActivitySessionsRange à la place
  */
-export const getTodayActivitySessions = async () => {
+export const getTodayActivitySessions = async () => getActivitySessionsRange(_localDate(), _localDate());
+
+/**
+ * Sessions de TOUS les utilisateurs sur une plage de dates (incluse).
+ * startDate / endDate : strings 'YYYY-MM-DD'
+ * Tri client-side (pas d'index composite nécessaire — range sur champ unique `date`).
+ */
+export const getActivitySessionsRange = async (startDate, endDate) => {
   if (!db) return [];
-  const today = _localDate();
-  const snap  = await getDocs(
-    query(collection(db, 'activity_sessions'), where('date', '==', today))
+  const snap = await getDocs(
+    query(
+      collection(db, 'activity_sessions'),
+      where('date', '>=', startDate),
+      where('date', '<=', endDate)
+    )
   );
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };

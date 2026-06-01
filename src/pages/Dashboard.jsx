@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
-  BarChart as RBarChart, Bar, AreaChart, Area,
+  BarChart as RBarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
 import {
@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { resetStats } from '../store/slices/statsSlice';
 import { ROLE_COLORS } from '../constants/theme';
-import { getTodayActivitySessions } from '../services/firebase';
+import { getActivitySessionsRange } from '../services/firebase';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt    = (n) => (n || 0).toLocaleString('fr-FR');
@@ -292,36 +292,130 @@ const fmtDuration = (min) => {
   return h === 0 ? `${m}min` : m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, '0')}`;
 };
 
+// ── Helpers date ─────────────────────────────────────────────────────────────
+const toDateStr = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const todayStr = () => toDateStr(new Date());
+
+const fmtTime = (ts) => {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}h${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+const PRESETS = [
+  { key: 'today',     label: "Aujourd'hui" },
+  { key: 'yesterday', label: 'Hier'        },
+  { key: 'week',      label: 'Semaine'     },
+  { key: 'month',     label: 'Mois'        },
+  { key: 'custom',    label: 'Période'     },
+];
+
+const presetRange = (key) => {
+  const now  = new Date();
+  const today = toDateStr(now);
+  if (key === 'today')     return { start: today, end: today };
+  if (key === 'yesterday') {
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    const s = toDateStr(y); return { start: s, end: s };
+  }
+  if (key === 'week') {
+    const day = now.getDay() || 7;
+    const mon = new Date(now); mon.setDate(now.getDate() - (day - 1));
+    return { start: toDateStr(mon), end: today };
+  }
+  if (key === 'month') {
+    return { start: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`, end: today };
+  }
+  return { start: today, end: today };
+};
+
 // ── Widget Activité équipe (super_admin uniquement) ───────────────────────────
 const TeamActivityWidget = ({ delay = 0 }) => {
-  const [sessions, setSessions] = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const ACTIVE_WINDOW = 10 * 60 * 1000; // 10 min
+  const [sessions,     setSessions]     = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [preset,       setPreset]       = useState('today');
+  const [customStart,  setCustomStart]  = useState(todayStr());
+  const [customEnd,    setCustomEnd]    = useState(todayStr());
 
+  const ACTIVE_WINDOW = 10 * 60 * 1000;
+
+  // Plage de dates active
+  const range = preset === 'custom'
+    ? { start: customStart, end: customEnd }
+    : presetRange(preset);
+
+  const isSingleDay = range.start === range.end;
+  const isToday     = range.start === todayStr() && isSingleDay;
+
+  // Chargement des sessions
   useEffect(() => {
-    getTodayActivitySessions()
+    if (!range.start || !range.end || range.start > range.end) return;
+    setLoading(true);
+    getActivitySessionsRange(range.start, range.end)
       .then(data => setSessions(data))
       .catch(() => setSessions([]))
       .finally(() => setLoading(false));
-  }, []);
+  }, [range.start, range.end]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const now           = Date.now();
-  const activeNow     = sessions.filter(s => s.lastActivityAt && (now - s.lastActivityAt) < ACTIVE_WINDOW);
-  const totalActions  = sessions.reduce((s, d) => s + (d.actions?.total || 0), 0);
-  const totalMin      = sessions.reduce((s, d) => s + (d.totalActiveMinutes || 0), 0);
+  const now = Date.now();
 
-  // Agrégation horaire équipe
+  // ── Agrégation par membre ────────────────────────────────────────────────────
+  const memberMap = {};
+  sessions.forEach(s => {
+    if (!memberMap[s.userId]) {
+      memberMap[s.userId] = {
+        userId: s.userId, userName: s.userName, userRole: s.userRole,
+        sessions: [],
+      };
+    }
+    memberMap[s.userId].sessions.push(s);
+  });
+
+  const rows = Object.values(memberMap).map(m => {
+    const sorted = [...m.sessions].sort((a, b) => a.date.localeCompare(b.date));
+    const latest = sorted[sorted.length - 1];
+    const totalActions     = m.sessions.reduce((s, d) => s + (d.actions?.total || 0), 0);
+    const totalMin         = m.sessions.reduce((s, d) => s + (d.totalActiveMinutes || 0), 0);
+    const totalPausesCount = m.sessions.reduce((s, d) => s + (d.pauses?.length || 0), 0);
+    const totalPauseMin    = m.sessions.reduce((s, d) =>
+      s + (d.pauses || []).reduce((a, p) => a + (p.end && p.start ? Math.round((p.end - p.start) / 60000) : 0), 0), 0);
+
+    return {
+      ...m,
+      daysActive:        m.sessions.length,
+      totalActions,
+      totalMin,
+      totalPausesCount,
+      totalPauseMin,
+      articlesUpdated:   m.sessions.reduce((s, d) => s + (d.actions?.articlesUpdated || 0), 0),
+      ticketsCreated:    m.sessions.reduce((s, d) => s + (d.actions?.ticketsCreated || 0), 0),
+      ticketsCommented:  m.sessions.reduce((s, d) => s + (d.actions?.ticketsCommented || 0), 0),
+      ticketsResolved:   m.sessions.reduce((s, d) => s + (d.actions?.ticketsResolved || 0), 0),
+      // Colonne "journée" : données de la session la plus récente de la plage
+      firstActivityAt:   sorted[0]?.firstActivityAt,
+      lastActivityAt:    latest?.lastActivityAt,
+      pauses:            isSingleDay ? (latest?.pauses || []) : [],
+      isActiveNow:       isToday && latest?.lastActivityAt && (now - latest.lastActivityAt) < ACTIVE_WINDOW,
+    };
+  }).sort((a, b) => b.totalActions - a.totalActions);
+
+  // KPIs globaux
+  const totalActions   = rows.reduce((s, r) => s + r.totalActions, 0);
+  const totalMin       = rows.reduce((s, r) => s + r.totalMin, 0);
+  const activeNowCount = rows.filter(r => r.isActiveNow).length;
+
+  // Chart horaire (mode journée uniquement)
   const teamHourly = Array.from({ length: 24 }, (_, h) => ({
-    heure: `${h}h`,
+    heure:    `${h}h`,
     activité: sessions.reduce((s, d) => s + (d.hourlyActivity?.[String(h)] || 0), 0),
   }));
 
-  // Leaderboard
-  const leaderboard = [...sessions]
-    .sort((a, b) => (b.actions?.total || 0) - (a.actions?.total || 0))
-    .slice(0, 5);
-
-  const maxActions = Math.max(...leaderboard.map(s => s.actions?.total || 0), 1);
+  // Étiquette de période
+  const periodLabel = preset === 'custom'
+    ? (customStart === customEnd ? customStart : `${customStart} → ${customEnd}`)
+    : PRESETS.find(p => p.key === preset)?.label;
 
   return (
     <motion.div
@@ -330,29 +424,70 @@ const TeamActivityWidget = ({ delay = 0 }) => {
       transition={{ delay }}
       className="glass-card p-6 space-y-5"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      {/* ── Header ── */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-gradient-to-br from-violet-500 to-indigo-600 rounded-xl flex items-center justify-center flex-shrink-0">
             <Activity size={18} className="text-white" />
           </div>
           <div>
-            <h2 className="font-bold text-gray-900 text-sm">Activité équipe — aujourd'hui</h2>
-            <p className="text-xs text-gray-400">Tracking en temps réel</p>
+            <h2 className="font-bold text-gray-900 text-sm">Activité équipe</h2>
+            <p className="text-xs text-gray-400">{periodLabel}</p>
           </div>
         </div>
-        {loading && (
-          <div className="w-4 h-4 border-2 border-gray-200 border-t-violet-500 rounded-full animate-spin" />
+        {loading && <div className="w-4 h-4 border-2 border-gray-200 border-t-violet-500 rounded-full animate-spin" />}
+      </div>
+
+      {/* ── Filtres rapides ── */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1 flex-wrap">
+          {PRESETS.map(p => (
+            <button
+              key={p.key}
+              onClick={() => setPreset(p.key)}
+              className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all flex-1 min-w-0 ${
+                preset === p.key
+                  ? 'bg-white shadow-sm text-gray-900'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Sélecteur de dates personnalisé */}
+        {preset === 'custom' && (
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={customStart}
+              max={customEnd}
+              onChange={e => setCustomStart(e.target.value)}
+              className="input-glass text-xs flex-1"
+            />
+            <span className="text-gray-400 text-xs font-medium flex-shrink-0">→</span>
+            <input
+              type="date"
+              value={customEnd}
+              min={customStart}
+              max={todayStr()}
+              onChange={e => setCustomEnd(e.target.value)}
+              className="input-glass text-xs flex-1"
+            />
+          </div>
         )}
       </div>
 
-      {/* KPIs rapides */}
+      {/* ── KPIs ── */}
       <div className="grid grid-cols-3 gap-3">
         <div className="bg-violet-50 rounded-xl px-4 py-3 text-center">
-          <p className="text-[11px] text-gray-400 font-medium uppercase mb-1">Actifs maintenant</p>
+          <p className="text-[11px] text-gray-400 font-medium uppercase mb-1">
+            {isToday ? 'Actifs maintenant' : 'Membres actifs'}
+          </p>
           <div className="flex items-center justify-center gap-1.5">
-            <span className={`w-2 h-2 rounded-full ${activeNow.length > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-gray-300'}`} />
-            <p className="text-2xl font-bold text-violet-700">{activeNow.length}</p>
+            {isToday && <span className={`w-2 h-2 rounded-full flex-shrink-0 ${activeNowCount > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-gray-300'}`} />}
+            <p className="text-2xl font-bold text-violet-700">{isToday ? activeNowCount : rows.length}</p>
           </div>
         </div>
         <div className="bg-indigo-50 rounded-xl px-4 py-3 text-center">
@@ -365,104 +500,186 @@ const TeamActivityWidget = ({ delay = 0 }) => {
         </div>
       </div>
 
-      {sessions.length === 0 && !loading ? (
+      {/* ── Vide ── */}
+      {rows.length === 0 && !loading && (
         <div className="text-center py-8 text-gray-400">
           <Activity size={32} className="mx-auto mb-2 opacity-25" />
-          <p className="text-sm">Aucune activité enregistrée aujourd'hui</p>
+          <p className="text-sm">Aucune activité sur cette période</p>
           <p className="text-xs mt-1 text-gray-300">Le tracking démarre dès qu'un membre se connecte</p>
         </div>
-      ) : sessions.length > 0 && (
+      )}
+
+      {rows.length > 0 && (
         <>
-          {/* Membres actifs maintenant */}
-          {activeNow.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold text-emerald-500 uppercase tracking-widest">Connectés maintenant</p>
-              <div className="flex flex-wrap gap-2">
-                {activeNow.map(s => {
-                  const sinceMin = Math.round((now - s.lastActivityAt) / 60000);
-                  return (
-                    <div key={s.id} className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-xs font-semibold text-gray-700">{s.userName}</span>
-                      <span className="text-[10px] text-gray-400">
-                        {sinceMin === 0 ? 'à l\'instant' : `il y a ${sinceMin}min`}
-                      </span>
-                    </div>
-                  );
-                })}
+          {/* ── Actifs maintenant (today seulement) ── */}
+          {isToday && activeNowCount > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {rows.filter(r => r.isActiveNow).map(r => {
+                const sinceMin = Math.round((now - r.lastActivityAt) / 60000);
+                return (
+                  <div key={r.userId} className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-xs font-semibold text-gray-700">{r.userName}</span>
+                    <span className="text-[10px] text-gray-400">
+                      {sinceMin === 0 ? "à l'instant" : `il y a ${sinceMin}min`}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── Chart horaire (journée seulement) ── */}
+          {isSingleDay && (
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Activité horaire équipe</p>
+              <div className="h-24">
+                <ResponsiveContainer width="100%" height="100%">
+                  <RBarChart data={teamHourly} barCategoryGap="25%">
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                    <XAxis dataKey="heure" tick={{ fontSize: 9, fill: '#9ca3af' }} axisLine={false} tickLine={false} interval={3} />
+                    <YAxis hide />
+                    <Tooltip content={<DashTooltip />} cursor={{ fill: '#f5f3ff' }} />
+                    <Bar dataKey="activité" fill="#8b5cf6" radius={[2, 2, 0, 0]} />
+                  </RBarChart>
+                </ResponsiveContainer>
               </div>
             </div>
           )}
 
-          {/* Graphique activité horaire équipe */}
-          <div className="space-y-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Activité horaire (équipe)</p>
-            <div className="h-28">
-              <ResponsiveContainer width="100%" height="100%">
-                <RBarChart data={teamHourly} barCategoryGap="25%">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-                  <XAxis
-                    dataKey="heure"
-                    tick={{ fontSize: 9, fill: '#9ca3af' }}
-                    axisLine={false}
-                    tickLine={false}
-                    interval={3}
-                  />
-                  <YAxis hide />
-                  <Tooltip content={<DashTooltip />} cursor={{ fill: '#f5f3ff' }} />
-                  <Bar dataKey="activité" fill="#8b5cf6" radius={[2, 2, 0, 0]} />
-                </RBarChart>
-              </ResponsiveContainer>
+          {/* ── Tableau par membre ── */}
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+              <Award size={11} className="text-amber-500" />
+              Détail par membre
+            </p>
+            <div className="overflow-x-auto -mx-2">
+              <table className="w-full text-xs min-w-[640px]">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-left">Membre</th>
+                    {!isSingleDay && <th className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-center">Jours</th>}
+                    {isSingleDay  && <th className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-center">Début</th>}
+                    {isSingleDay  && <th className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-center">Fin</th>}
+                    <th className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-center">Actif</th>
+                    <th className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-center">Actions</th>
+                    <th className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-center">Articles</th>
+                    <th className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-center">Tickets</th>
+                    <th className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-center">Pauses</th>
+                    {isToday && <th className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-center">Statut</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {rows.map((r, idx) => {
+                    const roleCls = r.userRole === 'cq_ia'
+                      ? 'bg-blue-50 text-blue-600'
+                      : 'bg-purple-50 text-purple-600';
+                    const ticketsTotal = r.ticketsCreated + r.ticketsCommented + r.ticketsResolved;
+                    return (
+                      <tr key={r.userId} className="hover:bg-gray-50/60 transition-colors">
+                        {/* Membre */}
+                        <td className="py-2.5 px-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-5 h-5 rounded-full text-[9px] font-bold flex items-center justify-center flex-shrink-0 border ${
+                              idx === 0 ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-gray-100 text-gray-500 border-gray-200'
+                            }`}>{idx + 1}</span>
+                            <div className="min-w-0">
+                              <p className="font-semibold text-gray-800 truncate max-w-[120px]">{r.userName}</p>
+                              <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${roleCls}`}>
+                                {r.userRole === 'cq_ia' ? 'CQ IA' : 'Manager'}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Jours actifs (multi-day) */}
+                        {!isSingleDay && (
+                          <td className="py-2.5 px-2 text-center">
+                            <span className="font-bold text-gray-700">{r.daysActive}</span>
+                          </td>
+                        )}
+
+                        {/* Début (single day) */}
+                        {isSingleDay && (
+                          <td className="py-2.5 px-2 text-center font-mono text-gray-600">
+                            {fmtTime(r.firstActivityAt)}
+                          </td>
+                        )}
+
+                        {/* Fin (single day) */}
+                        {isSingleDay && (
+                          <td className="py-2.5 px-2 text-center font-mono text-gray-600">
+                            {r.isActiveNow
+                              ? <span className="flex items-center justify-center gap-1 text-emerald-600 font-semibold">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                  En cours
+                                </span>
+                              : fmtTime(r.lastActivityAt)
+                            }
+                          </td>
+                        )}
+
+                        {/* Temps actif */}
+                        <td className="py-2.5 px-2 text-center">
+                          <span className="font-semibold text-emerald-600">{fmtDuration(r.totalMin)}</span>
+                        </td>
+
+                        {/* Actions total */}
+                        <td className="py-2.5 px-2 text-center">
+                          <span className="font-bold text-gray-900">{r.totalActions}</span>
+                        </td>
+
+                        {/* Articles */}
+                        <td className="py-2.5 px-2 text-center">
+                          <span className={`font-semibold ${r.articlesUpdated > 0 ? 'text-blue-600' : 'text-gray-300'}`}>
+                            {r.articlesUpdated}
+                          </span>
+                        </td>
+
+                        {/* Tickets (créés + commentés + résolus) */}
+                        <td className="py-2.5 px-2 text-center">
+                          {ticketsTotal > 0 ? (
+                            <div className="flex items-center justify-center gap-1">
+                              <span className="font-semibold text-amber-600">{ticketsTotal}</span>
+                              <span className="text-[9px] text-gray-400">
+                                ({r.ticketsCreated}+{r.ticketsCommented}+{r.ticketsResolved})
+                              </span>
+                            </div>
+                          ) : <span className="text-gray-300">—</span>}
+                        </td>
+
+                        {/* Pauses */}
+                        <td className="py-2.5 px-2 text-center">
+                          {r.totalPausesCount > 0 ? (
+                            <span className="text-amber-600 font-medium">
+                              {r.totalPausesCount}×{isSingleDay && r.totalPauseMin > 0 ? ` (${fmtDuration(r.totalPauseMin)})` : ''}
+                            </span>
+                          ) : <span className="text-gray-300">—</span>}
+                        </td>
+
+                        {/* Statut temps réel (today seulement) */}
+                        {isToday && (
+                          <td className="py-2.5 px-2 text-center">
+                            {r.isActiveNow ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />Actif
+                              </span>
+                            ) : r.lastActivityAt ? (
+                              <span className="text-[10px] text-gray-400">
+                                {fmtTime(r.lastActivityAt)}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-gray-300">—</span>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
-
-          {/* Leaderboard */}
-          {leaderboard.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
-                <Award size={11} className="text-amber-500" />Classement du jour
-              </p>
-              <div className="space-y-2">
-                {leaderboard.map((s, i) => {
-                  const actions = s.actions?.total || 0;
-                  const pct = Math.round((actions / maxActions) * 100);
-                  const badgeCls = i === 0
-                    ? 'bg-amber-100 text-amber-700 border-amber-200'
-                    : 'bg-gray-100 text-gray-500 border-gray-200';
-                  return (
-                    <div key={s.id} className="flex items-center gap-3">
-                      <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${badgeCls}`}>
-                        {i + 1}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between mb-0.5">
-                          <div className="flex items-center gap-1.5">
-                            <p className="text-xs font-semibold text-gray-800 truncate">{s.userName}</p>
-                            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${
-                              s.userRole === 'cq_ia'
-                                ? 'bg-blue-50 text-blue-600'
-                                : 'bg-purple-50 text-purple-600'
-                            }`}>
-                              {s.userRole === 'cq_ia' ? 'CQ' : 'Mgr'}
-                            </span>
-                          </div>
-                          <span className="text-xs font-bold text-gray-700 tabular-nums">{actions}</span>
-                        </div>
-                        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all ${
-                              s.userRole === 'cq_ia' ? 'bg-blue-400' : 'bg-purple-400'
-                            }`}
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </>
       )}
     </motion.div>
