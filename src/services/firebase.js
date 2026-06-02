@@ -440,30 +440,51 @@ const _localDate = () => {
 };
 
 /**
- * Crée ou met à jour (merge) le document de session du jour.
- * setDoc + merge: true → ne remplace pas les champs existants.
+ * Crée le document de session du jour OU enregistre une reconnexion.
+ *
+ * CRÉATION (première activité du jour) :
+ *   - setDoc complet avec firstActivityAt, connections[0]
+ *
+ * RECONNEXION (document déjà existant) :
+ *   - NE JAMAIS écraser firstActivityAt
+ *   - Ajouter la reconnexion dans connections[] via arrayUnion
+ *
+ * Structure connections[] : [{at: timestamp}] — une entrée par connexion du jour.
+ * Permet de déduire les périodes hors-ligne (gap entre lastActivityAt et connections[n].at).
  */
 export const saveActivitySession = async (data) => {
   if (!db) return;
-  const docId = `${data.userId}_${data.date}`;
-  await setDoc(doc(db, 'activity_sessions', docId), {
-    userId:             data.userId,
-    userRole:           data.userRole,
-    userName:           data.userName,
-    date:               data.date,
-    firstActivityAt:    data.firstActivityAt,
-    lastActivityAt:     data.lastActivityAt,
-    totalActiveMinutes: 0,
-    pauses:             [],
-    hourlyActivity:     {},
-    actions: {
-      articlesUpdated:  0,
-      ticketsCreated:   0,
-      ticketsCommented: 0,
-      ticketsResolved:  0,
-      total:            0,
-    },
-  }, { merge: true });
+  const ref  = doc(db, 'activity_sessions', `${data.userId}_${data.date}`);
+  const snap = await getDoc(ref);
+
+  if (!snap.exists()) {
+    // Première connexion du jour → créer le document complet
+    await setDoc(ref, {
+      userId:             data.userId,
+      userRole:           data.userRole,
+      userName:           data.userName,
+      date:               data.date,
+      firstActivityAt:    data.firstActivityAt,
+      lastActivityAt:     data.lastActivityAt,
+      totalActiveMinutes: 0,
+      pauses:             [],
+      connections:        [{ at: data.firstActivityAt }],
+      hourlyActivity:     {},
+      actions: {
+        articlesUpdated:  0,
+        ticketsCreated:   0,
+        ticketsCommented: 0,
+        ticketsResolved:  0,
+        total:            0,
+      },
+    });
+  } else {
+    // Reconnexion — firstActivityAt préservé, reconnexion ajoutée à l'historique
+    await updateDoc(ref, {
+      lastActivityAt: data.lastActivityAt,
+      connections:    arrayUnion({ at: data.firstActivityAt }),
+    });
+  }
 };
 
 /**

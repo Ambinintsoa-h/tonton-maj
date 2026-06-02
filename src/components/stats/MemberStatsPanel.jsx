@@ -59,6 +59,49 @@ const ChartTooltip = ({ active, payload, label }) => {
   );
 };
 
+/**
+ * Construit la liste ordonnée de segments à partir de connections[], pauses[] et lastActivityAt.
+ *
+ * Types de segments :
+ *   'active'  → vert   : période d'utilisation active du SaaS
+ *   'pause'   → gris   : inactivité > 10 min sans fermer le navigateur
+ *   'offline' → ardoise: navigateur fermé (gap entre lastActivityAt et reconnexion suivante)
+ */
+const buildSegments = (session) => {
+  const connections = [...(session.connections || [{ at: session.firstActivityAt }])]
+    .filter(c => c?.at)
+    .sort((a, b) => a.at - b.at);
+
+  const pauses  = [...(session.pauses || [])].filter(p => p.start && p.end).sort((a, b) => a.start - b.start);
+  const lastAct = session.lastActivityAt || Date.now();
+  const segments = [];
+
+  connections.forEach((conn, i) => {
+    const connStart = conn.at;
+    // Fin de cette période de connexion = début de la prochaine reconnexion (ou lastActivityAt pour la dernière)
+    const connEnd   = i < connections.length - 1 ? connections[i + 1].at : lastAct;
+
+    // Pauses incluses dans cette période de connexion
+    const periodPauses = pauses.filter(p => p.start >= connStart && p.start < connEnd);
+    let cursor = connStart;
+
+    periodPauses.forEach(p => {
+      if (p.start > cursor) segments.push({ type: 'active',  start: cursor,  end: p.start });
+      segments.push({ type: 'pause', start: p.start, end: p.end });
+      cursor = Math.max(cursor, p.end);
+    });
+
+    if (cursor < connEnd) segments.push({ type: 'active', start: cursor, end: connEnd });
+
+    // Période hors-ligne entre cette connexion et la suivante
+    if (i < connections.length - 1) {
+      segments.push({ type: 'offline', start: connEnd, end: connections[i + 1].at });
+    }
+  });
+
+  return segments;
+};
+
 // ── Barre de timeline visuelle ────────────────────────────────────────────────
 function TimelineBar({ session }) {
   if (!session?.firstActivityAt) return (
@@ -67,47 +110,50 @@ function TimelineBar({ session }) {
     </div>
   );
 
-  const start = session.firstActivityAt;
-  const end   = session.lastActivityAt || Date.now();
-  const total = end - start;
+  const start    = session.firstActivityAt;
+  const end      = session.lastActivityAt || Date.now();
+  const total    = end - start;
   if (total <= 0) return null;
 
-  const pauses = (session.pauses || []).filter(p => p.start && p.end);
+  const segments = buildSegments(session);
 
-  // Convertir en segments colorés
-  const segments = [];
-  let cursor = start;
-  const sortedPauses = [...pauses].sort((a, b) => a.start - b.start);
+  const segColor = {
+    active:  'bg-emerald-400',
+    pause:   'bg-amber-200',
+    offline: 'bg-gray-400',
+  };
 
-  sortedPauses.forEach(p => {
-    if (p.start > cursor) {
-      segments.push({ type: 'active', start: cursor, end: p.start });
-    }
-    segments.push({ type: 'pause', start: p.start, end: p.end });
-    cursor = p.end;
-  });
-  if (cursor < end) segments.push({ type: 'active', start: cursor, end });
+  const reconnections = (session.connections || []).length - 1;
 
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center gap-1.5 h-5 rounded-lg overflow-hidden">
+      <div className="flex items-center h-5 rounded-lg overflow-hidden gap-px">
         {segments.map((seg, i) => {
           const width = ((seg.end - seg.start) / total) * 100;
+          const label = seg.type === 'offline'
+            ? `Hors-ligne ${fmtTime(seg.start)} → ${fmtTime(seg.end)}`
+            : seg.type === 'pause'
+            ? `Pause ${fmtTime(seg.start)} → ${fmtTime(seg.end)}`
+            : `Actif ${fmtTime(seg.start)} → ${fmtTime(seg.end)}`;
           return (
             <div
               key={i}
-              title={`${fmtTime(seg.start)} → ${fmtTime(seg.end)}`}
-              className={`h-full rounded-sm ${seg.type === 'active' ? 'bg-emerald-400' : 'bg-gray-200'}`}
-              style={{ width: `${Math.max(width, 0.5)}%` }}
+              title={label}
+              className={`h-full ${segColor[seg.type]} ${seg.type === 'offline' ? 'opacity-50' : ''}`}
+              style={{ width: `${Math.max(width, 0.3)}%`, flexShrink: 0 }}
             />
           );
         })}
       </div>
       <div className="flex justify-between text-[10px] text-gray-400">
         <span>{fmtTime(start)}</span>
-        <span className="flex items-center gap-3">
+        <span className="flex items-center gap-3 flex-wrap justify-center">
           <span className="flex items-center gap-1"><span className="w-2 h-2 bg-emerald-400 rounded-sm inline-block" />Actif</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 bg-gray-200 rounded-sm inline-block" />Pause</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 bg-amber-200 rounded-sm inline-block" />Pause</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 bg-gray-400 opacity-50 rounded-sm inline-block" />Hors-ligne</span>
+          {reconnections > 0 && (
+            <span className="text-indigo-400 font-semibold">{reconnections} reconnexion{reconnections > 1 ? 's' : ''}</span>
+          )}
         </span>
         <span>{fmtTime(end)}</span>
       </div>
@@ -156,12 +202,32 @@ export default function MemberStatsPanel({ user, onClose }) {
     minutes: s.totalActiveMinutes || 0,
   }));
 
-  // ── Pauses de la session courante ──
+  // ── Pauses (inactivité) de la session courante ──
   const pauses = (currentSession?.pauses || [])
     .filter(p => p.start && p.end)
     .sort((a, b) => a.start - b.start);
 
   const totalPauseMin = pauses.reduce((acc, p) => acc + Math.round((p.end - p.start) / 60000), 0);
+
+  // ── Périodes hors-ligne (fermeture navigateur = gap entre connexions) ──
+  const connections  = [...(currentSession?.connections || [])].filter(c => c?.at).sort((a, b) => a.at - b.at);
+  const offlineGaps  = connections.slice(1).map((c, i) => ({
+    start: connections[i].at + (currentSession?.lastActivityAt && i === connections.length - 2
+      ? 0 : 0), // lastActivityAt avant reconnexion = fin de la période précédente
+    end:   c.at,
+    // Approximation : offline commence à lastActivityAt (avant reco) ou à connections[i].at
+  }));
+  // Calcul plus précis : pour chaque reconnexion, la période offline = gap entre segments précédents
+  const offlinePeriods = connections.slice(1).map((c, i) => {
+    // Fin de la période précédente = dernier heartbeat avant cette reconnexion
+    // On l'approxime avec les segments de la timeline
+    const segs = currentSession ? buildSegments(currentSession) : [];
+    const prevActive = segs.filter(s => s.type !== 'offline' && s.end <= c.at).sort((a,b) => b.end - a.end)[0];
+    return { start: prevActive?.end || connections[i].at, end: c.at };
+  }).filter(p => p.end - p.start > 60000); // ignorer < 1 min
+
+  const totalOfflineMin = offlinePeriods.reduce((acc, p) => acc + Math.round((p.end - p.start) / 60000), 0);
+  const reconnections   = connections.length - 1;
 
   // ── Statut actif maintenant ──
   const isActiveNow = currentSession?.lastActivityAt
@@ -301,7 +367,10 @@ export default function MemberStatsPanel({ user, onClose }) {
                         },
                         {
                           icon: Coffee, label: 'Pauses',
-                          value: pauses.length > 0 ? `${pauses.length} (${fmtDuration(totalPauseMin)})` : '—',
+                          value: pauses.length > 0
+                            ? `${pauses.length} (${fmtDuration(totalPauseMin)})`
+                            : reconnections > 0 ? '—' : '—',
+                          sub: reconnections > 0 ? `${reconnections} reconnexion${reconnections > 1 ? 's' : ''}` : null,
                           color: 'text-amber-700', bg: 'bg-amber-50',
                         },
                         {
@@ -315,6 +384,7 @@ export default function MemberStatsPanel({ user, onClose }) {
                           <k.icon size={14} className={`mx-auto mb-1 ${k.color}`} />
                           <p className={`text-xl font-bold ${k.color} leading-none`}>{k.value}</p>
                           <p className="text-[10px] text-gray-400 mt-1">{k.label}</p>
+                          {k.sub && <p className="text-[9px] text-indigo-400 font-semibold mt-0.5">{k.sub}</p>}
                         </div>
                       ))}
                     </div>
@@ -373,24 +443,47 @@ export default function MemberStatsPanel({ user, onClose }) {
                       </div>
                     </div>
 
-                    {/* Pauses détaillées */}
-                    {pauses.length > 0 && (
+                    {/* Pauses (inactivité) + Hors-ligne (fermeture navigateur) */}
+                    {(pauses.length > 0 || offlinePeriods.length > 0) && (
                       <div className="space-y-2">
                         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                          Pauses ({fmtDuration(totalPauseMin)} total)
+                          Absences
+                          {(totalPauseMin + totalOfflineMin) > 0 && ` — ${fmtDuration(totalPauseMin + totalOfflineMin)} total`}
                         </p>
                         <div className="space-y-1.5">
+                          {/* Pauses inactivité */}
                           {pauses.map((p, i) => {
                             const dur = Math.round((p.end - p.start) / 60000);
                             return (
-                              <div key={i} className="flex items-center justify-between bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                              <div key={`pause-${i}`} className="flex items-center justify-between bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
                                 <div className="flex items-center gap-2">
                                   <Coffee size={12} className="text-amber-500" />
-                                  <span className="text-xs text-gray-700 font-medium">
-                                    {fmtTime(p.start)} → {fmtTime(p.end)}
-                                  </span>
+                                  <div>
+                                    <span className="text-xs text-gray-700 font-medium">
+                                      {fmtTime(p.start)} → {fmtTime(p.end)}
+                                    </span>
+                                    <span className="ml-2 text-[10px] text-amber-500">Inactivité</span>
+                                  </div>
                                 </div>
                                 <span className="text-xs font-semibold text-amber-700">{fmtDuration(dur)}</span>
+                              </div>
+                            );
+                          })}
+                          {/* Périodes hors-ligne (navigateur fermé) */}
+                          {offlinePeriods.map((p, i) => {
+                            const dur = Math.round((p.end - p.start) / 60000);
+                            return (
+                              <div key={`offline-${i}`} className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-3 h-3 rounded-sm bg-gray-400 opacity-60 flex-shrink-0" />
+                                  <div>
+                                    <span className="text-xs text-gray-700 font-medium">
+                                      {fmtTime(p.start)} → {fmtTime(p.end)}
+                                    </span>
+                                    <span className="ml-2 text-[10px] text-gray-400">Hors-ligne</span>
+                                  </div>
+                                </div>
+                                <span className="text-xs font-semibold text-gray-500">{fmtDuration(dur)}</span>
                               </div>
                             );
                           })}
