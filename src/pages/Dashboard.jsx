@@ -298,6 +298,7 @@ const toDateStr = (d) =>
 
 const todayStr = () => toDateStr(new Date());
 
+// new Date(ts) convertit automatiquement UTC → heure locale du super_admin
 const fmtTime = (ts) => {
   if (!ts) return '—';
   const d = new Date(ts);
@@ -396,6 +397,7 @@ const TeamActivityWidget = ({ delay = 0 }) => {
       // Colonne "journée" : données de la session la plus récente de la plage
       firstActivityAt:   sorted[0]?.firstActivityAt,
       lastActivityAt:    latest?.lastActivityAt,
+
       pauses:            isSingleDay ? (latest?.pauses || []) : [],
       isActiveNow:       isToday && latest?.lastActivityAt && (now - latest.lastActivityAt) < ACTIVE_WINDOW,
     };

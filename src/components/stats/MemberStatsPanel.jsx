@@ -12,6 +12,8 @@ import { getUserActivitySessions } from '../../services/firebase';
 import { AccountAvatar } from '../account/MonComptePanel';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+// Convertit un timestamp UTC en heure locale du viewer (super_admin)
+// new Date(ts) gère automatiquement le timezone de l'appareil du super_admin
 const fmtTime = (ts) => {
   if (!ts) return '—';
   const d = new Date(ts);

@@ -126,12 +126,13 @@ class ActivityTracker {
   _createSession(now) {
     this._initializing = true;
     saveActivitySession({
-      userId:          this._uid,
-      userRole:        this._role,
-      userName:        this._name,
-      date:            this._today,
-      firstActivityAt: now,
-      lastActivityAt:  now,
+      userId:           this._uid,
+      userRole:         this._role,
+      userName:         this._name,
+      date:             this._today,
+      firstActivityAt:  now,
+      lastActivityAt:   now,
+
     })
       .then(() => {
         this._ready        = true;
