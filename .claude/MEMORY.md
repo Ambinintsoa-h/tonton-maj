@@ -2,6 +2,7 @@
 
 ## Index
 - [Règles comportementales](#règles-comportementales) — Instructions permanentes de l'utilisateur
+- [Workflow Git / Déploiement](#workflow-git--déploiement) — ⚠️ Règles commit/push CRITIQUES
 - [Architecture technique](#architecture-technique) — Stack, déploiement, structure
 - [Rôles et sécurité](#rôles-et-sécurité) — Système de rôles, auth, JWT
 - [Fonctionnalités implémentées](#fonctionnalités-implémentées) — État complet du SaaS
@@ -23,10 +24,40 @@
 
 ---
 
+## Workflow Git / Déploiement
+
+> ⚠️ **CRITIQUE — lire avant tout commit ou PR**
+
+### Règle absolue : push direct sur `main`
+Ce repo utilise un **workflow push direct sur `main`** — PAS de branches feature, PAS de PR classiques.
+
+```bash
+git add <fichiers>
+git commit -m "message"
+git push origin main   # → GitHub Actions déploie automatiquement sur maj.stomos.net
+```
+
+### Quand `/create-pr-command` est demandé
+- **NE PAS** réinitialiser `main` via l'API GitHub (`PATCH /git/refs/heads/main`) — ça casse le CI/CD
+- **Faire** : commit + push sur main, puis fournir l'URL du commit :
+  `https://github.com/Ambinintsoa-h/tonton-maj/commit/{SHA}`
+- Les PRs GitHub ne sont pas adaptées à ce workflow — le code est déjà déployé avant qu'une PR puisse être créée
+
+### Pourquoi le reset de main casse tout
+GitHub Actions écoute les push sur `main`. Si on force-reset `main` à un commit antérieur via l'API GitHub pour créer un diff de PR, le CI/CD redéploie l'ancienne version en production.
+
+### Token GitHub disponible (en session)
+```
+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
+```
+Récupéré avec : `printf "protocol=https\nhost=github.com\n" | git credential fill`
+
+---
+
 ## Architecture technique
 
 ### Stack
-- **Frontend** : React 19 + Redux Toolkit + React Router v7 + Framer Motion + Tailwind CSS
+- **Frontend** : React 19 + Redux Toolkit + React Router v7 + Framer Motion + Tailwind CSS + **Recharts** (charts)
 - **Backend** : Express proxy (`proxy.js`) — Node.js, JWT, Firebase Admin SDK v13
 - **Base de données** : Firebase Firestore + Firebase Storage (Firebase v12 client)
 - **Auth** : JWT interne + Firebase Auth (pour manager/cq_ia) + admin local (super_admin)
@@ -117,9 +148,37 @@
 - Real-time Firestore onSnapshot
 
 ### Dashboard (3 vues)
-- **super_admin** : CostWidget global + KPIs équipe + tableau productivité
+- **super_admin** : CostWidget global + KPIs équipe + tableau productivité + **TeamActivityWidget** (tracking)
 - **manager** : KPIs équipe + CQ IA performance
 - **cq_ia** : Stats personnelles (filtré par assigneeId)
+
+### Tracking activité (invisible — manager/cq_ia uniquement)
+Système 100% transparent côté manager/cq_ia. Visible uniquement par le super_admin.
+
+**`src/services/activityTracker.js`** — singleton initialisé dans App.js :
+- Heartbeat Firestore toutes les **2 min** si activité détectée
+- **Pause** détectée après **10 min** sans activité (souris/clavier/scroll)
+- `trackAction(type)` appelé depuis Articles.jsx et Tickets.jsx pour compter les actions métier
+- `init(uid, role, name)` → appelé uniquement pour roles `manager` et `cq_ia`
+- `destroy()` → appelé au logout (useEffect cleanup)
+
+**Dashboard super_admin — `TeamActivityWidget`** :
+- Filtres : Aujourd'hui / Hier / Semaine / Mois / Période personnalisée (date pickers)
+- Tableau par membre : Début · Fin · Temps actif · Actions · Articles · Tickets · Pauses · Statut live
+- Actifs maintenant : badge vert animé si `lastActivityAt < 10 min`
+- Heure affichée dans **le timezone du super_admin** (`new Date(ts)` = local automatique)
+
+**Page Équipe — `MemberStatsPanel`** (slide depuis la droite) :
+- Clic sur une carte membre (super_admin seulement, rôle manager ou cq_ia)
+- Vue "Par jour" : KPIs + Timeline + Chart horaire + Absences
+- Vue "7 derniers jours" : AreaChart + BarChart + tableau détaillé
+- Absences = pauses inactivité (jaune) + périodes hors-ligne/navigateur fermé (gris)
+
+**Actions métier trackées** :
+- `articlesUpdated` → Articles.jsx, après traitement complet
+- `ticketsCreated` → Tickets.jsx, après `createTicket()`
+- `ticketsCommented` → Tickets.jsx, après `addComment()`
+- `ticketsResolved` → Tickets.jsx, dans `handleResolve()`
 
 ### Mon compte
 - Photo de profil (upload → Firebase Storage → base64 data URL)
@@ -161,6 +220,47 @@
 | `tickets` | Tickets du système de ticketing |
 | `ticket_comments` | Commentaires des tickets |
 | `notifications` | Notifications in-app |
+| `activity_sessions` | **Tracking activité** — 1 doc par user par jour |
+
+### Collection `activity_sessions`
+**ID doc** : `{userId}_{YYYY-MM-DD}` (ex: `abc123_2026-06-02`)
+
+```js
+{
+  userId:             string,
+  userName:           string,
+  userRole:           'manager' | 'cq_ia',
+  date:               string,          // 'YYYY-MM-DD' locale du membre
+  firstActivityAt:    number,          // ⚠️ JAMAIS écrasé après création
+  lastActivityAt:     number,          // mis à jour à chaque heartbeat
+  totalActiveMinutes: number,          // incrémenté de +2 à chaque heartbeat actif
+  connections: [{ at: number }],       // une entrée par connexion du jour (reconnexions incluses)
+  pauses: [{ start: number, end: number }],  // inactivité > 10 min (navigateur ouvert)
+  hourlyActivity: { "8": 5, "14": 12 },     // clé = heure locale du membre
+  actions: {
+    articlesUpdated:  number,
+    ticketsCreated:   number,
+    ticketsCommented: number,
+    ticketsResolved:  number,
+    total:            number,
+  }
+}
+```
+
+**Règle critique** : `saveActivitySession` fait un `getDoc` avant écriture :
+- Doc inexistant → `setDoc` complet (firstActivityAt + connections[0])
+- Doc existant → `updateDoc` uniquement (firstActivityAt JAMAIS écrasé)
+
+**Périodes hors-ligne** : déduites des gaps entre `connections[i].at` précédent et `connections[i+1].at`.
+
+**Requêtes** :
+```js
+// Range de dates (pas d'index composite — range sur champ unique `date`)
+getActivitySessionsRange(startDate, endDate)  // where date >= X AND date <= Y
+
+// Sessions d'un user (champ unique userId)
+getUserActivitySessions(userId, days)          // where userId == X, tri client-side
+```
 
 ### Règles importantes
 - **Pas de `where` + `orderBy` sur champs différents** sans index composite → tri client-side
@@ -186,31 +286,35 @@ docs.sort((a, b) => b.createdAt - a.createdAt);
 article-updater/
 ├── proxy.js                          ← Backend Express complet (1800+ lignes)
 ├── src/
-│   ├── App.js                        ← Routes + Bootstrap Firebase + Loaders
+│   ├── App.js                        ← Routes + Bootstrap Firebase + ActivityTrackerInit
 │   ├── store/
 │   │   ├── index.js                  ← Store Redux + persistMiddleware
 │   │   └── slices/
-│   │       ├── authSlice.js          ← Auth + decodeJwt au refresh
+│   │       ├── authSlice.js          ← Auth + decodeJwt (uid, username, role, prenom, nom)
 │   │       ├── settingsSlice.js      ← DEFAULT_MODEL_PRICING
 │   │       ├── ticketsSlice.js       ← Tickets Redux
 │   │       └── notificationsSlice.js ← Notifications Redux
 │   ├── services/
-│   │   ├── firebase.js               ← Toutes les fonctions Firestore + Storage
+│   │   ├── firebase.js               ← Toutes les fonctions Firestore + Storage + activity_sessions
+│   │   ├── activityTracker.js        ← Singleton tracking invisible (manager/cq_ia)
 │   │   ├── agent.js                  ← runAgent / runReviewAgent (search proxifié)
 │   │   └── search.js                 ← searchWeb → /api/brave, /api/tavily, /api/searxng
 │   ├── pages/
-│   │   ├── Tickets.jsx               ← Ticketing complet (1100+ lignes)
-│   │   ├── Dashboard.jsx             ← 3 vues selon rôle
-│   │   ├── Equipe.jsx                ← Gestion équipe
+│   │   ├── Tickets.jsx               ← Ticketing complet + trackAction
+│   │   ├── Dashboard.jsx             ← 3 vues + TeamActivityWidget (super_admin)
+│   │   ├── Equipe.jsx                ← Gestion équipe + clic membre → MemberStatsPanel
+│   │   ├── Articles.jsx              ← MAJ articles + trackAction('articlesUpdated')
 │   │   └── ResetPassword.jsx         ← Page reset MDP branded
 │   └── components/
 │       ├── layout/
-│       │   ├── Header.jsx            ← Cloche notifs + profil
+│       │   ├── Header.jsx            ← Cloche notifs + profil (zIndex: 100 ⚠️)
 │       │   └── Sidebar.jsx           ← Nav + badges
 │       ├── account/
 │       │   └── MonComptePanel.jsx    ← AccountAvatar (exporté) + profil + 2FA
-│       └── notifications/
-│           └── NotificationPanel.jsx ← Dropdown notifications
+│       ├── notifications/
+│       │   └── NotificationPanel.jsx ← Dropdown notifications
+│       └── stats/
+│           └── MemberStatsPanel.jsx  ← Slide panel stats membre (z-index: 200)
 ├── data/                             ← Gitignorés (settings.json, 2fa/, profiles/)
 │   ├── settings.json                 ← Clés API équipe (Anthropic, Groq, Brave, Tavily, SMTP)
 │   ├── firebase-service-account.json ← Service account Firebase Admin
@@ -219,6 +323,8 @@ article-updater/
 └── public/
     └── tonton.jpg                    ← Avatar TONTON AI (favicon généré via canvas)
 ```
+
+> ⚠️ **Header zIndex: 100** — tout overlay doit utiliser `z-[200]` minimum pour passer au-dessus.
 
 ---
 
@@ -230,22 +336,28 @@ article-updater/
 
 ---
 
-## État actuel — dernière session (29 mai 2026)
+## État actuel — dernière session (2 juin 2026)
 
-### Derniers commits
+### Commits récents (session tracking)
+- `9fee628` — fix: préserver firstActivityAt + tracker reconnexions journée
+- `6468334` — fix: timezone affichage heures — heure locale du super_admin
+- `d85106d` — feat: TeamActivityWidget — filtre période + tableau détaillé par membre
+- `ba92f4a` — fix: MemberStatsPanel — z-index header + fallback nom membre
+- `fea49d9` — feat: système de tracking activité invisible (manager / cq_ia)
+- `90e29cd` — chore: nettoyage — suppression boilerplate CRA + console.log navigateur
+
+### Sessions précédentes
 - Système de ticketing complet (Firestore, UI split-panel, notifications ciblées)
 - Panneau notifications dans le header (cloche + dropdown)
-- Ciblage précis des notifications (assigné uniquement, pas broadcast de rôle)
 - Fix SAFE_USERNAME_RE → autorise les points (colonel.sanders)
-- Fix Firestore index composite (where+orderBy → tri client-side)
-- Favicon TONTON AI via canvas crop (objectPosition 50% 18%)
+- Favicon TONTON AI via canvas crop
 - Page reset-password branded
 - 2FA universelle (manager + CQ IA)
 - Tarification Anthropic auto depuis LiteLLM
-- 20 correctifs sécurité (path traversal, DNS rebinding, CSP, OTP hash, etc.)
+- 20 correctifs sécurité
 
 ### À faire / idées futures
 - Configurer Firebase Console : Action URL → `https://maj.stomos.net/reset-password` (flow 100% custom reset MDP)
 - Règles Firestore à auditer (apiKey hardcodée dans bundle → sécurité dépend des rules)
 - Rate limiter Map() réinitialisé au redémarrage → Redis ou persistance fichier (amélioration future)
-- Index Firestore composite à créer si les requêtes where+orderBy deviennent nécessaires
+- Modales avec `z-50` (< 100) passent SOUS le header → migrer vers `z-[200]` si nécessaire
