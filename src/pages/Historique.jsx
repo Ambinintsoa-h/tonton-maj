@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -8,7 +8,8 @@ import {
   Calendar, CheckCircle2, Sparkles, AlertTriangle, ChevronDown, ChevronUp,
   UserCircle2, RotateCcw, Loader, TrendingUp, TrendingDown, Minus,
 } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import axios from 'axios';
 import { removeFromHistory } from '../store/slices/articlesSlice';
 import { addPendingItem } from '../store/slices/pendingSlice';
 import {
@@ -157,171 +158,182 @@ function SearchBar({ value, onChange, suggestions }) {
   );
 }
 
-// ── Composant SEO Panel ───────────────────────────────────────────────────────
-const SNAPSHOT_LABELS = { before: 'Avant MAJ', after_7d: 'J+7', after_30d: 'J+30' };
+// ── Composant SEO Panel — données live via Haloscan pageEvolution ─────────────
+const COLORS = ['#16a34a', '#2563eb', '#d97706'];
 
-function SeoPanel({ seoTracking }) {
-  if (!seoTracking?.keywords?.length) return null;
+function SeoPanel({ seoTracking, majDate }) {
+  const [evoData, setEvoData] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState(null);
 
-  const snapshots = [...(seoTracking.snapshots || [])].sort((a, b) => a.capturedAt - b.capturedAt);
-  const keywords  = seoTracking.keywords;
-  const before    = snapshots.find(s => s.type === 'before');
-  const after7    = snapshots.find(s => s.type === 'after_7d');
-  const after30   = snapshots.find(s => s.type === 'after_30d');
+  const keywords   = seoTracking?.keywords   || [];
+  const articleUrl = seoTracking?.articleUrl || '';
 
+  useEffect(() => {
+    if (!keywords.length || !articleUrl || !majDate) return;
+    setLoading(true);
+    setError(null);
+    const today = new Date().toISOString().slice(0, 10);
+    Promise.all(keywords.map(keyword =>
+      axios.post('/api/haloscan/evolution', { keyword, articleUrl, firstDate: majDate, secondDate: today })
+        .then(r => ({ keyword, ...r.data }))
+        .catch(() => ({ keyword, position_history: [], volume_history: [] }))
+    ))
+      .then(results => {
+        const map = {};
+        results.forEach(r => { map[r.keyword] = r; });
+        setEvoData(map);
+      })
+      .catch(() => setError('Impossible de charger les données Haloscan'))
+      .finally(() => setLoading(false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Données chart : position par keyword dans le temps
-  const chartData = snapshots.map(s => {
-    const entry = { name: SNAPSHOT_LABELS[s.type] || s.type };
+  if (!keywords.length) return null;
+
+  // Chart : une entrée par date, une key par mot-clé
+  const allDates = [...new Set(
+    keywords.flatMap(kw => (evoData[kw]?.position_history || []).map(p => p.search_date))
+  )].sort();
+
+  const chartData = allDates.map(date => {
+    const entry = { date: date.slice(5) }; // "MM-DD"
     keywords.forEach(kw => {
-      entry[kw] = getPos(s, kw);
+      const pt = (evoData[kw]?.position_history || []).find(p => p.search_date === date);
+      entry[kw] = pt?.position && pt.position !== 'NA' ? Number(pt.position) : null;
     });
     return entry;
   });
 
-  const COLORS = ['#16a34a', '#2563eb', '#d97706'];
-  const getResult = (snap, kw) => {
-    if (!snap?.results) return null;
-    return snap.results.find(r => r.keyword === kw) || null;
-  };
+  // Résumé par mot-clé
+  const summary = keywords.map(kw => {
+    const hist  = (evoData[kw]?.position_history || []).filter(p => p.position !== 'NA' && p.position != null);
+    const first = hist[0];
+    const last  = hist[hist.length - 1];
+    const best  = hist.reduce((b, p) => (!b || Number(p.position) < Number(b.position) ? p : b), null);
+    return { kw, first, last, best };
+  });
 
-  const getPos = (snap, kw) => {
-    const r = getResult(snap, kw);
-    return r?.position != null ? Number(r.position) : null;
-  };
-
-  const fmtPos = (snap, kw) => {
-    const p = getPos(snap, kw);
-    return p != null ? `#${p}` : '—';
-  };
-
-  // Badge diff Haloscan : "+5", "-3", "new", "lost", "="
-  const DiffBadge = ({ snap, kw }) => {
-    const r = getResult(snap, kw);
-    if (!r) return <span className="text-gray-300">—</span>;
-    if (!r.inSerp && r.inSerp !== undefined) return <span className="text-xs text-gray-400">Hors top 100</span>;
-    const d = r.haloscanDiff;
-    if (!d || d === '=')    return <span className="inline-flex items-center gap-0.5 text-gray-400"><Minus size={11} /> =</span>;
-    if (d === 'lost')        return <span className="inline-flex items-center gap-0.5 text-red-500 font-semibold text-xs"><TrendingDown size={11} /> Sorti</span>;
-    if (d === 'new')         return <span className="inline-flex items-center gap-0.5 text-emerald-600 font-semibold text-xs"><TrendingUp size={11} /> Nouveau</span>;
-    const num = parseFloat(d);
-    if (isNaN(num)) return <span className="text-gray-400 text-xs">{d}</span>;
-    // Position inversée : diff positif Haloscan = remontée = bon
-    return num > 0
-      ? <span className="inline-flex items-center gap-0.5 text-emerald-600 font-semibold text-xs"><TrendingUp size={11} /> +{num}</span>
-      : <span className="inline-flex items-center gap-0.5 text-red-500 font-semibold text-xs"><TrendingDown size={11} /> {num}</span>;
-  };
-
-  const pendingLabel = seoTracking.completed ? null
-    : !after7  ? 'Snapshot J+7 en attente'
-    : !after30 ? 'Snapshot J+30 en attente'
-    : null;
+  // Volume mensuel (dernier mot-clé saisi)
+  const volumeData = (evoData[keywords[0]]?.volume_history || []).map(v => ({
+    month: v.search_date.slice(0, 7),
+    volume: v.volume,
+  }));
 
   return (
     <div className="mt-3 border border-emerald-100 rounded-xl overflow-hidden">
-      {/* Header */}
       <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-50 border-b border-emerald-100">
         <TrendingUp size={13} className="text-emerald-600" />
         <span className="text-xs font-semibold text-emerald-800">Suivi SEO Haloscan</span>
-        {pendingLabel && (
-          <span className="ml-auto text-[10px] text-emerald-500 bg-emerald-100 px-2 py-0.5 rounded-full">{pendingLabel}</span>
-        )}
-        {seoTracking.completed && (
-          <span className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-            <CheckCircle2 size={9} /> Suivi terminé (J+30)
-          </span>
-        )}
+        {loading && <Loader size={11} className="animate-spin text-emerald-500 ml-1" />}
+        {majDate && <span className="ml-auto text-[10px] text-emerald-500">depuis le {majDate}</span>}
       </div>
 
       <div className="p-4 bg-white space-y-4">
-        {/* Mots-clés chips */}
+        {/* Chips mots-clés */}
         <div className="flex flex-wrap gap-1.5">
           {keywords.map((kw, i) => (
             <span key={i} className="inline-flex items-center gap-1 text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full">
-              <span style={{ color: COLORS[i] }} className="w-1.5 h-1.5 rounded-full bg-current inline-block" />
+              <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: COLORS[i] }} />
               {kw}
             </span>
           ))}
         </div>
 
-        {/* Tableau comparatif */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-gray-100">
-                <th className="text-left text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 pr-4">Mot-clé</th>
-                <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Avant MAJ</th>
-                {after7  && <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">J+7</th>}
-                {after30 && <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">J+30</th>}
-                <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Tendance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {keywords.map((kw, i) => {
-                return (
-                  <tr key={i} className="border-b border-gray-50 last:border-0">
-                    <td className="py-2 pr-4 font-medium text-gray-700 truncate max-w-[160px]">
-                      <span className="inline-block w-2 h-2 rounded-full mr-1.5 flex-shrink-0" style={{ background: COLORS[i] }} />
-                      {kw}
-                    </td>
-                    <td className="py-2 px-3 text-center text-gray-600 font-mono text-xs">{fmtPos(before, kw)}</td>
-                    {after7  && <td className="py-2 px-3 text-center text-gray-600 font-mono text-xs">{fmtPos(after7,  kw)}</td>}
-                    {after30 && <td className="py-2 px-3 text-center text-gray-600 font-mono text-xs">{fmtPos(after30, kw)}</td>}
-                    <td className="py-2 px-3 text-center">
-                      <DiffBadge snap={after30 || after7 || before} kw={kw} />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center gap-2 py-6 text-xs text-gray-400">
+            <Loader size={14} className="animate-spin" />Chargement depuis Haloscan…
+          </div>
+        )}
 
-        {/* Chart évolution — affiché si au moins 2 snapshots */}
-        {chartData.length >= 2 && (
+        {/* Erreur */}
+        {error && !loading && <p className="text-xs text-red-400 text-center py-3">{error}</p>}
+
+        {/* Tableau résumé */}
+        {!loading && summary.some(s => s.first || s.last) && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 pr-4">Mot-clé</th>
+                  <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">À la MAJ</th>
+                  <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Meilleure</th>
+                  <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Actuelle</th>
+                  <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Évol.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.map(({ kw, first, last, best }, i) => {
+                  const diff = first && last ? Number(first.position) - Number(last.position) : null;
+                  return (
+                    <tr key={kw} className="border-b border-gray-50 last:border-0">
+                      <td className="py-2 pr-4 font-medium text-gray-700 truncate max-w-[150px]">
+                        <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ background: COLORS[i] }} />{kw}
+                      </td>
+                      <td className="py-2 px-3 text-center font-mono text-gray-600">{first ? `#${first.position}` : '—'}</td>
+                      <td className="py-2 px-3 text-center font-mono text-emerald-600 font-semibold">{best ? `#${best.position}` : '—'}</td>
+                      <td className="py-2 px-3 text-center font-mono text-gray-600">{last ? `#${last.position}` : '—'}</td>
+                      <td className="py-2 px-3 text-center">
+                        {diff == null ? <span className="text-gray-300">—</span>
+                          : diff > 0 ? <span className="inline-flex items-center gap-0.5 text-emerald-600 font-semibold"><TrendingUp size={11} />+{diff}</span>
+                          : diff < 0 ? <span className="inline-flex items-center gap-0.5 text-red-500 font-semibold"><TrendingDown size={11} />{diff}</span>
+                          : <span className="inline-flex items-center gap-0.5 text-gray-400"><Minus size={11} />=</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Courbe de position complète */}
+        {!loading && chartData.length >= 2 && (
           <div>
-            <p className="text-[10px] text-gray-400 uppercase tracking-widest font-semibold mb-2">Évolution de position (bas = mieux)</p>
-            <ResponsiveContainer width="100%" height={120}>
-              <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                <YAxis reversed tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+            <p className="text-[10px] text-gray-400 uppercase tracking-widest font-semibold mb-2">Historique de position (axe inversé — bas = meilleur)</p>
+            <ResponsiveContainer width="100%" height={150}>
+              <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -22 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#9ca3af' }} axisLine={false} tickLine={false}
+                  interval={Math.max(0, Math.floor(chartData.length / 6))} />
+                <YAxis reversed tick={{ fontSize: 9, fill: '#9ca3af' }} axisLine={false} tickLine={false}
+                  tickFormatter={v => `#${v}`} />
                 <Tooltip
                   contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
-                  formatter={(v, name) => [v != null ? `Position ${v}` : '—', name]}
+                  labelFormatter={l => `Date : ${l}`}
+                  formatter={(v, name) => [v != null ? `#${v}` : 'Hors top 100', name]}
                 />
                 {keywords.map((kw, i) => (
-                  <Line
-                    key={kw}
-                    type="monotone"
-                    dataKey={kw}
-                    stroke={COLORS[i]}
-                    strokeWidth={2}
-                    dot={{ r: 3, fill: COLORS[i] }}
-                    connectNulls={false}
-                  />
+                  <Line key={kw} type="monotone" dataKey={kw} stroke={COLORS[i]}
+                    strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls={false} />
                 ))}
               </LineChart>
             </ResponsiveContainer>
           </div>
         )}
 
-        {/* Aucun snapshot encore */}
-        {snapshots.length === 0 && (
-          <p className="text-xs text-gray-400 text-center py-2">
-            Snapshot J+0 en cours de traitement…
+        {/* Volume mensuel */}
+        {!loading && volumeData.length > 0 && (
+          <div className="flex items-center gap-3 text-xs text-gray-400 flex-wrap">
+            <span className="font-medium text-gray-500">Vol/mois :</span>
+            {volumeData.slice(-3).map(v => (
+              <span key={v.month}>{v.month} → <strong className="text-gray-600">{Number(v.volume).toLocaleString('fr')}</strong></span>
+            ))}
+          </div>
+        )}
+
+        {/* Aucune donnée */}
+        {!loading && !error && chartData.length === 0 && Object.keys(evoData).length > 0 && (
+          <p className="text-xs text-gray-400 text-center py-3">
+            Aucun historique disponible — l'URL n'est peut-être pas encore dans les données Haloscan.
           </p>
         )}
 
-        {/* URL trackée */}
-        {seoTracking.articleUrl && (
-          <a
-            href={seoTracking.articleUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-600 hover:underline"
-          >
-            <ExternalLink size={10} />
-            {seoTracking.articleUrl}
+        {/* URL */}
+        {articleUrl && (
+          <a href={articleUrl} target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-600 hover:underline">
+            <ExternalLink size={10} />{articleUrl}
           </a>
         )}
       </div>
@@ -500,7 +512,10 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
 
               {/* Panneau SEO Haloscan */}
               {article.seoTracking?.enabled && (
-                <SeoPanel seoTracking={article.seoTracking} />
+                <SeoPanel
+                  seoTracking={article.seoTracking}
+                  majDate={article.createdAt ? new Date(article.createdAt).toISOString().slice(0, 10) : null}
+                />
               )}
             </div>
           </motion.div>

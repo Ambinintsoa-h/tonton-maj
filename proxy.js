@@ -885,6 +885,43 @@ app.post('/api/haloscan/check', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/haloscan/evolution — historique complet de position d'une URL pour un mot-clé
+// Utilise POST /keywords/serp/pageEvolution — retourne position_history + volume_history
+app.post('/api/haloscan/evolution', requireAuth, async (req, res) => {
+  const { keyword, articleUrl, firstDate, secondDate } = req.body;
+  const haloscanKey = readServerSettings().haloscanKey;
+  if (!haloscanKey)  return res.status(503).json({ error: 'Clé Haloscan non configurée' });
+  if (!keyword)      return res.status(400).json({ error: 'keyword requis' });
+  if (!articleUrl)   return res.status(400).json({ error: 'articleUrl requis' });
+  if (!firstDate)    return res.status(400).json({ error: 'firstDate requis (YYYY-MM-DD)' });
+
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const resp = await axios.post(`${HALOSCAN_BASE}/keywords/serp/pageEvolution`, {
+      keyword,
+      url:         articleUrl,
+      first_date:  firstDate,
+      second_date: secondDate || today,
+    }, {
+      headers: haloscanHeaders(haloscanKey),
+      timeout: 30000,
+    });
+    const data = resp.data;
+    res.json({
+      keyword,
+      position_history: data?.results?.position_history || [],
+      volume_history:   data?.results?.volume_history   || [],
+      dates:            data?.dates || [],
+    });
+  } catch (e) {
+    console.error('[haloscan/evolution]', e.response?.data || e.message);
+    res.status(e.response?.status || 500).json({
+      error:  'Erreur Haloscan pageEvolution',
+      detail: e.response?.data || e.message,
+    });
+  }
+});
+
 // ─── Haloscan cron — snapshots SEO automatiques J+7 / J+30 ──────────────────
 // Vérifie toutes les 6h les articles ayant un snapshot en attente.
 // Nécessite Firebase Admin + clé Haloscan configurés.
