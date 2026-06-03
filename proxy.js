@@ -2055,24 +2055,59 @@ app.post('/api/wp-tool', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/debug/storage — liste les buckets GCS accessibles (super_admin, debug uniquement)
+// ─── Helper upload GCS via REST API (service account token) ──────────────────
+// Contourne les problèmes de SDK en appelant directement l'API Google Cloud Storage.
+const _gcsUpload = async (buffer, filePath, contentType, bucketName) => {
+  const credential = firebaseAdmin.app().options.credential;
+  const { access_token } = await credential.getAccessToken();
+
+  const uploadUrl = `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(bucketName)}/o?uploadType=media&name=${encodeURIComponent(filePath)}`;
+  const uploadResp = await axios.post(uploadUrl, buffer, {
+    headers: {
+      'Authorization': `Bearer ${access_token}`,
+      'Content-Type': contentType,
+    },
+    maxBodyLength: Infinity,
+    timeout: 60000,
+  });
+
+  // Rendre le fichier public
+  const patchUrl = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucketName)}/o/${encodeURIComponent(filePath)}?predefinedAcl=publicRead`;
+  await axios.patch(patchUrl, {}, { headers: { 'Authorization': `Bearer ${access_token}` } }).catch(() => {});
+
+  return `https://storage.googleapis.com/${bucketName}/${filePath}`;
+};
+
+// GET /api/debug/storage — infos bucket (super_admin, debug)
 app.get('/api/debug/storage', requireAuth, requireRole('super_admin'), async (req, res) => {
   if (!firebaseAdmin) return res.json({ error: 'Firebase Admin non configuré' });
   try {
-    const [buckets] = await firebaseAdmin.storage().getBuckets();
-    res.json({
-      buckets: buckets.map(b => b.name),
-      projectId: firebaseAdmin.app().options?.credential?.projectId || 'inconnu',
-      configBucket: readServerSettings().firebaseConfig?.storageBucket || 'non défini',
-    });
+    const credential = firebaseAdmin.app().options.credential;
+    const { access_token } = await credential.getAccessToken();
+    const configBucket = readServerSettings().firebaseConfig?.storageBucket || '';
+    // Tester les deux formats de bucket avec l'API REST
+    const projectId  = configBucket.replace('.firebasestorage.app', '').replace('.appspot.com', '') || 'tonton-ai-c8196';
+    const candidates = [...new Set([configBucket, `${projectId}.appspot.com`, `${projectId}.firebasestorage.app`].filter(Boolean))];
+    const results = {};
+    for (const b of candidates) {
+      try {
+        const r = await axios.get(`https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(b)}`, {
+          headers: { 'Authorization': `Bearer ${access_token}` },
+          timeout: 5000,
+        });
+        results[b] = r.status === 200 ? 'ACCESSIBLE ✅' : r.status;
+      } catch (e) {
+        results[b] = `${e.response?.status || 'erreur'} — ${e.response?.data?.error?.message || e.message}`;
+      }
+    }
+    res.json({ configBucket, results, projectId });
   } catch (e) {
-    res.status(500).json({ error: e.message, code: e.code });
+    res.status(500).json({ error: e.message });
   }
 });
 
-// ─── POST /api/upload-ticket-file — upload PJ ticket/commentaire via Firebase Admin ─
-// Bypasse les règles Firebase Storage (Admin SDK = accès root).
-// Accepte multipart/form-data : file (image/vidéo), ticketId.
+// ─── POST /api/upload-ticket-file — upload PJ via API REST GCS (bypass SDK) ──
+// Utilise le token du service account directement → fonctionne peu importe les règles Storage.
 const ticketUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB max
@@ -2088,36 +2123,28 @@ app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), as
   try {
     const configBucket = readServerSettings().firebaseConfig?.storageBucket || '';
     const projectId    = configBucket.replace('.firebasestorage.app', '').replace('.appspot.com', '') || 'tonton-ai-c8196';
+    const filePath     = `ticket-attachments/${ticketId}/${Date.now()}_${req.file.originalname}`;
 
-    // Tenter de lister les buckets disponibles pour trouver le bon nom
-    let usedBucket = configBucket;
-    try {
-      const [buckets] = await firebaseAdmin.storage().getBuckets();
-      if (buckets.length > 0) {
-        usedBucket = buckets[0].name; // prend le 1er bucket disponible
-        console.log('[upload-ticket-file] Buckets disponibles :', buckets.map(b => b.name).join(', '));
+    // Essayer les candidats dans l'ordre jusqu'à trouver le bon bucket
+    const candidates = [...new Set([configBucket, `${projectId}.appspot.com`, `${projectId}.firebasestorage.app`].filter(Boolean))];
+    let url = null, lastErr = '';
+
+    for (const bucket of candidates) {
+      try {
+        url = await _gcsUpload(req.file.buffer, filePath, req.file.mimetype, bucket);
+        console.log(`[upload-ticket-file] ✓ ${req.file.originalname} → ${bucket}/${filePath}`);
+        break;
+      } catch (e) {
+        lastErr = `${bucket}: ${e.response?.data?.error?.message || e.message}`;
+        console.warn(`[upload-ticket-file] ✗ ${lastErr}`);
       }
-    } catch (listErr) {
-      console.warn('[upload-ticket-file] Impossible de lister les buckets :', listErr.message);
-      // Fallback : essayer appspot.com puis firebasestorage.app
-      usedBucket = `${projectId}.appspot.com`;
     }
 
-    const filePath = `ticket-attachments/${ticketId}/${Date.now()}_${req.file.originalname}`;
-    const fileRef  = firebaseAdmin.storage().bucket(usedBucket).file(filePath);
-
-    await fileRef.save(req.file.buffer, {
-      contentType: req.file.mimetype,
-      metadata: { originalname: req.file.originalname },
-    });
-    await fileRef.makePublic();
-
-    const url = `https://storage.googleapis.com/${usedBucket}/${filePath}`;
-    console.log(`[upload-ticket-file] ✓ ${req.file.originalname} → ${url}`);
+    if (!url) return res.status(500).json({ error: `Upload échoué sur tous les buckets. Dernier: ${lastErr}` });
     res.json({ url, name: req.file.originalname, type: req.file.mimetype, size: req.file.size });
   } catch (e) {
-    console.error('[upload-ticket-file] ERREUR COMPLÈTE :', e.message, e.code);
-    res.status(500).json({ error: `Upload échoué : ${e.message}`, code: e.code });
+    console.error('[upload-ticket-file]', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
