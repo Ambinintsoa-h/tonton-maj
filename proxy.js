@@ -787,61 +787,100 @@ app.get('/api/searxng', requireAuth, async (req, res) => {
   res.status(503).json({ error: 'SearXNG inaccessible', results: [] });
 });
 
-// ─── Haloscan SEO API (clé lue depuis settings.json — jamais exposée au navigateur) ──────────
-// Header authentification Haloscan : "haloscan-api-key" (confirmé dans tool.haloscan.com/user/api)
-// ⚠️ ENDPOINT /check : adapter l'URL selon la doc officielle Haloscan si nécessaire
-const HALOSCAN_BASE    = 'https://tool.haloscan.com/api';
-const haloscanHeaders  = (key) => ({ 'haloscan-api-key': key, 'Accept': 'application/json', 'Content-Type': 'application/json' });
+// ─── Haloscan SEO API ────────────────────────────────────────────────────────
+// Base URL : https://api.haloscan.com/api  (confirmé dans la doc officielle)
+// Auth     : header "haloscan-api-key: {jwt}"
+// Endpoints utilisés :
+//   GET  /user/credit            → test de connexion
+//   POST /keywords/overview      → données SERP par mot-clé (1 appel par mot-clé)
+//     body: { keyword, requested_data: ["serp", "metrics"] }
+//     → on parse le SERP pour retrouver la position de l'URL de l'article
+const HALOSCAN_BASE   = 'https://api.haloscan.com/api';
+const haloscanHeaders = (key) => ({
+  'haloscan-api-key': key,
+  'accept':           'application/json',
+  'content-type':     'application/json',
+});
 
-// GET /api/haloscan/test — valide la clé API (super_admin seulement)
+// Extrait la position d'une URL dans les résultats SERP Haloscan
+const _findPositionInSerp = (serpData, articleUrl) => {
+  if (!serpData || !articleUrl) return null;
+  const results = Array.isArray(serpData) ? serpData : serpData?.results || serpData?.serp || [];
+  const normalise = (u) => u?.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '').toLowerCase();
+  const target = normalise(articleUrl);
+  for (let i = 0; i < results.length; i++) {
+    const u = results[i]?.url || results[i]?.link || results[i]?.href || '';
+    if (normalise(u).includes(target) || target.includes(normalise(u))) {
+      return i + 1; // position 1-based
+    }
+  }
+  return null; // non trouvé dans le SERP
+};
+
+// GET /api/haloscan/test — valide la clé (super_admin seulement)
 app.get('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (req, res) => {
   const haloscanKey = readServerSettings().haloscanKey;
   if (!haloscanKey) return res.status(503).json({ error: 'Clé Haloscan non configurée' });
   try {
-    // Teste la clé en appelant un endpoint léger — ajuster si Haloscan expose /account, /me ou /ping
-    const resp = await axios.get(`${HALOSCAN_BASE}/v1/account`, {
+    const resp = await axios.get(`${HALOSCAN_BASE}/user/credit`, {
       headers: haloscanHeaders(haloscanKey),
       timeout: 10000,
     });
-    res.json({ success: true, data: resp.data });
+    res.json({ success: true, credits: resp.data });
   } catch (e) {
     const status = e.response?.status;
-    // 401/403 = clé invalide ; 404 = endpoint incertain mais clé peut être OK
     const invalid = status === 401 || status === 403;
-    res.status(invalid ? 400 : 200).json({
-      success: !invalid,
-      error:   invalid ? 'Clé API invalide' : null,
-      hint:    !invalid ? 'Clé acceptée — endpoint test à confirmer dans tool.haloscan.com/user/api' : null,
+    res.status(invalid ? 400 : 500).json({
+      success: false,
+      error:   invalid ? 'Clé API invalide' : 'Erreur API Haloscan',
       detail:  e.response?.data || e.message,
     });
   }
 });
 
-// POST /api/haloscan/check — vérifie le positionnement de mots-clés pour une URL article
+// POST /api/haloscan/check — position Google de l'article pour chaque mot-clé
+// 1 appel Haloscan par mot-clé (max 3) → parse SERP → retourne position
 app.post('/api/haloscan/check', requireAuth, async (req, res) => {
   const { keywords, articleUrl } = req.body;
   const haloscanKey = readServerSettings().haloscanKey;
-  if (!haloscanKey)                                  return res.status(503).json({ error: 'Clé Haloscan non configurée' });
-  if (!Array.isArray(keywords) || !keywords.length)  return res.status(400).json({ error: 'keywords (array) requis' });
-  if (!articleUrl)                                   return res.status(400).json({ error: 'articleUrl requis' });
+  if (!haloscanKey)                                 return res.status(503).json({ error: 'Clé Haloscan non configurée' });
+  if (!Array.isArray(keywords) || !keywords.length) return res.status(400).json({ error: 'keywords (array) requis' });
+  if (!articleUrl)                                  return res.status(400).json({ error: 'articleUrl requis' });
 
-  // ⚠️ Adapter l'endpoint + paramètres selon la doc officielle Haloscan
   try {
-    const resp = await axios.post(`${HALOSCAN_BASE}/v1/positions`, {
-      keywords,
-      url:    articleUrl,
-      locale: 'fr',
-    }, {
-      headers: haloscanHeaders(haloscanKey),
-      timeout: 30000,
-    });
-    res.json({ success: true, results: resp.data });
+    const results = await Promise.all(keywords.map(async (keyword) => {
+      try {
+        const resp = await axios.post(`${HALOSCAN_BASE}/keywords/overview`, {
+          keyword,
+          requested_data: ['serp', 'metrics'],
+        }, {
+          headers: haloscanHeaders(haloscanKey),
+          timeout: 20000,
+        });
+
+        const data     = resp.data;
+        const serp     = data?.serp || data?.data?.serp || data?.results?.serp || [];
+        const metrics  = data?.metrics || data?.data?.metrics || {};
+        const position = _findPositionInSerp(serp, articleUrl);
+
+        return {
+          keyword,
+          position,         // null = article non trouvé dans le top SERP
+          volume:  metrics?.search_volume ?? metrics?.volume ?? null,
+          cpc:     metrics?.cpc           ?? null,
+          kvi:     metrics?.kvi           ?? metrics?.difficulty ?? null,
+          serpRaw: serp.slice(0, 10),     // top 10 SERP pour debug
+        };
+      } catch (e) {
+        console.warn(`[haloscan] keyword "${keyword}" :`, e.response?.data || e.message);
+        return { keyword, position: null, error: e.response?.data?.message || e.message };
+      }
+    }));
+
+    res.json({ success: true, results });
   } catch (e) {
-    console.error('[haloscan]', e.response?.data || e.message);
-    res.status(e.response?.status || 500).json({
-      error:  'Erreur Haloscan API',
-      detail: e.response?.data || e.message,
-    });
+    console.error('[haloscan]', e.message);
+    res.status(500).json({ error: 'Erreur Haloscan API', detail: e.message });
   }
 });
 
@@ -873,18 +912,23 @@ const _seoSnapshotCheck = async () => {
       if (!seo.keywords?.length || !seo.articleUrl) continue;
 
       try {
-        const resp = await axios.post(`${HALOSCAN_BASE}/v1/positions`, {
-          keywords: seo.keywords,
-          url:      seo.articleUrl,
-          locale:   'fr',
-        }, {
-          headers: haloscanHeaders(haloscanKey),
-          timeout: 30000,
-        });
+        // 1 appel par mot-clé → parse SERP → position de l'article
+        const kwResults = await Promise.all((seo.keywords || []).map(async (keyword) => {
+          try {
+            const r = await axios.post(`${HALOSCAN_BASE}/keywords/overview`, {
+              keyword,
+              requested_data: ['serp', 'metrics'],
+            }, { headers: haloscanHeaders(haloscanKey), timeout: 20000 });
+            const serp     = r.data?.serp || r.data?.data?.serp || [];
+            const metrics  = r.data?.metrics || r.data?.data?.metrics || {};
+            const position = _findPositionInSerp(serp, seo.articleUrl);
+            return { keyword, position, volume: metrics?.search_volume ?? null };
+          } catch { return { keyword, position: null }; }
+        }));
 
         const capturedAt = now;
         const type       = seo.nextSnapshotType || 'after_7d';
-        const snapshot   = { type, capturedAt, results: resp.data?.results || resp.data };
+        const snapshot   = { type, capturedAt, results: kwResults };
 
         // Planification du prochain snapshot
         const isLast = type === 'after_30d';

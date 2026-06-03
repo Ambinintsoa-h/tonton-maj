@@ -193,7 +193,13 @@ function SeoPanel({ seoTracking }) {
     if (!snap) return '—';
     const r = (snap.results || []).find(r => r.keyword === kw || r.kw === kw || r.query === kw);
     const p = r?.position ?? r?.rank;
-    return p != null ? p.toFixed(1) : '—';
+    return p != null ? Number(p).toFixed(0) : '—';
+  };
+
+  const getVol = (snap, kw) => {
+    if (!snap) return null;
+    const r = (snap.results || []).find(r => r.keyword === kw);
+    return r?.volume ?? null;
   };
 
   const pendingLabel = seoTracking.completed ? null
@@ -234,6 +240,7 @@ function SeoPanel({ seoTracking }) {
             <thead>
               <tr className="border-b border-gray-100">
                 <th className="text-left text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 pr-4">Mot-clé</th>
+                <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Vol/mois</th>
                 <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Avant MAJ</th>
                 {after7  && <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">J+7</th>}
                 {after30 && <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">J+30</th>}
@@ -247,9 +254,12 @@ function SeoPanel({ seoTracking }) {
                 const evol = posEvol(bPos, aPos);
                 return (
                   <tr key={i} className="border-b border-gray-50 last:border-0">
-                    <td className="py-2 pr-4 font-medium text-gray-700 truncate max-w-[180px]">
+                    <td className="py-2 pr-4 font-medium text-gray-700 truncate max-w-[160px]">
                       <span className="inline-block w-2 h-2 rounded-full mr-1.5 flex-shrink-0" style={{ background: COLORS[i] }} />
                       {kw}
+                    </td>
+                    <td className="py-2 px-3 text-center text-gray-400 text-[11px]">
+                      {getVol(before, kw) != null ? Number(getVol(before, kw)).toLocaleString('fr') : '—'}
                     </td>
                     <td className="py-2 px-3 text-center text-gray-600">{getPos(before,  kw)}</td>
                     {after7  && <td className="py-2 px-3 text-center text-gray-600">{getPos(after7,  kw)}</td>}
