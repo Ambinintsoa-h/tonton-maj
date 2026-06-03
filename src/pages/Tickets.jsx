@@ -11,7 +11,7 @@ import {
 import { addTicket, updateTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
   getTickets, createTicket, updateTicketDoc, subscribeToComments, addComment,
-  uploadTicketFile, createNotification, getStorageRef,
+  uploadTicketFile, updateCommentAttachments, createNotification, getStorageRef,
 } from '../services/firebase';
 import { AccountAvatar } from '../components/account/MonComptePanel';
 import tracker from '../services/activityTracker';
@@ -156,60 +156,48 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
     if (!text.trim() && files.length === 0) return;
     setSending(true);
     try {
-      // Upload PJ en parallèle (Promise.allSettled) + vérif storage
-      let attachments = [];
-      if (files.length > 0) {
-        if (!getStorageRef()) {
-          toast.error('Firebase Storage non initialisé — PJ ignorées, réessayez.');
-          setSending(false);
-          return;
-        }
-        const results = await Promise.allSettled(files.map(f => uploadTicketFile(ticket.id, f)));
-        results.forEach((r, i) => {
-          if (r.status === 'fulfilled') attachments.push(r.value);
-          else toast.error(`Échec upload "${files[i].name}" : ${r.reason?.message || 'erreur'}`);
-        });
-        if (attachments.length === 0 && !text.trim()) {
-          toast.error('Toutes les PJ ont échoué — commentaire non envoyé.');
-          setSending(false);
-          return;
-        }
-      }
-
+      const hasPJ  = files.length > 0 && getStorageRef();
       const commentData = {
         ticketId:       ticket.id,
         authorId:       currentUser.uid || currentUser.username,
         authorUsername: currentUser.username,
         authorRole:     currentUser.role,
         content:        text.trim(),
-        attachments,
+        attachments:    [],   // envoyé immédiatement sans attendre l'upload
       };
 
-      // Calcul du statusUpdate côté client (évite un getDoc dans addComment)
       const statusUpdate = ticket.status === 'open' && commentData.authorId !== ticket.creatorId
         ? { status: 'in_progress' } : {};
 
-      await addComment(commentData, statusUpdate);
+      // ── Envoyer le commentaire IMMÉDIATEMENT (le texte apparaît en <1s via onSnapshot) ──
+      const commentId = await addComment(commentData, statusUpdate);
       tracker.trackAction('ticketsCommented');
-
-      // Notifier créateur + assignee en parallèle
-      const toNotify = [...new Set([
-        ticket.creatorId !== commentData.authorId ? ticket.creatorId : null,
-        ticket.assigneeId !== commentData.authorId ? ticket.assigneeId : null,
-      ].filter(Boolean))];
-      await Promise.all(toNotify.map(uid => createNotification({
-        toUserId: uid,
-        fromUsername: currentUser.username,
-        type: 'new_comment',
-        ticketId: ticket.id,
-        ticketTitle: ticket.title,
-        message: `${currentUser.username} a commenté le ticket "${ticket.title}"`,
-      })));
-
       setText('');
       setFiles([]);
-      // onSnapshot met à jour les commentaires automatiquement — pas besoin de re-fetch
       onCommentAdded && onCommentAdded();
+
+      // ── Arrière-plan : upload PJ + mise à jour commentaire + notifications ──
+      // Rien de tout ça ne bloque l'UI — l'utilisateur voit son commentaire immédiatement
+      Promise.resolve().then(async () => {
+        // Upload PJ
+        if (hasPJ) {
+          const results = await Promise.allSettled(files.map(f => uploadTicketFile(ticket.id, f)));
+          const uploaded = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+          const failed   = results.filter(r => r.status === 'rejected').length;
+          if (uploaded.length > 0) await updateCommentAttachments(commentId, uploaded);
+          if (failed > 0) toast.error(`${failed} pièce(s) jointe(s) non uploadée(s).`);
+        }
+        // Notifications
+        const toNotify = [...new Set([
+          ticket.creatorId  !== commentData.authorId ? ticket.creatorId  : null,
+          ticket.assigneeId !== commentData.authorId ? ticket.assigneeId : null,
+        ].filter(Boolean))];
+        await Promise.all(toNotify.map(uid => createNotification({
+          toUserId: uid, fromUsername: currentUser.username,
+          type: 'new_comment', ticketId: ticket.id, ticketTitle: ticket.title,
+          message: `${currentUser.username} a commenté le ticket "${ticket.title}"`,
+        })));
+      }).catch(() => {});
     } catch (e) {
       toast.error('Erreur lors de l\'envoi du commentaire');
     } finally {

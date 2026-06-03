@@ -393,6 +393,12 @@ export const uploadTicketFile = async (ticketId, file) => {
   return { url, name: file.name, type: file.type, size: file.size };
 };
 
+// Met à jour les PJ d'un commentaire après upload en arrière-plan
+export const updateCommentAttachments = async (commentId, attachments) => {
+  if (!db || !commentId) return;
+  await updateDoc(doc(db, 'ticket_comments', commentId), { attachments });
+};
+
 // ── Notifications ─────────────────────────────────────────────────────────────
 
 export const createNotification = async (notif) => {
