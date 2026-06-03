@@ -2069,16 +2069,18 @@ app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), (r
   if (!ticketId || ticketId.includes('..')) return res.status(400).json({ error: 'ticketId invalide' });
 
   try {
-    const safeName  = path.basename(req.file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
-    const prefix    = require('crypto').randomBytes(8).toString('hex');
-    const filename  = `${prefix}_${safeName}`;
-    const dir       = path.join(UPLOADS_DIR, ticketId);
+    // multer reçoit les noms en Latin-1 même si le fichier est UTF-8 → décodage explicite
+    const decodedName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    const safeName    = path.basename(decodedName).replace(/[^a-zA-Z0-9._\-àáâãäåèéêëìíîïòóôõöùúûüýÿ]/g, '_');
+    const prefix      = require('crypto').randomBytes(8).toString('hex');
+    const filename    = `${prefix}_${safeName}`;
+    const dir         = path.join(UPLOADS_DIR, ticketId);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, filename), req.file.buffer);
 
     const url = `/api/ticket-attachments/${ticketId}/${filename}`;
-    console.log(`[upload-ticket-file] ✓ ${req.file.originalname} → ${url}`);
-    res.json({ url, name: req.file.originalname, type: req.file.mimetype, size: req.file.size });
+    console.log(`[upload-ticket-file] ✓ ${decodedName} → ${url}`);
+    res.json({ url, name: decodedName, type: req.file.mimetype, size: req.file.size });
   } catch (e) {
     console.error('[upload-ticket-file]', e.message);
     res.status(500).json({ error: 'Erreur sauvegarde fichier : ' + e.message });

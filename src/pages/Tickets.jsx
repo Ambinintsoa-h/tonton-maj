@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import {
   Bug, Plus, X, Send, Paperclip,
   CheckCircle2, RefreshCw, ArrowUpRight, MessageSquare,
-  Search, User, Calendar, Link2,
+  Search, User, Calendar, Link2, FileText, Film, FileImage, File,
 } from 'lucide-react';
 import { addTicket, updateTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
@@ -113,6 +113,73 @@ function TicketCard({ ticket, selected, onClick }) {
         </div>
       </div>
     </motion.div>
+  );
+}
+
+// ─── Composant PJ ────────────────────────────────────────────────────────────
+const fmtSize = (bytes) => {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} o`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} Ko`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
+};
+
+const isImage = (type) => type?.startsWith('image/');
+const isVideo = (type) => type?.startsWith('video/');
+
+function AttachmentItem({ a }) {
+  if (isImage(a.type)) {
+    return (
+      <a href={a.url} target="_blank" rel="noopener noreferrer"
+        className="group relative block w-32 rounded-xl overflow-hidden border border-gray-100 hover:border-blue-300 transition-colors shadow-sm"
+        title={a.name}
+      >
+        <img src={a.url} alt={a.name} className="w-32 h-20 object-cover" />
+        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition" />
+        <div className="px-2 py-1 bg-white border-t border-gray-100">
+          <p className="text-[10px] text-gray-600 truncate font-medium">{a.name}</p>
+          {a.size && <p className="text-[9px] text-gray-400">{fmtSize(a.size)}</p>}
+        </div>
+      </a>
+    );
+  }
+
+  const Icon = isVideo(a.type) ? Film : a.type?.includes('pdf') ? FileText : a.type?.includes('image') ? FileImage : File;
+  const iconColor = isVideo(a.type) ? 'text-purple-500 bg-purple-50' : a.type?.includes('pdf') ? 'text-red-500 bg-red-50' : 'text-blue-500 bg-blue-50';
+
+  return (
+    <a href={a.url} target="_blank" rel="noopener noreferrer"
+      className="flex items-center gap-2.5 bg-gray-50 hover:bg-gray-100 border border-gray-100 hover:border-gray-200 rounded-xl px-3 py-2 transition-colors group"
+      title={a.name}
+    >
+      <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${iconColor}`}>
+        <Icon size={15} />
+      </div>
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-gray-700 truncate max-w-[160px] group-hover:text-blue-600 transition-colors">{a.name}</p>
+        {a.size && <p className="text-[10px] text-gray-400">{fmtSize(a.size)}</p>}
+      </div>
+    </a>
+  );
+}
+
+function AttachmentList({ attachments, className = '' }) {
+  if (!attachments?.length) return null;
+  const images = attachments.filter(a => isImage(a.type));
+  const others = attachments.filter(a => !isImage(a.type));
+  return (
+    <div className={`space-y-2 ${className}`}>
+      {images.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {images.map((a, i) => <AttachmentItem key={i} a={a} />)}
+        </div>
+      )}
+      {others.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {others.map((a, i) => <AttachmentItem key={i} a={a} />)}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -230,16 +297,7 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
                   <span className="text-[10px] text-gray-400 ml-auto">{timeAgo(c.createdAt)}</span>
                 </div>
                 {c.content && <p className="text-xs text-gray-700 whitespace-pre-wrap">{c.content}</p>}
-                {c.attachments?.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {c.attachments.map((a, i) => (
-                      <a key={i} href={a.url} target="_blank" rel="noopener noreferrer"
-                        className="text-[10px] text-blue-600 hover:underline flex items-center gap-0.5">
-                        <Paperclip size={10} />{a.name}
-                      </a>
-                    ))}
-                  </div>
-                )}
+                <AttachmentList attachments={c.attachments} className="mt-2" />
               </div>
             </div>
           );
@@ -522,15 +580,10 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
           )}
           {ticket.attachments?.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Pièces jointes ({ticket.attachments.length})</p>
-              <div className="flex flex-wrap gap-2">
-                {ticket.attachments.map((a, i) => (
-                  <a key={i} href={a.url} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-xs text-blue-600 hover:underline bg-blue-50 px-2 py-1 rounded-lg">
-                    <Paperclip size={11} />{a.name}
-                  </a>
-                ))}
-              </div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+                Pièces jointes ({ticket.attachments.length})
+              </p>
+              <AttachmentList attachments={ticket.attachments} />
             </div>
           )}
         </div>
