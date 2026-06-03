@@ -7,6 +7,7 @@ import {
   Bug, Plus, X, Send, Paperclip,
   CheckCircle2, RefreshCw, ArrowUpRight, MessageSquare,
   Search, User, Calendar, Link2, FileText, Film, FileImage, File,
+  ZoomIn, ZoomOut, Download, RotateCcw, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { addTicket, updateTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
@@ -116,7 +117,7 @@ function TicketCard({ ticket, selected, onClick }) {
   );
 }
 
-// ─── Composant PJ ────────────────────────────────────────────────────────────
+// ─── Composant PJ + Lightbox ─────────────────────────────────────────────────
 const fmtSize = (bytes) => {
   if (!bytes) return '';
   if (bytes < 1024) return `${bytes} o`;
@@ -127,20 +128,183 @@ const fmtSize = (bytes) => {
 const isImage = (type) => type?.startsWith('image/');
 const isVideo = (type) => type?.startsWith('video/');
 
-function AttachmentItem({ a }) {
+// Modal lightbox avec zoom/dézoom pour images et vidéos
+function Lightbox({ attachments, initialIndex, onClose }) {
+  const [idx, setIdx]     = useState(initialIndex);
+  const [zoom, setZoom]   = useState(1);
+  const [pos, setPos]     = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef(null);
+  const a = attachments[idx];
+
+  // Fermer avec Escape, naviguer avec flèches
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape')     onClose();
+      if (e.key === 'ArrowLeft')  setIdx(i => Math.max(0, i - 1));
+      if (e.key === 'ArrowRight') setIdx(i => Math.min(attachments.length - 1, i + 1));
+      if (e.key === '+')          setZoom(z => Math.min(4, z + 0.5));
+      if (e.key === '-')          setZoom(z => Math.max(0.5, z - 0.5));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, attachments.length]);
+
+  // Reset zoom quand on change d'image
+  useEffect(() => { setZoom(1); setPos({ x: 0, y: 0 }); }, [idx]);
+
+  // Zoom molette
+  const onWheel = (e) => {
+    e.preventDefault();
+    setZoom(z => Math.min(4, Math.max(0.5, z - e.deltaY * 0.001)));
+  };
+
+  // Drag pour déplacer quand zoomé
+  const onMouseDown = (e) => { if (zoom <= 1) return; setDragging(true); dragStart.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }; };
+  const onMouseMove = (e) => { if (!dragging || !dragStart.current) return; setPos({ x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y }); };
+  const onMouseUp   = () => { setDragging(false); dragStart.current = null; };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 flex flex-col"
+      style={{ zIndex: 300, background: 'rgba(0,0,0,0.92)' }}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 flex-shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
+          <p className="text-white font-medium text-sm truncate max-w-xs">{a.name}</p>
+          {a.size && <span className="text-gray-400 text-xs flex-shrink-0">{fmtSize(a.size)}</span>}
+          {attachments.length > 1 && (
+            <span className="text-gray-400 text-xs flex-shrink-0">{idx + 1} / {attachments.length}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {isImage(a.type) && (
+            <>
+              <button onClick={() => setZoom(z => Math.max(0.5, z - 0.25))} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition" title="Dézoomer (-)">
+                <ZoomOut size={16} />
+              </button>
+              <span className="text-gray-400 text-xs w-12 text-center">{Math.round(zoom * 100)}%</span>
+              <button onClick={() => setZoom(z => Math.min(4, z + 0.25))} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition" title="Zoomer (+)">
+                <ZoomIn size={16} />
+              </button>
+              <button onClick={() => { setZoom(1); setPos({ x: 0, y: 0 }); }} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition" title="Réinitialiser">
+                <RotateCcw size={14} />
+              </button>
+            </>
+          )}
+          <a href={a.url} download={a.name} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition" title="Télécharger">
+            <Download size={16} />
+          </a>
+          <button onClick={onClose} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition ml-1">
+            <X size={18} />
+          </button>
+        </div>
+      </div>
+
+      {/* Contenu */}
+      <div
+        className="flex-1 flex items-center justify-center overflow-hidden relative select-none"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+        onWheel={onWheel}
+        style={{ cursor: zoom > 1 ? (dragging ? 'grabbing' : 'grab') : 'default' }}
+      >
+        {isImage(a.type) && (
+          <img
+            src={a.url}
+            alt={a.name}
+            onMouseDown={onMouseDown}
+            draggable={false}
+            style={{
+              transform: `scale(${zoom}) translate(${pos.x / zoom}px, ${pos.y / zoom}px)`,
+              transition: dragging ? 'none' : 'transform 0.15s ease',
+              maxWidth: '90vw',
+              maxHeight: '80vh',
+              objectFit: 'contain',
+              borderRadius: 8,
+              userSelect: 'none',
+            }}
+          />
+        )}
+        {isVideo(a.type) && (
+          <video src={a.url} controls className="max-w-[90vw] max-h-[80vh] rounded-xl" />
+        )}
+        {!isImage(a.type) && !isVideo(a.type) && (
+          <div className="text-center space-y-4">
+            <File size={64} className="text-gray-500 mx-auto" />
+            <p className="text-white font-medium">{a.name}</p>
+            {a.size && <p className="text-gray-400 text-sm">{fmtSize(a.size)}</p>}
+            <a href={a.url} download={a.name}
+              className="inline-flex items-center gap-2 bg-white text-gray-900 font-medium px-5 py-2.5 rounded-xl hover:bg-gray-100 transition">
+              <Download size={16} /> Télécharger
+            </a>
+          </div>
+        )}
+      </div>
+
+      {/* Navigation entre pièces jointes */}
+      {attachments.length > 1 && (
+        <>
+          <button
+            onClick={() => setIdx(i => Math.max(0, i - 1))}
+            disabled={idx === 0}
+            className="absolute left-3 top-1/2 -translate-y-1/2 p-2 bg-white/10 hover:bg-white/20 text-white rounded-full disabled:opacity-20 transition"
+          >
+            <ChevronLeft size={22} />
+          </button>
+          <button
+            onClick={() => setIdx(i => Math.min(attachments.length - 1, i + 1))}
+            disabled={idx === attachments.length - 1}
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-white/10 hover:bg-white/20 text-white rounded-full disabled:opacity-20 transition"
+          >
+            <ChevronRight size={22} />
+          </button>
+        </>
+      )}
+
+      {/* Miniatures en bas si plusieurs */}
+      {attachments.length > 1 && (
+        <div className="flex items-center justify-center gap-2 py-3 flex-shrink-0">
+          {attachments.map((att, i) => (
+            <button
+              key={i}
+              onClick={() => setIdx(i)}
+              className={`w-12 h-8 rounded-lg overflow-hidden border-2 transition ${i === idx ? 'border-white' : 'border-transparent opacity-50 hover:opacity-80'}`}
+            >
+              {isImage(att.type)
+                ? <img src={att.url} alt="" className="w-full h-full object-cover" />
+                : <div className="w-full h-full bg-white/20 flex items-center justify-center"><File size={12} className="text-white" /></div>
+              }
+            </button>
+          ))}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+function AttachmentItem({ a, onClick }) {
   if (isImage(a.type)) {
     return (
-      <a href={a.url} target="_blank" rel="noopener noreferrer"
-        className="group relative block w-32 rounded-xl overflow-hidden border border-gray-100 hover:border-blue-300 transition-colors shadow-sm"
-        title={a.name}
+      <button
+        onClick={onClick}
+        className="group relative block w-32 rounded-xl overflow-hidden border border-gray-100 hover:border-blue-300 transition-colors shadow-sm cursor-zoom-in"
+        title={`${a.name} — cliquer pour agrandir`}
       >
         <img src={a.url} alt={a.name} className="w-32 h-20 object-cover" />
-        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition" />
+        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/15 transition flex items-center justify-center">
+          <ZoomIn size={20} className="text-white opacity-0 group-hover:opacity-100 transition drop-shadow" />
+        </div>
         <div className="px-2 py-1 bg-white border-t border-gray-100">
           <p className="text-[10px] text-gray-600 truncate font-medium">{a.name}</p>
           {a.size && <p className="text-[9px] text-gray-400">{fmtSize(a.size)}</p>}
         </div>
-      </a>
+      </button>
     );
   }
 
@@ -148,8 +312,9 @@ function AttachmentItem({ a }) {
   const iconColor = isVideo(a.type) ? 'text-purple-500 bg-purple-50' : a.type?.includes('pdf') ? 'text-red-500 bg-red-50' : 'text-blue-500 bg-blue-50';
 
   return (
-    <a href={a.url} target="_blank" rel="noopener noreferrer"
-      className="flex items-center gap-2.5 bg-gray-50 hover:bg-gray-100 border border-gray-100 hover:border-gray-200 rounded-xl px-3 py-2 transition-colors group"
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2.5 bg-gray-50 hover:bg-gray-100 border border-gray-100 hover:border-gray-200 rounded-xl px-3 py-2 transition-colors group text-left"
       title={a.name}
     >
       <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${iconColor}`}>
@@ -159,11 +324,12 @@ function AttachmentItem({ a }) {
         <p className="text-xs font-medium text-gray-700 truncate max-w-[160px] group-hover:text-blue-600 transition-colors">{a.name}</p>
         {a.size && <p className="text-[10px] text-gray-400">{fmtSize(a.size)}</p>}
       </div>
-    </a>
+    </button>
   );
 }
 
 function AttachmentList({ attachments, className = '' }) {
+  const [lightbox, setLightbox] = useState(null); // index de la PJ ouverte
   if (!attachments?.length) return null;
   const images = attachments.filter(a => isImage(a.type));
   const others = attachments.filter(a => !isImage(a.type));
@@ -171,14 +337,23 @@ function AttachmentList({ attachments, className = '' }) {
     <div className={`space-y-2 ${className}`}>
       {images.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {images.map((a, i) => <AttachmentItem key={i} a={a} />)}
+          {images.map((a, i) => (
+            <AttachmentItem key={i} a={a} onClick={() => setLightbox(attachments.indexOf(a))} />
+          ))}
         </div>
       )}
       {others.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {others.map((a, i) => <AttachmentItem key={i} a={a} />)}
+          {others.map((a, i) => (
+            <AttachmentItem key={i} a={a} onClick={() => setLightbox(attachments.indexOf(a))} />
+          ))}
         </div>
       )}
+      <AnimatePresence>
+        {lightbox !== null && (
+          <Lightbox attachments={attachments} initialIndex={lightbox} onClose={() => setLightbox(null)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
