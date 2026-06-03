@@ -125,7 +125,7 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     }
     if (sites.length > 0) {
       dispatch(setSites(sites));
-      sessionStorage.setItem(STORAGE_KEYS.wpSites, JSON.stringify(sites));
+      localStorage.setItem(STORAGE_KEYS.wpSites, JSON.stringify(sites));
     }
     if (users.length > 0) {
       dispatch(setUsers(users));
@@ -289,8 +289,8 @@ function LocalStorageSync() {
   }, [history]);
 
   useEffect(() => {
-    // sessionStorage : mots de passe WP ne persistent pas après fermeture du navigateur
-    sessionStorage.setItem(STORAGE_KEYS.wpSites, JSON.stringify(sites));
+    // localStorage : Application Passwords WP persistés entre sessions
+    localStorage.setItem(STORAGE_KEYS.wpSites, JSON.stringify(sites));
   }, [sites]);
 
   useEffect(() => {

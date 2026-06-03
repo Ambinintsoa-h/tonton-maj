@@ -26,16 +26,18 @@ const persistMiddleware = (storeAPI) => (next) => (action) => {
   const result = next(action);
   const type = action.type || '';
   if (
-    type.startsWith('skills/')    ||
-    type.startsWith('knowledge/') ||
-    type.startsWith('articles/')  ||
-    type.startsWith('pending/')   ||
-    type.startsWith('stats/')
+    type.startsWith('skills/')     ||
+    type.startsWith('knowledge/')  ||
+    type.startsWith('articles/')   ||
+    type.startsWith('pending/')    ||
+    type.startsWith('stats/')      ||
+    type.startsWith('wordpress/')
   ) {
     const s = storeAPI.getState();
     trySet(STORAGE_KEYS.skills,    s.skills.list);
     trySet(STORAGE_KEYS.knowledge, s.knowledge.list);
     trySet(STORAGE_KEYS.history,   s.articles.history);
+    if (type.startsWith('wordpress/')) trySet(STORAGE_KEYS.wpSites, s.wordpress.sites);
     if (type.startsWith('pending/')) trySet(STORAGE_KEYS.pending, s.pending.list);
     if (type.startsWith('stats/')) {
       trySet(STORAGE_KEYS.statsArticles, s.stats.totalArticles);

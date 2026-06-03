@@ -60,7 +60,12 @@ function SiteForm({ site, onSave, onCancel }) {
         <div className="space-y-1.5">
           <label className="text-xs font-medium text-gray-600">Mot de passe d'application</label>
           <input type="password" value={form.password} onChange={e => set('password', e.target.value)} placeholder="xxxx xxxx xxxx xxxx" className="input-glass" />
-          <p className="text-xs text-gray-400">WordPress → Utilisateurs → Profil → Mots de passe d'application (bas de page)</p>
+          {site.id && !form.password && (
+            <p className="text-xs text-amber-500 font-medium">⚠️ Mot de passe absent — veuillez le ressaisir pour le persister.</p>
+          )}
+          {!site.id && (
+            <p className="text-xs text-gray-400">WordPress → Utilisateurs → Profil → Mots de passe d'application (bas de page)</p>
+          )}
         </div>
       </div>
 

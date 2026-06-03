@@ -1,15 +1,15 @@
 import { createSlice } from '@reduxjs/toolkit';
 import { STORAGE_KEYS } from '../../constants/storage';
 
-const loadFromSession = (key) => {
-  try { return JSON.parse(sessionStorage.getItem(key) || 'null') || []; }
+const loadFromLocal = (key) => {
+  try { return JSON.parse(localStorage.getItem(key) || 'null') || []; }
   catch { return []; }
 };
 
 const wordpressSlice = createSlice({
   name: 'wordpress',
-  // sessionStorage : mots de passe WP non persistés après fermeture du navigateur
-  initialState: { sites: loadFromSession(STORAGE_KEYS.wpSites), loading: false },
+  // localStorage : Application Passwords WP persistés entre sessions (tokens révocables ≠ mdp admin)
+  initialState: { sites: loadFromLocal(STORAGE_KEYS.wpSites), loading: false },
   reducers: {
     setSites: (state, action) => { state.sites = action.payload; },
     addSite: (state, action) => { state.sites.push(action.payload); },
