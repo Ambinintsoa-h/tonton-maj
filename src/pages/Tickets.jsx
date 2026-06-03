@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { addTicket, updateTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
-  getTickets, createTicket, updateTicketDoc, getComments, addComment,
+  getTickets, createTicket, updateTicketDoc, subscribeToComments, addComment,
   uploadTicketFile, createNotification, getStorageRef,
 } from '../services/firebase';
 import { AccountAvatar } from '../components/account/MonComptePanel';
@@ -120,33 +120,29 @@ function TicketCard({ ticket, selected, onClick }) {
 
 function CommentThread({ ticket, currentUser, onCommentAdded }) {
   const [comments, setComments] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [text, setText] = useState('');
-  const [files, setFiles] = useState([]);
-  const [sending, setSending] = useState(false);
-  const fileRef = useRef();
+  const [loading, setLoading]   = useState(true);
+  const [text, setText]         = useState('');
+  const [files, setFiles]       = useState([]);
+  const [sending, setSending]   = useState(false);
+  const fileRef   = useRef();
   const bottomRef = useRef();
   const users = useSelector(s => s.users.list);
 
-  const loadComments = useCallback(async () => {
-    if (!ticket?.id) return;
-    setLoading(true);
-    try {
-      const data = await getComments(ticket.id);
-      setComments(data);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [ticket?.id]);
-
+  // Abonnement onSnapshot — cache local Firestore = affichage quasi-instantané
   useEffect(() => {
+    if (!ticket?.id) return;
     setComments([]);
     setText('');
     setFiles([]);
-    loadComments();
-  }, [ticket?.id, loadComments]);
+    setLoading(true);
+
+    const unsubscribe = subscribeToComments(
+      ticket.id,
+      (data) => { setComments(data); setLoading(false); },
+      ()     => setLoading(false),
+    );
+    return unsubscribe; // nettoyage au unmount / changement de ticket
+  }, [ticket?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -212,7 +208,7 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
 
       setText('');
       setFiles([]);
-      await loadComments();
+      // onSnapshot met à jour les commentaires automatiquement — pas besoin de re-fetch
       onCommentAdded && onCommentAdded();
     } catch (e) {
       toast.error('Erreur lors de l\'envoi du commentaire');

@@ -343,12 +343,30 @@ export const updateTicketDoc = async (ticketId, updates) => {
 
 export const getComments = async (ticketId) => {
   if (!db) return [];
-  // where seul — tri client-side pour éviter l'index composite
   const q = query(collection(db, 'ticket_comments'), where('ticketId', '==', ticketId));
   const snap = await getDocs(q);
   return snap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+};
+
+// Abonnement temps réel aux commentaires d'un ticket.
+// Lit d'abord depuis le cache Firestore local (quasi-instantané), puis sync serveur.
+// Retourne la fonction de désabonnement (à appeler au unmount).
+export const subscribeToComments = (ticketId, onUpdate, onError = () => {}) => {
+  if (!db) return () => {};
+  const q = query(collection(db, 'ticket_comments'), where('ticketId', '==', ticketId));
+  return onSnapshot(
+    q,
+    { includeMetadataChanges: false },
+    (snap) => {
+      const comments = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      onUpdate(comments);
+    },
+    onError,
+  );
 };
 
 // ticketStatusUpdate : objet optionnel calculé côté client (ex: { status: 'in_progress' })
