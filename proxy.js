@@ -2055,6 +2055,44 @@ app.post('/api/wp-tool', requireAuth, async (req, res) => {
   }
 });
 
+// ─── POST /api/upload-ticket-file — upload PJ ticket/commentaire via Firebase Admin ─
+// Bypasse les règles Firebase Storage (Admin SDK = accès root).
+// Accepte multipart/form-data : file (image/vidéo), ticketId.
+const ticketUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB max
+});
+
+app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), async (req, res) => {
+  if (!req.file)    return res.status(400).json({ error: 'Fichier requis' });
+  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
+
+  const { ticketId } = req.body;
+  if (!ticketId) return res.status(400).json({ error: 'ticketId requis' });
+
+  try {
+    // Récupérer le bucket depuis les settings ou utiliser la valeur par défaut
+    const storageBucket = readServerSettings().firebaseConfig?.storageBucket || 'tonton-ai-c8196.firebasestorage.app';
+    const bucket  = firebaseAdmin.storage().bucket(storageBucket);
+    const filePath = `ticket-attachments/${ticketId}/${Date.now()}_${req.file.originalname}`;
+    const fileRef  = bucket.file(filePath);
+
+    // Upload + rendre public (pas de règles Storage à respecter via Admin SDK)
+    await fileRef.save(req.file.buffer, {
+      contentType: req.file.mimetype,
+      metadata: { originalname: req.file.originalname },
+    });
+    await fileRef.makePublic();
+
+    const url = `https://storage.googleapis.com/${storageBucket}/${filePath}`;
+    console.log(`[upload-ticket-file] ✓ ${req.file.originalname} → ${filePath}`);
+    res.json({ url, name: req.file.originalname, type: req.file.mimetype, size: req.file.size });
+  } catch (e) {
+    console.error('[upload-ticket-file]', e.message);
+    res.status(500).json({ error: 'Erreur upload : ' + e.message });
+  }
+});
+
 // ─── POST /api/wp-upload-file — upload d'un fichier local vers la médiathèque WP ─
 // Accepte multipart/form-data : file (image), site (JSON site object).
 // Utilisé pour le téléversement direct depuis le PC (bouton "Parcourir") dans l'UI.

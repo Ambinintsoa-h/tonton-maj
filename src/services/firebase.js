@@ -384,13 +384,26 @@ export const addComment = async (comment, ticketStatusUpdate = {}) => {
   return ref.id;
 };
 
+// Upload via proxy serveur (Firebase Admin SDK) — bypasse les règles Storage,
+// fonctionne pour tous les rôles y compris super_admin sans Firebase Auth.
 export const uploadTicketFile = async (ticketId, file) => {
-  if (!storage) throw new Error('Storage non initialisé');
-  const path = `ticket-attachments/${ticketId}/${Date.now()}_${file.name}`;
-  const r = storageRef(storage, path);
-  await uploadBytes(r, file);
-  const url = await getDownloadURL(r);
-  return { url, name: file.name, type: file.type, size: file.size };
+  const token = sessionStorage.getItem('tonton_auth_token');
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('ticketId', ticketId);
+
+  const resp = await fetch('/api/upload-ticket-file', {
+    method: 'POST',
+    headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+    body: formData,
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+    throw new Error(err.error || `Erreur upload HTTP ${resp.status}`);
+  }
+
+  return resp.json(); // { url, name, type, size }
 };
 
 // Met à jour les PJ d'un commentaire après upload en arrière-plan

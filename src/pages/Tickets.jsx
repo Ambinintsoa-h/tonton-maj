@@ -11,7 +11,7 @@ import {
 import { addTicket, updateTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
   getTickets, createTicket, updateTicketDoc, subscribeToComments, addComment,
-  uploadTicketFile, updateCommentAttachments, createNotification, getStorageRef,
+  uploadTicketFile, updateCommentAttachments, createNotification,
 } from '../services/firebase';
 import { AccountAvatar } from '../components/account/MonComptePanel';
 import tracker from '../services/activityTracker';
@@ -159,22 +159,18 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
       // ── Upload PJ (synchrone, timeout 15s pour éviter le blocage infini) ──
       let attachments = [];
       if (files.length > 0) {
-        if (!getStorageRef()) {
-          toast.error('Firebase Storage non initialisé — PJ non uploadées.');
-        } else {
-          const TIMEOUT_MS = 15000;
-          const uploadWithTimeout = (f) => Promise.race([
-            uploadTicketFile(ticket.id, f),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`Timeout upload "${f.name}" (>15s)`)), TIMEOUT_MS)
-            ),
-          ]);
-          const results = await Promise.allSettled(files.map(uploadWithTimeout));
-          results.forEach((r, i) => {
-            if (r.status === 'fulfilled') attachments.push(r.value);
-            else toast.error(`PJ "${files[i]?.name}" : ${r.reason?.message || 'échec'}`);
-          });
-        }
+        const TIMEOUT_MS = 20000;
+        const uploadWithTimeout = (f) => Promise.race([
+          uploadTicketFile(ticket.id, f),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout upload "${f.name}" (>20s)`)), TIMEOUT_MS)
+          ),
+        ]);
+        const results = await Promise.allSettled(files.map(uploadWithTimeout));
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled') attachments.push(r.value);
+          else toast.error(`PJ "${files[i]?.name}" : ${r.reason?.message || 'échec'}`);
+        });
       }
 
       const commentData = {
@@ -591,24 +587,19 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
       // 1. Upload PJ synchrone avec timeout (même approche que les commentaires)
       let ticketAttachments = [];
       if (files.length > 0) {
-        if (!getStorageRef()) {
-          toast.error('Firebase Storage non initialisé — PJ non uploadées.');
-        } else {
-          // Ticket n'a pas encore d'ID → upload dans un dossier temp puis déplacé après
-          const tempId = `temp_${Date.now()}`;
-          const TIMEOUT_MS = 15000;
-          const uploadWithTimeout = (f) => Promise.race([
-            uploadTicketFile(tempId, f),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`Timeout upload "${f.name}" (>15s)`)), TIMEOUT_MS)
-            ),
-          ]);
-          const results = await Promise.allSettled(files.map(uploadWithTimeout));
-          results.forEach((r, i) => {
-            if (r.status === 'fulfilled') ticketAttachments.push(r.value);
-            else toast.error(`PJ "${files[i]?.name}" : ${r.reason?.message || 'échec'}`);
-          });
-        }
+        const TIMEOUT_MS = 20000;
+        const tempId = `temp_${Date.now()}`;
+        const uploadWithTimeout = (f) => Promise.race([
+          uploadTicketFile(tempId, f),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout upload "${f.name}" (>20s)`)), TIMEOUT_MS)
+          ),
+        ]);
+        const results = await Promise.allSettled(files.map(uploadWithTimeout));
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled') ticketAttachments.push(r.value);
+          else toast.error(`PJ "${files[i]?.name}" : ${r.reason?.message || 'échec'}`);
+        });
       }
 
       // 2. Créer le ticket avec les PJ déjà uploadées
