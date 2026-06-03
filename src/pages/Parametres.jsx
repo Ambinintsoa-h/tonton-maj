@@ -3,7 +3,7 @@ import { STORAGE_KEYS } from '../constants/storage';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Settings, Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink } from 'lucide-react';
+import { Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink, Flame, Shield, Zap } from 'lucide-react';
 import axios from 'axios';
 import { setSettings, setFirebaseReady } from '../store/slices/settingsSlice';
 import { initFirebase, saveSettings } from '../services/firebase';
@@ -241,8 +241,11 @@ export default function Parametres() {
       {/* Anthropic */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className={`glass-card p-6 space-y-5 transition-opacity duration-200 ${form.useLocalProxy ? 'opacity-40 pointer-events-none' : ''}`}>
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-black rounded-xl flex items-center justify-center">
-            <Settings size={16} className="text-white" />
+          {/* Anthropic logo — stylisé */}
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: '#191919' }}>
+            <svg viewBox="0 0 24 24" fill="white" className="w-[18px] h-[18px]">
+              <path d="M17.32 3H14.2L12 8.8 9.8 3H6.68L11 13.82h2L17.32 3zM6 21h2.8l1.2-3h4l1.2 3H18l-5-12.5h-2L6 21zm5.1-5.3 1.4-3.5 1.4 3.5h-2.8z"/>
+            </svg>
           </div>
           <div>
             <h2 className="font-semibold text-gray-900">Anthropic Claude</h2>
@@ -262,8 +265,9 @@ export default function Parametres() {
       {/* Brave Search */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="glass-card p-6 space-y-5">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-gray-800 rounded-xl flex items-center justify-center">
-            <span className="text-white text-sm font-bold">B</span>
+          {/* Brave logo — lion/shield */}
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: '#FB542B' }}>
+            <Shield size={17} className="text-white" strokeWidth={2.2} />
           </div>
           <div>
             <h2 className="font-semibold text-gray-900">Brave Search</h2>
@@ -289,8 +293,11 @@ export default function Parametres() {
       {/* Tavily Search */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.07 }} className="glass-card p-6 space-y-5">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: '#0ea5e9' }}>
-            <span className="text-white text-sm font-bold">T</span>
+          {/* Tavily logo */}
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #1E40AF, #3B82F6)' }}>
+            <svg viewBox="0 0 24 24" fill="white" className="w-[17px] h-[17px]">
+              <path d="M13 3L4 14h7l-2 7 11-11h-7l2-7z"/>
+            </svg>
           </div>
           <div>
             <h2 className="font-semibold text-gray-900">Tavily Search</h2>
@@ -315,8 +322,11 @@ export default function Parametres() {
       {/* Groq Whisper — Transcription vidéo */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.09 }} className="glass-card p-6 space-y-5">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: '#f55036' }}>
-            <Mic size={16} className="text-white" />
+          {/* Groq logo */}
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: '#F55036' }}>
+            <svg viewBox="0 0 24 24" fill="white" className="w-[18px] h-[18px]">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+            </svg>
           </div>
           <div>
             <h2 className="font-semibold text-gray-900">Groq Whisper — Transcription vidéo</h2>
@@ -340,8 +350,9 @@ export default function Parametres() {
       {/* Firebase */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="glass-card p-6 space-y-5">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-orange-500 rounded-xl flex items-center justify-center">
-            <span className="text-white text-sm font-bold">F</span>
+          {/* Firebase logo — flamme */}
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(160deg, #FFA000, #F57C00)' }}>
+            <Flame size={18} className="text-white" strokeWidth={2} />
           </div>
           <div>
             <h2 className="font-semibold text-gray-900">Firebase</h2>
