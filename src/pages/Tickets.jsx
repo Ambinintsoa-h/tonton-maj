@@ -160,44 +160,40 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
     if (!text.trim() && files.length === 0) return;
     setSending(true);
     try {
-      // Vérification Firebase Storage avant upload
+      // Upload PJ en parallèle (Promise.allSettled) + vérif storage
       let attachments = [];
       if (files.length > 0) {
         if (!getStorageRef()) {
-          toast.error('Firebase Storage non initialisé — impossible d\'uploader les pièces jointes. Réessayez dans quelques secondes.');
+          toast.error('Firebase Storage non initialisé — PJ ignorées, réessayez.');
           setSending(false);
           return;
         }
-        let uploadErrors = 0;
-        for (const f of files) {
-          try {
-            const att = await uploadTicketFile(ticket.id, f);
-            attachments.push(att);
-          } catch (e) {
-            uploadErrors++;
-            toast.error(`Échec upload "${f.name}" : ${e.message}`);
-          }
-        }
-        // Toutes les PJ ont échoué → ne pas envoyer un commentaire vide sans PJ
-        if (uploadErrors > 0 && attachments.length === 0 && !text.trim()) {
-          toast.error('Toutes les pièces jointes ont échoué — commentaire non envoyé.');
+        const results = await Promise.allSettled(files.map(f => uploadTicketFile(ticket.id, f)));
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled') attachments.push(r.value);
+          else toast.error(`Échec upload "${files[i].name}" : ${r.reason?.message || 'erreur'}`);
+        });
+        if (attachments.length === 0 && !text.trim()) {
+          toast.error('Toutes les PJ ont échoué — commentaire non envoyé.');
           setSending(false);
           return;
-        }
-        if (uploadErrors > 0) {
-          toast.error(`${uploadErrors} pièce(s) jointe(s) n'ont pas pu être uploadées.`);
         }
       }
 
       const commentData = {
-        ticketId: ticket.id,
-        authorId: currentUser.uid || currentUser.username,
+        ticketId:       ticket.id,
+        authorId:       currentUser.uid || currentUser.username,
         authorUsername: currentUser.username,
-        authorRole: currentUser.role,
-        content: text.trim(),
+        authorRole:     currentUser.role,
+        content:        text.trim(),
         attachments,
       };
-      await addComment(commentData);
+
+      // Calcul du statusUpdate côté client (évite un getDoc dans addComment)
+      const statusUpdate = ticket.status === 'open' && commentData.authorId !== ticket.creatorId
+        ? { status: 'in_progress' } : {};
+
+      await addComment(commentData, statusUpdate);
       tracker.trackAction('ticketsCommented');
 
       // Notifier créateur + assignee en parallèle
@@ -601,31 +597,11 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
         attachments: [],
       };
 
-      // 1. Créer le ticket d'abord pour obtenir l'ID réel
+      // 1. Créer le ticket pour obtenir l'ID réel
       const id = await createTicket({ ...ticketData, level: ticketLevel });
       tracker.trackAction('ticketsCreated');
 
-      // 2. Uploader les PJ avec le vrai ticketId → chemin définitif ticket-attachments/{id}/...
-      let attachments = [];
-      if (files.length > 0) {
-        if (!getStorageRef()) {
-          toast.error('Firebase Storage non initialisé — les pièces jointes n\'ont pas pu être uploadées.');
-        } else {
-          const results = await Promise.allSettled(files.map(f => uploadTicketFile(id, f)));
-          results.forEach((r, i) => {
-            if (r.status === 'fulfilled') attachments.push(r.value);
-            else toast.error(`Échec upload "${files[i].name}" : ${r.reason?.message || 'erreur inconnue'}`);
-          });
-          // 3. Mettre à jour le doc Firestore avec les PJ si au moins une a réussi
-          if (attachments.length > 0) {
-            await updateTicketDoc(id, { attachments });
-          } else {
-            toast.error('Aucune pièce jointe n\'a pu être uploadée — ticket créé sans PJ.');
-          }
-        }
-      }
-
-      const newTicket = { id, ...ticketData, attachments, status: 'open', level: ticketLevel, commentCount: 0, createdAt: Date.now(), updatedAt: Date.now(), resolvedAt: null, closedAt: null };
+      const newTicket = { id, ...ticketData, attachments: [], status: 'open', level: ticketLevel, commentCount: 0, createdAt: Date.now(), updatedAt: Date.now(), resolvedAt: null, closedAt: null };
 
       // CQ IA → notifie UNIQUEMENT l'assigné (le manager désigné)
       // Manager → notifie tous les super admins (ticket L2 sans assigné fixe)
@@ -639,18 +615,30 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
       } else {
         notifTargets = users.filter(u => u.role === 'manager');
       }
-      await Promise.all(notifTargets.map(u => createNotification({
+      // Notifs + upload PJ en parallèle (non-bloquant pour l'UI)
+      onCreated(newTicket);
+      toast.success('Ticket créé avec succès');
+      onClose();
+
+      // Arrière-plan : notifs + PJ (n'affecte pas la réactivité)
+      Promise.all(notifTargets.map(u => createNotification({
         toUserId: u.id || u.uid,
         fromUsername: currentUser.username,
         type: 'new_ticket',
         ticketId: id,
         ticketTitle: title.trim(),
         message: `Nouveau ticket de ${currentUser.username} : "${title.trim()}"`,
-      })));
+      }))).catch(() => {});
 
-      onCreated(newTicket);
-      toast.success('Ticket créé avec succès');
-      onClose();
+      if (files.length > 0 && getStorageRef()) {
+        Promise.allSettled(files.map(f => uploadTicketFile(id, f)))
+          .then(results => {
+            const uploaded = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+            if (uploaded.length > 0) updateTicketDoc(id, { attachments: uploaded }).catch(() => {});
+            const failed = results.filter(r => r.status === 'rejected').length;
+            if (failed > 0) toast.error(`${failed} pièce(s) jointe(s) non uploadée(s).`);
+          });
+      }
     } catch (e) {
       toast.error('Erreur lors de la création du ticket');
     } finally {

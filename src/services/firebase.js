@@ -351,24 +351,18 @@ export const getComments = async (ticketId) => {
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 };
 
-export const addComment = async (comment) => {
+// ticketStatusUpdate : objet optionnel calculé côté client (ex: { status: 'in_progress' })
+// Évite un getDoc() inutile → addDoc + updateDoc lancés en parallèle
+export const addComment = async (comment, ticketStatusUpdate = {}) => {
   if (!db) throw new Error('Firebase non initialisé');
-  const ref = await addDoc(collection(db, 'ticket_comments'), {
-    ...comment,
-    createdAt: Date.now(),
-  });
-  // Incrémenter le compteur
-  const ticketRef = doc(db, 'tickets', comment.ticketId);
-  const ticketSnap = await getDoc(ticketRef);
-  if (ticketSnap.exists()) {
-    const t = ticketSnap.data();
-    const updates = { commentCount: (t.commentCount || 0) + 1, updatedAt: Date.now() };
-    // Auto in_progress si ticket open ET auteur n'est pas le créateur
-    if (t.status === 'open' && comment.authorId !== t.creatorId) {
-      updates.status = 'in_progress';
-    }
-    await updateDoc(ticketRef, updates);
-  }
+  const [ref] = await Promise.all([
+    addDoc(collection(db, 'ticket_comments'), { ...comment, createdAt: Date.now() }),
+    updateDoc(doc(db, 'tickets', comment.ticketId), {
+      commentCount: increment(1),
+      updatedAt:    Date.now(),
+      ...ticketStatusUpdate,
+    }),
+  ]);
   return ref.id;
 };
 
