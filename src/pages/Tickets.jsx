@@ -11,7 +11,7 @@ import {
 import { addTicket, updateTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
   getTickets, createTicket, updateTicketDoc, getComments, addComment,
-  uploadTicketFile, createNotification,
+  uploadTicketFile, createNotification, getStorageRef,
 } from '../services/firebase';
 import { AccountAvatar } from '../components/account/MonComptePanel';
 import tracker from '../services/activityTracker';
@@ -160,14 +160,32 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
     if (!text.trim() && files.length === 0) return;
     setSending(true);
     try {
-      // Upload fichiers
+      // Vérification Firebase Storage avant upload
       let attachments = [];
-      for (const f of files) {
-        try {
-          const att = await uploadTicketFile(ticket.id, f);
-          attachments.push(att);
-        } catch {
-          toast.error(`Erreur upload ${f.name}`);
+      if (files.length > 0) {
+        if (!getStorageRef()) {
+          toast.error('Firebase Storage non initialisé — impossible d\'uploader les pièces jointes. Réessayez dans quelques secondes.');
+          setSending(false);
+          return;
+        }
+        let uploadErrors = 0;
+        for (const f of files) {
+          try {
+            const att = await uploadTicketFile(ticket.id, f);
+            attachments.push(att);
+          } catch (e) {
+            uploadErrors++;
+            toast.error(`Échec upload "${f.name}" : ${e.message}`);
+          }
+        }
+        // Toutes les PJ ont échoué → ne pas envoyer un commentaire vide sans PJ
+        if (uploadErrors > 0 && attachments.length === 0 && !text.trim()) {
+          toast.error('Toutes les pièces jointes ont échoué — commentaire non envoyé.');
+          setSending(false);
+          return;
+        }
+        if (uploadErrors > 0) {
+          toast.error(`${uploadErrors} pièce(s) jointe(s) n'ont pas pu être uploadées.`);
         }
       }
 
@@ -590,14 +608,20 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
       // 2. Uploader les PJ avec le vrai ticketId → chemin définitif ticket-attachments/{id}/...
       let attachments = [];
       if (files.length > 0) {
-        const results = await Promise.allSettled(files.map(f => uploadTicketFile(id, f)));
-        results.forEach((r, i) => {
-          if (r.status === 'fulfilled') attachments.push(r.value);
-          else toast.error(`Échec upload : ${files[i].name}`);
-        });
-        // 3. Mettre à jour le doc Firestore avec les PJ si au moins une a réussi
-        if (attachments.length > 0) {
-          await updateTicketDoc(id, { attachments });
+        if (!getStorageRef()) {
+          toast.error('Firebase Storage non initialisé — les pièces jointes n\'ont pas pu être uploadées.');
+        } else {
+          const results = await Promise.allSettled(files.map(f => uploadTicketFile(id, f)));
+          results.forEach((r, i) => {
+            if (r.status === 'fulfilled') attachments.push(r.value);
+            else toast.error(`Échec upload "${files[i].name}" : ${r.reason?.message || 'erreur inconnue'}`);
+          });
+          // 3. Mettre à jour le doc Firestore avec les PJ si au moins une a réussi
+          if (attachments.length > 0) {
+            await updateTicketDoc(id, { attachments });
+          } else {
+            toast.error('Aucune pièce jointe n\'a pu être uploadée — ticket créé sans PJ.');
+          }
         }
       }
 
