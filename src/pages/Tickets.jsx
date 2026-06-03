@@ -156,7 +156,10 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
     if (!text.trim() && files.length === 0) return;
     setSending(true);
     try {
-      const hasPJ  = files.length > 0 && getStorageRef();
+      // Capturer les fichiers AVANT setFiles([]) — évite la perte dans la closure React
+      const filesToUpload = [...files];
+      const hasPJ = filesToUpload.length > 0 && !!getStorageRef();
+
       const commentData = {
         ticketId:       ticket.id,
         authorId:       currentUser.uid || currentUser.username,
@@ -169,7 +172,7 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
       const statusUpdate = ticket.status === 'open' && commentData.authorId !== ticket.creatorId
         ? { status: 'in_progress' } : {};
 
-      // ── Envoyer le commentaire IMMÉDIATEMENT (le texte apparaît en <1s via onSnapshot) ──
+      // ── Envoyer le commentaire IMMÉDIATEMENT (<1s via onSnapshot) ──
       const commentId = await addComment(commentData, statusUpdate);
       tracker.trackAction('ticketsCommented');
       setText('');
@@ -177,17 +180,24 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
       onCommentAdded && onCommentAdded();
 
       // ── Arrière-plan : upload PJ + mise à jour commentaire + notifications ──
-      // Rien de tout ça ne bloque l'UI — l'utilisateur voit son commentaire immédiatement
       Promise.resolve().then(async () => {
         // Upload PJ
         if (hasPJ) {
-          const results = await Promise.allSettled(files.map(f => uploadTicketFile(ticket.id, f)));
+          const results = await Promise.allSettled(
+            filesToUpload.map(f => uploadTicketFile(ticket.id, f))
+          );
           const uploaded = results.filter(r => r.status === 'fulfilled').map(r => r.value);
-          const failed   = results.filter(r => r.status === 'rejected').length;
-          if (uploaded.length > 0) await updateCommentAttachments(commentId, uploaded);
-          if (failed > 0) toast.error(`${failed} pièce(s) jointe(s) non uploadée(s).`);
+          const rejected = results.filter(r => r.status === 'rejected');
+          if (uploaded.length > 0) {
+            await updateCommentAttachments(commentId, uploaded);
+          }
+          if (rejected.length > 0) {
+            toast.error(`${rejected.length} PJ non uploadée(s) : ${rejected.map(r => r.reason?.message || 'erreur').join(', ')}`);
+          }
+        } else if (filesToUpload.length > 0 && !getStorageRef()) {
+          toast.error('Firebase Storage non prêt — PJ non uploadées.');
         }
-        // Notifications
+        // Notifications (non bloquant)
         const toNotify = [...new Set([
           ticket.creatorId  !== commentData.authorId ? ticket.creatorId  : null,
           ticket.assigneeId !== commentData.authorId ? ticket.assigneeId : null,
@@ -197,7 +207,9 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
           type: 'new_comment', ticketId: ticket.id, ticketTitle: ticket.title,
           message: `${currentUser.username} a commenté le ticket "${ticket.title}"`,
         })));
-      }).catch(() => {});
+      }).catch(e => {
+        if (filesToUpload.length > 0) toast.error('Erreur upload PJ : ' + (e?.message || 'inconnu'));
+      });
     } catch (e) {
       toast.error('Erreur lors de l\'envoi du commentaire');
     } finally {
@@ -614,14 +626,17 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
         message: `Nouveau ticket de ${currentUser.username} : "${title.trim()}"`,
       }))).catch(() => {});
 
-      if (files.length > 0 && getStorageRef()) {
-        Promise.allSettled(files.map(f => uploadTicketFile(id, f)))
+      // Capturer les fichiers AVANT que le modal se ferme (évite perte dans la closure)
+      const ticketFiles = [...files];
+      if (ticketFiles.length > 0 && getStorageRef()) {
+        Promise.allSettled(ticketFiles.map(f => uploadTicketFile(id, f)))
           .then(results => {
             const uploaded = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+            const rejected = results.filter(r => r.status === 'rejected');
             if (uploaded.length > 0) updateTicketDoc(id, { attachments: uploaded }).catch(() => {});
-            const failed = results.filter(r => r.status === 'rejected').length;
-            if (failed > 0) toast.error(`${failed} pièce(s) jointe(s) non uploadée(s).`);
-          });
+            if (rejected.length > 0) toast.error(`${rejected.length} PJ non uploadée(s) sur le ticket.`);
+          })
+          .catch(e => toast.error('Erreur upload PJ ticket : ' + (e?.message || 'inconnu')));
       }
     } catch (e) {
       toast.error('Erreur lors de la création du ticket');
