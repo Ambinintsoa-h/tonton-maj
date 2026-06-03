@@ -484,11 +484,13 @@ export default function Parametres() {
               try {
                 const r = await axios.get('/api/haloscan/test');
                 setHaloscanStatus(r.data.success ? 'ok' : 'warn');
-                if (r.data.success) toast.success('Haloscan connecté !');
-                else toast('Clé acceptée — endpoint à confirmer', { icon: '⚠️' });
-              } catch {
+                if (r.data.success) toast.success(`Haloscan connecté ! ${r.data.credits ? JSON.stringify(r.data.credits) : ''}`);
+                else toast('Réponse inattendue — vérifiez la clé', { icon: '⚠️' });
+              } catch (e) {
                 setHaloscanStatus('error');
-                toast.error('Clé Haloscan invalide ou API inaccessible');
+                const detail = e.response?.data?.detail || e.response?.data?.error || e.message || '';
+                const status = e.response?.status;
+                toast.error(`Haloscan erreur ${status || ''} — ${detail || 'Clé invalide ou API inaccessible'}`);
               }
               setTestingHaloscan(false);
             }}

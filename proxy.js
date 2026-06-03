@@ -815,21 +815,28 @@ const _findInSerp = (serp, articleUrl) => {
 };
 
 // GET /api/haloscan/test — valide la clé via GET /user/credit (super_admin seulement)
+// Note : Haloscan GET /user/credit attend un body {} même en GET (curl -d '{}' -X GET)
 app.get('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (req, res) => {
   const haloscanKey = readServerSettings().haloscanKey;
   if (!haloscanKey) return res.status(503).json({ error: 'Clé Haloscan non configurée' });
   try {
-    const resp = await axios.get(`${HALOSCAN_BASE}/user/credit`, {
+    // axios.request permet d'envoyer un body sur une requête GET (requis par Haloscan)
+    const resp = await axios.request({
+      method:  'get',
+      url:     `${HALOSCAN_BASE}/user/credit`,
       headers: haloscanHeaders(haloscanKey),
+      data:    {},
       timeout: 10000,
     });
     res.json({ success: true, credits: resp.data });
   } catch (e) {
     const status  = e.response?.status;
     const invalid = status === 401 || status === 403;
+    console.error('[haloscan/test]', status, e.response?.data || e.message);
     res.status(invalid ? 400 : 500).json({
       success: false,
       error:   invalid ? 'Clé API invalide' : 'Erreur API Haloscan',
+      status,
       detail:  e.response?.data || e.message,
     });
   }
