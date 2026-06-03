@@ -788,30 +788,31 @@ app.get('/api/searxng', requireAuth, async (req, res) => {
 });
 
 // ─── Haloscan SEO API (clé lue depuis settings.json — jamais exposée au navigateur) ──────────
-// ⚠️  ENDPOINT : vérifier l'URL exacte dans tool.haloscan.com/user/api
-//     Les paramètres ci-dessous suivent le pattern standard des APIs SEO — adapter si besoin.
-const HALOSCAN_BASE = 'https://tool.haloscan.com/api';
+// Header authentification Haloscan : "haloscan-api-key" (confirmé dans tool.haloscan.com/user/api)
+// ⚠️ ENDPOINT /check : adapter l'URL selon la doc officielle Haloscan si nécessaire
+const HALOSCAN_BASE    = 'https://tool.haloscan.com/api';
+const haloscanHeaders  = (key) => ({ 'haloscan-api-key': key, 'Accept': 'application/json', 'Content-Type': 'application/json' });
 
 // GET /api/haloscan/test — valide la clé API (super_admin seulement)
 app.get('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (req, res) => {
   const haloscanKey = readServerSettings().haloscanKey;
   if (!haloscanKey) return res.status(503).json({ error: 'Clé Haloscan non configurée' });
   try {
-    // Test minimal : vérifier que la clé est acceptée
-    // ⚠️ Adapter l'endpoint selon la doc Haloscan (ex: /v1/account, /v1/me, /v1/ping…)
+    // Teste la clé en appelant un endpoint léger — ajuster si Haloscan expose /account, /me ou /ping
     const resp = await axios.get(`${HALOSCAN_BASE}/v1/account`, {
-      headers: { 'Authorization': `Bearer ${haloscanKey}`, 'Accept': 'application/json' },
+      headers: haloscanHeaders(haloscanKey),
       timeout: 10000,
     });
     res.json({ success: true, data: resp.data });
   } catch (e) {
     const status = e.response?.status;
-    // 401/403 = clé invalide ; autres = endpoint incertain mais clé peut être OK
-    res.status(status === 401 || status === 403 ? 400 : 200).json({
-      success: status !== 401 && status !== 403,
-      error: status === 401 || status === 403 ? 'Clé API invalide' : null,
-      hint: 'Si le test échoue, vérifiez l\'endpoint dans tool.haloscan.com/user/api',
-      detail: e.response?.data || e.message,
+    // 401/403 = clé invalide ; 404 = endpoint incertain mais clé peut être OK
+    const invalid = status === 401 || status === 403;
+    res.status(invalid ? 400 : 200).json({
+      success: !invalid,
+      error:   invalid ? 'Clé API invalide' : null,
+      hint:    !invalid ? 'Clé acceptée — endpoint test à confirmer dans tool.haloscan.com/user/api' : null,
+      detail:  e.response?.data || e.message,
     });
   }
 });
@@ -820,22 +821,18 @@ app.get('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (re
 app.post('/api/haloscan/check', requireAuth, async (req, res) => {
   const { keywords, articleUrl } = req.body;
   const haloscanKey = readServerSettings().haloscanKey;
-  if (!haloscanKey)              return res.status(503).json({ error: 'Clé Haloscan non configurée' });
-  if (!Array.isArray(keywords) || !keywords.length) return res.status(400).json({ error: 'keywords (array) requis' });
-  if (!articleUrl)               return res.status(400).json({ error: 'articleUrl requis' });
+  if (!haloscanKey)                                  return res.status(503).json({ error: 'Clé Haloscan non configurée' });
+  if (!Array.isArray(keywords) || !keywords.length)  return res.status(400).json({ error: 'keywords (array) requis' });
+  if (!articleUrl)                                   return res.status(400).json({ error: 'articleUrl requis' });
 
-  // ⚠️ ADAPTER : endpoint + paramètres selon la doc officielle Haloscan
-  // Patterns courants pour les APIs SEO de ranking :
-  //   POST /v1/positions        { keywords, url, locale }
-  //   POST /v1/keyword/ranking  { keyword, url, country }
-  //   GET  /v1/serp?kw=...&url=...
+  // ⚠️ Adapter l'endpoint + paramètres selon la doc officielle Haloscan
   try {
     const resp = await axios.post(`${HALOSCAN_BASE}/v1/positions`, {
       keywords,
       url:    articleUrl,
       locale: 'fr',
     }, {
-      headers: { 'Authorization': `Bearer ${haloscanKey}`, 'Content-Type': 'application/json' },
+      headers: haloscanHeaders(haloscanKey),
       timeout: 30000,
     });
     res.json({ success: true, results: resp.data });
@@ -881,7 +878,7 @@ const _seoSnapshotCheck = async () => {
           url:      seo.articleUrl,
           locale:   'fr',
         }, {
-          headers: { 'Authorization': `Bearer ${haloscanKey}`, 'Content-Type': 'application/json' },
+          headers: haloscanHeaders(haloscanKey),
           timeout: 30000,
         });
 
