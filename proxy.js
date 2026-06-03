@@ -2055,6 +2055,21 @@ app.post('/api/wp-tool', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/debug/storage — liste les buckets GCS accessibles (super_admin, debug uniquement)
+app.get('/api/debug/storage', requireAuth, requireRole('super_admin'), async (req, res) => {
+  if (!firebaseAdmin) return res.json({ error: 'Firebase Admin non configuré' });
+  try {
+    const [buckets] = await firebaseAdmin.storage().getBuckets();
+    res.json({
+      buckets: buckets.map(b => b.name),
+      projectId: firebaseAdmin.app().options?.credential?.projectId || 'inconnu',
+      configBucket: readServerSettings().firebaseConfig?.storageBucket || 'non défini',
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, code: e.code });
+  }
+});
+
 // ─── POST /api/upload-ticket-file — upload PJ ticket/commentaire via Firebase Admin ─
 // Bypasse les règles Firebase Storage (Admin SDK = accès root).
 // Accepte multipart/form-data : file (image/vidéo), ticketId.
@@ -2071,32 +2086,25 @@ app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), as
   if (!ticketId) return res.status(400).json({ error: 'ticketId requis' });
 
   try {
-    // Firebase Admin SDK utilise le nom GCS du bucket.
-    // Format récent Firebase : {project}.firebasestorage.app → Admin SDK l'accepte directement.
-    // Format classique       : {project}.appspot.com
-    // On essaie les deux automatiquement.
     const configBucket = readServerSettings().firebaseConfig?.storageBucket || '';
     const projectId    = configBucket.replace('.firebasestorage.app', '').replace('.appspot.com', '') || 'tonton-ai-c8196';
-    const candidates   = [
-      configBucket,
-      `${projectId}.appspot.com`,
-      `${projectId}.firebasestorage.app`,
-    ].filter((b, i, arr) => b && arr.indexOf(b) === i); // unique + non-vide
 
-    let bucket = null, usedBucket = '';
-    for (const name of candidates) {
-      try {
-        const b = firebaseAdmin.storage().bucket(name);
-        const [exists] = await b.exists();
-        if (exists) { bucket = b; usedBucket = name; break; }
-      } catch {}
-    }
-    if (!bucket) {
-      return res.status(500).json({ error: `Bucket Firebase Storage introuvable. Candidats testés : ${candidates.join(', ')}` });
+    // Tenter de lister les buckets disponibles pour trouver le bon nom
+    let usedBucket = configBucket;
+    try {
+      const [buckets] = await firebaseAdmin.storage().getBuckets();
+      if (buckets.length > 0) {
+        usedBucket = buckets[0].name; // prend le 1er bucket disponible
+        console.log('[upload-ticket-file] Buckets disponibles :', buckets.map(b => b.name).join(', '));
+      }
+    } catch (listErr) {
+      console.warn('[upload-ticket-file] Impossible de lister les buckets :', listErr.message);
+      // Fallback : essayer appspot.com puis firebasestorage.app
+      usedBucket = `${projectId}.appspot.com`;
     }
 
     const filePath = `ticket-attachments/${ticketId}/${Date.now()}_${req.file.originalname}`;
-    const fileRef  = bucket.file(filePath);
+    const fileRef  = firebaseAdmin.storage().bucket(usedBucket).file(filePath);
 
     await fileRef.save(req.file.buffer, {
       contentType: req.file.mimetype,
@@ -2105,11 +2113,11 @@ app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), as
     await fileRef.makePublic();
 
     const url = `https://storage.googleapis.com/${usedBucket}/${filePath}`;
-    console.log(`[upload-ticket-file] ✓ ${req.file.originalname} → ${usedBucket}/${filePath}`);
+    console.log(`[upload-ticket-file] ✓ ${req.file.originalname} → ${url}`);
     res.json({ url, name: req.file.originalname, type: req.file.mimetype, size: req.file.size });
   } catch (e) {
-    console.error('[upload-ticket-file]', e.message);
-    res.status(500).json({ error: 'Erreur upload : ' + e.message });
+    console.error('[upload-ticket-file] ERREUR COMPLÈTE :', e.message, e.code);
+    res.status(500).json({ error: `Upload échoué : ${e.message}`, code: e.code });
   }
 });
 
