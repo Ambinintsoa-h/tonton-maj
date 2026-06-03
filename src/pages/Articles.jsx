@@ -2,14 +2,14 @@ import { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Link2, FileText, Sparkles, ChevronRight, AlertCircle } from 'lucide-react';
+import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon } from 'lucide-react';
 import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData } from '../store/slices/agentSlice';
 import { addToHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
-import { saveArticle } from '../services/firebase';
+import { saveArticle, initArticleSeoTracking, saveSeoSnapshot } from '../services/firebase';
 import tracker from '../services/activityTracker';
 import AgentThinking from '../components/agent/AgentThinking';
 import ArticleResult from '../components/agent/ArticleResult';
@@ -33,6 +33,8 @@ export default function Articles() {
   const [url, setUrl] = useState('');
   const [text, setText] = useState('');
   const [scraping, setScraping] = useState(false);
+  const [seoKeywords, setSeoKeywords] = useState([]);
+  const [seoKwInput, setSeoKwInput] = useState('');
   const canRun = (settings.aiConfigured || settings.useLocalProxy || settings.anthropicKey) && (tab === TAB_URL ? url.trim() : text.trim());
 
   const handleRun = async () => {
@@ -206,6 +208,26 @@ export default function Articles() {
       }
 
       tracker.trackAction('articlesUpdated');
+
+      // ── Suivi SEO Haloscan — capture snapshot J+0 si mots-clés renseignés ─
+      if (seoKeywords.length > 0 && savedId && firebaseReady && (settings.haloscanConfigured || settings.haloscanKey)) {
+        const articleUrl = tab === TAB_URL ? url.trim() : '';
+        try {
+          await initArticleSeoTracking(savedId, { keywords: seoKeywords, articleUrl });
+          if (articleUrl) {
+            const resp = await axios.post('/api/haloscan/check', { keywords: seoKeywords, articleUrl });
+            if (resp.data?.success) {
+              await saveSeoSnapshot(savedId, {
+                type:       'before',
+                capturedAt: Date.now(),
+                results:    resp.data.results || [],
+              });
+            }
+          }
+        } catch { /* non bloquant */ }
+        setSeoKeywords([]);
+        setSeoKwInput('');
+      }
       if (result.tokenUsage) {
         dispatch(setTokenUsage(result.tokenUsage));
         dispatch(addArticleStat({
@@ -339,6 +361,71 @@ export default function Articles() {
                 <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700">
                   <AlertCircle size={15} />
                   <span>Clé API Anthropic requise — <a href="/parametres" className="underline font-medium">Paramètres</a></span>
+                </div>
+              )}
+
+              {/* ── Suivi SEO Haloscan (optionnel) — visible uniquement si clé configurée ── */}
+              {(settings.haloscanConfigured || settings.haloscanKey) && (
+                <div className="border border-emerald-100 bg-emerald-50/50 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp size={14} className="text-emerald-600" />
+                    <span className="text-sm font-medium text-emerald-800">Suivi SEO (optionnel)</span>
+                    <span className="text-xs text-emerald-500 ml-auto">max 3 mots-clés</span>
+                  </div>
+
+                  {/* Liste mots-clés ajoutés */}
+                  {seoKeywords.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {seoKeywords.map((kw, i) => (
+                        <span key={i} className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-800 text-xs font-medium px-3 py-1 rounded-full">
+                          {kw}
+                          <button
+                            type="button"
+                            onClick={() => setSeoKeywords(prev => prev.filter((_, j) => j !== i))}
+                            className="text-emerald-500 hover:text-emerald-800 transition-colors"
+                          >
+                            <XIcon size={11} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Input nouveau mot-clé */}
+                  {seoKeywords.length < 3 && (
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={seoKwInput}
+                        onChange={e => setSeoKwInput(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && seoKwInput.trim()) {
+                            e.preventDefault();
+                            setSeoKeywords(prev => [...prev, seoKwInput.trim()]);
+                            setSeoKwInput('');
+                          }
+                        }}
+                        placeholder="ex: choisir un bon VPN"
+                        className="input-glass text-sm flex-1 !py-2"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (seoKwInput.trim()) {
+                            setSeoKeywords(prev => [...prev, seoKwInput.trim()]);
+                            setSeoKwInput('');
+                          }
+                        }}
+                        disabled={!seoKwInput.trim()}
+                        className="btn-secondary !py-2 !px-3 text-xs disabled:opacity-40"
+                      >
+                        <Plus size={13} />
+                      </button>
+                    </div>
+                  )}
+                  <p className="text-[11px] text-emerald-600">
+                    La position Google sera capturée avant/après la MAJ et comparée à J+7 et J+30.
+                  </p>
                 </div>
               )}
 

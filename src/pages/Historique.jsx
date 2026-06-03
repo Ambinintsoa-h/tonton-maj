@@ -6,8 +6,9 @@ import toast from 'react-hot-toast';
 import {
   Clock, Trash2, Eye, Search, X, ExternalLink,
   Calendar, CheckCircle2, Sparkles, AlertTriangle, ChevronDown, ChevronUp,
-  UserCircle2, RotateCcw, Loader,
+  UserCircle2, RotateCcw, Loader, TrendingUp, TrendingDown, Minus,
 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { removeFromHistory } from '../store/slices/articlesSlice';
 import { addPendingItem } from '../store/slices/pendingSlice';
 import {
@@ -152,6 +153,171 @@ function SearchBar({ value, onChange, suggestions }) {
         </AnimatePresence>,
         document.body
       )}
+    </div>
+  );
+}
+
+// ── Composant SEO Panel ───────────────────────────────────────────────────────
+const SNAPSHOT_LABELS = { before: 'Avant MAJ', after_7d: 'J+7', after_30d: 'J+30' };
+
+function SeoPanel({ seoTracking }) {
+  if (!seoTracking?.keywords?.length) return null;
+
+  const snapshots = [...(seoTracking.snapshots || [])].sort((a, b) => a.capturedAt - b.capturedAt);
+  const keywords  = seoTracking.keywords;
+  const before    = snapshots.find(s => s.type === 'before');
+  const after7    = snapshots.find(s => s.type === 'after_7d');
+  const after30   = snapshots.find(s => s.type === 'after_30d');
+
+  // Couleur et icône selon l'évolution de position (position basse = meilleure)
+  const posEvol = (before, after) => {
+    if (!before || !after) return null;
+    const diff = before - after; // positif = amélioration
+    if (diff > 0) return { icon: <TrendingUp size={12} />, color: 'text-emerald-600', label: `+${diff.toFixed(1)}` };
+    if (diff < 0) return { icon: <TrendingDown size={12} />, color: 'text-red-500',     label: diff.toFixed(1) };
+    return { icon: <Minus size={12} />, color: 'text-gray-400', label: '=' };
+  };
+
+  // Données chart : position par keyword dans le temps
+  const chartData = snapshots.map(s => {
+    const entry = { name: SNAPSHOT_LABELS[s.type] || s.type };
+    keywords.forEach(kw => {
+      const r = (s.results || []).find(r => r.keyword === kw || r.kw === kw || r.query === kw);
+      entry[kw] = r?.position ?? r?.rank ?? null;
+    });
+    return entry;
+  });
+
+  const COLORS = ['#16a34a', '#2563eb', '#d97706'];
+  const getPos = (snap, kw) => {
+    if (!snap) return '—';
+    const r = (snap.results || []).find(r => r.keyword === kw || r.kw === kw || r.query === kw);
+    const p = r?.position ?? r?.rank;
+    return p != null ? p.toFixed(1) : '—';
+  };
+
+  const pendingLabel = seoTracking.completed ? null
+    : !after7  ? 'Snapshot J+7 en attente'
+    : !after30 ? 'Snapshot J+30 en attente'
+    : null;
+
+  return (
+    <div className="mt-3 border border-emerald-100 rounded-xl overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-50 border-b border-emerald-100">
+        <TrendingUp size={13} className="text-emerald-600" />
+        <span className="text-xs font-semibold text-emerald-800">Suivi SEO Haloscan</span>
+        {pendingLabel && (
+          <span className="ml-auto text-[10px] text-emerald-500 bg-emerald-100 px-2 py-0.5 rounded-full">{pendingLabel}</span>
+        )}
+        {seoTracking.completed && (
+          <span className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+            <CheckCircle2 size={9} /> Suivi terminé (J+30)
+          </span>
+        )}
+      </div>
+
+      <div className="p-4 bg-white space-y-4">
+        {/* Mots-clés chips */}
+        <div className="flex flex-wrap gap-1.5">
+          {keywords.map((kw, i) => (
+            <span key={i} className="inline-flex items-center gap-1 text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full">
+              <span style={{ color: COLORS[i] }} className="w-1.5 h-1.5 rounded-full bg-current inline-block" />
+              {kw}
+            </span>
+          ))}
+        </div>
+
+        {/* Tableau comparatif */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="text-left text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 pr-4">Mot-clé</th>
+                <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Avant MAJ</th>
+                {after7  && <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">J+7</th>}
+                {after30 && <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">J+30</th>}
+                {after7  && <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Évol.</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {keywords.map((kw, i) => {
+                const bPos = parseFloat(getPos(before,  kw)) || null;
+                const aPos = parseFloat(getPos(after30 || after7, kw)) || null;
+                const evol = posEvol(bPos, aPos);
+                return (
+                  <tr key={i} className="border-b border-gray-50 last:border-0">
+                    <td className="py-2 pr-4 font-medium text-gray-700 truncate max-w-[180px]">
+                      <span className="inline-block w-2 h-2 rounded-full mr-1.5 flex-shrink-0" style={{ background: COLORS[i] }} />
+                      {kw}
+                    </td>
+                    <td className="py-2 px-3 text-center text-gray-600">{getPos(before,  kw)}</td>
+                    {after7  && <td className="py-2 px-3 text-center text-gray-600">{getPos(after7,  kw)}</td>}
+                    {after30 && <td className="py-2 px-3 text-center text-gray-600">{getPos(after30, kw)}</td>}
+                    {after7  && (
+                      <td className="py-2 px-3 text-center">
+                        {evol ? (
+                          <span className={`inline-flex items-center gap-0.5 font-semibold ${evol.color}`}>
+                            {evol.icon}{evol.label}
+                          </span>
+                        ) : '—'}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Chart évolution — affiché si au moins 2 snapshots */}
+        {chartData.length >= 2 && (
+          <div>
+            <p className="text-[10px] text-gray-400 uppercase tracking-widest font-semibold mb-2">Évolution de position (bas = mieux)</p>
+            <ResponsiveContainer width="100%" height={120}>
+              <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+                <YAxis reversed tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+                <Tooltip
+                  contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
+                  formatter={(v, name) => [v != null ? `Position ${v}` : '—', name]}
+                />
+                {keywords.map((kw, i) => (
+                  <Line
+                    key={kw}
+                    type="monotone"
+                    dataKey={kw}
+                    stroke={COLORS[i]}
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: COLORS[i] }}
+                    connectNulls={false}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {/* Aucun snapshot encore */}
+        {snapshots.length === 0 && (
+          <p className="text-xs text-gray-400 text-center py-2">
+            Snapshot J+0 en cours de traitement…
+          </p>
+        )}
+
+        {/* URL trackée */}
+        {seoTracking.articleUrl && (
+          <a
+            href={seoTracking.articleUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-600 hover:underline"
+          >
+            <ExternalLink size={10} />
+            {seoTracking.articleUrl}
+          </a>
+        )}
+      </div>
     </div>
   );
 }
@@ -324,6 +490,11 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
                   </div>
                 )}
               </div>
+
+              {/* Panneau SEO Haloscan */}
+              {article.seoTracking?.enabled && (
+                <SeoPanel seoTracking={article.seoTracking} />
+              )}
             </div>
           </motion.div>
         )}

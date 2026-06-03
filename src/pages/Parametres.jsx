@@ -3,7 +3,7 @@ import { STORAGE_KEYS } from '../constants/storage';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Settings, Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail } from 'lucide-react';
+import { Settings, Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink } from 'lucide-react';
 import axios from 'axios';
 import { setSettings, setFirebaseReady } from '../store/slices/settingsSlice';
 import { initFirebase, saveSettings } from '../services/firebase';
@@ -39,6 +39,8 @@ export default function Parametres() {
   const stored = useSelector(s => s.settings);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [testingHaloscan, setTestingHaloscan] = useState(false);
+  const [haloscanStatus, setHaloscanStatus] = useState(null);
   const [proxyStatus, setProxyStatus] = useState(null);
   const [checkingProxy, setCheckingProxy] = useState(false);
 
@@ -58,7 +60,8 @@ export default function Parametres() {
     smtpPort:  stored.smtpPort  || 587,
     smtpUser:  stored.smtpUser  || '',
     smtpPass:  stored.smtpPass  || '',
-    smtpFrom:  stored.smtpFrom  || '',
+    smtpFrom:    stored.smtpFrom    || '',
+    haloscanKey: stored.haloscanKey || '',
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -109,11 +112,12 @@ export default function Parametres() {
       tavilyKey:     form.tavilyKey,
       groqKey:       form.groqKey,
       firebaseConfig,
-      smtpHost: form.smtpHost,
-      smtpPort: Number(form.smtpPort) || 587,
-      smtpUser: form.smtpUser,
-      smtpPass: form.smtpPass,
-      smtpFrom: form.smtpFrom,
+      smtpHost:    form.smtpHost,
+      smtpPort:    Number(form.smtpPort) || 587,
+      smtpUser:    form.smtpUser,
+      smtpPass:    form.smtpPass,
+      smtpFrom:    form.smtpFrom,
+      haloscanKey: form.haloscanKey,
     };
 
     // 1. Init Firebase si config fournie
@@ -172,11 +176,12 @@ export default function Parametres() {
       firebaseStorageBucket:     stored.firebaseConfig?.storageBucket || '',
       firebaseMessagingSenderId: stored.firebaseConfig?.messagingSenderId || '',
       firebaseAppId:             stored.firebaseConfig?.appId || '',
-      smtpHost: stored.smtpHost  || '',
-      smtpPort: stored.smtpPort  || 587,
-      smtpUser: stored.smtpUser  || '',
-      smtpPass: stored.smtpPass  || '',
-      smtpFrom: stored.smtpFrom  || '',
+      smtpHost:    stored.smtpHost    || '',
+      smtpPort:    stored.smtpPort    || 587,
+      smtpUser:    stored.smtpUser    || '',
+      smtpPass:    stored.smtpPass    || '',
+      smtpFrom:    stored.smtpFrom    || '',
+      haloscanKey: stored.haloscanKey || '',
     }));
   }, [stored]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -446,6 +451,75 @@ export default function Parametres() {
           <p>• <strong>Gmail</strong> : smtp.gmail.com · port 587 · App Password requis</p>
           <p>• <strong>OVH / Infomaniak</strong> : ssl0.ovh.net ou mail.infomaniak.com · port 587</p>
           <p>• <strong>Brevo (gratuit)</strong> : smtp-relay.brevo.com · port 587 · 300 emails/jour</p>
+        </div>
+      </motion.div>
+
+      {/* Haloscan SEO */}
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.14 }} className="glass-card p-6 space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #16a34a, #15803d)' }}>
+            <TrendingUp size={16} className="text-white" />
+          </div>
+          <div className="flex-1">
+            <h2 className="font-semibold text-gray-900">Haloscan — Suivi SEO</h2>
+            <p className="text-xs text-gray-400">Avant/après positionnement Google par article · outil SEO N°1 FR</p>
+          </div>
+          {stored.haloscanKey && <CheckCircle2 size={16} className="text-sage-400 ml-auto" />}
+        </div>
+
+        <SecretInput
+          label="Clé API Haloscan"
+          value={form.haloscanKey}
+          onChange={v => { set('haloscanKey', v); setHaloscanStatus(null); }}
+          placeholder="hal_..."
+          hint="Disponible dans ton compte Haloscan — tool.haloscan.com/user/api"
+        />
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={async () => {
+              if (!form.haloscanKey) { toast.error('Renseigne la clé Haloscan d\'abord'); return; }
+              setTestingHaloscan(true);
+              try {
+                const r = await axios.get('/api/haloscan/test');
+                setHaloscanStatus(r.data.success ? 'ok' : 'warn');
+                if (r.data.success) toast.success('Haloscan connecté !');
+                else toast('Clé acceptée — endpoint à confirmer', { icon: '⚠️' });
+              } catch {
+                setHaloscanStatus('error');
+                toast.error('Clé Haloscan invalide ou API inaccessible');
+              }
+              setTestingHaloscan(false);
+            }}
+            disabled={testingHaloscan}
+            className="btn-secondary text-xs"
+          >
+            {testingHaloscan ? <Loader size={13} className="animate-spin" /> : <TrendingUp size={13} />}
+            Tester la connexion
+          </button>
+          {haloscanStatus === 'ok'   && <span className="text-xs text-emerald-600 font-medium flex items-center gap-1"><CheckCircle2 size={13} /> Connecté</span>}
+          {haloscanStatus === 'warn' && <span className="text-xs text-amber-600 font-medium flex items-center gap-1"><AlertCircle size={13} /> Partiel — voir hint</span>}
+          {haloscanStatus === 'error'&& <span className="text-xs text-red-500 font-medium flex items-center gap-1"><AlertCircle size={13} /> Clé invalide</span>}
+        </div>
+
+        <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 text-xs text-emerald-700 space-y-1.5">
+          <p className="font-semibold">Ce que ça active dans le SaaS</p>
+          <p>• Champ mots-clés cibles lors de chaque MAJ article</p>
+          <p>• Snapshot position <strong>J+0</strong> (au moment de la MAJ) via l'API Haloscan</p>
+          <p>• Snapshots automatiques <strong>J+7</strong> et <strong>J+30</strong> en arrière-plan</p>
+          <p>• Graphique d'évolution de position dans l'Historique par article</p>
+        </div>
+
+        <div className="bg-gray-50 rounded-xl px-4 py-3 text-xs text-gray-500 space-y-1">
+          <p className="font-medium text-gray-700 flex items-center gap-1.5">
+            <AlertCircle size={12} className="text-amber-400" />
+            Configuration endpoint (si test partiel)
+          </p>
+          <p>Si le test Haloscan retourne "endpoint à confirmer", vérifier l'URL API exacte dans
+            {' '}<a href="https://tool.haloscan.com/user/api" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline inline-flex items-center gap-0.5">tool.haloscan.com/user/api <ExternalLink size={10} /></a>
+            {' '}et mettre à jour <code className="bg-white px-1 py-0.5 rounded border border-gray-200">HALOSCAN_BASE</code> dans <code className="bg-white px-1 py-0.5 rounded border border-gray-200">proxy.js</code>.
+          </p>
         </div>
       </motion.div>
 

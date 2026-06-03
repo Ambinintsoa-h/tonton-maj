@@ -558,3 +558,58 @@ export const getUserActivitySessions = async (userId, days = 7) => {
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, days);
 };
+
+// ─── Haloscan SEO Tracking ────────────────────────────────────────────────────
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Initialise le tracking SEO pour un article (appelé après saveArticle).
+ * Enregistre les mots-clés cibles et l'URL de l'article.
+ */
+export const initArticleSeoTracking = async (articleId, { keywords, articleUrl }) => {
+  if (!db || !articleId) return;
+  const now = Date.now();
+  await updateDoc(doc(db, 'articles', articleId), {
+    'seoTracking.enabled':           true,
+    'seoTracking.keywords':          keywords,
+    'seoTracking.articleUrl':        articleUrl || '',
+    'seoTracking.snapshots':         [],
+    'seoTracking.completed':         false,
+    'seoTracking.nextSnapshotType':  'after_7d',
+    'seoTracking.nextSnapshotAt':    now + 7 * DAY_MS,
+    'seoTracking.createdAt':         now,
+  });
+};
+
+/**
+ * Ajoute un snapshot SEO à un article (J+0, J+7 ou J+30).
+ * nextType : 'after_7d' | 'after_30d' | null (terminé)
+ */
+export const saveSeoSnapshot = async (articleId, snapshot) => {
+  if (!db || !articleId) return;
+  const now      = Date.now();
+  const type     = snapshot.type;
+  const isLast   = type === 'after_30d';
+  const nextType = type === 'before' ? 'after_7d' : type === 'after_7d' ? 'after_30d' : null;
+  const nextAt   = type === 'before'   ? now + 7  * DAY_MS
+                 : type === 'after_7d' ? now + 23 * DAY_MS  // 30 - 7 = 23 jours restants
+                 : Number.MAX_SAFE_INTEGER;                  // terminé
+
+  await updateDoc(doc(db, 'articles', articleId), {
+    'seoTracking.snapshots':        arrayUnion(snapshot),
+    'seoTracking.lastSnapshotAt':   snapshot.capturedAt,
+    'seoTracking.completed':        isLast,
+    'seoTracking.nextSnapshotType': nextType,
+    'seoTracking.nextSnapshotAt':   nextAt,
+  });
+};
+
+/**
+ * Récupère le seoTracking d'un article.
+ */
+export const getArticleSeoTracking = async (articleId) => {
+  if (!db || !articleId) return null;
+  const snap = await getDoc(doc(db, 'articles', articleId));
+  return snap.exists() ? (snap.data().seoTracking || null) : null;
+};

@@ -92,7 +92,7 @@ if (IS_PROD) {
 const VALID_ROLES       = new Set(['super_admin', 'manager', 'cq_ia']);
 const SAFE_USERNAME_RE  = /^[a-zA-Z0-9._-]{1,64}$/; // point autorisé (colonel.sanders) — path.basename() protège du traversal
 const SETTINGS_WHITELIST = [
-  'anthropicKey', 'groqKey', 'braveKey', 'tavilyKey',
+  'anthropicKey', 'groqKey', 'braveKey', 'tavilyKey', 'haloscanKey',
   'smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'smtpFrom',
   'firebaseConfig', 'useLocalProxy',
 ];
@@ -644,8 +644,12 @@ app.get('/api/settings', requireAuth, (req, res) => {
   const settings = readServerSettings();
   if (req.user.role !== 'super_admin') {
     // Clés API non exposées aux rôles inférieurs — le serveur les lit directement depuis settings.json
-    const { anthropicKey, groqKey, braveKey, tavilyKey, smtpPass, smtpUser, smtpHost, smtpFrom, smtpPort, ...safeSettings } = settings;
-    return res.json({ ...safeSettings, aiConfigured: !!(settings.anthropicKey || settings.useLocalProxy) });
+    const { anthropicKey, groqKey, braveKey, tavilyKey, haloscanKey, smtpPass, smtpUser, smtpHost, smtpFrom, smtpPort, ...safeSettings } = settings;
+    return res.json({
+      ...safeSettings,
+      aiConfigured:       !!(settings.anthropicKey || settings.useLocalProxy),
+      haloscanConfigured: !!settings.haloscanKey,
+    });
   }
   res.json(settings);
 });
@@ -782,6 +786,134 @@ app.get('/api/searxng', requireAuth, async (req, res) => {
   }
   res.status(503).json({ error: 'SearXNG inaccessible', results: [] });
 });
+
+// ─── Haloscan SEO API (clé lue depuis settings.json — jamais exposée au navigateur) ──────────
+// ⚠️  ENDPOINT : vérifier l'URL exacte dans tool.haloscan.com/user/api
+//     Les paramètres ci-dessous suivent le pattern standard des APIs SEO — adapter si besoin.
+const HALOSCAN_BASE = 'https://tool.haloscan.com/api';
+
+// GET /api/haloscan/test — valide la clé API (super_admin seulement)
+app.get('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (req, res) => {
+  const haloscanKey = readServerSettings().haloscanKey;
+  if (!haloscanKey) return res.status(503).json({ error: 'Clé Haloscan non configurée' });
+  try {
+    // Test minimal : vérifier que la clé est acceptée
+    // ⚠️ Adapter l'endpoint selon la doc Haloscan (ex: /v1/account, /v1/me, /v1/ping…)
+    const resp = await axios.get(`${HALOSCAN_BASE}/v1/account`, {
+      headers: { 'Authorization': `Bearer ${haloscanKey}`, 'Accept': 'application/json' },
+      timeout: 10000,
+    });
+    res.json({ success: true, data: resp.data });
+  } catch (e) {
+    const status = e.response?.status;
+    // 401/403 = clé invalide ; autres = endpoint incertain mais clé peut être OK
+    res.status(status === 401 || status === 403 ? 400 : 200).json({
+      success: status !== 401 && status !== 403,
+      error: status === 401 || status === 403 ? 'Clé API invalide' : null,
+      hint: 'Si le test échoue, vérifiez l\'endpoint dans tool.haloscan.com/user/api',
+      detail: e.response?.data || e.message,
+    });
+  }
+});
+
+// POST /api/haloscan/check — vérifie le positionnement de mots-clés pour une URL article
+app.post('/api/haloscan/check', requireAuth, async (req, res) => {
+  const { keywords, articleUrl } = req.body;
+  const haloscanKey = readServerSettings().haloscanKey;
+  if (!haloscanKey)              return res.status(503).json({ error: 'Clé Haloscan non configurée' });
+  if (!Array.isArray(keywords) || !keywords.length) return res.status(400).json({ error: 'keywords (array) requis' });
+  if (!articleUrl)               return res.status(400).json({ error: 'articleUrl requis' });
+
+  // ⚠️ ADAPTER : endpoint + paramètres selon la doc officielle Haloscan
+  // Patterns courants pour les APIs SEO de ranking :
+  //   POST /v1/positions        { keywords, url, locale }
+  //   POST /v1/keyword/ranking  { keyword, url, country }
+  //   GET  /v1/serp?kw=...&url=...
+  try {
+    const resp = await axios.post(`${HALOSCAN_BASE}/v1/positions`, {
+      keywords,
+      url:    articleUrl,
+      locale: 'fr',
+    }, {
+      headers: { 'Authorization': `Bearer ${haloscanKey}`, 'Content-Type': 'application/json' },
+      timeout: 30000,
+    });
+    res.json({ success: true, results: resp.data });
+  } catch (e) {
+    console.error('[haloscan]', e.response?.data || e.message);
+    res.status(e.response?.status || 500).json({
+      error:  'Erreur Haloscan API',
+      detail: e.response?.data || e.message,
+    });
+  }
+});
+
+// ─── Haloscan cron — snapshots SEO automatiques J+7 / J+30 ──────────────────
+// Vérifie toutes les 6h les articles ayant un snapshot en attente.
+// Nécessite Firebase Admin + clé Haloscan configurés.
+const _seoSnapshotCheck = async () => {
+  const haloscanKey = readServerSettings().haloscanKey;
+  if (!haloscanKey || !firebaseAdmin) return;
+
+  const DAY = 24 * 60 * 60 * 1000;
+  try {
+    const db  = firebaseAdmin.firestore();
+    const now = Date.now();
+
+    // Articles avec nextSnapshotAt dépassé et tracking non terminé
+    const snap = await db.collection('articles')
+      .where('seoTracking.nextSnapshotAt', '<=', now)
+      .where('seoTracking.completed', '==', false)
+      .limit(20)
+      .get();
+
+    if (snap.empty) return;
+    console.log(`[seo-cron] ${snap.size} article(s) à mettre à jour`);
+
+    for (const docSnap of snap.docs) {
+      const article = docSnap.data();
+      const seo     = article.seoTracking || {};
+      if (!seo.keywords?.length || !seo.articleUrl) continue;
+
+      try {
+        const resp = await axios.post(`${HALOSCAN_BASE}/v1/positions`, {
+          keywords: seo.keywords,
+          url:      seo.articleUrl,
+          locale:   'fr',
+        }, {
+          headers: { 'Authorization': `Bearer ${haloscanKey}`, 'Content-Type': 'application/json' },
+          timeout: 30000,
+        });
+
+        const capturedAt = now;
+        const type       = seo.nextSnapshotType || 'after_7d';
+        const snapshot   = { type, capturedAt, results: resp.data?.results || resp.data };
+
+        // Planification du prochain snapshot
+        const isLast = type === 'after_30d';
+        const updates = {
+          'seoTracking.snapshots':         firebaseAdmin.firestore.FieldValue.arrayUnion(snapshot),
+          'seoTracking.lastSnapshotAt':    capturedAt,
+          'seoTracking.completed':         isLast,
+          'seoTracking.nextSnapshotAt':    isLast ? Number.MAX_SAFE_INTEGER : capturedAt + (type === 'after_7d' ? 23 * DAY : DAY),
+          'seoTracking.nextSnapshotType':  isLast ? null : 'after_30d',
+        };
+        await db.collection('articles').doc(docSnap.id).update(updates);
+        console.log(`[seo-cron] ✓ Snapshot ${type} — article ${docSnap.id}`);
+      } catch (e) {
+        console.warn(`[seo-cron] ✗ Article ${docSnap.id} :`, e.message);
+      }
+    }
+  } catch (e) {
+    console.warn('[seo-cron] Erreur :', e.message);
+  }
+};
+
+// Lancement 30s après démarrage, puis toutes les 6h
+setTimeout(() => {
+  _seoSnapshotCheck();
+  setInterval(_seoSnapshotCheck, 6 * 60 * 60 * 1000);
+}, 30000);
 
 // ─── Sécurité globale : empêche le proxy de crasher sur exceptions non gérées ─
 process.on('uncaughtException', (err) => {
