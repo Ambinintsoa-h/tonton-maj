@@ -2071,21 +2071,41 @@ app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), as
   if (!ticketId) return res.status(400).json({ error: 'ticketId requis' });
 
   try {
-    // Récupérer le bucket depuis les settings ou utiliser la valeur par défaut
-    const storageBucket = readServerSettings().firebaseConfig?.storageBucket || 'tonton-ai-c8196.firebasestorage.app';
-    const bucket  = firebaseAdmin.storage().bucket(storageBucket);
+    // Firebase Admin SDK utilise le nom GCS du bucket.
+    // Format récent Firebase : {project}.firebasestorage.app → Admin SDK l'accepte directement.
+    // Format classique       : {project}.appspot.com
+    // On essaie les deux automatiquement.
+    const configBucket = readServerSettings().firebaseConfig?.storageBucket || '';
+    const projectId    = configBucket.replace('.firebasestorage.app', '').replace('.appspot.com', '') || 'tonton-ai-c8196';
+    const candidates   = [
+      configBucket,
+      `${projectId}.appspot.com`,
+      `${projectId}.firebasestorage.app`,
+    ].filter((b, i, arr) => b && arr.indexOf(b) === i); // unique + non-vide
+
+    let bucket = null, usedBucket = '';
+    for (const name of candidates) {
+      try {
+        const b = firebaseAdmin.storage().bucket(name);
+        const [exists] = await b.exists();
+        if (exists) { bucket = b; usedBucket = name; break; }
+      } catch {}
+    }
+    if (!bucket) {
+      return res.status(500).json({ error: `Bucket Firebase Storage introuvable. Candidats testés : ${candidates.join(', ')}` });
+    }
+
     const filePath = `ticket-attachments/${ticketId}/${Date.now()}_${req.file.originalname}`;
     const fileRef  = bucket.file(filePath);
 
-    // Upload + rendre public (pas de règles Storage à respecter via Admin SDK)
     await fileRef.save(req.file.buffer, {
       contentType: req.file.mimetype,
       metadata: { originalname: req.file.originalname },
     });
     await fileRef.makePublic();
 
-    const url = `https://storage.googleapis.com/${storageBucket}/${filePath}`;
-    console.log(`[upload-ticket-file] ✓ ${req.file.originalname} → ${filePath}`);
+    const url = `https://storage.googleapis.com/${usedBucket}/${filePath}`;
+    console.log(`[upload-ticket-file] ✓ ${req.file.originalname} → ${usedBucket}/${filePath}`);
     res.json({ url, name: req.file.originalname, type: req.file.mimetype, size: req.file.size });
   } catch (e) {
     console.error('[upload-ticket-file]', e.message);
