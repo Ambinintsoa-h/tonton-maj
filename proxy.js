@@ -2055,97 +2055,44 @@ app.post('/api/wp-tool', requireAuth, async (req, res) => {
   }
 });
 
-// ─── Helper upload GCS via REST API (service account token) ──────────────────
-// Contourne les problèmes de SDK en appelant directement l'API Google Cloud Storage.
-const _gcsUpload = async (buffer, filePath, contentType, bucketName) => {
-  const credential = firebaseAdmin.app().options.credential;
-  const { access_token } = await credential.getAccessToken();
+// ─── PJ Tickets — stockage local serveur (data/uploads/) ────────────────────
+// Firebase Storage inaccessible via service account → fichiers sur le serveur.
+// Persistance : data/ n'est jamais écrasé par le CI/CD.
+// Sécurité : préfixe aléatoire + path.basename() anti-traversal.
+const UPLOADS_DIR = path.join(__dirname, 'data', 'uploads', 'ticket-attachments');
+const ticketUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-  const uploadUrl = `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(bucketName)}/o?uploadType=media&name=${encodeURIComponent(filePath)}`;
-  const uploadResp = await axios.post(uploadUrl, buffer, {
-    headers: {
-      'Authorization': `Bearer ${access_token}`,
-      'Content-Type': contentType,
-    },
-    maxBodyLength: Infinity,
-    timeout: 60000,
-  });
-
-  // Rendre le fichier public
-  const patchUrl = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucketName)}/o/${encodeURIComponent(filePath)}?predefinedAcl=publicRead`;
-  await axios.patch(patchUrl, {}, { headers: { 'Authorization': `Bearer ${access_token}` } }).catch(() => {});
-
-  return `https://storage.googleapis.com/${bucketName}/${filePath}`;
-};
-
-// GET /api/debug/storage — infos bucket (super_admin, debug)
-app.get('/api/debug/storage', requireAuth, requireRole('super_admin'), async (req, res) => {
-  if (!firebaseAdmin) return res.json({ error: 'Firebase Admin non configuré' });
-  try {
-    const credential = firebaseAdmin.app().options.credential;
-    const { access_token } = await credential.getAccessToken();
-    const configBucket = readServerSettings().firebaseConfig?.storageBucket || '';
-    // Tester les deux formats de bucket avec l'API REST
-    const projectId  = configBucket.replace('.firebasestorage.app', '').replace('.appspot.com', '') || 'tonton-ai-c8196';
-    const candidates = [...new Set([configBucket, `${projectId}.appspot.com`, `${projectId}.firebasestorage.app`].filter(Boolean))];
-    const results = {};
-    for (const b of candidates) {
-      try {
-        const r = await axios.get(`https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(b)}`, {
-          headers: { 'Authorization': `Bearer ${access_token}` },
-          timeout: 5000,
-        });
-        results[b] = r.status === 200 ? 'ACCESSIBLE ✅' : r.status;
-      } catch (e) {
-        results[b] = `${e.response?.status || 'erreur'} — ${e.response?.data?.error?.message || e.message}`;
-      }
-    }
-    res.json({ configBucket, results, projectId });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ─── POST /api/upload-ticket-file — upload PJ via API REST GCS (bypass SDK) ──
-// Utilise le token du service account directement → fonctionne peu importe les règles Storage.
-const ticketUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB max
-});
-
-app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), async (req, res) => {
-  if (!req.file)    return res.status(400).json({ error: 'Fichier requis' });
-  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
-
+// POST /api/upload-ticket-file
+app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Fichier requis' });
   const { ticketId } = req.body;
-  if (!ticketId) return res.status(400).json({ error: 'ticketId requis' });
+  if (!ticketId || ticketId.includes('..')) return res.status(400).json({ error: 'ticketId invalide' });
 
   try {
-    const configBucket = readServerSettings().firebaseConfig?.storageBucket || '';
-    const projectId    = configBucket.replace('.firebasestorage.app', '').replace('.appspot.com', '') || 'tonton-ai-c8196';
-    const filePath     = `ticket-attachments/${ticketId}/${Date.now()}_${req.file.originalname}`;
+    const safeName  = path.basename(req.file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const prefix    = require('crypto').randomBytes(8).toString('hex');
+    const filename  = `${prefix}_${safeName}`;
+    const dir       = path.join(UPLOADS_DIR, ticketId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, filename), req.file.buffer);
 
-    // Essayer les candidats dans l'ordre jusqu'à trouver le bon bucket
-    const candidates = [...new Set([configBucket, `${projectId}.appspot.com`, `${projectId}.firebasestorage.app`].filter(Boolean))];
-    let url = null, lastErr = '';
-
-    for (const bucket of candidates) {
-      try {
-        url = await _gcsUpload(req.file.buffer, filePath, req.file.mimetype, bucket);
-        console.log(`[upload-ticket-file] ✓ ${req.file.originalname} → ${bucket}/${filePath}`);
-        break;
-      } catch (e) {
-        lastErr = `${bucket}: ${e.response?.data?.error?.message || e.message}`;
-        console.warn(`[upload-ticket-file] ✗ ${lastErr}`);
-      }
-    }
-
-    if (!url) return res.status(500).json({ error: `Upload échoué sur tous les buckets. Dernier: ${lastErr}` });
+    const url = `/api/ticket-attachments/${ticketId}/${filename}`;
+    console.log(`[upload-ticket-file] ✓ ${req.file.originalname} → ${url}`);
     res.json({ url, name: req.file.originalname, type: req.file.mimetype, size: req.file.size });
   } catch (e) {
     console.error('[upload-ticket-file]', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Erreur sauvegarde fichier : ' + e.message });
   }
+});
+
+// GET /api/ticket-attachments/:ticketId/:filename — sert les PJ (accessible sans auth pour affichage)
+app.get('/api/ticket-attachments/:ticketId/:filename', (req, res) => {
+  const ticketId = path.basename(req.params.ticketId);
+  const filename = path.basename(req.params.filename);
+  if (!ticketId || !filename) return res.status(400).send('Paramètres invalides');
+  const filePath = path.join(UPLOADS_DIR, ticketId, filename);
+  if (!fs.existsSync(filePath)) return res.status(404).send('Fichier introuvable');
+  res.sendFile(filePath);
 });
 
 // ─── POST /api/wp-upload-file — upload d'un fichier local vers la médiathèque WP ─
