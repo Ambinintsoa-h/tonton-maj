@@ -185,15 +185,15 @@ export const getWordPressSites = async () => {
 
 export const saveWordPressSite = async (site) => {
   if (!db) throw new Error('Firebase non initialisé');
-  // Le mot de passe Application Password ne doit jamais être persisté en cloud.
-  // Il reste uniquement dans localStorage côté client, jamais dans Firestore.
-  // eslint-disable-next-line no-unused-vars
-  const { password, ...safeData } = site;
-  if (site.id) {
-    await updateDoc(doc(db, 'wordpress_sites', site.id), safeData);
-    return site.id;
+  // WordPress Application Password : token révocable (≠ mot de passe admin).
+  // Persisté dans Firestore pour survie au vidage de cache — révocable depuis WP Admin → Users → Application Passwords.
+  // Le vrai mot de passe admin n'est jamais stocké ici.
+  const { id, ...data } = site;
+  if (id) {
+    await updateDoc(doc(db, 'wordpress_sites', id), data);
+    return id;
   }
-  const ref = await addDoc(collection(db, 'wordpress_sites'), { ...safeData, createdAt: Date.now() });
+  const ref = await addDoc(collection(db, 'wordpress_sites'), { ...data, createdAt: Date.now() });
   return ref.id;
 };
 

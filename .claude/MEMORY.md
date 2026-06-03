@@ -85,7 +85,7 @@ Récupérer en session avec : `printf "protocol=https\nhost=github.com\n" | git 
 - Rate limiter AVANT les routes auth (60/min global, 10/min auth)
 - `assertSafeUrl` async + `dns.lookup()` (anti DNS rebinding)
 - Clés API (Brave/Tavily/Anthropic/Groq) jamais exposées au client
-- Passwords WordPress en sessionStorage uniquement, jamais Firestore
+- Application Passwords WordPress **persistés dans Firestore** (token révocable ≠ mot de passe admin)
 - OTP 2FA hashé HMAC-SHA256 avant stockage disque
 - LiteLLM pricing : validation 0 < prix < 200 $/MTok
 
@@ -181,7 +181,7 @@ Système 100% transparent côté manager/cq_ia. Visible uniquement par le super_
 ### Règles Firestore
 - `where` + `orderBy` sur champs différents = index composite requis → **tri client-side**
 - Range de dates OK sur champ unique : `where('date', '>=', X) AND where('date', '<=', Y)`
-- Passwords WordPress / Clés API **jamais** dans Firestore
+- Clés API (Anthropic/Groq/Brave/Tavily/Haloscan) **jamais** dans Firestore — Application Passwords WP **oui** (révocables)
 
 ---
 
