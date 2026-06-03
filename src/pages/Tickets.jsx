@@ -588,15 +588,40 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
         attachments: [],
       };
 
-      // 1. Créer le ticket pour obtenir l'ID réel
-      const id = await createTicket({ ...ticketData, level: ticketLevel });
+      // 1. Upload PJ synchrone avec timeout (même approche que les commentaires)
+      let ticketAttachments = [];
+      if (files.length > 0) {
+        if (!getStorageRef()) {
+          toast.error('Firebase Storage non initialisé — PJ non uploadées.');
+        } else {
+          // Ticket n'a pas encore d'ID → upload dans un dossier temp puis déplacé après
+          const tempId = `temp_${Date.now()}`;
+          const TIMEOUT_MS = 15000;
+          const uploadWithTimeout = (f) => Promise.race([
+            uploadTicketFile(tempId, f),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error(`Timeout upload "${f.name}" (>15s)`)), TIMEOUT_MS)
+            ),
+          ]);
+          const results = await Promise.allSettled(files.map(uploadWithTimeout));
+          results.forEach((r, i) => {
+            if (r.status === 'fulfilled') ticketAttachments.push(r.value);
+            else toast.error(`PJ "${files[i]?.name}" : ${r.reason?.message || 'échec'}`);
+          });
+        }
+      }
+
+      // 2. Créer le ticket avec les PJ déjà uploadées
+      const id = await createTicket({ ...ticketData, attachments: ticketAttachments, level: ticketLevel });
       tracker.trackAction('ticketsCreated');
 
-      const newTicket = { id, ...ticketData, attachments: [], status: 'open', level: ticketLevel, commentCount: 0, createdAt: Date.now(), updatedAt: Date.now(), resolvedAt: null, closedAt: null };
+      // 3. newTicket inclut les PJ → Redux + panneau affichent les PJ immédiatement
+      const newTicket = {
+        id, ...ticketData, attachments: ticketAttachments,
+        status: 'open', level: ticketLevel, commentCount: 0,
+        createdAt: Date.now(), updatedAt: Date.now(), resolvedAt: null, closedAt: null,
+      };
 
-      // CQ IA → notifie UNIQUEMENT l'assigné (le manager désigné)
-      // Manager → notifie tous les super admins (ticket L2 sans assigné fixe)
-      // Fallback : si pas d'assigné pour CQ IA, notifie tous les managers
       let notifTargets = [];
       if (isManagerCreating) {
         notifTargets = users.filter(u => u.role === 'super_admin');
@@ -606,12 +631,12 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
       } else {
         notifTargets = users.filter(u => u.role === 'manager');
       }
-      // Notifs + upload PJ en parallèle (non-bloquant pour l'UI)
+
       onCreated(newTicket);
       toast.success('Ticket créé avec succès');
       onClose();
 
-      // Arrière-plan : notifs + PJ (n'affecte pas la réactivité)
+      // Notifications en arrière-plan
       Promise.all(notifTargets.map(u => createNotification({
         toUserId: u.id || u.uid,
         fromUsername: currentUser.username,
@@ -620,19 +645,6 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
         ticketTitle: title.trim(),
         message: `Nouveau ticket de ${currentUser.username} : "${title.trim()}"`,
       }))).catch(() => {});
-
-      // Capturer les fichiers AVANT que le modal se ferme (évite perte dans la closure)
-      const ticketFiles = [...files];
-      if (ticketFiles.length > 0 && getStorageRef()) {
-        Promise.allSettled(ticketFiles.map(f => uploadTicketFile(id, f)))
-          .then(results => {
-            const uploaded = results.filter(r => r.status === 'fulfilled').map(r => r.value);
-            const rejected = results.filter(r => r.status === 'rejected');
-            if (uploaded.length > 0) updateTicketDoc(id, { attachments: uploaded }).catch(() => {});
-            if (rejected.length > 0) toast.error(`${rejected.length} PJ non uploadée(s) sur le ticket.`);
-          })
-          .catch(e => toast.error('Erreur upload PJ ticket : ' + (e?.message || 'inconnu')));
-      }
     } catch (e) {
       toast.error('Erreur lors de la création du ticket');
     } finally {
