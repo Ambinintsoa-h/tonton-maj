@@ -802,22 +802,19 @@ const haloscanHeaders = (key) => ({
   'content-type':     'application/json',
 });
 
-// Extrait la position d'une URL dans les résultats SERP Haloscan
-const _findPositionInSerp = (serpData, articleUrl) => {
-  if (!serpData || !articleUrl) return null;
-  const results = Array.isArray(serpData) ? serpData : serpData?.results || serpData?.serp || [];
-  const normalise = (u) => u?.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '').toLowerCase();
-  const target = normalise(articleUrl);
-  for (let i = 0; i < results.length; i++) {
-    const u = results[i]?.url || results[i]?.link || results[i]?.href || '';
-    if (normalise(u).includes(target) || target.includes(normalise(u))) {
-      return i + 1; // position 1-based
-    }
-  }
-  return null; // non trouvé dans le SERP
+// Cherche l'URL de l'article dans un SERP Haloscan (old_serp ou new_serp)
+// Retourne { position, diff } ou null si non trouvé
+const _findInSerp = (serp, articleUrl) => {
+  if (!Array.isArray(serp) || !articleUrl) return null;
+  const norm  = (u) => (u || '').replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '').toLowerCase();
+  const target = norm(articleUrl);
+  return serp.find(r => {
+    const u = norm(r.url);
+    return u === target || u.includes(target) || target.includes(u);
+  }) || null;
 };
 
-// GET /api/haloscan/test — valide la clé (super_admin seulement)
+// GET /api/haloscan/test — valide la clé via GET /user/credit (super_admin seulement)
 app.get('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (req, res) => {
   const haloscanKey = readServerSettings().haloscanKey;
   if (!haloscanKey) return res.status(503).json({ error: 'Clé Haloscan non configurée' });
@@ -828,7 +825,7 @@ app.get('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (re
     });
     res.json({ success: true, credits: resp.data });
   } catch (e) {
-    const status = e.response?.status;
+    const status  = e.response?.status;
     const invalid = status === 401 || status === 403;
     res.status(invalid ? 400 : 500).json({
       success: false,
@@ -839,9 +836,10 @@ app.get('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (re
 });
 
 // POST /api/haloscan/check — position Google de l'article pour chaque mot-clé
-// 1 appel Haloscan par mot-clé (max 3) → parse SERP → retourne position
+// Utilise POST /keywords/serp/compare (period: "1 month") — Haloscan calcule lui-même le diff
+// Réponse : { keyword, position, positionOld, haloscanDiff, dates, inSerp }
 app.post('/api/haloscan/check', requireAuth, async (req, res) => {
-  const { keywords, articleUrl } = req.body;
+  const { keywords, articleUrl, period = '1 month' } = req.body;
   const haloscanKey = readServerSettings().haloscanKey;
   if (!haloscanKey)                                 return res.status(503).json({ error: 'Clé Haloscan non configurée' });
   if (!Array.isArray(keywords) || !keywords.length) return res.status(400).json({ error: 'keywords (array) requis' });
@@ -850,30 +848,33 @@ app.post('/api/haloscan/check', requireAuth, async (req, res) => {
   try {
     const results = await Promise.all(keywords.map(async (keyword) => {
       try {
-        const resp = await axios.post(`${HALOSCAN_BASE}/keywords/overview`, {
+        const resp = await axios.post(`${HALOSCAN_BASE}/keywords/serp/compare`, {
           keyword,
-          requested_data: ['serp', 'metrics'],
+          period,
         }, {
           headers: haloscanHeaders(haloscanKey),
-          timeout: 20000,
+          timeout: 25000,
         });
 
-        const data     = resp.data;
-        const serp     = data?.serp || data?.data?.serp || data?.results?.serp || [];
-        const metrics  = data?.metrics || data?.data?.metrics || {};
-        const position = _findPositionInSerp(serp, articleUrl);
+        const data    = resp.data;
+        const newSerp = data?.results?.new_serp || [];
+        const oldSerp = data?.results?.old_serp || [];
+
+        const newEntry = _findInSerp(newSerp, articleUrl);
+        const oldEntry = _findInSerp(oldSerp, articleUrl);
 
         return {
           keyword,
-          position,         // null = article non trouvé dans le top SERP
-          volume:  metrics?.search_volume ?? metrics?.volume ?? null,
-          cpc:     metrics?.cpc           ?? null,
-          kvi:     metrics?.kvi           ?? metrics?.difficulty ?? null,
-          serpRaw: serp.slice(0, 10),     // top 10 SERP pour debug
+          position:      newEntry?.position ?? null,   // position actuelle (new_serp)
+          positionOld:   oldEntry?.position ?? null,   // position période précédente (old_serp)
+          haloscanDiff:  newEntry?.diff     ?? null,   // diff calculé par Haloscan ex: "+5", "lost", "new"
+          dates:         data?.dates        || [],     // [date_ancienne, date_récente]
+          inSerp:        !!newEntry,                   // false = article absent du top 100
         };
       } catch (e) {
         console.warn(`[haloscan] keyword "${keyword}" :`, e.response?.data || e.message);
-        return { keyword, position: null, error: e.response?.data?.message || e.message };
+        return { keyword, position: null, positionOld: null, haloscanDiff: null, inSerp: false,
+                 error: e.response?.data?.message || e.message };
       }
     }));
 
@@ -912,18 +913,24 @@ const _seoSnapshotCheck = async () => {
       if (!seo.keywords?.length || !seo.articleUrl) continue;
 
       try {
-        // 1 appel par mot-clé → parse SERP → position de l'article
+        // 1 appel serp/compare par mot-clé → position actuelle + diff Haloscan
         const kwResults = await Promise.all((seo.keywords || []).map(async (keyword) => {
           try {
-            const r = await axios.post(`${HALOSCAN_BASE}/keywords/overview`, {
+            const r = await axios.post(`${HALOSCAN_BASE}/keywords/serp/compare`, {
+              keyword, period: '1 month',
+            }, { headers: haloscanHeaders(haloscanKey), timeout: 25000 });
+            const newSerp  = r.data?.results?.new_serp || [];
+            const oldSerp  = r.data?.results?.old_serp || [];
+            const newEntry = _findInSerp(newSerp, seo.articleUrl);
+            const oldEntry = _findInSerp(oldSerp, seo.articleUrl);
+            return {
               keyword,
-              requested_data: ['serp', 'metrics'],
-            }, { headers: haloscanHeaders(haloscanKey), timeout: 20000 });
-            const serp     = r.data?.serp || r.data?.data?.serp || [];
-            const metrics  = r.data?.metrics || r.data?.data?.metrics || {};
-            const position = _findPositionInSerp(serp, seo.articleUrl);
-            return { keyword, position, volume: metrics?.search_volume ?? null };
-          } catch { return { keyword, position: null }; }
+              position:     newEntry?.position ?? null,
+              positionOld:  oldEntry?.position ?? null,
+              haloscanDiff: newEntry?.diff     ?? null,
+              inSerp:       !!newEntry,
+            };
+          } catch { return { keyword, position: null, positionOld: null, haloscanDiff: null, inSerp: false }; }
         }));
 
         const capturedAt = now;

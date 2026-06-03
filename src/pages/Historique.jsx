@@ -169,37 +169,47 @@ function SeoPanel({ seoTracking }) {
   const after7    = snapshots.find(s => s.type === 'after_7d');
   const after30   = snapshots.find(s => s.type === 'after_30d');
 
-  // Couleur et icône selon l'évolution de position (position basse = meilleure)
-  const posEvol = (before, after) => {
-    if (!before || !after) return null;
-    const diff = before - after; // positif = amélioration
-    if (diff > 0) return { icon: <TrendingUp size={12} />, color: 'text-emerald-600', label: `+${diff.toFixed(1)}` };
-    if (diff < 0) return { icon: <TrendingDown size={12} />, color: 'text-red-500',     label: diff.toFixed(1) };
-    return { icon: <Minus size={12} />, color: 'text-gray-400', label: '=' };
-  };
 
   // Données chart : position par keyword dans le temps
   const chartData = snapshots.map(s => {
     const entry = { name: SNAPSHOT_LABELS[s.type] || s.type };
     keywords.forEach(kw => {
-      const r = (s.results || []).find(r => r.keyword === kw || r.kw === kw || r.query === kw);
-      entry[kw] = r?.position ?? r?.rank ?? null;
+      entry[kw] = getPos(s, kw);
     });
     return entry;
   });
 
   const COLORS = ['#16a34a', '#2563eb', '#d97706'];
-  const getPos = (snap, kw) => {
-    if (!snap) return '—';
-    const r = (snap.results || []).find(r => r.keyword === kw || r.kw === kw || r.query === kw);
-    const p = r?.position ?? r?.rank;
-    return p != null ? Number(p).toFixed(0) : '—';
+  const getResult = (snap, kw) => {
+    if (!snap?.results) return null;
+    return snap.results.find(r => r.keyword === kw) || null;
   };
 
-  const getVol = (snap, kw) => {
-    if (!snap) return null;
-    const r = (snap.results || []).find(r => r.keyword === kw);
-    return r?.volume ?? null;
+  const getPos = (snap, kw) => {
+    const r = getResult(snap, kw);
+    return r?.position != null ? Number(r.position) : null;
+  };
+
+  const fmtPos = (snap, kw) => {
+    const p = getPos(snap, kw);
+    return p != null ? `#${p}` : '—';
+  };
+
+  // Badge diff Haloscan : "+5", "-3", "new", "lost", "="
+  const DiffBadge = ({ snap, kw }) => {
+    const r = getResult(snap, kw);
+    if (!r) return <span className="text-gray-300">—</span>;
+    if (!r.inSerp && r.inSerp !== undefined) return <span className="text-xs text-gray-400">Hors top 100</span>;
+    const d = r.haloscanDiff;
+    if (!d || d === '=')    return <span className="inline-flex items-center gap-0.5 text-gray-400"><Minus size={11} /> =</span>;
+    if (d === 'lost')        return <span className="inline-flex items-center gap-0.5 text-red-500 font-semibold text-xs"><TrendingDown size={11} /> Sorti</span>;
+    if (d === 'new')         return <span className="inline-flex items-center gap-0.5 text-emerald-600 font-semibold text-xs"><TrendingUp size={11} /> Nouveau</span>;
+    const num = parseFloat(d);
+    if (isNaN(num)) return <span className="text-gray-400 text-xs">{d}</span>;
+    // Position inversée : diff positif Haloscan = remontée = bon
+    return num > 0
+      ? <span className="inline-flex items-center gap-0.5 text-emerald-600 font-semibold text-xs"><TrendingUp size={11} /> +{num}</span>
+      : <span className="inline-flex items-center gap-0.5 text-red-500 font-semibold text-xs"><TrendingDown size={11} /> {num}</span>;
   };
 
   const pendingLabel = seoTracking.completed ? null
@@ -240,39 +250,26 @@ function SeoPanel({ seoTracking }) {
             <thead>
               <tr className="border-b border-gray-100">
                 <th className="text-left text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 pr-4">Mot-clé</th>
-                <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Vol/mois</th>
                 <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Avant MAJ</th>
                 {after7  && <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">J+7</th>}
                 {after30 && <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">J+30</th>}
-                {after7  && <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Évol.</th>}
+                <th className="text-center text-[10px] text-gray-400 uppercase tracking-widest font-semibold pb-2 px-3">Tendance</th>
               </tr>
             </thead>
             <tbody>
               {keywords.map((kw, i) => {
-                const bPos = parseFloat(getPos(before,  kw)) || null;
-                const aPos = parseFloat(getPos(after30 || after7, kw)) || null;
-                const evol = posEvol(bPos, aPos);
                 return (
                   <tr key={i} className="border-b border-gray-50 last:border-0">
                     <td className="py-2 pr-4 font-medium text-gray-700 truncate max-w-[160px]">
                       <span className="inline-block w-2 h-2 rounded-full mr-1.5 flex-shrink-0" style={{ background: COLORS[i] }} />
                       {kw}
                     </td>
-                    <td className="py-2 px-3 text-center text-gray-400 text-[11px]">
-                      {getVol(before, kw) != null ? Number(getVol(before, kw)).toLocaleString('fr') : '—'}
+                    <td className="py-2 px-3 text-center text-gray-600 font-mono text-xs">{fmtPos(before, kw)}</td>
+                    {after7  && <td className="py-2 px-3 text-center text-gray-600 font-mono text-xs">{fmtPos(after7,  kw)}</td>}
+                    {after30 && <td className="py-2 px-3 text-center text-gray-600 font-mono text-xs">{fmtPos(after30, kw)}</td>}
+                    <td className="py-2 px-3 text-center">
+                      <DiffBadge snap={after30 || after7 || before} kw={kw} />
                     </td>
-                    <td className="py-2 px-3 text-center text-gray-600">{getPos(before,  kw)}</td>
-                    {after7  && <td className="py-2 px-3 text-center text-gray-600">{getPos(after7,  kw)}</td>}
-                    {after30 && <td className="py-2 px-3 text-center text-gray-600">{getPos(after30, kw)}</td>}
-                    {after7  && (
-                      <td className="py-2 px-3 text-center">
-                        {evol ? (
-                          <span className={`inline-flex items-center gap-0.5 font-semibold ${evol.color}`}>
-                            {evol.icon}{evol.label}
-                          </span>
-                        ) : '—'}
-                      </td>
-                    )}
                   </tr>
                 );
               })}
