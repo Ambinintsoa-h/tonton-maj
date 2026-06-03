@@ -482,15 +482,21 @@ export default function Parametres() {
               if (!form.haloscanKey) { toast.error('Renseigne la clé Haloscan d\'abord'); return; }
               setTestingHaloscan(true);
               try {
-                const r = await axios.get('/api/haloscan/test');
+                // Passe la clé directement — fonctionne avant même la sauvegarde
+                const r = await axios.post('/api/haloscan/test', { key: form.haloscanKey });
                 setHaloscanStatus(r.data.success ? 'ok' : 'warn');
-                if (r.data.success) toast.success(`Haloscan connecté ! ${r.data.credits ? JSON.stringify(r.data.credits) : ''}`);
-                else toast('Réponse inattendue — vérifiez la clé', { icon: '⚠️' });
+                if (r.data.success) {
+                  const credits = r.data.credits;
+                  const info = credits?.remaining != null ? ` · ${credits.remaining} crédits restants` : '';
+                  toast.success(`Haloscan connecté !${info}`);
+                } else {
+                  toast('Réponse inattendue — vérifiez la clé', { icon: '⚠️' });
+                }
               } catch (e) {
                 setHaloscanStatus('error');
                 const detail = e.response?.data?.detail || e.response?.data?.error || e.message || '';
                 const status = e.response?.status;
-                toast.error(`Haloscan erreur ${status || ''} — ${detail || 'Clé invalide ou API inaccessible'}`);
+                toast.error(`Haloscan ${status ? `erreur ${status}` : 'inaccessible'} — ${detail || 'Clé invalide'}`);
               }
               setTestingHaloscan(false);
             }}

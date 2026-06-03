@@ -814,13 +814,12 @@ const _findInSerp = (serp, articleUrl) => {
   }) || null;
 };
 
-// GET /api/haloscan/test — valide la clé via GET /user/credit (super_admin seulement)
-// Note : Haloscan GET /user/credit attend un body {} même en GET (curl -d '{}' -X GET)
-app.get('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (req, res) => {
-  const haloscanKey = readServerSettings().haloscanKey;
-  if (!haloscanKey) return res.status(503).json({ error: 'Clé Haloscan non configurée' });
+// POST /api/haloscan/test — valide la clé (super_admin seulement)
+// La clé peut être passée dans le body (avant sauvegarde) ou lue depuis settings.json
+app.post('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (req, res) => {
+  const haloscanKey = req.body?.key || readServerSettings().haloscanKey;
+  if (!haloscanKey) return res.status(400).json({ error: 'Clé Haloscan manquante — renseignez-la dans le champ puis retestez' });
   try {
-    // axios.request permet d'envoyer un body sur une requête GET (requis par Haloscan)
     const resp = await axios.request({
       method:  'get',
       url:     `${HALOSCAN_BASE}/user/credit`,
