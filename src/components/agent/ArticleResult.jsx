@@ -64,14 +64,22 @@ export default function ArticleResult() {
     setEditedTitle(wpMcpData?.wpTitle || cqItem?.title || '');
   }, [wpMcpData?.wpTitle, cqItem?.title]);
 
-  // ── Catégories et tags WordPress ──────────────────────────────────────────────
-  const [wpCategories, setWpCategories]       = useState([]);  // toutes les catégories du site
-  const [wpTags, setWpTags]                   = useState([]);  // tous les tags du site
-  const [selectedCategories, setSelectedCategories] = useState([]); // IDs sélectionnés
-  const [selectedTags, setSelectedTags]       = useState([]);  // IDs sélectionnés
+  // ── Catégories WordPress ──────────────────────────────────────────────────────
+  const [wpCategories, setWpCategories]       = useState([]);
+  const [selectedCategories, setSelectedCategories] = useState([]);
   const [catLoading, setCatLoading]           = useState(false);
   const [catSearch, setCatSearch]             = useState('');
   const [showCatPanel, setShowCatPanel]       = useState(false);
+
+  // Décode les entités HTML côté client (sécurité double avec le serveur)
+  const decodeHtml = (str) => {
+    if (!str) return str;
+    try {
+      const txt = document.createElement('textarea');
+      txt.innerHTML = str;
+      return txt.value;
+    } catch { return str; }
+  };
 
   // ── Image à la une — remplacement inline ──────────────────────────────────────
   const [featuredImgUrl, setFeaturedImgUrl] = useState('');
@@ -624,11 +632,9 @@ export default function ArticleResult() {
     catLoadedSiteRef.current = site.id;
     setCatLoading(true);
     setWpCategories([]);
-    setWpTags([]);
     try {
       const resp = await axios.post('/api/wp-categories', { siteId: site.id, wpSites });
       setWpCategories(resp.data.categories || []);
-      setWpTags(resp.data.tags || []);
     } catch { /* non bloquant */ }
     finally { setCatLoading(false); }
   }, [wpSites]);
@@ -640,11 +646,10 @@ export default function ArticleResult() {
     if (site) loadWpCategories(site);
   }, [wpMcpData?.siteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Pré-sélectionner les catégories/tags de l'article dès qu'on a les données MCP
+  // Pré-sélectionner les catégories de l'article dès qu'on a les données MCP
   useEffect(() => {
     if (wpMcpData?.categories?.length) setSelectedCategories(wpMcpData.categories);
-    if (wpMcpData?.tags?.length)       setSelectedTags(wpMcpData.tags);
-  }, [wpMcpData?.categories, wpMcpData?.tags]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [wpMcpData?.categories]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Quand on ouvre le menu WP, chercher si l'article existe déjà sur le site sélectionné.
   // Priorité : données MCP déjà récupérées par l'agent (pas de nouvelle requête WP).
@@ -718,7 +723,6 @@ export default function ArticleResult() {
       if (hasFeaturedMedia) postData.featured_media = wpMcpData.featuredMediaId;
       // Catégories et tags — inclus uniquement si l'utilisateur a fait une sélection
       if (selectedCategories.length > 0) postData.categories = selectedCategories;
-      if (selectedTags.length > 0)       postData.tags       = selectedTags;
       result = await updatePost(
         site,
         wpFoundPost.id,
@@ -944,8 +948,8 @@ export default function ArticleResult() {
         </motion.div>
       )}
 
-      {/* ── Catégories & Tags WordPress (visible si article MCP) ── */}
-      {wpMcpData?.siteId && (wpCategories.length > 0 || wpTags.length > 0 || catLoading) && (
+      {/* ── Catégories WordPress (visible si article MCP) ── */}
+      {wpMcpData?.siteId && (wpCategories.length > 0 || catLoading) && (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
@@ -971,72 +975,37 @@ export default function ArticleResult() {
 
           {/* Catégories */}
           {wpCategories.length > 0 && (
-            <div>
-              <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-2">Catégories</p>
-              <div className="flex flex-wrap gap-2">
-                {wpCategories
-                  .filter(c => !catSearch || c.name.toLowerCase().includes(catSearch.toLowerCase()))
-                  .map(cat => {
-                    const checked = selectedCategories.includes(cat.id);
-                    return (
-                      <button
-                        key={cat.id}
-                        onClick={() => setSelectedCategories(prev =>
-                          checked ? prev.filter(id => id !== cat.id) : [...prev, cat.id]
-                        )}
-                        className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
-                          checked
-                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                            : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
-                        }`}
-                      >
-                        {checked && <CheckCircle2 size={11} />}
-                        {cat.name}
-                        <span className={`text-[10px] ${checked ? 'text-indigo-200' : 'text-gray-400'}`}>{cat.count}</span>
-                      </button>
-                    );
-                  })}
-              </div>
-            </div>
-          )}
-
-          {/* Tags */}
-          {wpTags.length > 0 && (
-            <div>
-              <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-2">Tags</p>
-              <div className="flex flex-wrap gap-2">
-                {wpTags
-                  .filter(t => !catSearch || t.name.toLowerCase().includes(catSearch.toLowerCase()))
-                  .map(tag => {
-                    const checked = selectedTags.includes(tag.id);
-                    return (
-                      <button
-                        key={tag.id}
-                        onClick={() => setSelectedTags(prev =>
-                          checked ? prev.filter(id => id !== tag.id) : [...prev, tag.id]
-                        )}
-                        className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
-                          checked
-                            ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
-                            : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300 hover:text-purple-600'
-                        }`}
-                      >
-                        {checked && <CheckCircle2 size={11} />}
-                        # {tag.name}
-                        <span className={`text-[10px] ${checked ? 'text-purple-200' : 'text-gray-400'}`}>{tag.count}</span>
-                      </button>
-                    );
-                  })}
-              </div>
+            <div className="flex flex-wrap gap-2">
+              {wpCategories
+                .filter(c => !catSearch || decodeHtml(c.name).toLowerCase().includes(catSearch.toLowerCase()))
+                .map(cat => {
+                  const name    = decodeHtml(cat.name);
+                  const checked = selectedCategories.includes(cat.id);
+                  return (
+                    <button
+                      key={cat.id}
+                      onClick={() => setSelectedCategories(prev =>
+                        checked ? prev.filter(id => id !== cat.id) : [...prev, cat.id]
+                      )}
+                      className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
+                        checked
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                          : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
+                      }`}
+                    >
+                      {checked && <CheckCircle2 size={11} />}
+                      {name}
+                      <span className={`text-[10px] ${checked ? 'text-indigo-200' : 'text-gray-400'}`}>{cat.count}</span>
+                    </button>
+                  );
+                })}
             </div>
           )}
 
           {/* Résumé sélection */}
-          {(selectedCategories.length > 0 || selectedTags.length > 0) && (
+          {selectedCategories.length > 0 && (
             <p className="text-[11px] text-indigo-600 font-medium">
-              ✓ {selectedCategories.length} catégorie{selectedCategories.length > 1 ? 's' : ''}
-              {selectedTags.length > 0 && ` · ${selectedTags.length} tag${selectedTags.length > 1 ? 's' : ''}`}
-              {' '}sélectionné{selectedCategories.length + selectedTags.length > 1 ? 's' : ''} — appliqué{selectedCategories.length + selectedTags.length > 1 ? 's' : ''} à la publication
+              ✓ {selectedCategories.length} catégorie{selectedCategories.length > 1 ? 's' : ''} sélectionnée{selectedCategories.length > 1 ? 's' : ''} — appliquée{selectedCategories.length > 1 ? 's' : ''} à la publication
             </p>
           )}
         </motion.div>
@@ -1206,37 +1175,14 @@ export default function ArticleResult() {
                                                 )}
                                                 className="w-3.5 h-3.5 rounded text-indigo-600 accent-indigo-600"
                                               />
-                                              <span className="text-xs text-gray-700 truncate flex-1">{cat.name}</span>
+                                              <span className="text-xs text-gray-700 truncate flex-1">{decodeHtml(cat.name)}</span>
                                               <span className="text-[10px] text-gray-400">{cat.count}</span>
                                             </label>
                                           ))}
                                       </div>
                                     )}
 
-                                    {/* Tags */}
-                                    {wpTags.length > 0 && (
-                                      <div>
-                                        <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide px-1 mb-1">Tags</p>
-                                        {wpTags
-                                          .filter(t => !catSearch || t.name.toLowerCase().includes(catSearch.toLowerCase()))
-                                          .map(tag => (
-                                            <label key={tag.id} className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-white cursor-pointer transition-colors">
-                                              <input
-                                                type="checkbox"
-                                                checked={selectedTags.includes(tag.id)}
-                                                onChange={e => setSelectedTags(prev =>
-                                                  e.target.checked ? [...prev, tag.id] : prev.filter(id => id !== tag.id)
-                                                )}
-                                                className="w-3.5 h-3.5 rounded text-purple-600 accent-purple-600"
-                                              />
-                                              <span className="text-xs text-gray-700 truncate flex-1">{tag.name}</span>
-                                              <span className="text-[10px] text-gray-400">{tag.count}</span>
-                                            </label>
-                                          ))}
-                                      </div>
-                                    )}
-
-                                    {wpCategories.length === 0 && wpTags.length === 0 && (
+                                    {wpCategories.length === 0 && (
                                       <p className="text-xs text-gray-400 text-center py-2">Aucune catégorie disponible</p>
                                     )}
                                   </div>

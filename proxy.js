@@ -18,6 +18,20 @@ const path = require('path');
 const os = require('os');
 const multer = require('multer');
 const FormData = require('form-data');
+
+// ── Décodeur HTML entities (WordPress renvoie &amp; &#8211; etc.) ─────────────
+const decodeHtmlEntities = (str) => {
+  if (!str || typeof str !== 'string') return str;
+  return str
+    .replace(/&#(\d+);/g,        (_, n)   => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi,(_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&amp;/g,  '&')
+    .replace(/&lt;/g,   '<')
+    .replace(/&gt;/g,   '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+};
 const axios = require('axios');
 const { Readability } = require('@mozilla/readability');
 const { JSDOM } = require('jsdom');
@@ -1983,7 +1997,7 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
 
       return {
         post_id:            post.id,
-        title:              post.title?.rendered || '',
+        title:              decodeHtmlEntities(post.title?.rendered || ''),
         content:            processedContent,
         status:             post.status,
         post_type:          post.postType,
@@ -2077,9 +2091,10 @@ app.post('/api/wp-categories', requireAuth, async (req, res) => {
       axios.get(`${base}/wp-json/wp/v2/tags?per_page=100&_fields=id,name,count`, { headers, timeout: 10000 }),
     ]);
 
+    const decodeList = (arr) => (arr || []).map(item => ({ ...item, name: decodeHtmlEntities(item.name) }));
     res.json({
-      categories: catsResp.data || [],
-      tags:       tagsResp.data  || [],
+      categories: decodeList(catsResp.data),
+      tags:       decodeList(tagsResp.data),
     });
   } catch (e) {
     console.error('[wp-categories]', e.message);
