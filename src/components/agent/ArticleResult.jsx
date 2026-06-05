@@ -616,9 +616,12 @@ export default function ArticleResult() {
   // Normalise le hostname : supprime www. et met en minuscules pour comparaison robuste
   const normalizeHost = (h) => h.replace(/^www\./, '').toLowerCase();
 
-  // Charge toutes les catégories + tags du site WP sélectionné
+  // Charge toutes les catégories + tags du site WP (auto-triggered par MCP ou sélection manuelle)
+  const catLoadedSiteRef = useRef(null);
   const loadWpCategories = useCallback(async (site) => {
-    if (!site?.id || catLoading) return;
+    if (!site?.id) return;
+    if (catLoadedSiteRef.current === site.id) return; // déjà chargé pour ce site
+    catLoadedSiteRef.current = site.id;
     setCatLoading(true);
     setWpCategories([]);
     setWpTags([]);
@@ -626,12 +629,16 @@ export default function ArticleResult() {
       const resp = await axios.post('/api/wp-categories', { siteId: site.id, wpSites });
       setWpCategories(resp.data.categories || []);
       setWpTags(resp.data.tags || []);
-    } catch {
-      // non bloquant
-    } finally {
-      setCatLoading(false);
-    }
-  }, [wpSites, catLoading]);
+    } catch { /* non bloquant */ }
+    finally { setCatLoading(false); }
+  }, [wpSites]);
+
+  // Auto-charger catégories dès qu'un article WP est détecté via MCP
+  useEffect(() => {
+    if (!wpMcpData?.siteId) return;
+    const site = wpSites.find(s => s.id === wpMcpData.siteId);
+    if (site) loadWpCategories(site);
+  }, [wpMcpData?.siteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pré-sélectionner les catégories/tags de l'article dès qu'on a les données MCP
   useEffect(() => {
@@ -934,6 +941,104 @@ export default function ArticleResult() {
               dangerouslySetInnerHTML={{ __html: renderMarkdown(agent.analysis) }}
             />
           </div>
+        </motion.div>
+      )}
+
+      {/* ── Catégories & Tags WordPress (visible si article MCP) ── */}
+      {wpMcpData?.siteId && (wpCategories.length > 0 || wpTags.length > 0 || catLoading) && (
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass-card px-5 py-4 space-y-3"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Tag size={14} className="text-indigo-500 flex-shrink-0" />
+              <span className="text-sm font-semibold text-gray-800">Catégories WordPress</span>
+              {catLoading && <Loader size={12} className="animate-spin text-gray-400" />}
+            </div>
+            {/* Barre de recherche */}
+            <div className="relative w-44">
+              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <input
+                value={catSearch}
+                onChange={e => setCatSearch(e.target.value)}
+                placeholder="Filtrer…"
+                className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-300 bg-white"
+              />
+            </div>
+          </div>
+
+          {/* Catégories */}
+          {wpCategories.length > 0 && (
+            <div>
+              <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-2">Catégories</p>
+              <div className="flex flex-wrap gap-2">
+                {wpCategories
+                  .filter(c => !catSearch || c.name.toLowerCase().includes(catSearch.toLowerCase()))
+                  .map(cat => {
+                    const checked = selectedCategories.includes(cat.id);
+                    return (
+                      <button
+                        key={cat.id}
+                        onClick={() => setSelectedCategories(prev =>
+                          checked ? prev.filter(id => id !== cat.id) : [...prev, cat.id]
+                        )}
+                        className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
+                          checked
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                            : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
+                        }`}
+                      >
+                        {checked && <CheckCircle2 size={11} />}
+                        {cat.name}
+                        <span className={`text-[10px] ${checked ? 'text-indigo-200' : 'text-gray-400'}`}>{cat.count}</span>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* Tags */}
+          {wpTags.length > 0 && (
+            <div>
+              <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-2">Tags</p>
+              <div className="flex flex-wrap gap-2">
+                {wpTags
+                  .filter(t => !catSearch || t.name.toLowerCase().includes(catSearch.toLowerCase()))
+                  .map(tag => {
+                    const checked = selectedTags.includes(tag.id);
+                    return (
+                      <button
+                        key={tag.id}
+                        onClick={() => setSelectedTags(prev =>
+                          checked ? prev.filter(id => id !== tag.id) : [...prev, tag.id]
+                        )}
+                        className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
+                          checked
+                            ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                            : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300 hover:text-purple-600'
+                        }`}
+                      >
+                        {checked && <CheckCircle2 size={11} />}
+                        # {tag.name}
+                        <span className={`text-[10px] ${checked ? 'text-purple-200' : 'text-gray-400'}`}>{tag.count}</span>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* Résumé sélection */}
+          {(selectedCategories.length > 0 || selectedTags.length > 0) && (
+            <p className="text-[11px] text-indigo-600 font-medium">
+              ✓ {selectedCategories.length} catégorie{selectedCategories.length > 1 ? 's' : ''}
+              {selectedTags.length > 0 && ` · ${selectedTags.length} tag${selectedTags.length > 1 ? 's' : ''}`}
+              {' '}sélectionné{selectedCategories.length + selectedTags.length > 1 ? 's' : ''} — appliqué{selectedCategories.length + selectedTags.length > 1 ? 's' : ''} à la publication
+            </p>
+          )}
         </motion.div>
       )}
 

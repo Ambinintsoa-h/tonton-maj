@@ -105,6 +105,17 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+
+// ── Force UTF-8 sur toutes les réponses JSON ──────────────────────────────────
+app.use((_req, res, next) => {
+  const orig = res.json.bind(res);
+  res.json = (body) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    return orig(body);
+  };
+  next();
+});
 
 // ─── Headers de sécurité HTTP ──────────────────────────────────────────────────
 app.use(helmet({
