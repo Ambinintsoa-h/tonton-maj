@@ -1946,7 +1946,7 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
       for (const type of ['posts', 'pages']) {
         try {
           const rows = await wpApi(site, 'GET',
-            `/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,title,content,featured_media,status,link,type`);
+            `/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,title,content,featured_media,status,link,type,categories,tags`);
           if (Array.isArray(rows) && rows.length > 0) { post = { ...rows[0], postType: type }; break; }
         } catch {}
       }
@@ -1979,6 +1979,8 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
         link:               post.link,
         featured_media_id:  post.featured_media || null,
         featured_media_url: featuredMediaUrl,
+        categories:         post.categories || [],
+        tags:               post.tags || [],
       };
     }
 
@@ -2023,10 +2025,13 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
       // • Jamais de `title`  — le titre WP est conservé tel quel
       // • Jamais de `author` — l'auteur de l'article ne change jamais
       // • Jamais de champs SEO (meta, _seopress_*, _yoast_*) — gérés par SEOPRESS séparément
+      const { categories, tags } = toolInput;
       const body = {};
       if (content           !== undefined) body.content        = content;
       if (status            !== undefined) body.status         = status;
       if (featured_media_id !== undefined) body.featured_media = featured_media_id;
+      if (Array.isArray(categories))       body.categories     = categories;
+      if (Array.isArray(tags))             body.tags           = tags;
 
       // Détection du type (post ou page)
       let postType = 'posts';
@@ -2041,6 +2046,35 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
       throw new Error(`Outil MCP inconnu : ${toolName}`);
   }
 }
+
+// ─── POST /api/wp-categories — récupère catégories + tags d'un site WP ──────
+// Body : { siteId, wpSites: [{ id, url, username, password }] }
+app.post('/api/wp-categories', requireAuth, async (req, res) => {
+  const { siteId, wpSites = [] } = req.body;
+  const site = wpSites.find(s => s.id === siteId);
+  if (!site || !site.url || !site.username || !site.password) {
+    return res.status(400).json({ error: 'Site introuvable ou credentials manquants' });
+  }
+  try {
+    await assertSafeUrl(site.url, 'URL du site WP');
+    const auth    = Buffer.from(`${site.username}:${site.password}`).toString('base64');
+    const headers = { 'Authorization': `Basic ${auth}` };
+    const base    = site.url.replace(/\/$/, '');
+
+    const [catsResp, tagsResp] = await Promise.all([
+      axios.get(`${base}/wp-json/wp/v2/categories?per_page=100&_fields=id,name,parent,count`, { headers, timeout: 10000 }),
+      axios.get(`${base}/wp-json/wp/v2/tags?per_page=100&_fields=id,name,count`, { headers, timeout: 10000 }),
+    ]);
+
+    res.json({
+      categories: catsResp.data || [],
+      tags:       tagsResp.data  || [],
+    });
+  } catch (e) {
+    console.error('[wp-categories]', e.message);
+    res.status(500).json({ error: 'Impossible de récupérer les catégories : ' + e.message });
+  }
+});
 
 // ─── POST /api/wp-tool — exécution directe d'un outil WordPress (sans Claude) ─
 app.post('/api/wp-tool', requireAuth, async (req, res) => {

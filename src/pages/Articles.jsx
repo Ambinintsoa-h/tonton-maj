@@ -84,7 +84,9 @@ export default function Articles() {
               featuredMediaId: r.featured_media_id  || null,
               featuredMediaUrl:r.featured_media_url || null,
               postLink:        r.link || null,
-              wpTitle:         r.title || '',   // titre réel WP (pas le slug)
+              wpTitle:         r.title || '',
+              categories:      r.categories || [],  // IDs des catégories actuelles de l'article
+              tags:            r.tags       || [],  // IDs des tags actuels
             };
             dispatch(setWpData(prefetchedWpData));
             dispatch(addStep(`WordPress MCP ✓ — article lu directement (ID ${r.post_id})`));
