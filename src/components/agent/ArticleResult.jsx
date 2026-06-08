@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import axios from 'axios';
 import { useSelector, useDispatch } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -589,15 +590,32 @@ export default function ArticleResult() {
   // Cherche l'ancre dans le texte de l'article et la remplace par un <a href>.
   // Wrap seulement la première occurrence non déjà liée.
   const [appliedLinks, setAppliedLinks] = useState(new Set());
+  const [linkHover, setLinkHover]       = useState(null); // { idx, url, anchor, rect }
+  const leaveTimerRef  = useRef(null);
+  const ilInjectedRef  = useRef(false); // injecté une seule fois
+
+  // ── Appliquer un lien interne (depuis le span surligné ou fallback regex) ──
   const applyInternalLink = useCallback((anchor, url, linkIdx) => {
     if (!articleRef.current) return;
-    const html = articleRef.current.innerHTML;
-    // Cherche l'ancre dans le texte (insensible à la casse, hors balises existantes)
+    // Priorité : retrouver le span injecté par le surlignage
+    const span = articleRef.current.querySelector(`[data-il-idx="${linkIdx}"]`);
+    if (span) {
+      const a = document.createElement('a');
+      a.href  = url;
+      a.title = anchor;
+      a.innerHTML = span.innerHTML;
+      span.parentNode.replaceChild(a, span);
+      contentRef.current = articleRef.current.innerHTML;
+      lockMedia(articleRef.current);
+      setAppliedLinks(prev => new Set([...prev, linkIdx]));
+      toast.success(`Lien interne ajouté : "${anchor}"`);
+      return;
+    }
+    // Fallback : regex sur l'innerHTML brut
+    const html    = articleRef.current.innerHTML;
     const escaped = anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex   = new RegExp(`(?<!<[^>]*)${escaped}(?![^<]*>)`, 'i');
-    const newHtml = html.replace(regex, (match) =>
-      `<a href="${url}" title="${anchor}">${match}</a>`
-    );
+    const newHtml = html.replace(regex, match => `<a href="${url}" title="${anchor}">${match}</a>`);
     if (newHtml !== html) {
       articleRef.current.innerHTML = newHtml;
       contentRef.current = newHtml;
@@ -608,6 +626,27 @@ export default function ArticleResult() {
       toast.error(`Ancre introuvable dans l'article : "${anchor}"`);
     }
   }, [lockMedia]);
+
+  // ── Injecter les surlignages gris dans l'article dès que les liens arrivent ──
+  useEffect(() => {
+    if (!articleRef.current || internalLinks.length === 0 || ilInjectedRef.current) return;
+    ilInjectedRef.current = true;
+    let html    = articleRef.current.innerHTML;
+    let changed = false;
+    internalLinks.forEach((link, i) => {
+      const escaped = link.anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex   = new RegExp(`(?<!<[^>]*)${escaped}(?![^<]*>)`, 'i');
+      const next    = html.replace(regex, match =>
+        `<span data-il-idx="${i}" data-il-url="${link.url.replace(/"/g, '&quot;')}" class="il-highlight">${match}</span>`
+      );
+      if (next !== html) { html = next; changed = true; }
+    });
+    if (changed) {
+      articleRef.current.innerHTML = html;
+      contentRef.current = html;
+      lockMedia(articleRef.current);
+    }
+  }, [internalLinks, lockMedia]);
 
   // ── Comptage de mots ─────────────────────────────────────────────────────
   const countWords = (html) => {
@@ -1438,6 +1477,18 @@ export default function ArticleResult() {
                         ref={setArticleRef}
                         className="article-diff-content md-content text-sm leading-loose p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[480px] max-h-[78vh] overflow-y-auto focus:outline-none focus:ring-2 focus:ring-black/10"
                         onInput={handleInput}
+                        onMouseOver={(e) => {
+                          const el = e.target.closest('[data-il-idx]');
+                          if (!el) return;
+                          const idx = parseInt(el.getAttribute('data-il-idx'), 10);
+                          if (appliedLinks.has(idx)) return;
+                          clearTimeout(leaveTimerRef.current);
+                          const rect = el.getBoundingClientRect();
+                          setLinkHover({ idx, url: el.getAttribute('data-il-url') || '', anchor: el.textContent, rect });
+                        }}
+                        onMouseLeave={() => {
+                          leaveTimerRef.current = setTimeout(() => setLinkHover(null), 220);
+                        }}
                         contentEditable
                         suppressContentEditableWarning
                       />
@@ -1766,56 +1817,58 @@ export default function ArticleResult() {
         )}
       </AnimatePresence>
 
-      {/* ── Sources ── */}
-      {/* ── Liens internes suggérés ─────────────────────────────────────── */}
+      {/* ── Récap liens internes (mini-badge) ─────────────────────────────── */}
       {internalLinks.length > 0 && (
         <motion.div
-          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
-          className="glass-card p-5 space-y-3"
+          initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200"
         >
-          <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-            <Link2 size={14} className="text-sage-500" />
-            Liens internes suggérés ({internalLinks.length})
-            <span className="text-[11px] font-normal text-gray-400 ml-1">— cliquez Appliquer pour insérer dans l'article</span>
-          </h3>
-          <div className="space-y-2">
-            {internalLinks.map((link, i) => (
-              <div key={i} className={`flex items-start gap-3 rounded-xl px-3 py-2.5 transition-colors ${
-                appliedLinks.has(i) ? 'bg-emerald-50 border border-emerald-100' : 'bg-gray-50'
-              }`}>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="inline-flex items-center gap-1 bg-white border border-gray-200 rounded-md px-2 py-0.5 text-xs font-medium text-gray-800 shadow-sm">
-                      <Link2 size={9} className="text-sage-500 flex-shrink-0" />
-                      {link.anchor}
-                    </span>
-                    <span className="text-[10px] text-gray-400">→</span>
-                    <a href={link.url} target="_blank" rel="noopener noreferrer"
-                      className="text-[11px] text-sage-600 hover:underline truncate max-w-[260px]"
-                      title={link.url}
-                    >
-                      {link.title}
-                    </a>
-                  </div>
-                  {link.reason && (
-                    <p className="text-[11px] text-gray-400 mt-1 leading-snug">{link.reason}</p>
-                  )}
-                </div>
-                <button
-                  onClick={() => applyInternalLink(link.anchor, link.url, i)}
-                  disabled={appliedLinks.has(i)}
-                  className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    appliedLinks.has(i)
-                      ? 'bg-emerald-100 text-emerald-700 cursor-default'
-                      : 'bg-black text-white hover:bg-gray-800'
-                  }`}
-                >
-                  {appliedLinks.has(i) ? '✓ Appliqué' : 'Appliquer'}
-                </button>
-              </div>
-            ))}
-          </div>
+          <Link2 size={13} className="text-sage-500 flex-shrink-0" />
+          <span className="text-[12px] text-gray-600">
+            <span className="font-semibold text-gray-800">{appliedLinks.size}</span>
+            /{internalLinks.length} lien{internalLinks.length > 1 ? 's' : ''} interne{internalLinks.length > 1 ? 's' : ''} appliqué{appliedLinks.size > 1 ? 's' : ''}
+          </span>
+          {appliedLinks.size < internalLinks.length && (
+            <span className="text-[11px] text-gray-400 ml-1">— survolez les passages surlignés dans l'article</span>
+          )}
+          {appliedLinks.size === internalLinks.length && internalLinks.length > 0 && (
+            <span className="text-[11px] text-emerald-600 ml-1 font-medium">✓ Tous appliqués</span>
+          )}
         </motion.div>
+      )}
+
+      {/* ── Bouton flottant "Appliquer" au survol d'un surlignage ─────────── */}
+      {linkHover && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            top:  linkHover.rect.bottom + 6,
+            left: linkHover.rect.left,
+            zIndex: 400,
+          }}
+          onMouseEnter={() => clearTimeout(leaveTimerRef.current)}
+          onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setLinkHover(null), 220); }}
+        >
+          <motion.button
+            initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            transition={{ duration: 0.12 }}
+            onClick={() => {
+              applyInternalLink(linkHover.anchor, linkHover.url, linkHover.idx);
+              setLinkHover(null);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-900 text-white shadow-lg hover:bg-black whitespace-nowrap"
+          >
+            <Link2 size={11} />
+            Appliquer le lien
+          </motion.button>
+          {/* Tooltip : destination du lien */}
+          {internalLinks[linkHover.idx]?.title && (
+            <p className="mt-1 px-2 py-1 bg-white border border-gray-200 rounded-lg text-[10px] text-gray-500 shadow max-w-[260px] truncate">
+              → {internalLinks[linkHover.idx].title}
+            </p>
+          )}
+        </div>,
+        document.body
       )}
 
       {sources.length > 0 && (

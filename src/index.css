@@ -216,6 +216,18 @@ body {
   background-color: #bfdbfe !important;
 }
 
+/* Surlignage liens internes suggérés ── visible dans l'éditeur, strippé à l'export */
+.il-highlight {
+  background-color: rgba(156, 163, 175, 0.22); /* gris clair */
+  border-radius: 3px;
+  padding: 0 2px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.il-highlight:hover {
+  background-color: rgba(156, 163, 175, 0.42);
+}
+
 /* Skills editor */
 .skill-editor-preview { line-height: 1.7; }
 .skill-editor-preview h1, .skill-editor-preview h2, .skill-editor-preview h3 {

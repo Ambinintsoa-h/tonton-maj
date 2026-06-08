@@ -28,6 +28,14 @@ export const exportAsHtml = (content) => {
   // ne doivent jamais être publiés dans WordPress
   div.querySelectorAll('[data-media-overlay]').forEach(el => el.remove());
 
+  // Dépublier les surlignages de liens internes non appliqués : remplacer le <span>
+  // par son contenu texte brut (le lien n'a pas été validé par l'utilisateur).
+  div.querySelectorAll('[data-il-idx]').forEach(span => {
+    const frag = document.createDocumentFragment();
+    while (span.firstChild) frag.appendChild(span.firstChild);
+    if (span.parentNode) span.parentNode.replaceChild(frag, span);
+  });
+
   // Convertir les wrappers vidéo (iframes YouTube) en URL brute pour WordPress oEmbed.
   // WordPress strip les <iframe> via wp_kses ; une URL YouTube seule sur sa propre ligne
   // est auto-convertie en lecteur embarqué par le mécanisme oEmbed natif de WordPress.
