@@ -102,10 +102,16 @@ class ActivityTracker {
 
     // Fin de pause : l'utilisateur revient après inactivité
     if (this._pauseStart) {
-      recordActivityPause(this._uid, this._today, {
-        start: this._pauseStart,
-        end:   now,
-      }).catch(() => {});
+      const pauseDuration = now - this._pauseStart;
+      // Ignorer les pauses cross-midnight (> 8h) — elles correspondent à la nuit,
+      // pas à une vraie inactivité dans la session de travail du jour.
+      const MAX_PAUSE_MS = 8 * 60 * 60 * 1000;
+      if (pauseDuration > 0 && pauseDuration <= MAX_PAUSE_MS) {
+        recordActivityPause(this._uid, this._today, {
+          start: this._pauseStart,
+          end:   now,
+        }).catch(() => {});
+      }
       this._pauseStart = null;
     }
 
@@ -155,6 +161,7 @@ class ActivityTracker {
       this._today        = today;
       this._ready        = false;
       this._initializing = false;
+      this._pauseStart   = null; // annuler la pause cross-midnight (nuit ≠ inactivité)
       return;
     }
 

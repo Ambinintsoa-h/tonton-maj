@@ -203,8 +203,16 @@ export default function MemberStatsPanel({ user, onClose }) {
   }));
 
   // ── Pauses (inactivité) de la session courante ──
+  // On filtre les pauses aberrantes : durée > 4h ou antérieures au début de session.
+  // Ces valeurs corrompues venaient de pauses cross-midnight non purgées (bug corrigé dans activityTracker).
+  const sessionStart = currentSession?.firstActivityAt || 0;
+  const sessionEnd   = currentSession?.lastActivityAt  || Date.now();
+  const MAX_PAUSE_MS = 4 * 60 * 60 * 1000; // 4h max par pause
+
   const pauses = (currentSession?.pauses || [])
-    .filter(p => p.start && p.end)
+    .filter(p => p.start && p.end && p.end > p.start)
+    .filter(p => (p.end - p.start) <= MAX_PAUSE_MS)     // exclure pauses overnight
+    .filter(p => p.start >= sessionStart)                // exclure pauses d'avant la session
     .sort((a, b) => a.start - b.start);
 
   const totalPauseMin = pauses.reduce((acc, p) => acc + Math.round((p.end - p.start) / 60000), 0);
