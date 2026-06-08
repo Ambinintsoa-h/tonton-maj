@@ -434,6 +434,76 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
               {missed.length} manquée{missed.length > 1 ? 's' : ''}
             </span>
           )}
+
+          {/* Badge SEO Haloscan — position avant/après ou statut en attente */}
+          {article.seoTracking?.enabled && (() => {
+            const st          = article.seoTracking;
+            const snapshots   = st.snapshots || [];
+            const beforeSnap  = snapshots.find(s => s.type === 'before');
+            const after7Snap  = snapshots.find(s => s.type === 'after_7d');
+            const after30Snap = snapshots.find(s => s.type === 'after_30d');
+            const beforePos   = beforeSnap?.results?.[0]?.position;
+            const latestPos   = (after30Snap || after7Snap)?.results?.[0]?.position;
+
+            // En attente J+7
+            if (st.nextSnapshotType === 'after_7d') {
+              return (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-blue-50 text-blue-600 border border-blue-200 rounded-full px-2.5 py-1 leading-none whitespace-nowrap">
+                  <Clock size={9} />
+                  J+7
+                  {beforePos && beforePos !== 'NA' && (
+                    <span className="opacity-60 font-normal">#{beforePos}</span>
+                  )}
+                </span>
+              );
+            }
+
+            // En attente J+30
+            if (st.nextSnapshotType === 'after_30d') {
+              return (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-violet-50 text-violet-600 border border-violet-200 rounded-full px-2.5 py-1 leading-none whitespace-nowrap">
+                  <Clock size={9} />
+                  J+30
+                  {beforePos && beforePos !== 'NA' && (
+                    <span className="opacity-60 font-normal">#{beforePos}</span>
+                  )}
+                </span>
+              );
+            }
+
+            // Évolution connue (avant + après)
+            if (beforePos && beforePos !== 'NA' && latestPos && latestPos !== 'NA') {
+              const diff = Number(beforePos) - Number(latestPos); // positif = gagné des positions
+              return (
+                <span className={`inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2.5 py-1 leading-none whitespace-nowrap border ${
+                  diff > 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : diff < 0 ? 'bg-red-50 text-red-600 border-red-200'
+                  : 'bg-gray-50 text-gray-500 border-gray-200'
+                }`}>
+                  {diff > 0 ? <TrendingUp size={9} /> : diff < 0 ? <TrendingDown size={9} /> : <Minus size={9} />}
+                  #{beforePos}→#{latestPos}
+                </span>
+              );
+            }
+
+            // Seulement snapshot avant disponible
+            if (beforePos && beforePos !== 'NA') {
+              return (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-gray-50 text-gray-500 border border-gray-200 rounded-full px-2.5 py-1 leading-none whitespace-nowrap">
+                  <TrendingUp size={9} className="text-gray-400" />
+                  #{beforePos}
+                </span>
+              );
+            }
+
+            // Tracking actif mais pas encore de données
+            return (
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full px-2.5 py-1 leading-none whitespace-nowrap">
+                <TrendingUp size={9} />
+                SEO ✓
+              </span>
+            );
+          })()}
         </div>
 
         {/* Actions */}
