@@ -40,15 +40,22 @@ jobs:
             IdentityFile ~/.ssh/id_rsa
             StrictHostKeyChecking no
             ConnectTimeout 30
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
           EOF
 
       - name: Upload files via SCP
         run: |
-          scp -F ~/.ssh/config \
-            proxy.js package.json package-lock.json \
-            n0c:~/maj.stomos.net/
-          scp -F ~/.ssh/config -r build \
-            n0c:~/maj.stomos.net/
+          for attempt in 1 2 3; do
+            echo "Tentative SCP $attempt/3..."
+            scp -F ~/.ssh/config \
+              proxy.js package.json package-lock.json \
+              n0c:~/maj.stomos.net/ && \
+            scp -F ~/.ssh/config -r build \
+              n0c:~/maj.stomos.net/ && break
+            echo "Échec tentative $attempt, attente 15s..."
+            sleep 15
+          done
 
       - name: Install deps + restart sur n0c
         run: |
