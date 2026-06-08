@@ -2352,6 +2352,24 @@ app.get('/health', (_, res) => {
 });
 
 // ─── SPA fallback (prod) — toute route non-API renvoie index.html ─────────────
+// ── Tickets admin (Admin SDK — bypass règles Firestore) ──────────────────────
+// GET /api/admin/tickets — tous les tickets sans restriction (super_admin + manager)
+app.get('/api/admin/tickets', requireAuth, async (req, res) => {
+  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non initialisé' });
+  const { role } = req.user;
+  if (role !== 'super_admin' && role !== 'manager') {
+    return res.status(403).json({ error: 'Accès refusé' });
+  }
+  try {
+    const db = firebaseAdmin.firestore();
+    const snap = await db.collection('tickets').orderBy('createdAt', 'desc').get();
+    const tickets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    res.json({ tickets });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Doit être APRÈS toutes les routes /api/* pour ne pas les intercepter.
 // app.use() sans chemin = catch-all compatible toutes versions de path-to-regexp.
 if (IS_PROD) {

@@ -307,18 +307,23 @@ export const saveSettings = async (settings) => {
 // ── Tickets ──────────────────────────────────────────────────────────────────
 
 export const getTickets = async (userId, role) => {
-  if (!db) return [];
-  // Pas de combinaison where+orderBy sur des champs différents → évite l'exigence d'index composite
-  let q;
-  if (role === 'cq_ia') {
-    q = query(collection(db, 'tickets'), where('creatorId', '==', userId));
-  } else {
-    q = query(collection(db, 'tickets'), orderBy('createdAt', 'desc'));
+  // super_admin et manager passent par le proxy Admin SDK (bypass règles Firestore)
+  if (role === 'super_admin' || role === 'manager') {
+    const token = sessionStorage.getItem('tonton_auth_token');
+    const resp = await fetch('/api/admin/tickets', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!resp.ok) throw new Error(`Erreur chargement tickets : ${resp.status}`);
+    const data = await resp.json();
+    return data.tickets || [];
   }
+
+  if (!db) return [];
+  // cq_ia : seulement ses propres tickets
+  const q = query(collection(db, 'tickets'), where('creatorId', '==', userId));
   const snap = await getDocs(q);
   const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  // Tri client-side pour cq_ia (évite l'index composite Firestore)
-  if (role === 'cq_ia') docs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  docs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   return docs;
 };
 
