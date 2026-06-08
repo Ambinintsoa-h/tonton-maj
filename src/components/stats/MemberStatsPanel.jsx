@@ -72,25 +72,36 @@ const buildSegments = (session) => {
     .filter(c => c?.at)
     .sort((a, b) => a.at - b.at);
 
-  const pauses  = [...(session.pauses || [])].filter(p => p.start && p.end).sort((a, b) => a.start - b.start);
   const lastAct = session.lastActivityAt || Date.now();
+
+  // Filtrer les pauses clairement corrompues (durée > 4h)
+  const MAX_PAUSE_MS = 4 * 60 * 60 * 1000;
+  const pauses = [...(session.pauses || [])]
+    .filter(p => p.start && p.end && p.end > p.start && (p.end - p.start) <= MAX_PAUSE_MS)
+    .sort((a, b) => a.start - b.start);
+
   const segments = [];
 
   connections.forEach((conn, i) => {
     const connStart = conn.at;
-    // Fin de cette période de connexion = début de la prochaine reconnexion (ou lastActivityAt pour la dernière)
     const connEnd   = i < connections.length - 1 ? connections[i + 1].at : lastAct;
 
-    // Pauses incluses dans cette période de connexion
+    // Pauses dont le début est dans cette fenêtre de connexion
     const periodPauses = pauses.filter(p => p.start >= connStart && p.start < connEnd);
     let cursor = connStart;
 
     periodPauses.forEach(p => {
-      if (p.start > cursor) segments.push({ type: 'active',  start: cursor,  end: p.start });
-      segments.push({ type: 'pause', start: p.start, end: p.end });
-      cursor = Math.max(cursor, p.end);
+      const pauseStart = Math.max(p.start, cursor);
+      // Clamp la fin de pause à connEnd : une pause ne peut pas déborder dans la période offline
+      const pauseEnd   = Math.min(p.end, connEnd);
+      if (pauseEnd <= pauseStart) return; // pause dégénérée, ignorer
+
+      if (pauseStart > cursor) segments.push({ type: 'active', start: cursor,     end: pauseStart });
+      segments.push(                         { type: 'pause',  start: pauseStart, end: pauseEnd   });
+      cursor = pauseEnd;
     });
 
+    // Reste actif jusqu'à la fin de la connexion
     if (cursor < connEnd) segments.push({ type: 'active', start: cursor, end: connEnd });
 
     // Période hors-ligne entre cette connexion et la suivante
