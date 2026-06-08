@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag } from 'lucide-react';
 import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks } from '../store/slices/agentSlice';
-import { addToHistory } from '../store/slices/articlesSlice';
+import { addToHistory, updateInHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
@@ -222,19 +222,32 @@ export default function Articles() {
       const trackingKeywords = [targetKeyword.trim(), ...seoKeywords].filter(Boolean);
       if (trackingKeywords.length > 0 && savedId && firebaseReady && (settings.haloscanConfigured || settings.haloscanKey)) {
         const articleUrl = tab === TAB_URL ? url.trim() : '';
+        const now    = Date.now();
+        const DAY_MS = 86400000;
+        // Initialisé avant le try pour que le badge "En attente J+7" s'affiche
+        // même si les appels distants échouent silencieusement.
+        const capturedSeoTracking = {
+          enabled:          true,
+          keywords:         trackingKeywords,
+          articleUrl:       articleUrl || '',
+          snapshots:        [],
+          nextSnapshotType: 'after_7d',
+          nextSnapshotAt:   now + 7 * DAY_MS,
+          completed:        false,
+        };
         try {
           await initArticleSeoTracking(savedId, { keywords: trackingKeywords, articleUrl });
           if (articleUrl) {
             const resp = await axios.post('/api/haloscan/check', { keywords: trackingKeywords, articleUrl });
             if (resp.data?.success) {
-              await saveSeoSnapshot(savedId, {
-                type:       'before',
-                capturedAt: Date.now(),
-                results:    resp.data.results || [],
-              });
+              const snap = { type: 'before', capturedAt: now, results: resp.data.results || [] };
+              await saveSeoSnapshot(savedId, snap);
+              capturedSeoTracking.snapshots = [snap];
             }
           }
         } catch { /* non bloquant */ }
+        // Propager seoTracking dans Redux → badge visible dans Historique
+        dispatch(updateInHistory({ id: savedId, seoTracking: capturedSeoTracking }));
         setSeoKeywords([]);
         setSeoKwInput('');
       }
