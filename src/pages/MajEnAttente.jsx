@@ -9,7 +9,7 @@ import {
   Clock, Upload, Trash2, CheckCircle2, AlertCircle,
   ExternalLink, Plus, X, RefreshCw, ChevronDown, ChevronUp,
   FileSpreadsheet, Link2, Sparkles, Filter, Loader, UserCircle2,
-  Globe, PencilLine,
+  Globe, PencilLine, ListChecks, PlayCircle, ShieldCheck, Tag,
 } from 'lucide-react';
 import {
   addPendingItems, addPendingItem, removePendingItem,
@@ -226,9 +226,9 @@ function UploadZone({ onParsed }) {
   );
 }
 
-// ── Formulaire ajout manuel ───────────────────────────────────────────────────
+// ── Panel slide depuis la droite — Ajouter manuellement ─────────────────────
 
-function AddManualForm({ onAdd, onClose, teamMembers }) {
+function AddManualPanel({ open, onAdd, onClose, teamMembers }) {
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
   const [keyword, setKeyword] = useState('');
@@ -236,128 +236,228 @@ function AddManualForm({ onAdd, onClose, teamMembers }) {
   const [notes, setNotes] = useState('');
   const [assigneeId, setAssigneeId] = useState('');
 
+  // Reset on open
+  useEffect(() => {
+    if (open) { setUrl(''); setTitle(''); setKeyword(''); setPriority('normale'); setNotes(''); setAssigneeId(''); }
+  }, [open]);
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!url.trim() || !url.startsWith('http')) {
-      toast.error('URL invalide');
-      return;
-    }
+    if (!url.trim() || !url.startsWith('http')) { toast.error('URL invalide'); return; }
     onAdd({
-      id: uid(),
-      url: url.trim(),
-      title: title.trim() || url.trim(),
-      keyword: keyword.trim(),
-      priority,
-      notes: notes.trim(),
-      assigneeId: assigneeId || null,
-      status: 'pending',
-      source: 'manual',
-      addedAt: Date.now(),
-      updatedAt: Date.now(),
+      id: uid(), url: url.trim(), title: title.trim() || url.trim(),
+      keyword: keyword.trim(), priority, notes: notes.trim(),
+      assigneeId: assigneeId || null, status: 'pending', source: 'manual',
+      addedAt: Date.now(), updatedAt: Date.now(),
     });
     toast.success('Article ajouté à la liste');
     onClose();
   };
 
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -10 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -10 }}
-      className="glass-card p-5 space-y-4"
-    >
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-          <Plus size={14} className="text-gray-500" />
-          Ajouter manuellement
-        </h3>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
-          <X size={16} />
-        </button>
-      </div>
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <>
+          {/* Backdrop */}
+          <motion.div
+            key="add-backdrop"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/20 backdrop-blur-[2px] z-[200]"
+            onClick={onClose}
+          />
+          {/* Panel */}
+          <motion.div
+            key="add-panel"
+            initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+            transition={{ type: 'spring', stiffness: 340, damping: 34 }}
+            className="fixed right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl z-[201] flex flex-col"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-gray-900 flex items-center justify-center">
+                  <Plus size={14} className="text-white" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900">Ajouter un article</h3>
+                  <p className="text-[11px] text-gray-400 mt-0.5">Ajout manuel à la file</p>
+                </div>
+              </div>
+              <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-gray-700 transition-colors">
+                <X size={15} />
+              </button>
+            </div>
 
-      <form onSubmit={handleSubmit} className="space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="sm:col-span-2">
-            <label className="text-xs font-medium text-gray-500 mb-1 block">URL *</label>
-            <input
-              type="url"
-              value={url}
-              onChange={e => setUrl(e.target.value)}
-              placeholder="https://monsite.com/article"
-              className="input-field w-full text-sm"
-              required
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-gray-500 mb-1 block">Titre</label>
-            <input
-              type="text"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              placeholder="Titre de l'article"
-              className="input-field w-full text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-gray-500 mb-1 block">Mot-clé cible</label>
-            <input
-              type="text"
-              value={keyword}
-              onChange={e => setKeyword(e.target.value)}
-              placeholder="ex: référencement naturel"
-              className="input-field w-full text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-gray-500 mb-1 block">Priorité</label>
-            <select
-              value={priority}
-              onChange={e => setPriority(e.target.value)}
-              className="input-field w-full text-sm"
-            >
-              <option value="haute">Haute</option>
-              <option value="normale">Normale</option>
-              <option value="basse">Basse</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-gray-500 mb-1 block">Notes</label>
-            <input
-              type="text"
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
-              placeholder="Remarques, contexte…"
-              className="input-field w-full text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-gray-500 mb-1 block">Assigner à</label>
-            <select
-              value={assigneeId}
-              onChange={e => setAssigneeId(e.target.value)}
-              className="input-field w-full text-sm"
-            >
-              <option value="">— Non assigné —</option>
-              {teamMembers.map(m => (
-                <option key={m.id} value={m.id}>
-                  {m.firstName} {m.lastName} ({m.role === 'cq_ia' ? 'CQ IA' : 'Manager'})
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" onClick={onClose} className="btn-ghost text-sm">
-            Annuler
-          </button>
-          <button type="submit" className="btn-primary text-sm flex items-center gap-2">
-            <Plus size={13} />
-            Ajouter
-          </button>
-        </div>
-      </form>
-    </motion.div>
+            {/* Form */}
+            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+              {/* URL */}
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">URL *</label>
+                <input
+                  type="url" value={url} onChange={e => setUrl(e.target.value)}
+                  placeholder="https://monsite.com/article"
+                  className="input-field w-full text-sm" required autoFocus
+                />
+              </div>
+
+              {/* Titre */}
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">Titre</label>
+                <input
+                  type="text" value={title} onChange={e => setTitle(e.target.value)}
+                  placeholder="Titre de l'article (facultatif)"
+                  className="input-field w-full text-sm"
+                />
+                <p className="text-[11px] text-gray-400 mt-1">Récupéré automatiquement si vide</p>
+              </div>
+
+              {/* Mot-clé */}
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">
+                  <span className="flex items-center gap-1.5"><Tag size={10} /> Mot-clé cible</span>
+                </label>
+                <input
+                  type="text" value={keyword} onChange={e => setKeyword(e.target.value)}
+                  placeholder="ex : référencement naturel"
+                  className="input-field w-full text-sm"
+                />
+              </div>
+
+              {/* Priorité */}
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">Priorité</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { val: 'haute',   label: 'Haute',   dot: 'bg-red-400',    ring: 'ring-red-200',   active: 'bg-red-50 border-red-300 text-red-700' },
+                    { val: 'normale', label: 'Normale', dot: 'bg-amber-400',  ring: 'ring-amber-200', active: 'bg-amber-50 border-amber-300 text-amber-700' },
+                    { val: 'basse',   label: 'Basse',   dot: 'bg-emerald-400',ring: 'ring-emerald-200',active: 'bg-emerald-50 border-emerald-300 text-emerald-700' },
+                  ].map(p => (
+                    <button
+                      key={p.val} type="button"
+                      onClick={() => setPriority(p.val)}
+                      className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-xs font-semibold transition-all ${
+                        priority === p.val ? p.active + ' ring-2 ' + p.ring : 'border-gray-200 text-gray-500 hover:border-gray-300 bg-white'
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${p.dot}`} />
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Assigner à */}
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">Assigner à</label>
+                <select value={assigneeId} onChange={e => setAssigneeId(e.target.value)} className="input-field w-full text-sm">
+                  <option value="">— Non assigné —</option>
+                  {teamMembers.map(m => (
+                    <option key={m.id} value={m.id}>
+                      {m.firstName} {m.lastName} ({m.role === 'cq_ia' ? 'CQ IA' : 'Manager'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">Notes</label>
+                <textarea
+                  value={notes} onChange={e => setNotes(e.target.value)}
+                  placeholder="Remarques, contexte, instructions…"
+                  rows={3}
+                  className="input-field w-full text-sm resize-none"
+                />
+              </div>
+            </form>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
+              <button type="button" onClick={onClose} className="flex-1 btn-ghost text-sm">
+                Annuler
+              </button>
+              <button
+                onClick={handleSubmit}
+                className="flex-1 btn-primary text-sm flex items-center justify-center gap-2"
+              >
+                <Plus size={13} />
+                Ajouter
+              </button>
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>,
+    document.body
+  );
+}
+
+// ── Panel slide depuis la droite — Import fichier ─────────────────────────────
+
+function ImportPanel({ open, onClose, onParsed }) {
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            key="import-backdrop"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/20 backdrop-blur-[2px] z-[200]"
+            onClick={onClose}
+          />
+          <motion.div
+            key="import-panel"
+            initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+            transition={{ type: 'spring', stiffness: 340, damping: 34 }}
+            className="fixed right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl z-[201] flex flex-col"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center">
+                  <Upload size={14} className="text-white" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900">Importer un fichier</h3>
+                  <p className="text-[11px] text-gray-400 mt-0.5">Google Sheets · Excel · CSV</p>
+                </div>
+              </div>
+              <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-gray-700 transition-colors">
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+              <UploadZone onParsed={(items) => { onParsed(items); onClose(); }} />
+
+              {/* Infos format */}
+              <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4 space-y-3">
+                <p className="text-xs font-semibold text-gray-700 flex items-center gap-2">
+                  <FileSpreadsheet size={13} className="text-gray-400" />
+                  Format attendu
+                </p>
+                <p className="text-xs text-gray-500">Colonnes reconnues automatiquement (ordre libre) :</p>
+                <div className="flex flex-wrap gap-2">
+                  {['URL *', 'Titre', 'Mot-clé', 'Priorité', 'Notes'].map(col => (
+                    <span key={col} className={`inline-flex items-center px-2.5 py-1 rounded-lg text-[11px] font-medium ${col.includes('*') ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-white text-gray-500 border border-gray-200'}`}>
+                      {col}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-[11px] text-gray-400">Les doublons d'URL sont ignorés automatiquement.</p>
+              </div>
+
+              {/* Liens utiles */}
+              <div className="rounded-2xl bg-blue-50 border border-blue-100 p-4">
+                <p className="text-xs font-semibold text-blue-700 mb-2">💡 Astuce Google Sheets</p>
+                <p className="text-xs text-blue-600">Exportez votre feuille via <strong>Fichier → Télécharger → .xlsx</strong> puis importez-le ici.</p>
+              </div>
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>,
+    document.body
   );
 }
 
@@ -822,7 +922,7 @@ export default function MajEnAttente() {
     ASSIGNABLE_ROLES.includes(u.role) && (u.status === 'active' || !u.status)
   );
 
-  const [showUpload,    setShowUpload]    = useState(false);
+  const [showImport,    setShowImport]    = useState(false);
   const [showAddManual, setShowAddManual] = useState(false);
   const [filter,        setFilter]        = useState('Tous');
   // Enrichissement automatique après import : { total, done, errors }
@@ -876,7 +976,7 @@ export default function MajEnAttente() {
 
   const handleParsed = async (newItems) => {
     dispatch(addPendingItems(newItems));
-    setShowUpload(false);
+    setShowImport(false);
 
     // Enrichissement automatique : scraper les URLs dont le titre est absent
     // (titre absent = non fourni dans le fichier → la valeur par défaut est l'URL elle-même)
@@ -1114,32 +1214,45 @@ export default function MajEnAttente() {
   return (
     <div className="space-y-6 animate-fade-in">
 
+      {/* ── Panels slide ── */}
+      <AddManualPanel
+        open={showAddManual}
+        onAdd={(item) => dispatch(addPendingItem(item))}
+        onClose={() => setShowAddManual(false)}
+        teamMembers={teamMembers}
+      />
+      <ImportPanel
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        onParsed={handleParsed}
+      />
+
       {/* ── Header ── */}
       <div className="flex items-start justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Clock size={22} className="text-gray-700" />
+            <ListChecks size={22} className="text-gray-700" />
             MAJ en attente
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            Liste d'articles à mettre à jour · import Google Sheets / XLSX
+            File d'articles à mettre à jour · import Google Sheets / XLSX
           </p>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => { setShowAddManual(x => !x); setShowUpload(false); }}
+            onClick={() => setShowAddManual(true)}
             className="btn-ghost flex items-center gap-2 text-sm"
           >
             <Plus size={14} />
             Ajouter
           </button>
           <button
-            onClick={() => { setShowUpload(x => !x); setShowAddManual(false); }}
+            onClick={() => setShowImport(true)}
             className="btn-primary flex items-center gap-2 text-sm"
           >
             <Upload size={14} />
-            Importer un fichier
+            Importer
           </button>
         </div>
       </div>
@@ -1147,14 +1260,38 @@ export default function MajEnAttente() {
       {/* ── Compteurs ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Total',      value: counts.total,       color: 'text-gray-700',   bg: 'bg-gray-50'    },
-          { label: 'En attente', value: counts.pending,     color: 'text-amber-700',  bg: 'bg-amber-50'   },
-          { label: 'En cours',   value: counts.in_progress, color: 'text-blue-700',   bg: 'bg-blue-50'    },
-          { label: 'À valider',  value: counts.a_valider,   color: 'text-purple-700', bg: 'bg-purple-50'  },
+          {
+            label: 'Total', value: counts.total,
+            icon: <ListChecks size={15} className="text-gray-400" />,
+            color: 'text-gray-900', sub: 'articles actifs',
+            accent: 'border-l-gray-300',
+          },
+          {
+            label: 'En attente', value: counts.pending,
+            icon: <Clock size={15} className="text-amber-500" />,
+            color: 'text-amber-700', sub: 'à traiter',
+            accent: 'border-l-amber-300',
+          },
+          {
+            label: 'En cours', value: counts.in_progress,
+            icon: <PlayCircle size={15} className="text-blue-500" />,
+            color: 'text-blue-700', sub: 'en traitement',
+            accent: 'border-l-blue-300',
+          },
+          {
+            label: 'À valider', value: counts.a_valider,
+            icon: <ShieldCheck size={15} className="text-purple-500" />,
+            color: 'text-purple-700', sub: 'en review',
+            accent: 'border-l-purple-300',
+          },
         ].map(c => (
-          <div key={c.label} className={`glass-card px-4 py-3 ${c.bg}`}>
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">{c.label}</p>
-            <p className={`text-2xl font-bold ${c.color} leading-none mt-1`}>{c.value}</p>
+          <div key={c.label} className={`glass-card px-4 py-3.5 border-l-[3px] ${c.accent}`}>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{c.label}</p>
+              {c.icon}
+            </div>
+            <p className={`text-2xl font-bold ${c.color} leading-none`}>{c.value}</p>
+            <p className="text-[11px] text-gray-400 mt-1">{c.sub}</p>
           </div>
         ))}
       </div>
@@ -1171,12 +1308,8 @@ export default function MajEnAttente() {
             <Loader size={15} className="animate-spin text-blue-500 flex-shrink-0" />
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between mb-1.5">
-                <p className="text-xs font-medium text-gray-700">
-                  Récupération des titres manquants…
-                </p>
-                <span className="text-xs text-gray-400 tabular-nums">
-                  {enriching.done} / {enriching.total}
-                </span>
+                <p className="text-xs font-medium text-gray-700">Récupération des titres manquants…</p>
+                <span className="text-xs text-gray-400 tabular-nums">{enriching.done} / {enriching.total}</span>
               </div>
               <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                 <motion.div
@@ -1190,73 +1323,36 @@ export default function MajEnAttente() {
         )}
       </AnimatePresence>
 
-      {/* ── Zone upload (toggle) ── */}
-      <AnimatePresence>
-        {showUpload && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-          >
-            <UploadZone onParsed={handleParsed} />
-
-            {/* Template Google Sheets */}
-            <div className="mt-3 glass-card p-4 flex items-start gap-3">
-              <FileSpreadsheet size={16} className="text-gray-400 mt-0.5 flex-shrink-0" />
-              <div className="text-xs text-gray-500">
-                <p className="font-medium text-gray-700 mb-1">Format attendu</p>
-                <p>Colonnes reconnues automatiquement (ordre libre) :</p>
-                <p className="font-mono bg-gray-100 rounded px-2 py-1 mt-1 text-[11px]">
-                  URL · Titre · Mot-clé · Priorité (haute/normale/basse) · Notes
-                </p>
-                <p className="mt-1 text-gray-400">Les doublons d'URL sont ignorés automatiquement.</p>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── Formulaire ajout manuel (toggle) ── */}
-      <AnimatePresence>
-        {showAddManual && (
-          <AddManualForm
-            onAdd={(item) => dispatch(addPendingItem(item))}
-            onClose={() => setShowAddManual(false)}
-            teamMembers={teamMembers}
-          />
-        )}
-      </AnimatePresence>
-
       {/* ── Filtres + actions bulk ── */}
       {activeItems.length > 0 && (
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-1">
-            <Filter size={13} className="text-gray-400 mr-1" />
+          <div className="flex items-center gap-1 bg-gray-100/70 rounded-xl p-1">
             {FILTERS.map(f => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                   filter === f
-                    ? 'bg-gray-900 text-white'
-                    : 'text-gray-500 hover:bg-gray-100'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
                 {f}
+                {f !== 'Tous' && (
+                  <span className={`ml-1.5 tabular-nums ${filter === f ? 'text-gray-400' : 'text-gray-400'}`}>
+                    {f === 'En attente' ? counts.pending : f === 'En cours' ? counts.in_progress : counts.a_valider}
+                  </span>
+                )}
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                if (window.confirm('Vider toute la liste ?')) dispatch(clearAll());
-              }}
-              className="btn-ghost text-xs text-red-400 hover:text-red-600 hover:bg-red-50 flex items-center gap-1"
-            >
-              <Trash2 size={12} />
-              Tout supprimer
-            </button>
-          </div>
+          <button
+            onClick={() => { if (window.confirm('Vider toute la liste ?')) dispatch(clearAll()); }}
+            className="btn-ghost text-xs text-red-400 hover:text-red-600 hover:bg-red-50 flex items-center gap-1.5"
+          >
+            <Trash2 size={12} />
+            Tout supprimer
+          </button>
         </div>
       )}
 
@@ -1265,27 +1361,21 @@ export default function MajEnAttente() {
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="glass-card p-12 text-center"
+          className="glass-card p-14 text-center"
         >
-          <Clock size={36} className="mx-auto mb-4 text-gray-200" />
-          <p className="text-sm font-semibold text-gray-400">Aucun article en attente</p>
-          <p className="text-xs text-gray-400 mt-1 max-w-sm mx-auto">
+          <div className="w-14 h-14 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-center mx-auto mb-4">
+            <ListChecks size={24} className="text-gray-300" />
+          </div>
+          <p className="text-sm font-semibold text-gray-500">File vide</p>
+          <p className="text-xs text-gray-400 mt-1.5 max-w-xs mx-auto">
             Importez un fichier Google Sheets / XLSX ou ajoutez des articles manuellement.
           </p>
           <div className="flex justify-center gap-3 mt-6">
-            <button
-              onClick={() => setShowAddManual(true)}
-              className="btn-ghost text-sm flex items-center gap-2"
-            >
-              <Plus size={14} />
-              Ajouter manuellement
+            <button onClick={() => setShowAddManual(true)} className="btn-ghost text-sm flex items-center gap-2">
+              <Plus size={14} /> Ajouter
             </button>
-            <button
-              onClick={() => setShowUpload(true)}
-              className="btn-primary text-sm flex items-center gap-2"
-            >
-              <Upload size={14} />
-              Importer un fichier
+            <button onClick={() => setShowImport(true)} className="btn-primary text-sm flex items-center gap-2">
+              <Upload size={14} /> Importer
             </button>
           </div>
         </motion.div>
