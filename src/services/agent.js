@@ -343,6 +343,24 @@ const makeTokenTracker = () => {
   return { acc, track };
 };
 
+/**
+ * Lit la directive `liens_internes: N` dans les skills actifs.
+ * Syntaxe tolérée : "liens_internes: 6", "liens internes : 3", etc.
+ * Retourne { min, max } — défaut { min:2, max:4 } si aucune directive trouvée.
+ */
+const extractIlCount = (skills) => {
+  const RE = /liens[_\s-]*internes\s*:\s*(\d+)/i;
+  for (const s of skills) {
+    const text = s.content ? (s.content.trimStart().startsWith('<') ? stripHtml(s.content) : s.content) : '';
+    const m = text.match(RE);
+    if (m) {
+      const n = Math.max(1, Math.min(10, parseInt(m[1], 10)));
+      return { min: Math.min(2, n), max: n };
+    }
+  }
+  return { min: 2, max: 4 };
+};
+
 /** Construit le bloc Skills pour le system prompt. */
 const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON style, ta méthode et tes contraintes rédactionnelles.\nTu DOIS les respecter intégralement dans TOUTES tes modifications.') => {
   const active = skills.filter(s => s.content);
@@ -789,11 +807,24 @@ ${content}
   ];
 
   // ── Phase finale : suggestions liens internes ──────────────────────────────
-  // Nécessite un site WP connecté pour récupérer les articles du site
+  // Fonctionne si wpData est disponible OU si articleUrl correspond à un site configuré
   let internalLinks = [];
-  if (wpData?.siteId && wpSites?.length) {
+  const ilSiteId = wpData?.siteId || (() => {
+    if (!articleUrl || !wpSites?.length) return null;
     try {
-      onStep('Recherche de liens internes...');
+      const h = new URL(articleUrl).hostname.replace(/^www\./, '');
+      const s = wpSites.find(site => {
+        try { return new URL(site.url).hostname.replace(/^www\./, '') === h; }
+        catch { return false; }
+      });
+      return s?.id || null;
+    } catch { return null; }
+  })();
+  if (ilSiteId && wpSites?.length) {
+    // Limite configurable via skills — directive "liens_internes: N" dans le contenu d'un skill
+    const { min: ilMin, max: ilMax } = extractIlCount(skills);
+    try {
+      onStep(`Recherche de liens internes (${ilMin}–${ilMax})...`);
       onProgress(88);
 
       // 1. Extraire 3 mots-clés principaux depuis le titre / premier paragraphe
@@ -810,7 +841,7 @@ ${content}
       if (keywords.length) {
         // 2. Chercher des articles liés via l'API WordPress
         const resp = await axios.post('/api/wp-related-posts', {
-          siteId:     wpData.siteId,
+          siteId:     ilSiteId,
           wpSites,
           queries:    keywords.slice(0, 3),
           excludeUrl: articleUrl,
@@ -818,7 +849,7 @@ ${content}
         const relatedPosts = resp.data?.posts || [];
 
         if (relatedPosts.length >= 2) {
-          // 3. Demander à Claude de suggérer 2-4 liens internes
+          // 3. Demander à Claude de suggérer N liens internes (paramétré via skills)
           const postsList = relatedPosts.map((p, i) => `${i + 1}. "${p.title}" — ${p.url}`).join('\n');
           const articlePreviewText = stripHtml(content).substring(0, 2000);
 
@@ -834,7 +865,7 @@ ${articlePreviewText}
 Articles disponibles sur le même site :
 ${postsList}
 
-Suggère 2 à 4 liens internes pertinents. Pour chaque lien :
+Suggère ${ilMin} à ${ilMax} liens internes pertinents. Pour chaque lien :
 - "anchor" : une expression EXACTE présente dans l'article (2-5 mots, riche en mots-clés)
 - "url" : l'URL de l'article lié
 - "title" : le titre de l'article lié
@@ -845,7 +876,7 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
           });
           trackCall('internal_links', linksText);
           const { links = [] } = parseJsonResponse(linksText, { links: [] }, '[internal-links]');
-          internalLinks = links.filter(l => l.anchor && l.url && l.title).slice(0, 4);
+          internalLinks = links.filter(l => l.anchor && l.url && l.title).slice(0, ilMax);
         }
       }
     } catch (e) {

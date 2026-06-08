@@ -592,7 +592,6 @@ export default function ArticleResult() {
   const [appliedLinks, setAppliedLinks] = useState(new Set());
   const [linkHover, setLinkHover]       = useState(null); // { idx, url, anchor, rect }
   const leaveTimerRef  = useRef(null);
-  const ilInjectedRef  = useRef(false); // injecté une seule fois
 
   // ── Appliquer un lien interne (depuis le span surligné ou fallback regex) ──
   const applyInternalLink = useCallback((anchor, url, linkIdx) => {
@@ -628,9 +627,12 @@ export default function ArticleResult() {
   }, [lockMedia]);
 
   // ── Injecter les surlignages gris dans l'article dès que les liens arrivent ──
+  // articleEl dans les deps garantit que l'effet se re-déclenche quand le div monte,
+  // même si internalLinks était déjà chargé avant que le div existe dans le DOM.
   useEffect(() => {
-    if (!articleRef.current || internalLinks.length === 0 || ilInjectedRef.current) return;
-    ilInjectedRef.current = true;
+    if (!articleRef.current || internalLinks.length === 0) return;
+    // Éviter la double injection (vérification DOM, pas de ref flag qui ne se reset pas)
+    if (articleRef.current.querySelector('[data-il-idx]')) return;
     let html    = articleRef.current.innerHTML;
     let changed = false;
     internalLinks.forEach((link, i) => {
@@ -646,7 +648,7 @@ export default function ArticleResult() {
       contentRef.current = html;
       lockMedia(articleRef.current);
     }
-  }, [internalLinks, lockMedia]);
+  }, [internalLinks, lockMedia, articleEl]); // articleEl → re-run quand le div monte
 
   // ── Comptage de mots ─────────────────────────────────────────────────────
   const countWords = (html) => {

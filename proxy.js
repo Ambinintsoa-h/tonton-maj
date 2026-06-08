@@ -2108,13 +2108,16 @@ app.post('/api/wp-categories', requireAuth, async (req, res) => {
 app.post('/api/wp-related-posts', requireAuth, async (req, res) => {
   const { siteId, wpSites = [], queries = [], excludeUrl = '' } = req.body;
   const site = wpSites.find(s => s.id === siteId);
-  if (!site || !site.url || !site.username || !site.password) {
-    return res.status(400).json({ error: 'Site introuvable ou credentials manquants' });
+  if (!site || !site.url) {
+    return res.status(400).json({ error: 'Site introuvable' });
   }
   try {
     await assertSafeUrl(site.url, 'URL du site WP');
-    const auth    = Buffer.from(`${site.username}:${site.password}`).toString('base64');
-    const headers = { 'Authorization': `Basic ${auth}` };
+    // Auth optionnelle — les posts publiés sont accessibles publiquement via WP REST API
+    const authHeader = (site.username && site.password)
+      ? { 'Authorization': `Basic ${Buffer.from(`${site.username}:${site.password}`).toString('base64')}` }
+      : {};
+    const headers = { ...authHeader };
     const base    = site.url.replace(/\/$/, '');
 
     // Recherche en parallèle pour chaque query (max 3 queries × 5 résultats)
