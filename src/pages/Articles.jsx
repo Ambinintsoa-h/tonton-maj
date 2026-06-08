@@ -36,7 +36,9 @@ export default function Articles() {
   const [targetKeyword, setTargetKeyword] = useState('');
   const [seoKeywords, setSeoKeywords] = useState([]);
   const [seoKwInput, setSeoKwInput] = useState('');
-  const canRun = (settings.aiConfigured || settings.useLocalProxy || settings.anthropicKey) && (tab === TAB_URL ? url.trim() : text.trim());
+  const canRun = (settings.aiConfigured || settings.useLocalProxy || settings.anthropicKey)
+    && (tab === TAB_URL ? url.trim() : text.trim())
+    && targetKeyword.trim();
 
   const handleRun = async () => {
     if (!settings.aiConfigured && !settings.useLocalProxy && !settings.anthropicKey) {
@@ -367,7 +369,7 @@ export default function Articles() {
                 <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
                   <Tag size={13} className="text-gray-400" />
                   Mot-clé cible
-                  <span className="text-xs font-normal text-gray-400 ml-1">(optionnel)</span>
+                  <span className="text-xs font-normal text-red-400 ml-1">*</span>
                 </label>
                 <input
                   type="text"
@@ -376,11 +378,11 @@ export default function Articles() {
                   placeholder="ex: isolation toiture thermique"
                   className="input-glass text-sm"
                 />
-                {targetKeyword.trim() && (
-                  <p className="text-[11px] text-sage-600">
-                    L'IA priorisera ce mot-clé dans les titres, l'intro et la densité sémantique.
-                  </p>
-                )}
+                <p className="text-[11px] text-gray-400">
+                  {targetKeyword.trim()
+                    ? <span className="text-sage-600">✓ L'IA optimisera l'article autour de ce mot-clé (H1/H2, intro, densité sémantique).</span>
+                    : 'Requis — TONTON AI l\'utilisera pour orienter toute la MAJ SEO.'}
+                </p>
               </div>
 
               {!settings.anthropicKey && !settings.aiConfigured && !settings.useLocalProxy && (
