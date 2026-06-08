@@ -868,7 +868,7 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
 
 // ── Prompt système — Deuxième passe ──────────────────────────────────────────
 const buildReviewSystemPrompt = (skills, knowledge = []) => {
-  const { fr, year } = getDateContext();
+  const { fr, year, prevYear } = getDateContext();
 
   const skillsBlock = buildSkillsBlock(
     skills,
