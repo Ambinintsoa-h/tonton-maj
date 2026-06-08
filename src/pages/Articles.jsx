@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon } from 'lucide-react';
+import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag } from 'lucide-react';
 import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks } from '../store/slices/agentSlice';
 import { addToHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
@@ -33,6 +33,7 @@ export default function Articles() {
   const [url, setUrl] = useState('');
   const [text, setText] = useState('');
   const [scraping, setScraping] = useState(false);
+  const [targetKeyword, setTargetKeyword] = useState('');
   const [seoKeywords, setSeoKeywords] = useState([]);
   const [seoKwInput, setSeoKwInput] = useState('');
   const canRun = (settings.aiConfigured || settings.useLocalProxy || settings.anthropicKey) && (tab === TAB_URL ? url.trim() : text.trim());
@@ -127,6 +128,7 @@ export default function Articles() {
         skills,
         knowledge,
         articleUrl:      tab === TAB_URL ? url : '',
+        targetKeyword:   targetKeyword.trim(),
         wpSites,
         existingWpData:  prefetchedWpData,  // évite un 2e appel WP MCP dans runAgent
         modelPricing:    settings.modelPricing || null,
@@ -359,6 +361,27 @@ export default function Articles() {
                   </motion.div>
                 )}
               </AnimatePresence>
+
+              {/* ── Mot-clé cible (optionnel) ─────────────────────────────────────── */}
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
+                  <Tag size={13} className="text-gray-400" />
+                  Mot-clé cible
+                  <span className="text-xs font-normal text-gray-400 ml-1">(optionnel)</span>
+                </label>
+                <input
+                  type="text"
+                  value={targetKeyword}
+                  onChange={e => setTargetKeyword(e.target.value)}
+                  placeholder="ex: isolation toiture thermique"
+                  className="input-glass text-sm"
+                />
+                {targetKeyword.trim() && (
+                  <p className="text-[11px] text-sage-600">
+                    L'IA priorisera ce mot-clé dans les titres, l'intro et la densité sémantique.
+                  </p>
+                )}
+              </div>
 
               {!settings.anthropicKey && !settings.aiConfigured && !settings.useLocalProxy && (
                 <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700">

@@ -346,7 +346,8 @@ const makeTokenTracker = () => {
 /**
  * Lit la directive `liens_internes: N` dans les skills actifs.
  * Syntaxe tolérée : "liens_internes: 6", "liens internes : 3", etc.
- * Retourne { min, max } — défaut { min:2, max:4 } si aucune directive trouvée.
+ * Retourne { min, max, exact } — défaut { min:2, max:4, exact:false } si aucune directive.
+ * exact:true → le prompt dira "exactement N liens" au lieu d'une plage.
  */
 const extractIlCount = (skills) => {
   const RE = /liens[_\s-]*internes\s*:\s*(\d+)/i;
@@ -355,10 +356,10 @@ const extractIlCount = (skills) => {
     const m = text.match(RE);
     if (m) {
       const n = Math.max(1, Math.min(10, parseInt(m[1], 10)));
-      return { min: Math.min(2, n), max: n };
+      return { min: n, max: n, exact: true };
     }
   }
-  return { min: 2, max: 4 };
+  return { min: 2, max: 4, exact: false };
 };
 
 /** Construit le bloc Skills pour le system prompt. */
@@ -518,6 +519,7 @@ export const runAgent = async ({
   skills,
   knowledge      = [],
   articleUrl     = '',
+  targetKeyword  = '',    // mot-clé cible saisi par l'utilisateur dans Articles.jsx
   wpSites        = [],
   existingWpData = null,  // déjà récupéré par Articles.jsx — évite un 2e appel MCP
   modelPricing   = null,  // tarifs depuis settings.json — null = fallback hardcodé
@@ -740,8 +742,12 @@ ${content.substring(0, 5000)}`,
       `Tes ${skillsCount} skill(s) définissent tes règles d'écriture. Chaque modification doit les respecter.\n`
     : '';
 
+  const kwBlock = targetKeyword
+    ? `## MOT-CLÉ CIBLE\n**"${targetKeyword}"** — Priorise ce mot-clé dans toutes tes modifications : H1/H2, introduction, densité sémantique naturelle, balises title/meta si présentes.\n\n`
+    : '';
+
   const userMessage = `Nous sommes le ${fr} (${iso}).
-${skillsReminder}${knowlReminder}
+${kwBlock}${skillsReminder}${knowlReminder}
 ## ÉTAPES DE TRAVAIL OBLIGATOIRES
 
 **ÉTAPE 1 — Relire les Skills et la base de connaissances**
@@ -822,9 +828,9 @@ ${content}
   })();
   if (ilSiteId && wpSites?.length) {
     // Limite configurable via skills — directive "liens_internes: N" dans le contenu d'un skill
-    const { min: ilMin, max: ilMax } = extractIlCount(skills);
+    const { min: ilMin, max: ilMax, exact: ilExact } = extractIlCount(skills);
     try {
-      onStep(`Recherche de liens internes (${ilMin}–${ilMax})...`);
+      onStep(`Recherche de liens internes (${ilExact ? ilMax : `${ilMin}–${ilMax}`})...`);
       onProgress(88);
 
       // 1. Extraire 3 mots-clés principaux depuis le titre / premier paragraphe
@@ -865,7 +871,7 @@ ${articlePreviewText}
 Articles disponibles sur le même site :
 ${postsList}
 
-Suggère ${ilMin} à ${ilMax} liens internes pertinents. Pour chaque lien :
+Suggère ${ilExact ? `exactement ${ilMax}` : `${ilMin} à ${ilMax}`} lien(s) interne(s) pertinent(s). Pour chaque lien :
 - "anchor" : une expression EXACTE présente dans l'article (2-5 mots, riche en mots-clés)
 - "url" : l'URL de l'article lié
 - "title" : le titre de l'article lié
