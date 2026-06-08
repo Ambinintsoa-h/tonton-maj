@@ -1121,19 +1121,21 @@ export default function MajEnAttente() {
       // la position avant/après MAJ comparée à J+7 et J+30.
       let capturedSeoTracking = null;
       if (item.keyword && item.url && firebaseReady && (settings.haloscanConfigured || settings.haloscanKey)) {
+        const now    = Date.now();
+        const DAY_MS = 86400000;
+        // Initialisé avant le try : le badge "En attente J+7" s'affiche même si
+        // les appels Firestore/Haloscan échouent silencieusement.
+        capturedSeoTracking = {
+          enabled:          true,
+          keywords:         [item.keyword],
+          articleUrl:       item.url,
+          snapshots:        [],
+          nextSnapshotType: 'after_7d',
+          nextSnapshotAt:   now + 7 * DAY_MS,
+          completed:        false,
+        };
         try {
-          const now = Date.now();
-          const DAY_MS = 86400000;
           await initArticleSeoTracking(item.id, { keywords: [item.keyword], articleUrl: item.url });
-          capturedSeoTracking = {
-            enabled:           true,
-            keywords:          [item.keyword],
-            articleUrl:        item.url,
-            snapshots:         [],
-            nextSnapshotType:  'after_7d',
-            nextSnapshotAt:    now + 7 * DAY_MS,
-            completed:         false,
-          };
           const resp = await axios.post('/api/haloscan/check', { keywords: [item.keyword], articleUrl: item.url });
           if (resp.data?.success) {
             const snap = { type: 'before', capturedAt: now, results: resp.data.results || [] };
