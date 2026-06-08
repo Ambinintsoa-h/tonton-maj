@@ -325,7 +325,9 @@ function ActivityTrackerInit() {
     const name   = [prenom, nom].filter(Boolean).join(' ') || username || userId;
     tracker.init(userId, role, name);
     return () => tracker.destroy();
-  }, [isAuthenticated, role, uid, username, prenom, nom]); // eslint-disable-line react-hooks/exhaustive-deps
+    // prenom/nom intentionnellement exclus : leur chargement async ne doit pas
+    // déclencher destroy/init (= fausses reconnexions en base)
+  }, [isAuthenticated, role, uid, username]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return null;
 }

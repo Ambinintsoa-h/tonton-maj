@@ -202,40 +202,31 @@ export default function MemberStatsPanel({ user, onClose }) {
     minutes: s.totalActiveMinutes || 0,
   }));
 
-  // ── Pauses (inactivité) de la session courante ──
-  // On filtre les pauses aberrantes : durée > 4h ou antérieures au début de session.
-  // Ces valeurs corrompues venaient de pauses cross-midnight non purgées (bug corrigé dans activityTracker).
-  const sessionStart = currentSession?.firstActivityAt || 0;
-  const sessionEnd   = currentSession?.lastActivityAt  || Date.now();
-  const MAX_PAUSE_MS = 4 * 60 * 60 * 1000; // 4h max par pause
-
-  const pauses = (currentSession?.pauses || [])
-    .filter(p => p.start && p.end && p.end > p.start)
-    .filter(p => (p.end - p.start) <= MAX_PAUSE_MS)     // exclure pauses overnight
-    .filter(p => p.start >= sessionStart)                // exclure pauses d'avant la session
-    .sort((a, b) => a.start - b.start);
-
-  const totalPauseMin = pauses.reduce((acc, p) => acc + Math.round((p.end - p.start) / 60000), 0);
-
-  // ── Périodes hors-ligne (fermeture navigateur = gap entre connexions) ──
+  // ── Calcul depuis la timeline : active / pause / offline ──────────────────────
+  // buildSegments() découpe la session en segments sans chevauchement.
+  // C'est la seule source fiable : pauses[] brut Firestore peut être corrompu.
+  const segments     = currentSession ? buildSegments(currentSession) : [];
   const connections  = [...(currentSession?.connections || [])].filter(c => c?.at).sort((a, b) => a.at - b.at);
-  const offlineGaps  = connections.slice(1).map((c, i) => ({
-    start: connections[i].at + (currentSession?.lastActivityAt && i === connections.length - 2
-      ? 0 : 0), // lastActivityAt avant reconnexion = fin de la période précédente
-    end:   c.at,
-    // Approximation : offline commence à lastActivityAt (avant reco) ou à connections[i].at
-  }));
-  // Calcul plus précis : pour chaque reconnexion, la période offline = gap entre segments précédents
-  const offlinePeriods = connections.slice(1).map((c, i) => {
-    // Fin de la période précédente = dernier heartbeat avant cette reconnexion
-    // On l'approxime avec les segments de la timeline
-    const segs = currentSession ? buildSegments(currentSession) : [];
-    const prevActive = segs.filter(s => s.type !== 'offline' && s.end <= c.at).sort((a,b) => b.end - a.end)[0];
-    return { start: prevActive?.end || connections[i].at, end: c.at };
-  }).filter(p => p.end - p.start > 60000); // ignorer < 1 min
+  const reconnections = Math.max(0, connections.length - 1);
 
-  const totalOfflineMin = offlinePeriods.reduce((acc, p) => acc + Math.round((p.end - p.start) / 60000), 0);
-  const reconnections   = connections.length - 1;
+  // Durée totale de la session (fenêtre début → fin)
+  const sessionWindowMs  = currentSession
+    ? (currentSession.lastActivityAt || Date.now()) - currentSession.firstActivityAt
+    : 0;
+  const sessionWindowMin = Math.round(sessionWindowMs / 60000);
+
+  // Somme de chaque type de segment (mutuellement exclusifs, somme = fenêtre)
+  const sumMin = (type) =>
+    segments
+      .filter(s => s.type === type)
+      .reduce((acc, s) => acc + Math.round((s.end - s.start) / 60000), 0);
+
+  const totalPauseMin   = sumMin('pause');
+  const totalOfflineMin = sumMin('offline');
+
+  // Segments pour l'affichage détaillé (liste des pauses / hors-ligne)
+  const pauses        = segments.filter(s => s.type === 'pause');
+  const offlinePeriods = segments.filter(s => s.type === 'offline');
 
   // ── Statut actif maintenant ──
   const isActiveNow = currentSession?.lastActivityAt
@@ -360,30 +351,35 @@ export default function MemberStatsPanel({ user, onClose }) {
                   </div>
                 ) : (
                   <>
-                    {/* KPIs */}
+                    {/* KPIs — ligne 1 : session */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                       {[
                         {
                           icon: Clock, label: 'Début',
                           value: fmtTime(currentSession.firstActivityAt),
+                          sub: `→ ${fmtTime(currentSession.lastActivityAt)}`,
                           color: 'text-gray-900', bg: 'bg-gray-50',
                         },
                         {
                           icon: Zap, label: 'Temps actif',
                           value: fmtDuration(currentSession.totalActiveMinutes),
+                          sub: sessionWindowMin > 0
+                            ? `${Math.round((currentSession.totalActiveMinutes / sessionWindowMin) * 100)}% de la session`
+                            : null,
                           color: 'text-emerald-700', bg: 'bg-emerald-50',
                         },
                         {
                           icon: Coffee, label: 'Pauses',
-                          value: pauses.length > 0
-                            ? `${pauses.length} (${fmtDuration(totalPauseMin)})`
-                            : reconnections > 0 ? '—' : '—',
-                          sub: reconnections > 0 ? `${reconnections} reconnexion${reconnections > 1 ? 's' : ''}` : null,
+                          value: totalPauseMin > 0 ? fmtDuration(totalPauseMin) : '—',
+                          sub: reconnections > 0
+                            ? `+ ${fmtDuration(totalOfflineMin)} hors-ligne`
+                            : totalOfflineMin > 0 ? `+ ${fmtDuration(totalOfflineMin)} hors-ligne` : null,
                           color: 'text-amber-700', bg: 'bg-amber-50',
                         },
                         {
                           icon: TrendingUp, label: 'Actions',
                           value: currentSession.actions?.total || 0,
+                          sub: reconnections > 0 ? `${reconnections} reconnexion${reconnections > 1 ? 's' : ''}` : null,
                           color: colors.bar.startsWith('#3') ? 'text-blue-700' : 'text-purple-700',
                           bg: colors.bar.startsWith('#3') ? 'bg-blue-50' : 'bg-purple-50',
                         },
@@ -392,10 +388,48 @@ export default function MemberStatsPanel({ user, onClose }) {
                           <k.icon size={14} className={`mx-auto mb-1 ${k.color}`} />
                           <p className={`text-xl font-bold ${k.color} leading-none`}>{k.value}</p>
                           <p className="text-[10px] text-gray-400 mt-1">{k.label}</p>
-                          {k.sub && <p className="text-[9px] text-indigo-400 font-semibold mt-0.5">{k.sub}</p>}
+                          {k.sub && <p className="text-[9px] text-gray-400 mt-0.5">{k.sub}</p>}
                         </div>
                       ))}
                     </div>
+
+                    {/* Barre récap : Actif + Pause + Hors-ligne = Total session */}
+                    {sessionWindowMin > 0 && (
+                      <div className="bg-gray-50 rounded-xl px-4 py-3 space-y-2">
+                        <div className="flex items-center justify-between text-[10px] text-gray-400 font-semibold uppercase tracking-wide">
+                          <span>Répartition session</span>
+                          <span className="font-bold text-gray-600">{fmtDuration(sessionWindowMin)} total</span>
+                        </div>
+                        {/* Barre proportionnelle */}
+                        <div className="flex h-3 rounded-full overflow-hidden gap-px">
+                          {[
+                            { min: currentSession.totalActiveMinutes || 0, color: 'bg-emerald-400' },
+                            { min: totalPauseMin,   color: 'bg-amber-300' },
+                            { min: totalOfflineMin, color: 'bg-gray-300' },
+                          ].map((s, i) => {
+                            const pct = sessionWindowMin > 0 ? (s.min / sessionWindowMin) * 100 : 0;
+                            return pct > 0
+                              ? <div key={i} className={`${s.color} h-full`} style={{ width: `${pct}%` }} />
+                              : null;
+                          })}
+                        </div>
+                        {/* Légende */}
+                        <div className="flex items-center gap-4 flex-wrap text-[10px]">
+                          <span className="flex items-center gap-1.5 text-emerald-700">
+                            <span className="w-2.5 h-2.5 rounded-sm bg-emerald-400 inline-block" />
+                            Actif · <strong>{fmtDuration(currentSession.totalActiveMinutes || 0)}</strong>
+                          </span>
+                          <span className="flex items-center gap-1.5 text-amber-700">
+                            <span className="w-2.5 h-2.5 rounded-sm bg-amber-300 inline-block" />
+                            Pause · <strong>{fmtDuration(totalPauseMin) || '—'}</strong>
+                          </span>
+                          <span className="flex items-center gap-1.5 text-gray-500">
+                            <span className="w-2.5 h-2.5 rounded-sm bg-gray-300 inline-block" />
+                            Hors-ligne · <strong>{fmtDuration(totalOfflineMin) || '—'}</strong>
+                          </span>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Timeline */}
                     <div className="space-y-2">
