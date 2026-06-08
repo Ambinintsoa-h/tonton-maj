@@ -7,6 +7,7 @@ import {
   Clock, Trash2, Eye, Search, X, ExternalLink,
   Calendar, CheckCircle2, Sparkles, AlertTriangle, ChevronDown, ChevronUp,
   UserCircle2, RotateCcw, Loader, TrendingUp, TrendingDown, Minus,
+  ArrowUp, ArrowDown, Timer, Activity,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import axios from 'axios';
@@ -449,10 +450,10 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
             if (st.nextSnapshotType === 'after_7d') {
               return (
                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-blue-50 text-blue-600 border border-blue-200 rounded-full px-2.5 py-1 leading-none whitespace-nowrap">
-                  <Clock size={9} />
-                  J+7
+                  <Timer size={9} />
+                  En attente J+7
                   {beforePos && beforePos !== 'NA' && (
-                    <span className="opacity-60 font-normal">#{beforePos}</span>
+                    <span className="opacity-50 font-normal">· #{beforePos}</span>
                   )}
                 </span>
               );
@@ -462,10 +463,10 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
             if (st.nextSnapshotType === 'after_30d') {
               return (
                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-violet-50 text-violet-600 border border-violet-200 rounded-full px-2.5 py-1 leading-none whitespace-nowrap">
-                  <Clock size={9} />
-                  J+30
+                  <Timer size={9} />
+                  En attente J+30
                   {beforePos && beforePos !== 'NA' && (
-                    <span className="opacity-60 font-normal">#{beforePos}</span>
+                    <span className="opacity-50 font-normal">· #{beforePos}</span>
                   )}
                 </span>
               );
@@ -480,8 +481,8 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
                   : diff < 0 ? 'bg-red-50 text-red-600 border-red-200'
                   : 'bg-gray-50 text-gray-500 border-gray-200'
                 }`}>
-                  {diff > 0 ? <TrendingUp size={9} /> : diff < 0 ? <TrendingDown size={9} /> : <Minus size={9} />}
-                  #{beforePos}→#{latestPos}
+                  {diff > 0 ? <ArrowUp size={10} /> : diff < 0 ? <ArrowDown size={10} /> : <Minus size={10} />}
+                  #{beforePos} → #{latestPos}
                 </span>
               );
             }
@@ -490,7 +491,7 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
             if (beforePos && beforePos !== 'NA') {
               return (
                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-gray-50 text-gray-500 border border-gray-200 rounded-full px-2.5 py-1 leading-none whitespace-nowrap">
-                  <TrendingUp size={9} className="text-gray-400" />
+                  <Activity size={9} className="text-gray-400" />
                   #{beforePos}
                 </span>
               );
@@ -499,8 +500,8 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
             // Tracking actif mais pas encore de données
             return (
               <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full px-2.5 py-1 leading-none whitespace-nowrap">
-                <TrendingUp size={9} />
-                SEO ✓
+                <Activity size={9} />
+                SEO actif
               </span>
             );
           })()}
