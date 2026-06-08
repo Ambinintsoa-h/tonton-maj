@@ -459,11 +459,16 @@ Si un tableau reprend les mêmes données que le texte, mettre à jour les deux.
 \`\`\`
 
 ### Type "addition" — Nouveau paragraphe (actualité absente de l'article)
-Utilise ce type UNIQUEMENT quand les sources web révèlent une information VRAIMENT nouvelle sur le sujet, non encore présente dans l'article (ex : annonce récente, nouveau produit, chiffre de marché 2024-2025).
+Utilise ce type UNIQUEMENT quand les sources web scrapées révèlent une information VRAIMENT nouvelle sur le sujet, non encore présente dans l'article (ex : annonce récente, nouveau produit, chiffre de marché ${prevYear}-${year}).
 - \`"type": "addition"\`
 - \`"anchor"\` : copie EXACTE d'une courte phrase de l'article (20-40 mots) identifiant le paragraphe APRÈS lequel insérer
 - \`"updated"\` : contenu HTML du nouveau paragraphe (enveloppé dans \`<p>...</p>\`)
 - \`"original"\` : laisser vide \`""\`
+
+⚠️ **INTERDIT pour les additions** : ne jamais créer un bloc "actualité récente", "Dernières actualités" ou similaire en te basant sur tes connaissances d'entraînement.
+Ton entraînement s'arrête en début ${prevYear} — soit plus de 12 mois avant aujourd'hui (${fr}). Ces informations sont PÉRIMÉES.
+**Une addition ne peut exister QUE si une source web scrapée avec URL réelle la confirme.**
+Si aucune source web récente disponible → pas d'addition, pas de bloc actualité inventé.
 
 {
   "analysis": "Synthèse : état de l'article + skills appliqués + documents de la base de connaissances consultés + impact SEO",
@@ -836,8 +841,10 @@ const buildReviewSystemPrompt = (skills, knowledge = []) => {
 \`\`\`
 
 ### Type "addition" — Nouveau paragraphe (actualité absente de l'article)
-Utilise ce type quand les sources révèlent une information vraiment nouvelle, non présente dans l'article.
+Utilise ce type quand les sources web scrapées révèlent une information vraiment nouvelle, non présente dans l'article.
 - \`"type": "addition"\`, \`"anchor"\` : phrase EXACTE de l'article indiquant où insérer, \`"updated"\` : HTML \`<p>...</p>\`, \`"original"\` : \`""\`
+
+⚠️ **INTERDIT** : ne jamais créer une addition basée sur tes connaissances d'entraînement (qui s'arrêtent en début ${prevYear}, soit 12+ mois de retard). Source web réelle obligatoire.
 
 {
   "analysis": "Ce que la passe 2 a ajouté : skills vérifiés, documents base de connaissances appliqués, compléments SEO",
