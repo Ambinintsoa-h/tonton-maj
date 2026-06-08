@@ -17,6 +17,7 @@ const agentSlice = createSlice({
     tokenUsage: null, // { input, output, costUsd, calls: [{model, input, output}] }
     parseFailed: false,  // true si Claude a répondu mais le JSON n'a pas pu être parsé
     wpData: null,  // { siteId, siteName, postId, postType, featuredMediaId, featuredMediaUrl, postLink }
+    internalLinks: [],  // [{ anchor, url, title, reason }] — suggestions de liens internes
   },
   reducers: {
     resetAgent: (state) => {
@@ -34,6 +35,7 @@ const agentSlice = createSlice({
       state.tokenUsage = null;
       state.parseFailed = false;
       state.wpData = null;
+      state.internalLinks = [];
     },
     setStatus: (state, action) => { state.status = action.payload; },
     addStep: (state, action) => {
@@ -61,6 +63,7 @@ const agentSlice = createSlice({
     setTokenUsage: (state, action) => { state.tokenUsage = action.payload; },
     setParseFailed: (state, action) => { state.parseFailed = action.payload; },
     setWpData: (state, action) => { state.wpData = action.payload; },
+    setInternalLinks: (state, action) => { state.internalLinks = action.payload; },
   },
 });
 
@@ -68,6 +71,6 @@ export const {
   resetAgent, setStatus, addStep, replaceLastStep, setProgress,
   setOriginalContent, setUpdatedContent, setDiff, setSources,
   setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
-  setWpData,
+  setWpData, setInternalLinks,
 } = agentSlice.actions;
 export default agentSlice.reducer;

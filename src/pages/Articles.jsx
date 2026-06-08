@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon } from 'lucide-react';
-import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData } from '../store/slices/agentSlice';
+import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks } from '../store/slices/agentSlice';
 import { addToHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
 import axios from 'axios';
@@ -157,6 +157,7 @@ export default function Articles() {
       dispatch(setSources(result.sources || []));
       dispatch(setAnalysis(result.analysis || ''));
       dispatch(setParseFailed(result.parseFailed === true));
+      dispatch(setInternalLinks(result.internalLinks || []));
       dispatch(setStatus('done'));
 
       // Save to history — extraire le H1 comme titre (pas le slug d'URL)

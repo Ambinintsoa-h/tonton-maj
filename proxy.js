@@ -2102,6 +2102,54 @@ app.post('/api/wp-categories', requireAuth, async (req, res) => {
   }
 });
 
+// ─── POST /api/wp-related-posts — recherche des articles liés pour liens internes ─
+// Body : { siteId, wpSites, queries: string[], excludeUrl?: string }
+// Retourne : { posts: [{ id, title, url, excerpt }] }
+app.post('/api/wp-related-posts', requireAuth, async (req, res) => {
+  const { siteId, wpSites = [], queries = [], excludeUrl = '' } = req.body;
+  const site = wpSites.find(s => s.id === siteId);
+  if (!site || !site.url || !site.username || !site.password) {
+    return res.status(400).json({ error: 'Site introuvable ou credentials manquants' });
+  }
+  try {
+    await assertSafeUrl(site.url, 'URL du site WP');
+    const auth    = Buffer.from(`${site.username}:${site.password}`).toString('base64');
+    const headers = { 'Authorization': `Basic ${auth}` };
+    const base    = site.url.replace(/\/$/, '');
+
+    // Recherche en parallèle pour chaque query (max 3 queries × 5 résultats)
+    const searches = queries.slice(0, 3).map(q =>
+      axios.get(
+        `${base}/wp-json/wp/v2/posts?search=${encodeURIComponent(q)}&per_page=5&status=publish&_fields=id,title,link,excerpt`,
+        { headers, timeout: 10000 }
+      ).then(r => r.data).catch(() => [])
+    );
+    const results = await Promise.all(searches);
+
+    // Dédupliquer par ID, exclure l'article en cours
+    const seen = new Set();
+    const posts = results.flat()
+      .filter(p => {
+        if (seen.has(p.id)) return false;
+        seen.add(p.id);
+        if (excludeUrl && p.link && p.link.replace(/\/$/, '') === excludeUrl.replace(/\/$/, '')) return false;
+        return true;
+      })
+      .slice(0, 15)
+      .map(p => ({
+        id:      p.id,
+        title:   p.title?.rendered ? p.title.rendered.replace(/<[^>]+>/g, '') : '',
+        url:     p.link || '',
+        excerpt: p.excerpt?.rendered ? p.excerpt.rendered.replace(/<[^>]+>/g, '').substring(0, 120) : '',
+      }));
+
+    res.json({ posts });
+  } catch (e) {
+    console.error('[wp-related-posts]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── POST /api/wp-tool — exécution directe d'un outil WordPress (sans Claude) ─
 app.post('/api/wp-tool', requireAuth, async (req, res) => {
   const { toolName, toolInput, wpSites = [] } = req.body;

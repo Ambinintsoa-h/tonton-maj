@@ -788,6 +788,72 @@ ${content}
     ...searchResults.slice(0, 8).map(s => ({ title: s.title, url: s.url, relevance: s.description || '' })),
   ];
 
+  // ── Phase finale : suggestions liens internes ──────────────────────────────
+  // Nécessite un site WP connecté pour récupérer les articles du site
+  let internalLinks = [];
+  if (wpData?.siteId && wpSites?.length) {
+    try {
+      onStep('Recherche de liens internes...');
+      onProgress(88);
+
+      // 1. Extraire 3 mots-clés principaux depuis le titre / premier paragraphe
+      const articleText = stripHtml(content).substring(0, 800);
+      const { text: kwText } = await callClaude(null, {
+        model: selectModel('query_extraction'),
+        max_tokens: 80,
+        system: 'Tu extrais des mots-clés. Réponds UNIQUEMENT avec un JSON : {"keywords":["mot1","mot2","mot3"]}',
+        messages: [{ role: 'user', content: `Extrais 3 mots-clés principaux (en français) de ce texte :\n${articleText}` }],
+      });
+      trackCall('kw_extraction', kwText);
+      const { keywords = [] } = parseJsonResponse(kwText, { keywords: [] }, '[internal-links-kw]');
+
+      if (keywords.length) {
+        // 2. Chercher des articles liés via l'API WordPress
+        const resp = await axios.post('/api/wp-related-posts', {
+          siteId:     wpData.siteId,
+          wpSites,
+          queries:    keywords.slice(0, 3),
+          excludeUrl: articleUrl,
+        });
+        const relatedPosts = resp.data?.posts || [];
+
+        if (relatedPosts.length >= 2) {
+          // 3. Demander à Claude de suggérer 2-4 liens internes
+          const postsList = relatedPosts.map((p, i) => `${i + 1}. "${p.title}" — ${p.url}`).join('\n');
+          const articlePreviewText = stripHtml(content).substring(0, 2000);
+
+          const { text: linksText } = await callClaude(null, {
+            model:      selectModel('query_extraction'),
+            max_tokens: 600,
+            system:     `Tu es un expert SEO. Tu suggères des liens internes pertinents pour un article. Réponds UNIQUEMENT avec un JSON valide.`,
+            messages: [{
+              role: 'user',
+              content: `Article à enrichir (extrait) :
+${articlePreviewText}
+
+Articles disponibles sur le même site :
+${postsList}
+
+Suggère 2 à 4 liens internes pertinents. Pour chaque lien :
+- "anchor" : une expression EXACTE présente dans l'article (2-5 mots, riche en mots-clés)
+- "url" : l'URL de l'article lié
+- "title" : le titre de l'article lié
+- "reason" : pourquoi ce lien est pertinent (1 phrase)
+
+Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reason":"..."}]}`,
+            }],
+          });
+          trackCall('internal_links', linksText);
+          const { links = [] } = parseJsonResponse(linksText, { links: [] }, '[internal-links]');
+          internalLinks = links.filter(l => l.anchor && l.url && l.title).slice(0, 4);
+        }
+      }
+    } catch (e) {
+      // Liens internes non bloquants — on continue sans
+      console.warn('[internal-links] erreur:', e.message);
+    }
+  }
+
   const costUsd = calcCost(tokenAcc.calls, modelPricing);
   return {
     ...result,
@@ -796,6 +862,7 @@ ${content}
     parseFailed: result._parseFailed === true,
     // Données WordPress MCP (null si l'URL ne correspond à aucun site configuré)
     wpData,
+    internalLinks,
   };
 };
 
