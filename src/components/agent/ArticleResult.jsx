@@ -527,6 +527,7 @@ export default function ArticleResult() {
         assigneeId:      cqItem.assigneeId || null,
         createdAt:       new Date().toISOString(),
         tokenUsage:      agent.tokenUsage  || null,
+        ...(r.seoTracking ? { seoTracking: r.seoTracking } : {}),
       };
       try {
         if (firebaseReady) {

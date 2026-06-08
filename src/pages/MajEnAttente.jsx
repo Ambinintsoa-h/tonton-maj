@@ -1119,16 +1119,26 @@ export default function MajEnAttente() {
       // ── Étape 5 : Suivi SEO Haloscan — snapshot J+0 avant publication ────────
       // Utilise item.keyword (mot-clé cible de la file d'attente) pour tracker
       // la position avant/après MAJ comparée à J+7 et J+30.
+      let capturedSeoTracking = null;
       if (item.keyword && item.url && firebaseReady && (settings.haloscanConfigured || settings.haloscanKey)) {
         try {
+          const now = Date.now();
+          const DAY_MS = 86400000;
           await initArticleSeoTracking(item.id, { keywords: [item.keyword], articleUrl: item.url });
+          capturedSeoTracking = {
+            enabled:           true,
+            keywords:          [item.keyword],
+            articleUrl:        item.url,
+            snapshots:         [],
+            nextSnapshotType:  'after_7d',
+            nextSnapshotAt:    now + 7 * DAY_MS,
+            completed:         false,
+          };
           const resp = await axios.post('/api/haloscan/check', { keywords: [item.keyword], articleUrl: item.url });
           if (resp.data?.success) {
-            await saveSeoSnapshot(item.id, {
-              type:       'before',
-              capturedAt: Date.now(),
-              results:    resp.data.results || [],
-            });
+            const snap = { type: 'before', capturedAt: now, results: resp.data.results || [] };
+            await saveSeoSnapshot(item.id, snap);
+            capturedSeoTracking.snapshots = [snap];
           }
         } catch { /* non bloquant */ }
       }
@@ -1144,6 +1154,7 @@ export default function MajEnAttente() {
           updates:         allUpdatesWithStatus,
           sources:         result.sources || [],
           analysis:        result.analysis || '',
+          seoTracking:     capturedSeoTracking,   // transféré vers articleData à la validation
         },
       }));
 
