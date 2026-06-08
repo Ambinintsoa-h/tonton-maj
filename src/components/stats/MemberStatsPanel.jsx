@@ -391,85 +391,81 @@ export default function MemberStatsPanel({ user, onClose }) {
                   </div>
                 ) : (
                   <>
-                    {/* KPIs — ligne 1 : session */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      {[
-                        {
-                          icon: Clock, label: 'Début',
-                          value: fmtTime(currentSession.firstActivityAt),
-                          sub: `→ ${fmtTime(currentSession.lastActivityAt)}`,
-                          color: 'text-gray-900', bg: 'bg-gray-50',
-                        },
-                        {
-                          icon: Zap, label: 'Temps actif',
-                          value: fmtDuration(currentSession.totalActiveMinutes),
-                          sub: sessionWindowMin > 0
-                            ? `${Math.round((currentSession.totalActiveMinutes / sessionWindowMin) * 100)}% de la session`
-                            : null,
-                          color: 'text-emerald-700', bg: 'bg-emerald-50',
-                        },
-                        {
-                          icon: Coffee, label: 'Pauses',
-                          value: totalPauseMin > 0 ? fmtDuration(totalPauseMin) : '—',
-                          sub: reconnections > 0
-                            ? `+ ${fmtDuration(totalOfflineMin)} hors-ligne`
-                            : totalOfflineMin > 0 ? `+ ${fmtDuration(totalOfflineMin)} hors-ligne` : null,
-                          color: 'text-amber-700', bg: 'bg-amber-50',
-                        },
-                        {
-                          icon: TrendingUp, label: 'Actions',
-                          value: currentSession.actions?.total || 0,
-                          sub: reconnections > 0 ? `${reconnections} reconnexion${reconnections > 1 ? 's' : ''}` : null,
-                          color: colors.bar.startsWith('#3') ? 'text-blue-700' : 'text-purple-700',
-                          bg: colors.bar.startsWith('#3') ? 'bg-blue-50' : 'bg-purple-50',
-                        },
-                      ].map(k => (
-                        <div key={k.label} className={`${k.bg} rounded-xl px-4 py-3 text-center`}>
-                          <k.icon size={14} className={`mx-auto mb-1 ${k.color}`} />
-                          <p className={`text-xl font-bold ${k.color} leading-none`}>{k.value}</p>
-                          <p className="text-[10px] text-gray-400 mt-1">{k.label}</p>
-                          {k.sub && <p className="text-[9px] text-gray-400 mt-0.5">{k.sub}</p>}
-                        </div>
-                      ))}
-                    </div>
+                    {/* KPIs */}
+                    {(() => {
+                      const activeMin  = currentSession.totalActiveMinutes || 0;
+                      const absentMin  = Math.max(0, sessionWindowMin - activeMin);
+                      const activePct  = sessionWindowMin > 0 ? Math.round((activeMin / sessionWindowMin) * 100) : 0;
 
-                    {/* Barre récap : Actif + Pause + Hors-ligne = Total session */}
-                    {sessionWindowMin > 0 && (
-                      <div className="bg-gray-50 rounded-xl px-4 py-3 space-y-2">
-                        <div className="flex items-center justify-between text-[10px] text-gray-400 font-semibold uppercase tracking-wide">
-                          <span>Répartition session</span>
-                          <span className="font-bold text-gray-600">{fmtDuration(sessionWindowMin)} total</span>
-                        </div>
-                        {/* Barre proportionnelle */}
-                        <div className="flex h-3 rounded-full overflow-hidden gap-px">
-                          {[
-                            { min: currentSession.totalActiveMinutes || 0, color: 'bg-emerald-400' },
-                            { min: totalPauseMin,   color: 'bg-amber-300' },
-                            { min: totalOfflineMin, color: 'bg-gray-300' },
-                          ].map((s, i) => {
-                            const pct = sessionWindowMin > 0 ? (s.min / sessionWindowMin) * 100 : 0;
-                            return pct > 0
-                              ? <div key={i} className={`${s.color} h-full`} style={{ width: `${pct}%` }} />
-                              : null;
-                          })}
-                        </div>
-                        {/* Légende */}
-                        <div className="flex items-center gap-4 flex-wrap text-[10px]">
-                          <span className="flex items-center gap-1.5 text-emerald-700">
-                            <span className="w-2.5 h-2.5 rounded-sm bg-emerald-400 inline-block" />
-                            Actif · <strong>{fmtDuration(currentSession.totalActiveMinutes || 0)}</strong>
-                          </span>
-                          <span className="flex items-center gap-1.5 text-amber-700">
-                            <span className="w-2.5 h-2.5 rounded-sm bg-amber-300 inline-block" />
-                            Pause · <strong>{fmtDuration(totalPauseMin) || '—'}</strong>
-                          </span>
-                          <span className="flex items-center gap-1.5 text-gray-500">
-                            <span className="w-2.5 h-2.5 rounded-sm bg-gray-300 inline-block" />
-                            Hors-ligne · <strong>{fmtDuration(totalOfflineMin) || '—'}</strong>
-                          </span>
-                        </div>
-                      </div>
-                    )}
+                      return (
+                        <>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            {[
+                              {
+                                icon: Clock, label: 'Début',
+                                value: fmtTime(currentSession.firstActivityAt),
+                                sub: `→ ${fmtTime(currentSession.lastActivityAt)}`,
+                                color: 'text-gray-900', bg: 'bg-gray-50',
+                              },
+                              {
+                                icon: Zap, label: 'Temps actif',
+                                value: fmtDuration(activeMin),
+                                sub: sessionWindowMin > 0 ? `${activePct}% de la session` : null,
+                                color: 'text-emerald-700', bg: 'bg-emerald-50',
+                              },
+                              {
+                                icon: Coffee, label: 'Absent',
+                                value: fmtDuration(absentMin),
+                                sub: reconnections > 0
+                                  ? `${reconnections} reconnexion${reconnections > 1 ? 's' : ''}`
+                                  : null,
+                                color: 'text-amber-700', bg: 'bg-amber-50',
+                              },
+                              {
+                                icon: TrendingUp, label: 'Actions',
+                                value: currentSession.actions?.total || 0,
+                                sub: null,
+                                color: colors.bar.startsWith('#3') ? 'text-blue-700' : 'text-purple-700',
+                                bg: colors.bar.startsWith('#3') ? 'bg-blue-50' : 'bg-purple-50',
+                              },
+                            ].map(k => (
+                              <div key={k.label} className={`${k.bg} rounded-xl px-4 py-3 text-center`}>
+                                <k.icon size={14} className={`mx-auto mb-1 ${k.color}`} />
+                                <p className={`text-xl font-bold ${k.color} leading-none`}>{k.value}</p>
+                                <p className="text-[10px] text-gray-400 mt-1">{k.label}</p>
+                                {k.sub && <p className="text-[9px] text-gray-400 mt-0.5">{k.sub}</p>}
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Barre récap : Actif + Absent = Total — toujours exact */}
+                          {sessionWindowMin > 0 && (
+                            <div className="bg-gray-50 rounded-xl px-4 py-3 space-y-2">
+                              <div className="flex items-center justify-between text-[10px] text-gray-400 font-semibold uppercase tracking-wide">
+                                <span>Répartition session</span>
+                                <span className="font-bold text-gray-600">{fmtDuration(sessionWindowMin)} total</span>
+                              </div>
+                              <div className="flex h-3 rounded-full overflow-hidden gap-px">
+                                <div className="bg-emerald-400 h-full" style={{ width: `${activePct}%` }} />
+                                {absentMin > 0 && (
+                                  <div className="bg-gray-200 h-full flex-1" />
+                                )}
+                              </div>
+                              <div className="flex items-center gap-4 flex-wrap text-[10px]">
+                                <span className="flex items-center gap-1.5 text-emerald-700">
+                                  <span className="w-2.5 h-2.5 rounded-sm bg-emerald-400 inline-block" />
+                                  Actif · <strong>{fmtDuration(activeMin)}</strong>
+                                </span>
+                                <span className="flex items-center gap-1.5 text-gray-500">
+                                  <span className="w-2.5 h-2.5 rounded-sm bg-gray-200 inline-block" />
+                                  Absent · <strong>{fmtDuration(absentMin)}</strong>
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
 
                     {/* Timeline */}
                     <div className="space-y-2">
