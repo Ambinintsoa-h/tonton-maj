@@ -1337,7 +1337,7 @@ export default function ArticleResult() {
               {/* ── Barre image à la une — pleine largeur, tout en haut ──────── */}
               <input ref={fileImgInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
               <AnimatePresence>
-                {(featuredImgUrl || showImgReplace || wpMcpData?.siteId) && (
+                {hasContent && (
                   <motion.div
                     initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
                     className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-xs"
