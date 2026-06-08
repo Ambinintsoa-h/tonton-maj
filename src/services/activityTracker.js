@@ -3,11 +3,13 @@ import {
   updateActivityHeartbeat,
   recordActivityPause,
   recordActivityAction,
+  recordSessionClose,
 } from './firebase';
 
 const HEARTBEAT_MS = 2 * 60 * 1000;   // 2 min
 const INACTIVE_MS  = 10 * 60 * 1000;  // 10 min sans activité → pause
 const THROTTLE_MS  = 30 * 1000;       // throttle mousemove / scroll
+const CLOSE_KEY    = 'tonton_pending_close'; // clé localStorage pour la fermeture
 
 const localDate = () => {
   const d = new Date();
@@ -16,7 +18,6 @@ const localDate = () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ActivityTracker — singleton invisible, uniquement pour manager / cq_ia
-// Aucune UI, aucune notif. Tout se passe en arrière-plan.
 // ─────────────────────────────────────────────────────────────────────────────
 class ActivityTracker {
   constructor() {
@@ -31,9 +32,11 @@ class ActivityTracker {
     this._ready        = false;
     this._timer        = null;
 
-    // Bindings stables pour add/remove listener
-    this._direct    = this._onDirect.bind(this);
-    this._throttled = this._onThrottled.bind(this);
+    // Bindings stables
+    this._direct       = this._onDirect.bind(this);
+    this._throttled    = this._onThrottled.bind(this);
+    this._beforeunload = this._onClose.bind(this);
+    this._pagehide     = this._onPageHide.bind(this);
   }
 
   /**
@@ -47,10 +50,15 @@ class ActivityTracker {
     this._name  = name;
     this._today = localDate();
 
-    window.addEventListener('click',     this._direct);
-    window.addEventListener('keydown',   this._direct);
-    window.addEventListener('mousemove', this._throttled);
-    window.addEventListener('scroll',    this._throttled, { passive: true });
+    // Récupère et sync le close en attente de la session précédente
+    this._syncPendingClose();
+
+    window.addEventListener('click',        this._direct);
+    window.addEventListener('keydown',      this._direct);
+    window.addEventListener('mousemove',    this._throttled);
+    window.addEventListener('scroll',       this._throttled, { passive: true });
+    window.addEventListener('beforeunload', this._beforeunload);
+    window.addEventListener('pagehide',     this._pagehide);
 
     this._timer = setInterval(() => this._heartbeat(), HEARTBEAT_MS);
   }
@@ -59,10 +67,12 @@ class ActivityTracker {
    * Détruit le tracker — appelé à la déconnexion.
    */
   destroy() {
-    window.removeEventListener('click',     this._direct);
-    window.removeEventListener('keydown',   this._direct);
-    window.removeEventListener('mousemove', this._throttled);
-    window.removeEventListener('scroll',    this._throttled);
+    window.removeEventListener('click',        this._direct);
+    window.removeEventListener('keydown',      this._direct);
+    window.removeEventListener('mousemove',    this._throttled);
+    window.removeEventListener('scroll',       this._throttled);
+    window.removeEventListener('beforeunload', this._beforeunload);
+    window.removeEventListener('pagehide',     this._pagehide);
     clearInterval(this._timer);
     this._uid          = null;
     this._ready        = false;
@@ -79,6 +89,48 @@ class ActivityTracker {
     if (!this._uid || !this._ready) return;
     this._signal();
     recordActivityAction(this._uid, this._today, type).catch(() => {});
+  }
+
+  // ── Fermeture navigateur ─────────────────────────────────────────────────────
+
+  /**
+   * Appelé sur beforeunload / pagehide (fermeture onglet, refresh, navigation externe).
+   * Enregistre le timestamp de dernière activité comme "heure de fermeture".
+   * localStorage d'abord (synchrone, garanti), Firestore en parallèle (async).
+   */
+  _onClose() {
+    if (!this._uid || !this._ready) return;
+    const closeTime = this._lastEvent > 0 ? this._lastEvent : Date.now();
+    // Écriture synchrone en localStorage — survivra à la fermeture
+    try {
+      localStorage.setItem(CLOSE_KEY, JSON.stringify({
+        uid: this._uid, date: this._today, closeTime,
+      }));
+    } catch {}
+    // Tentative Firestore (peut ne pas aboutir si l'onglet se ferme trop vite)
+    recordSessionClose(this._uid, this._today, closeTime).catch(() => {});
+  }
+
+  _onPageHide(event) {
+    // persisted=true = page mise en bfcache, pas vraiment fermée
+    if (event.persisted) return;
+    this._onClose();
+  }
+
+  /**
+   * Au prochain init(), synchonise le close stocké en localStorage vers Firestore.
+   * Couvre le cas où l'onglet s'est fermé avant que la requête Firestore n'aboutisse.
+   */
+  _syncPendingClose() {
+    try {
+      const raw = localStorage.getItem(CLOSE_KEY);
+      if (!raw) return;
+      localStorage.removeItem(CLOSE_KEY);
+      const { uid, date, closeTime } = JSON.parse(raw);
+      if (uid === this._uid) {
+        recordSessionClose(uid, date, closeTime).catch(() => {});
+      }
+    } catch {}
   }
 
   // ── Gestionnaires d'événements ───────────────────────────────────────────────

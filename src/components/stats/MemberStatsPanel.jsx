@@ -67,14 +67,32 @@ const ChartTooltip = ({ active, payload, label }) => {
  *   'pause'   → gris   : inactivité > 10 min sans fermer le navigateur
  *   'offline' → ardoise: navigateur fermé (gap entre lastActivityAt et reconnexion suivante)
  */
+/**
+ * Construit les segments active / pause / offline à partir de la session.
+ *
+ * Modèle de données :
+ *   connections[i].at  = timestamp d'ouverture du navigateur (session i)
+ *   closes[i]          = timestamp de fermeture du navigateur (session i) — nouveau champ
+ *   → offline[i]       = closes[i] → connections[i+1].at
+ *
+ * Pour les anciennes sessions sans closes[], le fallback est :
+ *   connEnd = connections[i+1].at  (pas d'offline calculable → tout en active/pause)
+ */
 const buildSegments = (session) => {
-  const connections = [...(session.connections || [{ at: session.firstActivityAt }])]
+  // Tableau des heures d'ouverture (triées)
+  const opens = [...(session.connections || [{ at: session.firstActivityAt }])]
     .filter(c => c?.at)
-    .sort((a, b) => a.at - b.at);
+    .map(c => c.at)
+    .sort((a, b) => a - b);
+
+  // Tableau des heures de fermeture (triées) — parallèle à opens[]
+  const closes = [...(session.closes || [])]
+    .filter(Boolean)
+    .sort((a, b) => a - b);
 
   const lastAct = session.lastActivityAt || Date.now();
 
-  // Filtrer les pauses clairement corrompues (durée > 4h)
+  // Pauses inactivité — on filtre uniquement les clairement corrompues (> 4h)
   const MAX_PAUSE_MS = 4 * 60 * 60 * 1000;
   const pauses = [...(session.pauses || [])]
     .filter(p => p.start && p.end && p.end > p.start && (p.end - p.start) <= MAX_PAUSE_MS)
@@ -82,31 +100,42 @@ const buildSegments = (session) => {
 
   const segments = [];
 
-  connections.forEach((conn, i) => {
-    const connStart = conn.at;
-    const connEnd   = i < connections.length - 1 ? connections[i + 1].at : lastAct;
+  opens.forEach((openAt, i) => {
+    const nextOpenAt = opens[i + 1] ?? null;
 
-    // Pauses dont le début est dans cette fenêtre de connexion
-    const periodPauses = pauses.filter(p => p.start >= connStart && p.start < connEnd);
-    let cursor = connStart;
+    // Heure de fermeture réelle pour cette session
+    // closes[i] correspond à opens[i] (tableaux parallèles, même ordre chronologique)
+    const closeAt = closes[i] ?? null;
+
+    // connEnd = fin de la période de travail de cette session :
+    //   - closeAt si enregistré et cohérent (> openAt, < prochaine ouverture)
+    //   - sinon nextOpenAt (fallback : pas de fermeture connue → la fenêtre va jusqu'à la prochaine ouverture)
+    //   - sinon lastAct (dernière session de la journée)
+    const connEnd = nextOpenAt
+      ? (closeAt && closeAt > openAt && closeAt < nextOpenAt ? closeAt : nextOpenAt)
+      : lastAct;
+
+    // Pauses dont le début est dans cette fenêtre [openAt, connEnd]
+    const periodPauses = pauses.filter(p => p.start >= openAt && p.start < connEnd);
+    let cursor = openAt;
 
     periodPauses.forEach(p => {
       const pauseStart = Math.max(p.start, cursor);
-      // Clamp la fin de pause à connEnd : une pause ne peut pas déborder dans la période offline
-      const pauseEnd   = Math.min(p.end, connEnd);
-      if (pauseEnd <= pauseStart) return; // pause dégénérée, ignorer
-
+      const pauseEnd   = Math.min(p.end, connEnd); // jamais au-delà de connEnd
+      if (pauseEnd <= pauseStart) return;
       if (pauseStart > cursor) segments.push({ type: 'active', start: cursor,     end: pauseStart });
       segments.push(                         { type: 'pause',  start: pauseStart, end: pauseEnd   });
       cursor = pauseEnd;
     });
 
-    // Reste actif jusqu'à la fin de la connexion
     if (cursor < connEnd) segments.push({ type: 'active', start: cursor, end: connEnd });
 
-    // Période hors-ligne entre cette connexion et la suivante
-    if (i < connections.length - 1) {
-      segments.push({ type: 'offline', start: connEnd, end: connections[i + 1].at });
+    // Offline = closeAt → nextOpenAt (seulement si closeAt est connu et < nextOpenAt)
+    if (nextOpenAt) {
+      const offlineStart = closeAt && closeAt > openAt && closeAt < nextOpenAt ? closeAt : connEnd;
+      if (offlineStart < nextOpenAt) {
+        segments.push({ type: 'offline', start: offlineStart, end: nextOpenAt });
+      }
     }
   });
 

@@ -545,6 +545,18 @@ export const recordActivityPause = async (userId, date, pause) => {
 };
 
 /**
+ * Enregistre l'heure de fermeture du navigateur pour cette connexion.
+ * Peuplé par beforeunload/pagehide → permet de calculer les vraies périodes hors-ligne.
+ * closes[] est un tableau parallèle à connections[] (même ordre chronologique).
+ */
+export const recordSessionClose = async (userId, date, closeTime) => {
+  if (!db) return;
+  await updateDoc(doc(db, 'activity_sessions', `${userId}_${date}`), {
+    closes: arrayUnion(closeTime),
+  });
+};
+
+/**
  * Incrémente le compteur d'une action métier spécifique + le total.
  * actionType : 'articlesUpdated' | 'ticketsCreated' | 'ticketsCommented' | 'ticketsResolved'
  */
