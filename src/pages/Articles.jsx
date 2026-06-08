@@ -216,13 +216,16 @@ export default function Articles() {
 
       tracker.trackAction('articlesUpdated');
 
-      // ── Suivi SEO Haloscan — capture snapshot J+0 si mots-clés renseignés ─
-      if (seoKeywords.length > 0 && savedId && firebaseReady && (settings.haloscanConfigured || settings.haloscanKey)) {
+      // ── Suivi SEO Haloscan — snapshot J+0 ───────────────────────────────────
+      // targetKeyword = mot-clé principal (toujours en tête)
+      // seoKeywords   = mots-clés secondaires optionnels ajoutés dans "Suivi SEO"
+      const trackingKeywords = [targetKeyword.trim(), ...seoKeywords].filter(Boolean);
+      if (trackingKeywords.length > 0 && savedId && firebaseReady && (settings.haloscanConfigured || settings.haloscanKey)) {
         const articleUrl = tab === TAB_URL ? url.trim() : '';
         try {
-          await initArticleSeoTracking(savedId, { keywords: seoKeywords, articleUrl });
+          await initArticleSeoTracking(savedId, { keywords: trackingKeywords, articleUrl });
           if (articleUrl) {
-            const resp = await axios.post('/api/haloscan/check', { keywords: seoKeywords, articleUrl });
+            const resp = await axios.post('/api/haloscan/check', { keywords: trackingKeywords, articleUrl });
             if (resp.data?.success) {
               await saveSeoSnapshot(savedId, {
                 type:       'before',
@@ -397,8 +400,8 @@ export default function Articles() {
                 <div className="border border-emerald-100 bg-emerald-50/50 rounded-xl p-4 space-y-3">
                   <div className="flex items-center gap-2">
                     <TrendingUp size={14} className="text-emerald-600" />
-                    <span className="text-sm font-medium text-emerald-800">Suivi SEO (optionnel)</span>
-                    <span className="text-xs text-emerald-500 ml-auto">max 3 mots-clés</span>
+                    <span className="text-sm font-medium text-emerald-800">Mots-clés secondaires</span>
+                    <span className="text-xs text-emerald-500 ml-auto">optionnel · max 3</span>
                   </div>
 
                   {/* Liste mots-clés ajoutés */}
@@ -452,7 +455,7 @@ export default function Articles() {
                     </div>
                   )}
                   <p className="text-[11px] text-emerald-600">
-                    La position Google sera capturée avant/après la MAJ et comparée à J+7 et J+30.
+                    Le mot-clé cible est tracké automatiquement. Ajoutez ici des variantes longue traîne.
                   </p>
                 </div>
               )}

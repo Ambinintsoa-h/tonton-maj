@@ -514,6 +514,7 @@ export default function ArticleResult() {
     if (cqItem) {
       const r = cqItem.majResult || {};
       const articleData = {
+        id:              cqItem.id,          // réutilise l'ID du pending → SEO tracking lié
         title:           r.articleTitle    || cqItem.title  || '',
         originalContent: r.originalContent || agent.originalContent || '',
         updatedContent:  finalHtml,

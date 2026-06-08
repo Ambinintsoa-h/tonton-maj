@@ -617,16 +617,20 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const initArticleSeoTracking = async (articleId, { keywords, articleUrl }) => {
   if (!db || !articleId) return;
   const now = Date.now();
-  await updateDoc(doc(db, 'articles', articleId), {
-    'seoTracking.enabled':           true,
-    'seoTracking.keywords':          keywords,
-    'seoTracking.articleUrl':        articleUrl || '',
-    'seoTracking.snapshots':         [],
-    'seoTracking.completed':         false,
-    'seoTracking.nextSnapshotType':  'after_7d',
-    'seoTracking.nextSnapshotAt':    now + 7 * DAY_MS,
-    'seoTracking.createdAt':         now,
-  });
+  // setDoc + merge : crée le document s'il n'existe pas encore (ex: item MAJ en attente
+  // dont le doc Firestore articles/{id} n'est pas encore créé au moment du tracking J+0)
+  await setDoc(doc(db, 'articles', articleId), {
+    seoTracking: {
+      enabled:          true,
+      keywords,
+      articleUrl:       articleUrl || '',
+      snapshots:        [],
+      completed:        false,
+      nextSnapshotType: 'after_7d',
+      nextSnapshotAt:   now + 7 * DAY_MS,
+      createdAt:        now,
+    },
+  }, { merge: true });
 };
 
 /**
