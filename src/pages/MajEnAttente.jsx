@@ -25,6 +25,7 @@ import { addArticleStat } from '../store/slices/statsSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
+import { initArticleSeoTracking, saveSeoSnapshot } from '../services/firebase';
 import { applyAllDiffs } from '../utils/diff';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
@@ -906,12 +907,13 @@ const FILTERS = ['Tous', 'En attente', 'En cours', 'À valider'];
 export default function MajEnAttente() {
   const dispatch  = useDispatch();
   const navigate  = useNavigate();
-  const items     = useSelector(s => s.pending.list);
-  const settings  = useSelector(s => s.settings);
-  const skills    = useSelector(s => s.skills.list);
-  const knowledge = useSelector(s => s.knowledge.list);
-  const wpSites   = useSelector(s => s.wordpress.sites);
-  const allUsers  = useSelector(s => s.users.list);
+  const items        = useSelector(s => s.pending.list);
+  const settings     = useSelector(s => s.settings);
+  const skills       = useSelector(s => s.skills.list);
+  const knowledge    = useSelector(s => s.knowledge.list);
+  const wpSites      = useSelector(s => s.wordpress.sites);
+  const allUsers     = useSelector(s => s.users.list);
+  const firebaseReady = useSelector(s => s.settings.firebaseReady);
   const authRole     = useSelector(s => s.auth.role);
   const authUid      = useSelector(s => s.auth.uid);
   const authUsername = useSelector(s => s.auth.username);
@@ -1114,7 +1116,24 @@ export default function MajEnAttente() {
         }));
       }
 
-      // ── Étape 5 : Passer en statut "À valider" ────────────────────────────
+      // ── Étape 5 : Suivi SEO Haloscan — snapshot J+0 avant publication ────────
+      // Utilise item.keyword (mot-clé cible de la file d'attente) pour tracker
+      // la position avant/après MAJ comparée à J+7 et J+30.
+      if (item.keyword && item.url && firebaseReady && (settings.haloscanConfigured || settings.haloscanKey)) {
+        try {
+          await initArticleSeoTracking(item.id, { keywords: [item.keyword], articleUrl: item.url });
+          const resp = await axios.post('/api/haloscan/check', { keywords: [item.keyword], articleUrl: item.url });
+          if (resp.data?.success) {
+            await saveSeoSnapshot(item.id, {
+              type:       'before',
+              capturedAt: Date.now(),
+              results:    resp.data.results || [],
+            });
+          }
+        } catch { /* non bloquant */ }
+      }
+
+      // ── Étape 6 : Passer en statut "À valider" ────────────────────────────
       dispatch(updatePendingItem({
         id:     item.id,
         status: 'a_valider',
