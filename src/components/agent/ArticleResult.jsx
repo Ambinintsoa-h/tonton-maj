@@ -629,25 +629,54 @@ export default function ArticleResult() {
   }, [lockMedia]);
 
   // ── Injecter les surlignages gris dans l'article dès que les liens arrivent ──
-  // articleEl dans les deps garantit que l'effet se re-déclenche quand le div monte,
-  // même si internalLinks était déjà chargé avant que le div existe dans le DOM.
+  // Utilise TreeWalker (nœuds texte) au lieu d'une regex sur innerHTML :
+  // la vue diff contient des <mark>/<del>/<ins> qui fragmentent le texte,
+  // la regex sur chaîne manquait les ancres split sur plusieurs balises.
   useEffect(() => {
     if (!articleRef.current || internalLinks.length === 0) return;
-    // Éviter la double injection (vérification DOM, pas de ref flag qui ne se reset pas)
     if (articleRef.current.querySelector('[data-il-idx]')) return;
-    let html    = articleRef.current.innerHTML;
-    let changed = false;
+
+    let injected = 0;
+
     internalLinks.forEach((link, i) => {
-      const escaped = link.anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex   = new RegExp(`(?<!<[^>]*)${escaped}(?![^<]*>)`, 'i');
-      const next    = html.replace(regex, match =>
-        `<span data-il-idx="${i}" data-il-url="${link.url.replace(/"/g, '&quot;')}" class="il-highlight">${match}</span>`
+      const escaped   = link.anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const textRegex = new RegExp(escaped, 'i');
+
+      const walker = document.createTreeWalker(
+        articleRef.current,
+        NodeFilter.SHOW_TEXT,
+        null
       );
-      if (next !== html) { html = next; changed = true; }
+
+      let node;
+      while ((node = walker.nextNode())) {
+        // Ignorer le contenu supprimé (<del>) et les spans déjà surlignés
+        if (node.parentElement?.closest('del, [data-il-idx]')) continue;
+
+        const text  = node.textContent;
+        const match = text.match(textRegex);
+        if (!match) continue;
+
+        const idx = text.search(textRegex);
+        // Découper le nœud texte : [avant][ancre][après]
+        const anchorNode = node.splitText(idx);       // anchorNode = [ancre][après]
+        anchorNode.splitText(match[0].length);        // anchorNode = [ancre] seulement
+
+        // Envelopper anchorNode dans un span highlight
+        const span = document.createElement('span');
+        span.setAttribute('data-il-idx', String(i));
+        span.setAttribute('data-il-url', link.url);
+        span.className = 'il-highlight';
+        anchorNode.parentNode.insertBefore(span, anchorNode);
+        span.appendChild(anchorNode);
+
+        injected++;
+        break; // Une injection par lien interne
+      }
     });
-    if (changed) {
-      articleRef.current.innerHTML = html;
-      contentRef.current = html;
+
+    if (injected > 0) {
+      contentRef.current = articleRef.current.innerHTML;
       lockMedia(articleRef.current);
     }
   }, [internalLinks, lockMedia, articleEl]); // articleEl → re-run quand le div monte
