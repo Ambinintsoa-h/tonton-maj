@@ -13,14 +13,39 @@ export const exportAsText = (content) => {
 export const exportAsHtml = (content) => {
   const div = document.createElement('div');
   div.innerHTML = content;
+
   // Remove deleted content entirely
   div.querySelectorAll('.deleted-content, del').forEach(el => el.remove());
+
   // Unwrap updated content: keep inner HTML, discard the <mark> wrapper
   div.querySelectorAll('.updated-content, mark').forEach(el => {
     const frag = document.createDocumentFragment();
     while (el.firstChild) frag.appendChild(el.firstChild);
     if (el.parentNode) el.parentNode.replaceChild(frag, el);
   });
+
+  // Supprimer les overlays éditeur (data-media-overlay) — éléments UI uniquement,
+  // ne doivent jamais être publiés dans WordPress
+  div.querySelectorAll('[data-media-overlay]').forEach(el => el.remove());
+
+  // Convertir les wrappers vidéo (iframes YouTube) en URL brute pour WordPress oEmbed.
+  // WordPress strip les <iframe> via wp_kses ; une URL YouTube seule sur sa propre ligne
+  // est auto-convertie en lecteur embarqué par le mécanisme oEmbed natif de WordPress.
+  div.querySelectorAll('[data-media-type="video"]').forEach(wrapper => {
+    const iframe = wrapper.querySelector('iframe');
+    const src = iframe ? (iframe.getAttribute('src') || '') : '';
+    const match = src.match(/youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/);
+    if (match) {
+      const p = document.createElement('p');
+      p.textContent = `https://www.youtube.com/watch?v=${match[1]}`;
+      wrapper.parentNode?.replaceChild(p, wrapper);
+    } else {
+      // Vidéo non-YouTube : garder la balise <video> seule, supprimer le wrapper
+      const video = wrapper.querySelector('video');
+      if (video && wrapper.parentNode) wrapper.parentNode.replaceChild(video, wrapper);
+    }
+  });
+
   // Filet de sécurité regex — élimine tout résidu <del>/<mark> non capturé par le DOM
   let html = div.innerHTML;
   html = html.replace(/<del\b[^>]*>[\s\S]*?<\/del>/gi, '');
