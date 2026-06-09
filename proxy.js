@@ -331,6 +331,33 @@ const makeRateLimiter = (store, max) => (req, res, next) => {
 const rateLimiter     = makeRateLimiter(_rl,     60);
 const authRateLimiter = makeRateLimiter(_rlAuth, 10);
 
+// ─── Lockout IP après échecs répétés (H2) ─────────────────────────────────────
+// Complète le rate limiter : après 5 échecs de credentials, verrouille l'IP 15 min.
+// En mémoire (reset au redémarrage) — acceptable pour un outil interne.
+// Redis recommandé pour un verrouillage persistant.
+const _loginFailures = new Map(); // IP → { count, lockedUntil }
+
+const isLoginLocked = (ip) => {
+  const r = _loginFailures.get(ip);
+  if (!r) return false;
+  if (r.lockedUntil > Date.now()) return true;
+  // Verrouillage expiré — purger
+  _loginFailures.delete(ip);
+  return false;
+};
+
+const recordLoginFailure = (ip) => {
+  const r = _loginFailures.get(ip) || { count: 0, lockedUntil: 0 };
+  r.count++;
+  if (r.count >= 5) {
+    r.lockedUntil = Date.now() + 15 * 60 * 1000; // 15 min
+    console.warn(`[auth] ⚠ IP ${ip} verrouillée 15 min (${r.count} échecs consécutifs)`);
+  }
+  _loginFailures.set(ip, r);
+};
+
+const clearLoginFailure = (ip) => { _loginFailures.delete(ip); };
+
 app.use('/api/', rateLimiter);
 
 // ─── Route de login (publique — pas d'auth requise) ──────────────────────────
@@ -360,6 +387,12 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   // ── Étape 1 : username + password ───────────────────────────────────────────
   if (!username || !password) return res.status(400).json({ success: false, error: 'username et password requis' });
 
+  // H2 — Lockout IP après 5 échecs consécutifs
+  const clientIp = req.ip || 'local';
+  if (isLoginLocked(clientIp)) {
+    return res.status(429).json({ success: false, error: 'Trop de tentatives — accès verrouillé 15 minutes' });
+  }
+
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
     const tfa = read2fa(username);
     if (tfa.enabled) {
@@ -375,21 +408,31 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       const tempToken = jwt.sign({ username, role: 'super_admin', type: 'tfa_pending' }, JWT_SECRET, { expiresIn: '5m' });
       return res.json({ success: true, requires2fa: true, method: tfa.method, tempToken });
     }
+    clearLoginFailure(clientIp); // credentials corrects → réinitialiser le compteur
     const token = jwt.sign({ username, role: 'super_admin' }, JWT_SECRET, { expiresIn: '8h' });
     return res.json({ success: true, token, role: 'super_admin', username });
   }
-  // Délai pour ralentir le bruteforce
+  // Identifiants incorrects — enregistrer l'échec + délai anti-bruteforce
+  recordLoginFailure(clientIp);
   setTimeout(() => res.status(401).json({ success: false, error: 'Identifiants incorrects' }), 500);
 });
 
 // ─── Résoudre username → email (public, pour le flow Firebase Auth) ───────────
-app.get('/api/auth/resolve-username', authRateLimiter, async (req, res) => {
+// H3 — Rate limit strict (5/min/IP) pour limiter l'énumération de comptes.
+// Note : cet endpoint retourne l'email si le username existe (nécessaire pour le
+// flow Firebase Auth signInWithEmailAndPassword). Limitation structurelle documentée.
+const _rlResolve = new Map();
+const resolveRateLimiter = makeRateLimiter(_rlResolve, 5); // 5 req/min/IP
+
+app.get('/api/auth/resolve-username', resolveRateLimiter, async (req, res) => {
   if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   const username = (req.query.u || '').trim().toLowerCase();
   if (!username) return res.status(400).json({ error: 'Paramètre u requis' });
+  if (!SAFE_USERNAME_RE.test(username)) return res.json({ email: null }); // username invalide → réponse neutre
   try {
     const snap = await firebaseAdmin.firestore().collection('users').where('username', '==', username).limit(1).get();
     // Toujours 200 — évite l'énumération de comptes valides via code HTTP différent
+    if (!snap.empty) console.log(`[resolve-username] lookup: ${username} (IP: ${req.ip})`);
     return res.json({ email: snap.empty ? null : snap.docs[0].data().email });
   } catch (e) { console.error('[resolve-username]', e.message); return res.status(500).json({ error: 'Erreur serveur' }); }
 });
