@@ -21,6 +21,7 @@ import Dashboard from './pages/Dashboard';
 import MajEnAttente from './pages/MajEnAttente';
 import Equipe from './pages/Equipe';
 import Tickets from './pages/Tickets';
+import SupportDashboard from './pages/SupportDashboard';
 import { setSettings, setFirebaseReady, DEFAULT_FIREBASE_CONFIG } from './store/slices/settingsSlice';
 import { setSkills } from './store/slices/skillsSlice';
 import { setKnowledge } from './store/slices/knowledgeSlice';
@@ -386,7 +387,12 @@ function AppRoutes() {
               } />
               <Route path="/dashboard"      element={<Dashboard />}    />
               <Route path="/equipe"         element={<Equipe />}       />
-              <Route path="/tickets"        element={<Tickets />}      />
+              <Route path="/tickets"           element={<Tickets />}         />
+              <Route path="/support-dashboard" element={
+                <RoleGuard allowedRoles={['support']}>
+                  <SupportDashboard />
+                </RoleGuard>
+              } />
               <Route path="*"              element={<Navigate to="/" replace />} />
             </Routes>
           </Layout>

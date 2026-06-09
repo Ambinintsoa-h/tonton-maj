@@ -125,7 +125,7 @@ if (IS_PROD) {
 }
 
 // ─── Constantes de validation ─────────────────────────────────────────────────
-const VALID_ROLES       = new Set(['super_admin', 'manager', 'cq_ia']);
+const VALID_ROLES       = new Set(['super_admin', 'manager', 'cq_ia', 'support']);
 const SAFE_USERNAME_RE  = /^[a-zA-Z0-9._-]{1,64}$/; // point autorisé (colonel.sanders) — path.basename() protège du traversal
 const SETTINGS_WHITELIST = [
   'anthropicKey', 'groqKey', 'braveKey', 'tavilyKey', 'haloscanKey',
@@ -2547,7 +2547,7 @@ app.get('/health', (_, res) => {
 app.get('/api/admin/tickets', requireAuth, async (req, res) => {
   if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non initialisé' });
   const { role } = req.user;
-  if (role !== 'super_admin' && role !== 'manager') {
+  if (role !== 'super_admin' && role !== 'manager' && role !== 'support') {
     return res.status(403).json({ error: 'Accès refusé' });
   }
   try {

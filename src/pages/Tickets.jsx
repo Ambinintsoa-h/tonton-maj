@@ -770,10 +770,10 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
         {/* Boutons d'action */}
         {(() => {
           const buttons = [];
-          if ((role === 'manager' || role === 'super_admin') && ticket.status === 'open' && !ticket.assigneeId) {
+          if ((role === 'manager' || role === 'super_admin' || role === 'support') && ticket.status === 'open' && !ticket.assigneeId) {
             buttons.push(<button key="take" onClick={handleTakeCharge} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50">Prendre en charge</button>);
           }
-          if (role === 'manager' && ticket.status === 'in_progress' && ticket.level === 1) {
+          if ((role === 'manager' || role === 'support') && ticket.status === 'in_progress' && ticket.level === 1) {
             buttons.push(
               <button key="resolve" onClick={handleResolve} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"><CheckCircle2 size={12} />Résolu</button>,
               <button key="escalate" onClick={handleEscalate} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-1"><ArrowUpRight size={12} />Escalader L2</button>

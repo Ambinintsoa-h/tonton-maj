@@ -307,8 +307,8 @@ export const saveSettings = async (settings) => {
 // ── Tickets ──────────────────────────────────────────────────────────────────
 
 export const getTickets = async (userId, role) => {
-  // super_admin et manager passent par le proxy Admin SDK (bypass règles Firestore)
-  if (role === 'super_admin' || role === 'manager') {
+  // super_admin, manager et support passent par le proxy Admin SDK (bypass règles Firestore)
+  if (role === 'super_admin' || role === 'manager' || role === 'support') {
     const token = sessionStorage.getItem('tonton_auth_token');
     const resp = await fetch('/api/admin/tickets', {
       headers: token ? { Authorization: `Bearer ${token}` } : {},

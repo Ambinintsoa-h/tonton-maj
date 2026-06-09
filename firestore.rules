@@ -17,11 +17,14 @@ service cloud.firestore {
       return isAuthenticated() && userRole() in ['super_admin', 'manager'];
     }
 
+    function isSupport() {
+      return isAuthenticated() && userRole() == 'support';
+    }
+
     // ── wordpress_sites : contient des Application Passwords WP ──────────────
-    // Lecture/écriture réservées aux managers et super_admin.
-    // Les cq_ia n'ont pas besoin d'accéder aux credentials directement.
+    // Lecture/écriture : managers, super_admin et support technique.
     match /wordpress_sites/{siteId} {
-      allow read, write: if isAdmin();
+      allow read, write: if isAdmin() || isSupport();
     }
 
     // ── activity_sessions : tracking d'activité des membres ──────────────────
@@ -52,13 +55,13 @@ service cloud.firestore {
       allow update: if isAdmin();
     }
 
-    // ── tickets : les cq_ia voient uniquement leurs propres tickets ───────────
+    // ── tickets : cq_ia voient leurs tickets, admin/support voient tout ───────
     match /tickets/{ticketId} {
       allow read: if isAuthenticated()
-        && (resource.data.creatorId == request.auth.uid || isAdmin());
+        && (resource.data.creatorId == request.auth.uid || isAdmin() || isSupport());
       allow create: if isAuthenticated();
       allow update: if isAuthenticated()
-        && (resource.data.creatorId == request.auth.uid || isAdmin());
+        && (resource.data.creatorId == request.auth.uid || isAdmin() || isSupport());
       allow delete: if isAdmin();
     }
 

@@ -16,15 +16,17 @@ const TontonIcon = ({ size = 16 }) => (
   />
 );
 
-const NAV_TOP = [
-  { to: '/dashboard', label: 'Dashboard', icon: BarChart3 },
-];
+// Le lien dashboard varie selon le rôle
+const NAV_TOP_BY_ROLE = {
+  support: { to: '/support-dashboard', label: 'Tableau de bord', icon: BarChart3 },
+  default:  { to: '/dashboard',         label: 'Dashboard',       icon: BarChart3 },
+};
 
 const NAV_ALL = [
   { to: '/',               label: 'Faire une MAJ',  icon: TontonIcon },
   { to: '/maj-en-attente', label: 'MAJ en attente',  icon: ListTodo, badge: true },
   { to: '/skills',         label: 'Skills IA',       icon: Zap,      roles: ['super_admin', 'manager'] },
-  { to: '/wordpress',      label: 'WordPress',        icon: Globe,    roles: ['super_admin', 'manager'] },
+  { to: '/wordpress',      label: 'WordPress',        icon: Globe,    roles: ['super_admin', 'manager', 'support'] },
   { to: '/historique',     label: 'Historique',       icon: Clock },
   { to: '/equipe',         label: 'Équipe',            icon: Users,   roles: ['super_admin', 'manager'] },
   { to: '/tickets',        label: 'Tickets',           icon: Bug,      badge: true },
@@ -93,9 +95,9 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Dashboard — premier, isolé */}
+      {/* Dashboard — premier, isolé (lien adapté au rôle) */}
       <div className="px-3 mb-1">
-        {NAV_TOP.map(item => <NavItem key={item.to} {...item} />)}
+        <NavItem {...(NAV_TOP_BY_ROLE[role] || NAV_TOP_BY_ROLE.default)} />
       </div>
 
       <div className="px-3 mb-2">
