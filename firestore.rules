@@ -1,0 +1,113 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Lit le rôle depuis la collection users (Custom Claims non fiables côté règles).
+    // Utilise get() pour lire le document utilisateur courant.
+    function userRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && userRole() in ['super_admin', 'manager'];
+    }
+
+    // ── wordpress_sites : contient des Application Passwords WP ──────────────
+    // Lecture/écriture réservées aux managers et super_admin.
+    // Les cq_ia n'ont pas besoin d'accéder aux credentials directement.
+    match /wordpress_sites/{siteId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ── activity_sessions : tracking d'activité des membres ──────────────────
+    // Chaque membre ne lit que ses propres sessions.
+    // Les managers/super_admin peuvent lire toutes les sessions (dashboard équipe).
+    // Écriture : uniquement sur sa propre session (heartbeat, actions).
+    match /activity_sessions/{sessionId} {
+      allow read: if isAuthenticated()
+        && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isAuthenticated() && isAdmin();
+      allow create, update: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAdmin();
+    }
+
+    // ── users : annuaire membres ──────────────────────────────────────────────
+    // Lecture libre à tous les membres authentifiés (page Équipe).
+    // Mise à jour de son propre profil autorisée (avatar, nom) — sauf le champ role.
+    // Création / suppression / changement de rôle : admins uniquement.
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      // Mise à jour de son propre profil sans toucher au rôle
+      allow update: if isAuthenticated()
+        && request.auth.uid == userId
+        && !('role' in request.resource.data.diff(resource.data).affectedKeys());
+      // Admins peuvent tout modifier (y compris le rôle)
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin();
+    }
+
+    // ── tickets : les cq_ia voient uniquement leurs propres tickets ───────────
+    match /tickets/{ticketId} {
+      allow read: if isAuthenticated()
+        && (resource.data.creatorId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated()
+        && (resource.data.creatorId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ── ticket_comments : lisibles par les parties prenantes du ticket ────────
+    match /ticket_comments/{commentId} {
+      allow read, create: if isAuthenticated();
+      allow update: if isAuthenticated()
+        && resource.data.authorId == request.auth.uid;
+      allow delete: if isAdmin();
+    }
+
+    // ── notifications : chaque membre voit uniquement les siennes ─────────────
+    match /notifications/{notifId} {
+      allow read, update: if isAuthenticated()
+        && resource.data.toUserId == request.auth.uid;
+      allow create: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // ── Collections partagées (tous membres authentifiés) ─────────────────────
+    match /articles/{articleId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /pending/{itemId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /skills/{skillId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /knowledge/{itemId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /stats/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // ── settings : lecture libre, écriture admin ───────────────────────────────
+    match /settings/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // ── Refus par défaut (toute collection non listée ci-dessus) ─────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
