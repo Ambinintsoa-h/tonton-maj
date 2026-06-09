@@ -128,6 +128,65 @@ const fmtSize = (bytes) => {
 const isImage = (type) => type?.startsWith('image/');
 const isVideo = (type) => type?.startsWith('video/');
 
+// ─── Lecture des PJ avec authentification JWT ─────────────────────────────────
+// L'endpoint /api/ticket-attachments requiert un Bearer token → on fetche côté JS
+// et on crée un blob URL pour afficher l'image/vidéo sans exposer l'URL directe.
+
+function useAuthBlob(url) {
+  const [blobUrl, setBlobUrl] = useState(null);
+  useEffect(() => {
+    if (!url) return;
+    const token = sessionStorage.getItem('tonton_auth_token');
+    let objectUrl = null;
+    fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then(r => r.ok ? r.blob() : null)
+      .then(blob => {
+        if (!blob) return;
+        objectUrl = URL.createObjectURL(blob);
+        setBlobUrl(objectUrl);
+      })
+      .catch(() => {});
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [url]);
+  return blobUrl;
+}
+
+function downloadWithAuth(url, filename) {
+  const token = sessionStorage.getItem('tonton_auth_token');
+  fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    .then(r => r.ok ? r.blob() : null)
+    .then(blob => {
+      if (!blob) return;
+      const el = document.createElement('a');
+      el.href = URL.createObjectURL(blob);
+      el.download = filename || 'fichier';
+      el.click();
+      setTimeout(() => URL.revokeObjectURL(el.href), 5000);
+    })
+    .catch(() => {});
+}
+
+function AuthImage({ src, alt, className, style, onMouseDown, draggable }) {
+  const blobUrl = useAuthBlob(src);
+  if (!blobUrl) return <div className={className} style={{ ...style, background: '#1f2937' }} />;
+  return (
+    <img
+      src={blobUrl}
+      alt={alt}
+      className={className}
+      style={style}
+      onMouseDown={onMouseDown}
+      draggable={draggable}
+    />
+  );
+}
+
+function AuthVideo({ src, controls, className }) {
+  const blobUrl = useAuthBlob(src);
+  if (!blobUrl) return <div className={className} style={{ background: '#1f2937', borderRadius: 12 }} />;
+  return <video src={blobUrl} controls={controls} className={className} />;
+}
+
 // Modal lightbox avec zoom/dézoom pour images et vidéos
 function Lightbox({ attachments, initialIndex, onClose }) {
   const [idx, setIdx]     = useState(initialIndex);
@@ -198,9 +257,9 @@ function Lightbox({ attachments, initialIndex, onClose }) {
               </button>
             </>
           )}
-          <a href={a.url} download={a.name} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition" title="Télécharger">
+          <button onClick={() => downloadWithAuth(a.url, a.name)} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition" title="Télécharger">
             <Download size={16} />
-          </a>
+          </button>
           <button onClick={onClose} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition ml-1">
             <X size={18} />
           </button>
@@ -215,7 +274,7 @@ function Lightbox({ attachments, initialIndex, onClose }) {
         style={{ cursor: zoom > 1 ? (dragging ? 'grabbing' : 'grab') : 'default' }}
       >
         {isImage(a.type) && (
-          <img
+          <AuthImage
             src={a.url}
             alt={a.name}
             onMouseDown={onMouseDown}
@@ -232,17 +291,18 @@ function Lightbox({ attachments, initialIndex, onClose }) {
           />
         )}
         {isVideo(a.type) && (
-          <video src={a.url} controls className="max-w-[90vw] max-h-[80vh] rounded-xl" />
+          <AuthVideo src={a.url} controls className="max-w-[90vw] max-h-[80vh] rounded-xl" />
         )}
         {!isImage(a.type) && !isVideo(a.type) && (
           <div className="text-center space-y-4">
             <File size={64} className="text-gray-500 mx-auto" />
             <p className="text-white font-medium">{a.name}</p>
             {a.size && <p className="text-gray-400 text-sm">{fmtSize(a.size)}</p>}
-            <a href={a.url} download={a.name}
+            <button
+              onClick={() => downloadWithAuth(a.url, a.name)}
               className="inline-flex items-center gap-2 bg-white text-gray-900 font-medium px-5 py-2.5 rounded-xl hover:bg-gray-100 transition">
               <Download size={16} /> Télécharger
-            </a>
+            </button>
           </div>
         )}
       </div>
@@ -277,7 +337,7 @@ function Lightbox({ attachments, initialIndex, onClose }) {
               className={`w-12 h-8 rounded-lg overflow-hidden border-2 transition ${i === idx ? 'border-white' : 'border-transparent opacity-50 hover:opacity-80'}`}
             >
               {isImage(att.type)
-                ? <img src={att.url} alt="" className="w-full h-full object-cover" />
+                ? <AuthImage src={att.url} alt="" className="w-full h-full object-cover" />
                 : <div className="w-full h-full bg-white/20 flex items-center justify-center"><File size={12} className="text-white" /></div>
               }
             </button>
@@ -296,7 +356,7 @@ function AttachmentItem({ a, onClick }) {
         className="group relative block w-32 rounded-xl overflow-hidden border border-gray-100 hover:border-blue-300 transition-colors shadow-sm cursor-zoom-in"
         title={`${a.name} — cliquer pour agrandir`}
       >
-        <img src={a.url} alt={a.name} className="w-32 h-20 object-cover" />
+        <AuthImage src={a.url} alt={a.name} className="w-32 h-20 object-cover" />
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/15 transition flex items-center justify-center">
           <ZoomIn size={20} className="text-white opacity-0 group-hover:opacity-100 transition drop-shadow" />
         </div>

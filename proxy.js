@@ -2166,6 +2166,43 @@ app.post('/api/wp-tool', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Validation des types de fichiers pour les PJ tickets ─────────────────────
+// Blocklist des extensions pouvant servir de vecteur XSS ou d'exécution de code.
+// Vecteurs bloqués : SVG (inline JS), HTML, scripts côté serveur/client, binaires.
+const TICKET_BLOCKED_EXTENSIONS = new Set([
+  'html', 'htm', 'xhtml', 'svg', 'xml', 'mxml',
+  'js', 'mjs', 'cjs', 'ts', 'jsx', 'tsx',
+  'php', 'php3', 'php4', 'php5', 'phtml', 'phar',
+  'asp', 'aspx', 'ashx', 'jsp', 'jspx', 'cfm',
+  'exe', 'dll', 'com', 'bat', 'cmd', 'msi', 'msp',
+  'sh', 'bash', 'zsh', 'fish', 'ps1', 'psm1', 'psd1',
+  'vbs', 'vbe', 'wsf', 'wsh', 'hta', 'swf',
+  'jar', 'class', 'war', 'ear',
+  'py', 'rb', 'pl', 'cgi', 'lua',
+]);
+
+// Magic bytes pour les types visuels — détecte le spoofing d'extension
+const TICKET_IMG_MAGIC = [
+  { exts: ['jpg', 'jpeg'], magic: [0xFF, 0xD8, 0xFF] },
+  { exts: ['png'],         magic: [0x89, 0x50, 0x4E, 0x47] },
+  { exts: ['gif'],         magic: [0x47, 0x49, 0x46] },
+  { exts: ['webp'],        magic: [0x52, 0x49, 0x46, 0x46] }, // RIFF…WEBP
+  { exts: ['pdf'],         magic: [0x25, 0x50, 0x44, 0x46] }, // %PDF
+];
+
+const validateTicketFile = (buffer, filename) => {
+  const ext = (filename || '').split('.').pop().toLowerCase();
+  if (TICKET_BLOCKED_EXTENSIONS.has(ext)) {
+    return `Type de fichier interdit (.${ext}) — SVG, HTML et scripts ne sont pas acceptés`;
+  }
+  const magicEntry = TICKET_IMG_MAGIC.find(e => e.exts.includes(ext));
+  if (magicEntry) {
+    const valid = magicEntry.magic.every((b, i) => buffer[i] === b);
+    if (!valid) return `Contenu incohérent avec l'extension .${ext} — fichier corrompu ou déguisé`;
+  }
+  return null; // OK
+};
+
 // ─── PJ Tickets — stockage local serveur (data/uploads/) ────────────────────
 // Firebase Storage inaccessible via service account → fichiers sur le serveur.
 // Persistance : data/ n'est jamais écrasé par le CI/CD.
@@ -2182,6 +2219,9 @@ app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), (r
   try {
     // multer reçoit les noms en Latin-1 même si le fichier est UTF-8 → décodage explicite
     const decodedName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    // C2 — Validation type de fichier (blocklist extensions + magic bytes)
+    const validationError = validateTicketFile(req.file.buffer, decodedName);
+    if (validationError) return res.status(400).json({ error: validationError });
     const safeName    = path.basename(decodedName).replace(/[^a-zA-Z0-9._\-àáâãäåèéêëìíîïòóôõöùúûüýÿ]/g, '_');
     const prefix      = require('crypto').randomBytes(8).toString('hex');
     const filename    = `${prefix}_${safeName}`;
@@ -2198,13 +2238,27 @@ app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), (r
   }
 });
 
-// GET /api/ticket-attachments/:ticketId/:filename — sert les PJ (accessible sans auth pour affichage)
-app.get('/api/ticket-attachments/:ticketId/:filename', (req, res) => {
+// GET /api/ticket-attachments/:ticketId/:filename — sert les PJ (auth JWT requise)
+// Le frontend fetche via fetch()+blob URL pour envoyer le Bearer token.
+// X-Content-Type-Options : nosniff → empêche le MIME sniffing.
+// Content-Disposition : attachment pour les non-médias → empêche l'exécution inline.
+app.get('/api/ticket-attachments/:ticketId/:filename', requireAuth, (req, res) => {
   const ticketId = path.basename(req.params.ticketId);
   const filename = path.basename(req.params.filename);
   if (!ticketId || !filename) return res.status(400).send('Paramètres invalides');
   const filePath = path.join(UPLOADS_DIR, ticketId, filename);
   if (!fs.existsSync(filePath)) return res.status(404).send('Fichier introuvable');
+
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  // Images et vidéos → affichage inline (blob URL côté client, pas de risque XSS direct)
+  // Autres types → forcer téléchargement pour bloquer toute exécution navigateur
+  const ext = filename.split('.').pop().toLowerCase();
+  const INLINE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'webm', 'ogg', 'mov']);
+  if (!INLINE_EXTS.has(ext)) {
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  }
+
   res.sendFile(filePath);
 });
 
