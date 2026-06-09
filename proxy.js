@@ -49,6 +49,24 @@ const JWT_SECRET = process.env.JWT_SECRET || 'tonton-dev-secret-change-me-in-pro
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
 
+// ─── Blacklist JWT (M2) ───────────────────────────────────────────────────────
+// Permet la révocation immédiate d'un token avant son expiration.
+// En mémoire (reset au redémarrage) — fenêtre de risque de 8h max après restart.
+// Redis recommandé pour une révocation persistante.
+// Nettoyage automatique des jti expirés toutes les heures.
+const _revokedJti = new Map(); // jti → expiresAt (timestamp)
+
+const revokeToken = (jti, expiresAt) => { _revokedJti.set(jti, expiresAt); };
+const isTokenRevoked = (jti) => _revokedJti.has(jti);
+
+// Purge des entrées expirées (pas besoin de garder des jti dont le token est déjà expiré)
+setInterval(() => {
+  const now = Date.now();
+  for (const [jti, expiresAt] of _revokedJti) {
+    if (expiresAt < now) _revokedJti.delete(jti);
+  }
+}, 60 * 60 * 1000);
+
 const requireAuth = (req, res, next) => {
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) {
@@ -59,6 +77,10 @@ const requireAuth = (req, res, next) => {
     // Guard path traversal : username utilisé dans des chemins de fichiers
     if (req.user.username && !SAFE_USERNAME_RE.test(req.user.username)) {
       return res.status(401).json({ error: 'Token invalide' });
+    }
+    // M2 — Vérifier que le token n'a pas été révoqué
+    if (req.user.jti && isTokenRevoked(req.user.jti)) {
+      return res.status(401).json({ error: 'Session révoquée — reconnectez-vous' });
     }
     next();
   } catch {
@@ -137,7 +159,9 @@ app.use(helmet({
   contentSecurityPolicy: IS_PROD ? {
     directives: {
       defaultSrc:  ["'self'"],
-      scriptSrc:   ["'self'", "'unsafe-inline'"],  // requis par le build CRA
+      // CRA produit des chunks JS séparés → 'unsafe-inline' non requis en prod.
+      // Si une régression CSP survient, vérifier avec INLINE_RUNTIME_CHUNK=false dans .env.
+      scriptSrc:   ["'self'"],
       styleSrc:    ["'self'", "'unsafe-inline'"],  // requis par Tailwind/inline styles
       imgSrc:      ["'self'", 'data:', 'https:', 'blob:'],
       connectSrc:  [
@@ -205,6 +229,12 @@ const assertSafeUrl = async (raw, label = 'URL') => {
   }
   return parsed;
 };
+
+// ─── Helper erreur (M4) ───────────────────────────────────────────────────────
+// En production, ne jamais exposer e.message dans les 500 — cache la structure interne.
+// En dev, retourner le message réel pour faciliter le debug.
+const safeError = (e, publicMsg = 'Erreur interne du serveur') =>
+  IS_PROD ? publicMsg : (e?.message || publicMsg);
 
 // ─── Fichiers statiques React (production uniquement) ────────────────────────
 if (IS_PROD) {
@@ -378,7 +408,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     }
     if (!valid) return setTimeout(() => res.status(401).json({ error: 'Code incorrect' }), 500);
     // uid présent si le tempToken vient d'un compte Firebase (firebase-login)
-    const payload = { username: decoded.username, role: decoded.role };
+    const payload = { username: decoded.username, role: decoded.role, jti: require('crypto').randomUUID() };
     if (decoded.uid) payload.uid = decoded.uid;
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
     return res.json({ success: true, token, role: decoded.role, username: decoded.username, uid: decoded.uid || null });
@@ -409,12 +439,23 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       return res.json({ success: true, requires2fa: true, method: tfa.method, tempToken });
     }
     clearLoginFailure(clientIp); // credentials corrects → réinitialiser le compteur
-    const token = jwt.sign({ username, role: 'super_admin' }, JWT_SECRET, { expiresIn: '8h' });
+    const token = jwt.sign({ username, role: 'super_admin', jti: require('crypto').randomUUID() }, JWT_SECRET, { expiresIn: '8h' });
     return res.json({ success: true, token, role: 'super_admin', username });
   }
   // Identifiants incorrects — enregistrer l'échec + délai anti-bruteforce
   recordLoginFailure(clientIp);
   setTimeout(() => res.status(401).json({ success: false, error: 'Identifiants incorrects' }), 500);
+});
+
+// ─── Logout — révocation immédiate du token (M2) ──────────────────────────────
+app.post('/api/auth/logout', requireAuth, (req, res) => {
+  if (req.user.jti) {
+    // Calculer l'expiration du token pour purger automatiquement après 8h
+    const expiresAt = (req.user.exp || 0) * 1000 || Date.now() + 8 * 60 * 60 * 1000;
+    revokeToken(req.user.jti, expiresAt);
+    console.log(`[auth] Token révoqué — user: ${req.user.username}, jti: ${req.user.jti}`);
+  }
+  res.json({ success: true });
 });
 
 // ─── Résoudre username → email (public, pour le flow Firebase Auth) ───────────
@@ -457,7 +498,7 @@ app.post('/api/auth/firebase-login', authRateLimiter, async (req, res) => {
       valid = hashOtp(twoFaCode) === tfa.emailCode && Date.now() < (tfa.emailCodeExpiry || 0);
     }
     if (!valid) return setTimeout(() => res.status(401).json({ error: 'Code incorrect' }), 500);
-    const token = jwt.sign({ uid: decoded.uid, username: decoded.username, role: decoded.role }, JWT_SECRET, { expiresIn: '8h' });
+    const token = jwt.sign({ uid: decoded.uid, username: decoded.username, role: decoded.role, jti: require('crypto').randomUUID() }, JWT_SECRET, { expiresIn: '8h' });
     return res.json({ success: true, token, role: decoded.role, username: decoded.username, uid: decoded.uid });
   }
 
@@ -483,7 +524,7 @@ app.post('/api/auth/firebase-login', authRateLimiter, async (req, res) => {
       return res.json({ success: true, requires2fa: true, method: tfa.method, tempToken: tfaTempToken });
     }
 
-    const token = jwt.sign({ uid: fbDecoded.uid, username, role }, JWT_SECRET, { expiresIn: '8h' });
+    const token = jwt.sign({ uid: fbDecoded.uid, username, role, jti: require('crypto').randomUUID() }, JWT_SECRET, { expiresIn: '8h' });
     return res.json({ success: true, token, role, username, uid: fbDecoded.uid });
   } catch (e) { return res.status(401).json({ error: 'Erreur d\'authentification' }); }
 });
@@ -2141,7 +2182,7 @@ app.post('/api/wp-categories', requireAuth, async (req, res) => {
     });
   } catch (e) {
     console.error('[wp-categories]', e.message);
-    res.status(500).json({ error: 'Impossible de récupérer les catégories : ' + e.message });
+    res.status(500).json({ error: safeError(e, 'Impossible de récupérer les catégories') });
   }
 });
 
@@ -2192,7 +2233,7 @@ app.post('/api/wp-related-posts', requireAuth, async (req, res) => {
     res.json({ posts });
   } catch (e) {
     console.error('[wp-related-posts]', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: safeError(e, 'Impossible de récupérer les articles liés') });
   }
 });
 
@@ -2205,7 +2246,7 @@ app.post('/api/wp-tool', requireAuth, async (req, res) => {
     res.json({ success: true, result });
   } catch (e) {
     console.error('[proxy] /api/wp-tool erreur:', e.message);
-    res.status(500).json({ success: false, error: e.message });
+    res.status(500).json({ success: false, error: safeError(e, 'Erreur lors de l\'exécution de l\'outil WordPress') });
   }
 });
 
@@ -2277,7 +2318,7 @@ app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), (r
     res.json({ url, name: decodedName, type: req.file.mimetype, size: req.file.size });
   } catch (e) {
     console.error('[upload-ticket-file]', e.message);
-    res.status(500).json({ error: 'Erreur sauvegarde fichier : ' + e.message });
+    res.status(500).json({ error: safeError(e, 'Erreur lors de la sauvegarde du fichier') });
   }
 });
 
@@ -2342,7 +2383,8 @@ app.post('/api/wp-upload-file', requireAuth, upload.single('file'), async (req, 
   } catch (e) {
     const msg = e.response?.data?.message || e.response?.data?.code || e.message;
     console.error('[proxy] /api/wp-upload-file erreur:', e.response?.status, msg);
-    res.status(500).json({ success: false, error: msg });
+    // msg provient de l'API WordPress (erreur métier) — acceptable en prod
+    res.status(500).json({ success: false, error: msg || safeError(e) });
   }
 });
 
