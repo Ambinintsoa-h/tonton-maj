@@ -37,6 +37,13 @@ const ROLES = {
     avatarClass:'bg-gray-900 text-white',
     dotClass:   'bg-gray-900',
   },
+  support: {
+    label:      'Support',
+    description:'Support technique',
+    badgeClass: 'bg-teal-50 text-teal-700 border border-teal-200',
+    avatarClass:'bg-teal-100 text-teal-700',
+    dotClass:   'bg-teal-500',
+  },
 };
 
 const STATUSES = {
@@ -482,7 +489,7 @@ function InviteModal({ onClose, onCreated, authRole }) {
   // Manager ne peut créer que des cq_ia ; super_admin peut créer tous les rôles
   const availableRoles = authRole === 'manager'
     ? { cq_ia: ROLES.cq_ia }
-    : { cq_ia: ROLES.cq_ia, manager: ROLES.manager, super_admin: ROLES.super_admin };
+    : { cq_ia: ROLES.cq_ia, manager: ROLES.manager, super_admin: ROLES.super_admin, support: ROLES.support };
 
   return (
     <motion.div
