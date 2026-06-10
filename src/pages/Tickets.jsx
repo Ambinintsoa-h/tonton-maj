@@ -9,6 +9,7 @@ import {
   Search, User, Calendar, Link2, FileText, Film, FileImage, File,
   ZoomIn, ZoomOut, Download, RotateCcw, ChevronLeft, ChevronRight,
   ChevronDown, AtSign, LayoutList, LayoutGrid, FlaskConical, MoveRight,
+  GripVertical, Inbox,
 } from 'lucide-react';
 import { addTicket, updateTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
@@ -94,7 +95,7 @@ function TicketCard({ ticket, selected, onClick, users }) {
 
   return (
     <motion.div
-      whileHover={{ y: -1, shadow: 'lg' }}
+      whileHover={{ y: -2 }}
       whileTap={{ scale: 0.99 }}
       onClick={onClick}
       className={`cursor-pointer rounded-2xl border-l-[3px] p-3.5 transition-all ${prio.border} ${
@@ -895,18 +896,16 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
   const linkedArticle = ticket.linkedArticleId ? history.find(a => a.id === ticket.linkedArticleId) : null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, x: 20 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 20 }}
-      className="flex flex-col h-full"
-    >
+    <div className="flex flex-col h-full">
       {/* ── HEADER FIXE ─────────────────────────────────────────────────────── */}
       <div className="flex-shrink-0 px-5 pt-4 pb-3 border-b border-gray-100 space-y-2.5">
         {/* Titre + fermer */}
         <div className="flex items-start justify-between gap-3">
-          <h2 className="text-base font-bold text-gray-900 leading-snug flex-1">{ticket.title}</h2>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${status.dot}`} />
+            <h2 className="text-base font-bold text-gray-900 leading-snug">{ticket.title}</h2>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 flex-shrink-0">
             <X size={18} />
           </button>
         </div>
@@ -1049,7 +1048,42 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
 
       {/* ── COMMENTAIRES (prend le reste de la hauteur) ─────────────────────── */}
       <CommentThread ticket={ticket} currentUser={currentUser} onCommentAdded={handleCommentAdded} />
-    </motion.div>
+    </div>
+  );
+}
+
+// ─── Drawer latéral droit (slider détail) ─────────────────────────────────────
+
+function TicketDrawer({ ticket, onClose, ...rest }) {
+  // Échap pour fermer
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <AnimatePresence>
+      {ticket && (
+        <>
+          {/* Backdrop */}
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={onClose}
+            className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[2px]"
+          />
+          {/* Panneau */}
+          <motion.div
+            initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+            transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+            className="fixed inset-y-0 right-0 z-50 w-full max-w-[540px] bg-white shadow-2xl flex flex-col overflow-hidden"
+          >
+            <TicketDetail ticket={ticket} onClose={onClose} {...rest} />
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -1300,39 +1334,36 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
 
 // ─── Carte Kanban (compacte) ──────────────────────────────────────────────────
 
-function KanbanCard({ ticket, onOpen, onMove, users, isStaff }) {
-  const prio   = PRIORITIES[ticket.priority] || PRIORITIES.normale;
-  const cat    = CATEGORIES[ticket.category] || CATEGORIES.other;
-  const unread = ticketHasUnread(ticket);
+function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, onDragEnd, selected }) {
+  const prio     = PRIORITIES[ticket.priority] || PRIORITIES.normale;
+  const cat      = CATEGORIES[ticket.category] || CATEGORIES.other;
+  const unread   = ticketHasUnread(ticket);
   const assignee = users?.find(u => u.id === ticket.assigneeId || u.uid === ticket.assigneeId);
 
-  // Transitions disponibles depuis ce statut
-  const nextMoves = {
-    open:        isStaff ? [{ key: 'in_progress', label: 'En cours', icon: MoveRight }] : [],
-    in_progress: isStaff ? [
-      { key: 'testing',  label: 'À tester',  icon: FlaskConical },
-      { key: 'closed',   label: 'Clôturer',  icon: X },
-    ] : [],
-    testing:     isStaff ? [
-      { key: 'resolved', label: 'Résolu',    icon: CheckCircle2 },
-      { key: 'in_progress', label: 'Retour en cours', icon: RefreshCw },
-    ] : [],
-    resolved:    isStaff ? [{ key: 'closed', label: 'Clôturer', icon: X }] : [],
-    closed:      isStaff ? [{ key: 'open',   label: 'Rouvrir',  icon: RefreshCw }] : [],
-  };
-  const moves = nextMoves[ticket.status] || [];
-
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={`rounded-xl bg-white border-l-[3px] p-3 shadow-sm hover:shadow-md cursor-pointer transition-all ${prio.border}`}
+    <div
+      draggable={isStaff}
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/plain', ticket.id);
+        e.dataTransfer.effectAllowed = 'move';
+        onDragStart(ticket);
+      }}
+      onDragEnd={onDragEnd}
       onClick={() => onOpen(ticket)}
+      className={`group relative rounded-xl bg-white border border-gray-100 border-l-[3px] p-3 shadow-sm transition-all ${prio.border} ${
+        isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md hover:-translate-y-0.5'
+      } ${selected ? 'ring-2 ring-blue-300' : ''} ${isStaff ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
     >
+      {/* Poignée de drag (visible au survol pour le staff) */}
+      {isStaff && (
+        <div className="absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-40 transition-opacity pointer-events-none">
+          <GripVertical size={13} className="text-gray-400" />
+        </div>
+      )}
+
       {/* Titre + unread */}
-      <div className="flex items-start gap-1.5 mb-2">
-        {unread && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1 animate-pulse" />}
+      <div className="flex items-start gap-1.5 mb-2 pr-3">
+        {unread && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1 animate-pulse" title="Nouveaux commentaires" />}
         <p className="text-xs font-semibold text-gray-900 leading-snug line-clamp-2 flex-1">{ticket.title}</p>
       </div>
 
@@ -1340,49 +1371,92 @@ function KanbanCard({ ticket, onOpen, onMove, users, isStaff }) {
       <div className="flex flex-wrap gap-1 mb-2.5">
         <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
         <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${prio.color}`}>{prio.label}</span>
+        {ticket.level > 1 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">L{ticket.level}</span>}
       </div>
 
       {/* Footer : créateur + assigné + compteurs */}
       <div className="flex items-center justify-between">
+        <span className="text-[10px] text-gray-400">{timeAgo(ticket.createdAt)}</span>
         <div className="flex items-center gap-1.5">
-          <AccountAvatar avatarUrl={undefined} prenom={undefined} nom={undefined}
-            username={ticket.creatorUsername} size={16} />
-          <span className="text-[10px] text-gray-400">{timeAgo(ticket.createdAt)}</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {ticket.assigneeUsername && (
-            <AccountAvatar avatarUrl={assignee?.avatarUrl} prenom={assignee?.prenom}
-              nom={assignee?.nom} username={ticket.assigneeUsername} size={18} />
-          )}
           {(ticket.commentCount > 0) && (
             <span className={`flex items-center gap-0.5 text-[10px] ${unread ? 'text-blue-500 font-bold' : 'text-gray-400'}`}>
               <MessageSquare size={9} />{ticket.commentCount}
             </span>
           )}
+          {(ticket.attachments?.length > 0) && (
+            <span className="flex items-center gap-0.5 text-[10px] text-gray-400">
+              <Paperclip size={9} />{ticket.attachments.length}
+            </span>
+          )}
+          {ticket.assigneeUsername ? (
+            <div title={`Assigné : ${ticket.assigneeUsername}`}>
+              <AccountAvatar avatarUrl={assignee?.avatarUrl} prenom={assignee?.prenom}
+                nom={assignee?.nom} username={ticket.assigneeUsername} size={20} />
+            </div>
+          ) : (
+            <div className="w-5 h-5 rounded-full border border-dashed border-gray-300 flex items-center justify-center" title="Non assigné">
+              <User size={10} className="text-gray-300" />
+            </div>
+          )}
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Boutons de déplacement rapide (stop propagation → pas d'ouverture) */}
-      {moves.length > 0 && (
-        <div className="flex gap-1 mt-2.5 pt-2 border-t border-gray-100" onClick={e => e.stopPropagation()}>
-          {moves.map(m => {
-            const Icon = m.icon;
-            return (
-              <button key={m.key} onClick={() => onMove(ticket, m.key)}
-                className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-gray-100 hover:bg-blue-100 hover:text-blue-700 text-gray-500 transition-colors font-medium">
-                <Icon size={9} />{m.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </motion.div>
+// ─── Colonne Kanban (zone de drop) ────────────────────────────────────────────
+
+function KanbanColumn({ col, tickets, onOpen, onDropTicket, users, isStaff, draggingId, onDragStart, onDragEnd, selectedId }) {
+  const [over, setOver] = useState(false);
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setOver(false);
+    const id = e.dataTransfer.getData('text/plain');
+    if (id) onDropTicket(id, col.key);
+  };
+
+  return (
+    <div
+      onDragOver={(e) => { if (isStaff) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setOver(true); } }}
+      onDragLeave={() => setOver(false)}
+      onDrop={handleDrop}
+      className={`flex-shrink-0 w-[270px] flex flex-col rounded-2xl border transition-all ${col.color} ${
+        over ? 'ring-2 ring-blue-400 ring-offset-1 bg-blue-50/40' : ''
+      }`}
+    >
+      {/* Header colonne */}
+      <div className={`flex items-center justify-between px-3 py-2.5 rounded-t-2xl ${col.header}`}>
+        <span className="text-xs font-bold flex items-center gap-1.5">
+          <span className={`w-2 h-2 rounded-full ${STATUSES[col.key]?.dot || 'bg-gray-400'}`} />
+          {col.label}
+        </span>
+        <span className="text-xs font-bold bg-white/60 px-1.5 py-0.5 rounded-full min-w-[22px] text-center">{tickets.length}</span>
+      </div>
+
+      {/* Cartes */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-[120px]">
+        {tickets.length === 0 && (
+          <div className={`flex flex-col items-center justify-center py-10 text-xs transition-colors ${over ? 'text-blue-400' : 'text-gray-300'}`}>
+            <Inbox size={22} className="mb-1.5 opacity-50" />
+            {over ? 'Déposer ici' : 'Vide'}
+          </div>
+        )}
+        {tickets.map(ticket => (
+          <KanbanCard key={ticket.id} ticket={ticket} onOpen={onOpen} users={users} isStaff={isStaff}
+            isDragging={draggingId === ticket.id} onDragStart={onDragStart} onDragEnd={onDragEnd}
+            selected={selectedId === ticket.id} />
+        ))}
+      </div>
+    </div>
   );
 }
 
 // ─── Vue Kanban ───────────────────────────────────────────────────────────────
 
-function KanbanView({ tickets, onOpen, onMove, users, isStaff, search, filterCategory, filterPriority }) {
+function KanbanView({ tickets, onOpen, onDropTicket, users, isStaff, search, filterCategory, filterPriority, selectedId }) {
+  const [draggingId, setDraggingId] = useState(null);
+
   const filtered = tickets.filter(t => {
     if (filterCategory !== 'all' && t.category !== filterCategory) return false;
     if (filterPriority  !== 'all' && t.priority  !== filterPriority)  return false;
@@ -1390,37 +1464,22 @@ function KanbanView({ tickets, onOpen, onMove, users, isStaff, search, filterCat
     return true;
   });
 
+  const po = { urgent: 0, haute: 1, normale: 2, basse: 3 };
+  const colTicketsFor = (colKey) => filtered
+    .filter(t => colKey === 'closed' ? (t.status === 'closed' || t.status === 'resolved') : t.status === colKey)
+    .sort((a, b) => (po[a.priority] ?? 2) - (po[b.priority] ?? 2));
+
   return (
     <div className="flex gap-3 h-full overflow-x-auto pb-2">
-      {KANBAN_COLS.map(col => {
-        // La colonne "Clôturé" regroupe resolved + closed
-        const colTickets = filtered
-          .filter(t => col.key === 'closed' ? (t.status === 'closed' || t.status === 'resolved') : t.status === col.key)
-          .sort((a, b) => {
-            const po = { urgent: 0, haute: 1, normale: 2, basse: 3 };
-            return (po[a.priority] ?? 2) - (po[b.priority] ?? 2);
-          });
-
-        return (
-          <div key={col.key} className={`flex-shrink-0 w-64 flex flex-col rounded-2xl border ${col.color} overflow-hidden`}>
-            {/* Header colonne */}
-            <div className={`flex items-center justify-between px-3 py-2.5 ${col.header}`}>
-              <span className="text-xs font-bold">{col.label}</span>
-              <span className="text-xs font-bold bg-white/60 px-1.5 py-0.5 rounded-full">{colTickets.length}</span>
-            </div>
-            {/* Cartes */}
-            <div className="flex-1 overflow-y-auto p-2 space-y-2">
-              {colTickets.length === 0 && (
-                <div className="text-center py-8 text-xs text-gray-400 opacity-60">Aucun ticket</div>
-              )}
-              {colTickets.map(ticket => (
-                <KanbanCard key={ticket.id} ticket={ticket} onOpen={onOpen} onMove={onMove}
-                  users={users} isStaff={isStaff} />
-              ))}
-            </div>
-          </div>
-        );
-      })}
+      {KANBAN_COLS.map(col => (
+        <KanbanColumn
+          key={col.key} col={col} tickets={colTicketsFor(col.key)}
+          onOpen={onOpen} onDropTicket={onDropTicket} users={users} isStaff={isStaff}
+          draggingId={draggingId} selectedId={selectedId}
+          onDragStart={(t) => setDraggingId(t.id)}
+          onDragEnd={() => setDraggingId(null)}
+        />
+      ))}
     </div>
   );
 }
@@ -1534,17 +1593,45 @@ export default function Tickets() {
   const isStaff = ['super_admin', 'manager', 'support'].includes(auth.role);
   const canCreate = auth.role === 'cq_ia' || auth.role === 'manager' || auth.role === 'support';
 
-  // Déplacement rapide depuis la vue Kanban
-  const handleQuickMove = async (ticket, newStatus) => {
+  // Déplacement par drag & drop dans le Kanban (id ticket + colonne cible)
+  const handleDropTicket = async (ticketId, colKey) => {
+    const ticket = tickets.find(t => t.id === ticketId);
+    if (!ticket) return;
+    // La colonne "Clôturé" → statut closed
+    const newStatus = colKey === 'closed' ? 'closed' : colKey;
+    if (ticket.status === newStatus) return; // pas de changement
+
     try {
       const updates = { status: newStatus };
       if (newStatus === 'in_progress' && !ticket.assigneeId) {
         updates.assigneeId = auth.uid || auth.username;
         updates.assigneeUsername = auth.username;
       }
-      await updateTicketDoc(ticket.id, updates);
-      dispatch(updateTicket({ id: ticket.id, ...updates }));
-      toast.success(`Ticket déplacé : ${STATUSES[newStatus]?.label || newStatus}`);
+      if (newStatus === 'resolved') updates.resolvedAt = Date.now();
+      if (newStatus === 'closed')   updates.closedAt = Date.now();
+      if (newStatus === 'open')     { updates.resolvedAt = null; updates.closedAt = null; }
+
+      await updateTicketDoc(ticketId, updates);
+      dispatch(updateTicket({ id: ticketId, ...updates }));
+      if (newStatus === 'resolved') tracker.trackAction('ticketsResolved');
+
+      // Notification au créateur / assigné selon la transition
+      const messages = {
+        in_progress: { to: ticket.creatorId, msg: `${auth.username} a pris en charge votre ticket "${ticket.title}"` },
+        testing:     { to: ticket.creatorId, msg: `Votre ticket "${ticket.title}" est en cours de test` },
+        resolved:    { to: ticket.creatorId, msg: `Votre ticket "${ticket.title}" a été résolu` },
+        closed:      { to: ticket.assigneeId, msg: `Le ticket "${ticket.title}" a été clôturé` },
+        open:        { to: ticket.assigneeId, msg: `${auth.username} a rouvert le ticket "${ticket.title}"` },
+      };
+      const notif = messages[newStatus];
+      if (notif?.to && notif.to !== (auth.uid || auth.username)) {
+        createNotification({
+          toUserId: notif.to, fromUsername: auth.username,
+          type: 'status_change', ticketId, ticketTitle: ticket.title, message: notif.msg,
+        }).catch(() => {});
+      }
+
+      toast.success(`Déplacé : ${STATUSES[newStatus]?.label || newStatus}`);
     } catch {
       toast.error('Erreur lors du déplacement');
     }
@@ -1666,74 +1753,46 @@ export default function Tickets() {
           <KanbanView
             tickets={activeTickets}
             onOpen={t => setSelectedTicket(t)}
-            onMove={handleQuickMove}
+            onDropTicket={handleDropTicket}
             users={users}
             isStaff={isStaff}
             search={search}
             filterCategory={filterCategory}
             filterPriority={filterPriority}
+            selectedId={selectedTicket?.id}
           />
         )}
 
-        {/* ── VUE LISTE ── */}
+        {/* ── VUE LISTE (grille responsive pleine largeur) ── */}
         {!loading && viewMode === 'list' && (
-          <div className="flex gap-4 h-full overflow-hidden">
-            {/* Liste */}
-            <div className={`flex flex-col gap-2 overflow-y-auto pr-1 transition-all flex-shrink-0 ${selectedTicket ? 'w-72' : 'w-full'}`}>
-              {sorted.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-                  <Bug size={32} className="mb-3 opacity-30" />
-                  <p className="text-sm">{activeTab === 'historique' ? 'Aucun ticket fermé' : 'Aucun ticket trouvé'}</p>
-                </div>
-              )}
-              {sorted.map(ticket => (
-                <TicketCard key={ticket.id} ticket={ticket} users={users}
-                  selected={selectedTicket?.id === ticket.id}
-                  onClick={() => setSelectedTicket(ticket)} />
-              ))}
-            </div>
-
-            {/* Panneau détail */}
-            <AnimatePresence>
-              {selectedTicket ? (
-                <div className="flex-1 min-w-0 bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                  <TicketDetail
-                    ticket={selectedTicket}
-                    onClose={() => setSelectedTicket(null)}
-                    onUpdate={handleTicketUpdate}
-                    currentUser={currentUser}
-                    users={users}
-                    history={history}
-                  />
-                </div>
-              ) : (
-                sorted.length > 0 && (
-                  <div className="flex-1 flex flex-col items-center justify-center text-gray-300 gap-3">
-                    <MessageSquare size={40} className="opacity-30" />
-                    <p className="text-sm">Sélectionnez un ticket pour voir les détails</p>
-                  </div>
-                )
-              )}
-            </AnimatePresence>
+          <div className="h-full overflow-y-auto pr-1">
+            {sorted.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+                <Bug size={36} className="mb-3 opacity-30" />
+                <p className="text-sm">{activeTab === 'historique' ? 'Aucun ticket clôturé' : 'Aucun ticket trouvé'}</p>
+              </div>
+            ) : (
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))] content-start">
+                {sorted.map(ticket => (
+                  <TicketCard key={ticket.id} ticket={ticket} users={users}
+                    selected={selectedTicket?.id === ticket.id}
+                    onClick={() => setSelectedTicket(ticket)} />
+                ))}
+              </div>
+            )}
           </div>
         )}
-
-        {/* Kanban + détail : panneau flottant */}
-        {!loading && viewMode === 'kanban' && selectedTicket && (
-          <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
-            className="fixed inset-y-0 right-0 w-[480px] bg-white shadow-2xl border-l border-gray-100 z-40 flex flex-col overflow-hidden"
-            style={{ top: 64 }}>
-            <TicketDetail
-              ticket={selectedTicket}
-              onClose={() => setSelectedTicket(null)}
-              onUpdate={handleTicketUpdate}
-              currentUser={currentUser}
-              users={users}
-              history={history}
-            />
-          </motion.div>
-        )}
       </div>
+
+      {/* Drawer détail (slider droit) — commun aux deux vues */}
+      <TicketDrawer
+        ticket={selectedTicket}
+        onClose={() => setSelectedTicket(null)}
+        onUpdate={handleTicketUpdate}
+        currentUser={currentUser}
+        users={users}
+        history={history}
+      />
 
       {/* Modal nouveau ticket */}
       <AnimatePresence>
