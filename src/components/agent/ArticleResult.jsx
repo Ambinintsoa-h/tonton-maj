@@ -59,11 +59,29 @@ export default function ArticleResult() {
   const [diffMode, setDiffMode] = useState(true);
   // Titre éditable de l'article
   const [editedTitle, setEditedTitle] = useState('');
+  // titleDirty = true uniquement si l'utilisateur a tapé dans le champ
+  // → le titre n'est envoyé à WordPress QUE si l'utilisateur l'a modifié
+  const [titleDirty, setTitleDirty]   = useState(false);
+
+  // Extrait le premier H1 d'un HTML brut (même logique qu'Articles.jsx)
+  const extractH1FromHtml = (html) => {
+    if (!html) return '';
+    try {
+      const div = document.createElement('div');
+      div.innerHTML = html;
+      return div.querySelector('h1')?.textContent?.trim() || '';
+    } catch { return ''; }
+  };
+
   useEffect(() => {
-    // Priorité : titre WP réel (via API REST) > titre CQ item > vide
-    // Ne jamais utiliser currentArticle.title qui est le slug d'URL
-    setEditedTitle(wpMcpData?.wpTitle || cqItem?.title || '');
-  }, [wpMcpData?.wpTitle, cqItem?.title]);
+    setTitleDirty(false);
+    // Priorité 1 : titre WP réel (API REST) — source la plus fiable
+    const wpTitle = wpMcpData?.wpTitle || '';
+    if (wpTitle) { setEditedTitle(wpTitle); return; }
+    // Priorité 2 : H1 de l'article original — jamais le slug d'URL
+    const h1 = extractH1FromHtml(agent.originalContent);
+    setEditedTitle(h1 || '');
+  }, [wpMcpData?.wpTitle, agent.originalContent]);
 
   // ── Catégories WordPress ──────────────────────────────────────────────────────
   const [wpCategories, setWpCategories]       = useState([]);
@@ -564,7 +582,7 @@ export default function ArticleResult() {
     try {
       dispatch(updateInHistory({
         id:             agent.currentArticleId,
-        title:          editedTitle || currentArticle?.title || '',
+        title:          editedTitle || extractH1FromHtml(agent.originalContent) || '',
         updatedContent: finalHtml,
         updates:        agent.diff    || [],
         sources:        agent.sources || [],
@@ -816,7 +834,7 @@ export default function ArticleResult() {
       // • Ne jamais changer le titre sauf si l'utilisateur l'a édité manuellement
       // • Ne jamais toucher aux champs SEO (SEOPRESS, Yoast…) — non inclus
       const postData = { content: htmlContent, status: 'publish' };
-      if (editedTitle) postData.title = editedTitle;
+      if (titleDirty && editedTitle) postData.title = editedTitle;
       if (hasFeaturedMedia) postData.featured_media = wpMcpData.featuredMediaId;
       // Catégories et tags — inclus uniquement si l'utilisateur a fait une sélection
       if (selectedCategories.length > 0) postData.categories = selectedCategories;
@@ -1358,7 +1376,7 @@ export default function ArticleResult() {
                   <input
                     type="text"
                     value={editedTitle}
-                    onChange={e => setEditedTitle(e.target.value)}
+                    onChange={e => { setEditedTitle(e.target.value); setTitleDirty(true); }}
                     placeholder="Titre de l'article..."
                     className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black/20 min-w-0"
                   />
