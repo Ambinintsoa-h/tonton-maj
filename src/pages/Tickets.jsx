@@ -531,6 +531,29 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
     setTimeout(() => ta.focus(), 0);
   };
 
+  // Coller une capture d'écran (Ctrl+V) dans le commentaire → ajout aux pièces jointes.
+  // Le texte du commentaire reste brut ; l'image rejoint le pipeline d'upload existant.
+  const handleCommentPaste = (e) => {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageItems = items.filter(it => it.type?.startsWith('image/'));
+    if (imageItems.length === 0) return; // collage texte normal → comportement par défaut
+
+    e.preventDefault(); // évite l'insertion d'un éventuel texte parasite
+    const pasted = [];
+    imageItems.forEach((it, i) => {
+      const blob = it.getAsFile();
+      if (!blob) return;
+      const ext = (blob.type.split('/')[1] || 'png').split(';')[0];
+      // Les captures collées sont des Blob sans nom → on en génère un lisible
+      const name = blob.name || `capture-${Date.now()}${imageItems.length > 1 ? `-${i + 1}` : ''}.${ext}`;
+      pasted.push(new File([blob], name, { type: blob.type }));
+    });
+    if (pasted.length > 0) {
+      setFiles(prev => [...prev, ...pasted]);
+      toast.success(`${pasted.length} capture${pasted.length > 1 ? 's' : ''} ajoutée${pasted.length > 1 ? 's' : ''} aux pièces jointes`);
+    }
+  };
+
   // Abonnement onSnapshot — cache local Firestore = affichage quasi-instantané
   useEffect(() => {
     if (!ticket?.id) return;
@@ -681,7 +704,8 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
               ref={textareaRef}
               value={text}
               onChange={handleTextChange}
-              placeholder="Ajouter un commentaire... @ pour mentionner"
+              onPaste={handleCommentPaste}
+              placeholder="Ajouter un commentaire... @ pour mentionner · Ctrl+V pour coller une capture"
               rows={2}
               className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-200"
               onKeyDown={e => {
@@ -1123,6 +1147,29 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
   const [loading, setLoading] = useState(false);
   const fileRef = useRef();
 
+  // Coller une capture d'écran (Ctrl+V) dans la description → ajout aux pièces jointes.
+  // La description reste du texte brut ; l'image rejoint le pipeline d'upload existant.
+  const handleDescriptionPaste = (e) => {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageItems = items.filter(it => it.type?.startsWith('image/'));
+    if (imageItems.length === 0) return; // collage texte normal → comportement par défaut
+
+    e.preventDefault(); // évite l'insertion d'un éventuel texte parasite
+    const pasted = [];
+    imageItems.forEach((it, i) => {
+      const blob = it.getAsFile();
+      if (!blob) return;
+      const ext = (blob.type.split('/')[1] || 'png').split(';')[0];
+      // Les captures collées sont des Blob sans nom → on en génère un lisible
+      const name = blob.name || `capture-${Date.now()}${imageItems.length > 1 ? `-${i + 1}` : ''}.${ext}`;
+      pasted.push(new File([blob], name, { type: blob.type }));
+    });
+    if (pasted.length > 0) {
+      setFiles(prev => [...prev, ...pasted]);
+      toast.success(`${pasted.length} capture${pasted.length > 1 ? 's' : ''} ajoutée${pasted.length > 1 ? 's' : ''} aux pièces jointes`);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!title.trim()) { toast.error('Le titre est obligatoire'); return; }
     setLoading(true);
@@ -1299,10 +1346,14 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
-              placeholder="Décrivez le problème ou la demande..."
+              onPaste={handleDescriptionPaste}
+              placeholder="Décrivez le problème ou la demande...  (Astuce : collez une capture d'écran avec Ctrl+V)"
               rows={4}
               className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-200"
             />
+            <p className="text-[11px] text-gray-400 mt-1 flex items-center gap-1">
+              <FileImage size={11} /> Collez une capture d'écran directement ici — elle sera ajoutée aux pièces jointes.
+            </p>
           </div>
 
           {/* Pièces jointes */}
