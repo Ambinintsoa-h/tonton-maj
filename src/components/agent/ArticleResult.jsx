@@ -14,7 +14,7 @@ import {
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
 import BubbleToolbar from './BubbleToolbar';
-import { runReviewAgent, generateAltText } from '../../services/agent';
+import { runReviewAgent, generateAltText, generateSeoMeta } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, moveFaqToEnd } from '../../utils/diff';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData } from '../../store/slices/agentSlice';
@@ -63,6 +63,13 @@ export default function ArticleResult() {
   // → le titre n'est envoyé à WordPress QUE si l'utilisateur l'a modifié
   const [titleDirty, setTitleDirty]   = useState(false);
 
+  // ── SEO Meta (Yoast / SEOPress) ───────────────────────────────────────────────
+  const [seoTitle,       setSeoTitle]       = useState('');
+  const [seoDescription, setSeoDescription] = useState('');
+  const [seoGenerating,  setSeoGenerating]  = useState(false);
+  // Ref pour n'auto-générer qu'une seule fois par analyse (évite les re-runs)
+  const seoGeneratedRef = useRef(false);
+
   // Extrait le premier H1 d'un HTML brut (même logique qu'Articles.jsx)
   const extractH1FromHtml = (html) => {
     if (!html) return '';
@@ -82,6 +89,28 @@ export default function ArticleResult() {
     const h1 = extractH1FromHtml(agent.originalContent);
     setEditedTitle(h1 || '');
   }, [wpMcpData?.wpTitle, agent.originalContent]);
+
+  // Reset SEO fields quand on passe à un nouvel article
+  useEffect(() => {
+    seoGeneratedRef.current = false;
+    setSeoTitle('');
+    setSeoDescription('');
+  }, [agent.currentArticleId]);
+
+  // Auto-génération SEO dès que la MAJ est prête (une seule fois par analyse)
+  useEffect(() => {
+    if (!agent.updatedContent || seoGeneratedRef.current) return;
+    seoGeneratedRef.current = true;
+    setSeoGenerating(true);
+    const title = wpMcpData?.wpTitle || extractH1FromHtml(agent.originalContent) || '';
+    generateSeoMeta(agent.updatedContent, title)
+      .then(({ seoTitle: t, seoDescription: d }) => {
+        if (t) setSeoTitle(t);
+        if (d) setSeoDescription(d);
+      })
+      .catch(() => {})
+      .finally(() => setSeoGenerating(false));
+  }, [agent.updatedContent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Catégories WordPress ──────────────────────────────────────────────────────
   const [wpCategories, setWpCategories]       = useState([]);
@@ -844,8 +873,10 @@ export default function ArticleResult() {
       const postData = { content: htmlContent, status: 'publish' };
       if (titleDirty && editedTitle) postData.title = editedTitle;
       if (hasFeaturedMedia) postData.featured_media = wpMcpData.featuredMediaId;
-      // Catégories et tags — inclus uniquement si l'utilisateur a fait une sélection
+      // Catégories
       if (selectedCategories.length > 0) postData.categories = selectedCategories;
+      // SEO Meta — envoyé si au moins un champ est renseigné
+      if (seoTitle || seoDescription) postData.seoMeta = { seoTitle, seoDescription };
       result = await updatePost(
         site,
         wpFoundPost.id,
@@ -1442,6 +1473,65 @@ export default function ArticleResult() {
                         <button onClick={() => setShowImgReplace(false)} disabled={uploadingImg} className="shrink-0 p-1.5 text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-30"><X size={13} /></button>
                       </>
                     )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* ── SEO Meta — Yoast SEO & SEOPress ─────────────────────────────── */}
+              <AnimatePresence>
+                {hasContent && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
+                    className="flex flex-col gap-2.5 bg-white border border-gray-200 rounded-xl px-4 py-3"
+                  >
+                    {/* En-tête */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-base shrink-0">🔍</span>
+                      <span className="text-[11px] font-medium text-gray-500 shrink-0">SEO Meta</span>
+                      {seoGenerating && <Loader size={11} className="animate-spin text-gray-400 ml-1" />}
+                      {!seoGenerating && (seoTitle || seoDescription) && (
+                        <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                          <Sparkles size={9} /> Généré
+                        </span>
+                      )}
+                      <span className="ml-auto text-[10px] text-gray-400">Yoast SEO &amp; SEOPress</span>
+                    </div>
+
+                    {/* Meta Title */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-medium text-gray-400 w-20 shrink-0">Meta Title</span>
+                      <input
+                        type="text"
+                        value={seoTitle}
+                        onChange={e => setSeoTitle(e.target.value.substring(0, 70))}
+                        placeholder="Titre SEO optimisé (50-60 caractères)..."
+                        className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black/20 min-w-0"
+                      />
+                      <span className={`text-[10px] font-semibold shrink-0 w-10 text-right tabular-nums ${
+                        seoTitle.length === 0 ? 'text-gray-300'
+                        : seoTitle.length < 40 ? 'text-amber-500'
+                        : seoTitle.length <= 60 ? 'text-emerald-600'
+                        : 'text-red-500'
+                      }`}>{seoTitle.length}/60</span>
+                    </div>
+
+                    {/* Meta Description */}
+                    <div className="flex items-start gap-2">
+                      <span className="text-[10px] font-medium text-gray-400 w-20 shrink-0 pt-2">Meta Desc</span>
+                      <textarea
+                        value={seoDescription}
+                        onChange={e => setSeoDescription(e.target.value.substring(0, 165))}
+                        placeholder="Description SEO engageante (140-155 caractères)..."
+                        rows={2}
+                        className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black/20 min-w-0 resize-none"
+                      />
+                      <span className={`text-[10px] font-semibold shrink-0 w-10 text-right tabular-nums pt-2 ${
+                        seoDescription.length === 0 ? 'text-gray-300'
+                        : seoDescription.length < 120 ? 'text-amber-500'
+                        : seoDescription.length <= 155 ? 'text-emerald-600'
+                        : 'text-red-500'
+                      }`}>{seoDescription.length}/155</span>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>

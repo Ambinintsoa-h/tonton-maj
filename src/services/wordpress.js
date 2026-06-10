@@ -85,9 +85,21 @@ export const updatePost = async (site, postId, postData, postType = 'posts') => 
   if (postData.title !== undefined) body.title = postData.title;
   // Image à la une MCP
   if (postData.featured_media !== undefined) body.featured_media = postData.featured_media;
-  // Sécurité : jamais d'auteur ni de champs SEO dans une mise à jour
+  // Catégories
+  if (postData.categories?.length) body.categories = postData.categories;
+  // SEO Meta (Yoast SEO + SEOPress) — WP ignore silencieusement les champs du plugin absent
+  if (postData.seoMeta?.seoTitle || postData.seoMeta?.seoDescription) {
+    body.meta = {
+      // Yoast SEO
+      _yoast_wpseo_title:    postData.seoMeta.seoTitle       || '',
+      _yoast_wpseo_metadesc: postData.seoMeta.seoDescription || '',
+      // SEOPress
+      _seopress_titles_title: postData.seoMeta.seoTitle       || '',
+      _seopress_titles_desc:  postData.seoMeta.seoDescription || '',
+    };
+  }
+  // Sécurité : jamais d'auteur dans une mise à jour
   delete body.author;
-  delete body.meta;
 
   const result = await wpRequest(site, 'POST', `/wp-json/wp/v2/${type}/${postId}`, body);
   if (!result.success) return result;
