@@ -8,7 +8,7 @@ import {
   CheckCircle2, RefreshCw, ArrowUpRight, MessageSquare,
   Search, User, Calendar, Link2, FileText, Film, FileImage, File,
   ZoomIn, ZoomOut, Download, RotateCcw, ChevronLeft, ChevronRight,
-  ChevronDown, AtSign,
+  ChevronDown, AtSign, LayoutList, LayoutGrid, FlaskConical, MoveRight,
 } from 'lucide-react';
 import { addTicket, updateTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
@@ -36,11 +36,29 @@ const PRIORITIES = {
 };
 
 const STATUSES = {
-  open:        { label: 'Ouvert',   color: 'bg-yellow-100 text-yellow-700 border border-yellow-200' },
-  in_progress: { label: 'En cours', color: 'bg-blue-100 text-blue-700 border border-blue-200' },
-  resolved:    { label: 'Résolu',   color: 'bg-green-100 text-green-700 border border-green-200' },
-  closed:      { label: 'Fermé',    color: 'bg-gray-100 text-gray-500 border border-gray-200' },
+  open:        { label: 'Ouvert',    color: 'bg-yellow-100 text-yellow-700 border border-yellow-200', dot: 'bg-yellow-400' },
+  in_progress: { label: 'En cours',  color: 'bg-blue-100 text-blue-700 border border-blue-200',       dot: 'bg-blue-500'   },
+  testing:     { label: 'À tester',  color: 'bg-purple-100 text-purple-700 border border-purple-200', dot: 'bg-purple-500' },
+  resolved:    { label: 'Résolu',    color: 'bg-green-100 text-green-700 border border-green-200',    dot: 'bg-green-500'  },
+  closed:      { label: 'Clôturé',   color: 'bg-gray-100 text-gray-500 border border-gray-200',       dot: 'bg-gray-400'   },
 };
+
+// Colonnes Kanban : statut → index colonne
+const KANBAN_COLS = [
+  { key: 'open',        label: 'Ouvert',   color: 'border-yellow-300 bg-yellow-50/60', header: 'bg-yellow-100 text-yellow-800'  },
+  { key: 'in_progress', label: 'En cours', color: 'border-blue-300 bg-blue-50/60',     header: 'bg-blue-100 text-blue-800'     },
+  { key: 'testing',     label: 'À tester', color: 'border-purple-300 bg-purple-50/60', header: 'bg-purple-100 text-purple-800' },
+  { key: 'closed',      label: 'Clôturé',  color: 'border-gray-200 bg-gray-50/40',     header: 'bg-gray-100 text-gray-600'     },
+];
+
+// ─── Suivi des commentaires lus (localStorage) ────────────────────────────────
+const SEEN_KEY = 'tonton_tickets_seen';
+const getSeenCounts = () => { try { return JSON.parse(localStorage.getItem(SEEN_KEY) || '{}'); } catch { return {}; } };
+const markTicketSeen = (ticketId, count) => {
+  const s = getSeenCounts(); s[ticketId] = count;
+  localStorage.setItem(SEEN_KEY, JSON.stringify(s));
+};
+const ticketHasUnread = (ticket) => (ticket.commentCount || 0) > (getSeenCounts()[ticket.id] || 0);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -67,51 +85,79 @@ function formatDate(ts) {
 
 // ─── Composant carte ticket ───────────────────────────────────────────────────
 
-function TicketCard({ ticket, selected, onClick }) {
-  const prio = PRIORITIES[ticket.priority] || PRIORITIES.normale;
-  const status = STATUSES[ticket.status] || STATUSES.open;
-  const cat = CATEGORIES[ticket.category] || CATEGORIES.other;
+function TicketCard({ ticket, selected, onClick, users }) {
+  const prio    = PRIORITIES[ticket.priority] || PRIORITIES.normale;
+  const status  = STATUSES[ticket.status]     || STATUSES.open;
+  const cat     = CATEGORIES[ticket.category] || CATEGORIES.other;
+  const unread  = ticketHasUnread(ticket);
+  const assignee = users?.find(u => u.id === ticket.assigneeId || u.uid === ticket.assigneeId);
+
   return (
     <motion.div
-      whileHover={{ x: 2 }}
+      whileHover={{ y: -1, shadow: 'lg' }}
       whileTap={{ scale: 0.99 }}
       onClick={onClick}
-      className={`cursor-pointer rounded-xl border-l-4 p-3 mb-2 transition-all ${prio.border} ${
+      className={`cursor-pointer rounded-2xl border-l-[3px] p-3.5 transition-all ${prio.border} ${
         selected
-          ? 'bg-blue-50 shadow-md border-r border-t border-b border-blue-100'
-          : 'bg-white shadow-sm border-r border-t border-b border-gray-100 hover:shadow-md'
+          ? 'bg-blue-50/80 shadow-md ring-1 ring-blue-200'
+          : 'bg-white/90 shadow-sm hover:shadow-md border border-gray-100/80 border-l-[3px]'
       }`}
+      style={{ backdropFilter: 'blur(8px)' }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <p className="font-semibold text-gray-900 text-sm leading-snug line-clamp-2 flex-1">{ticket.title}</p>
-        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${status.color}`}>
+      {/* Ligne 1 : titre + badge non-lu + statut */}
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            {unread && (
+              <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 animate-pulse" title="Nouveau(x) commentaire(s)" />
+            )}
+            <p className="font-semibold text-gray-900 text-sm leading-snug line-clamp-2">{ticket.title}</p>
+          </div>
+        </div>
+        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${status.color}`}>
           {status.label}
         </span>
       </div>
-      <div className="flex flex-wrap gap-1 mt-2">
-        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
-        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${prio.color}`}>{prio.label}</span>
-        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">
-          L{ticket.level || 1}
-        </span>
+
+      {/* Ligne 2 : catégorie + priorité + niveau */}
+      <div className="flex items-center gap-1 mt-2 flex-wrap">
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${prio.color}`}>{prio.label}</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">L{ticket.level || 1}</span>
       </div>
-      <div className="flex items-center justify-between mt-2">
-        <div className="flex items-center gap-1 text-gray-400">
-          <User size={11} />
-          <span className="text-[11px]">{ticket.creatorUsername || '—'}</span>
-          <span className="text-[11px] ml-1">{timeAgo(ticket.createdAt)}</span>
+
+      {/* Ligne 3 : créateur + date | assigné + compteurs */}
+      <div className="flex items-center justify-between mt-2.5">
+        <div className="flex items-center gap-1 text-gray-400 min-w-0">
+          <User size={10} className="flex-shrink-0" />
+          <span className="text-[11px] truncate max-w-[90px]">{ticket.creatorUsername || '—'}</span>
+          <span className="text-[10px] text-gray-300">·</span>
+          <span className="text-[11px] flex-shrink-0">{timeAgo(ticket.createdAt)}</span>
         </div>
-        <div className="flex items-center gap-2 text-gray-400">
-          {ticket.commentCount > 0 && (
-            <span className="flex items-center gap-0.5 text-[11px]">
-              <MessageSquare size={11} />{ticket.commentCount}
-            </span>
+
+        <div className="flex items-center gap-2">
+          {/* Assigné */}
+          {ticket.assigneeUsername && (
+            <div className="flex items-center gap-1" title={`Assigné : ${ticket.assigneeUsername}`}>
+              <AccountAvatar
+                avatarUrl={assignee?.avatarUrl} prenom={assignee?.prenom}
+                nom={assignee?.nom} username={ticket.assigneeUsername} size={18}
+              />
+            </div>
           )}
-          {ticket.attachments?.length > 0 && (
-            <span className="flex items-center gap-0.5 text-[11px]">
-              <Paperclip size={11} />{ticket.attachments.length}
-            </span>
-          )}
+          {/* Compteurs */}
+          <div className="flex items-center gap-1.5 text-gray-400">
+            {(ticket.commentCount > 0) && (
+              <span className={`flex items-center gap-0.5 text-[11px] ${unread ? 'text-blue-500 font-semibold' : ''}`}>
+                <MessageSquare size={10} />{ticket.commentCount}
+              </span>
+            )}
+            {(ticket.attachments?.length > 0) && (
+              <span className="flex items-center gap-0.5 text-[11px]">
+                <Paperclip size={10} />{ticket.attachments.length}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </motion.div>
@@ -794,6 +840,23 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
     });
   };
 
+  // Marquer le ticket comme lu à l'ouverture
+  useEffect(() => {
+    if (ticket?.id) markTicketSeen(ticket.id, ticket.commentCount || 0);
+  }, [ticket?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleMoveToTesting = async () => {
+    await doAction({ status: 'testing' }, 'Ticket passé en phase de test', async () => {
+      if (ticket.creatorId) {
+        await createNotification({
+          toUserId: ticket.creatorId, fromUsername: currentUser.username,
+          type: 'status_change', ticketId: ticket.id, ticketTitle: ticket.title,
+          message: `Votre ticket "${ticket.title}" est en cours de test`,
+        });
+      }
+    });
+  };
+
   const handleAssign = async (user) => {
     setAssignOpen(false);
     const updates = {
@@ -920,21 +983,31 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
         {/* Boutons d'action */}
         {(() => {
           const buttons = [];
-          if ((role === 'manager' || role === 'super_admin' || role === 'support') && ticket.status === 'open' && !ticket.assigneeId) {
-            buttons.push(<button key="take" onClick={handleTakeCharge} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50">Prendre en charge</button>);
+          const isStaff = role === 'manager' || role === 'super_admin' || role === 'support';
+          // Prendre en charge
+          if (isStaff && ticket.status === 'open' && !ticket.assigneeId) {
+            buttons.push(<button key="take" onClick={handleTakeCharge} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 flex items-center gap-1"><MoveRight size={12} />Prendre en charge</button>);
           }
+          // En cours → À tester
+          if (isStaff && ticket.status === 'in_progress') {
+            buttons.push(
+              <button key="test" onClick={handleMoveToTesting} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-purple-500 text-white rounded-lg hover:bg-purple-600 disabled:opacity-50 flex items-center gap-1"><FlaskConical size={12} />À tester</button>
+            );
+          }
+          // En cours L1 → Escalader (manager / support)
           if ((role === 'manager' || role === 'support') && ticket.status === 'in_progress' && ticket.level === 1) {
             buttons.push(
-              <button key="resolve" onClick={handleResolve} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"><CheckCircle2 size={12} />Résolu</button>,
               <button key="escalate" onClick={handleEscalate} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-1"><ArrowUpRight size={12} />Escalader L2</button>
             );
           }
-          if (role === 'super_admin' && (ticket.status === 'open' || ticket.status === 'in_progress')) {
+          // À tester ou super_admin → Résolu + Fermer
+          if (isStaff && (ticket.status === 'testing' || (role === 'super_admin' && ['open', 'in_progress'].includes(ticket.status)))) {
             buttons.push(
               <button key="resolve" onClick={handleResolve} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"><CheckCircle2 size={12} />Résolu</button>,
-              <button key="close" onClick={handleClose} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-gray-500 text-white rounded-lg hover:bg-gray-600 disabled:opacity-50">Fermer</button>
+              <button key="close" onClick={handleClose} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-gray-500 text-white rounded-lg hover:bg-gray-600 disabled:opacity-50">Clôturer</button>
             );
           }
+          // Créateur → confirmer ou rouvrir
           if (isCreator && ticket.status === 'resolved') {
             buttons.push(
               <button key="confirm" onClick={handleConfirmResolved} disabled={actionLoading} className="px-3 py-1 text-xs font-semibold bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"><CheckCircle2 size={12} />Confirmer résolu</button>,
@@ -1225,6 +1298,133 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
   );
 }
 
+// ─── Carte Kanban (compacte) ──────────────────────────────────────────────────
+
+function KanbanCard({ ticket, onOpen, onMove, users, isStaff }) {
+  const prio   = PRIORITIES[ticket.priority] || PRIORITIES.normale;
+  const cat    = CATEGORIES[ticket.category] || CATEGORIES.other;
+  const unread = ticketHasUnread(ticket);
+  const assignee = users?.find(u => u.id === ticket.assigneeId || u.uid === ticket.assigneeId);
+
+  // Transitions disponibles depuis ce statut
+  const nextMoves = {
+    open:        isStaff ? [{ key: 'in_progress', label: 'En cours', icon: MoveRight }] : [],
+    in_progress: isStaff ? [
+      { key: 'testing',  label: 'À tester',  icon: FlaskConical },
+      { key: 'closed',   label: 'Clôturer',  icon: X },
+    ] : [],
+    testing:     isStaff ? [
+      { key: 'resolved', label: 'Résolu',    icon: CheckCircle2 },
+      { key: 'in_progress', label: 'Retour en cours', icon: RefreshCw },
+    ] : [],
+    resolved:    isStaff ? [{ key: 'closed', label: 'Clôturer', icon: X }] : [],
+    closed:      isStaff ? [{ key: 'open',   label: 'Rouvrir',  icon: RefreshCw }] : [],
+  };
+  const moves = nextMoves[ticket.status] || [];
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`rounded-xl bg-white border-l-[3px] p-3 shadow-sm hover:shadow-md cursor-pointer transition-all ${prio.border}`}
+      onClick={() => onOpen(ticket)}
+    >
+      {/* Titre + unread */}
+      <div className="flex items-start gap-1.5 mb-2">
+        {unread && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1 animate-pulse" />}
+        <p className="text-xs font-semibold text-gray-900 leading-snug line-clamp-2 flex-1">{ticket.title}</p>
+      </div>
+
+      {/* Badges */}
+      <div className="flex flex-wrap gap-1 mb-2.5">
+        <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
+        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${prio.color}`}>{prio.label}</span>
+      </div>
+
+      {/* Footer : créateur + assigné + compteurs */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <AccountAvatar avatarUrl={undefined} prenom={undefined} nom={undefined}
+            username={ticket.creatorUsername} size={16} />
+          <span className="text-[10px] text-gray-400">{timeAgo(ticket.createdAt)}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {ticket.assigneeUsername && (
+            <AccountAvatar avatarUrl={assignee?.avatarUrl} prenom={assignee?.prenom}
+              nom={assignee?.nom} username={ticket.assigneeUsername} size={18} />
+          )}
+          {(ticket.commentCount > 0) && (
+            <span className={`flex items-center gap-0.5 text-[10px] ${unread ? 'text-blue-500 font-bold' : 'text-gray-400'}`}>
+              <MessageSquare size={9} />{ticket.commentCount}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Boutons de déplacement rapide (stop propagation → pas d'ouverture) */}
+      {moves.length > 0 && (
+        <div className="flex gap-1 mt-2.5 pt-2 border-t border-gray-100" onClick={e => e.stopPropagation()}>
+          {moves.map(m => {
+            const Icon = m.icon;
+            return (
+              <button key={m.key} onClick={() => onMove(ticket, m.key)}
+                className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-gray-100 hover:bg-blue-100 hover:text-blue-700 text-gray-500 transition-colors font-medium">
+                <Icon size={9} />{m.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+// ─── Vue Kanban ───────────────────────────────────────────────────────────────
+
+function KanbanView({ tickets, onOpen, onMove, users, isStaff, search, filterCategory, filterPriority }) {
+  const filtered = tickets.filter(t => {
+    if (filterCategory !== 'all' && t.category !== filterCategory) return false;
+    if (filterPriority  !== 'all' && t.priority  !== filterPriority)  return false;
+    if (search && !t.title?.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  return (
+    <div className="flex gap-3 h-full overflow-x-auto pb-2">
+      {KANBAN_COLS.map(col => {
+        // La colonne "Clôturé" regroupe resolved + closed
+        const colTickets = filtered
+          .filter(t => col.key === 'closed' ? (t.status === 'closed' || t.status === 'resolved') : t.status === col.key)
+          .sort((a, b) => {
+            const po = { urgent: 0, haute: 1, normale: 2, basse: 3 };
+            return (po[a.priority] ?? 2) - (po[b.priority] ?? 2);
+          });
+
+        return (
+          <div key={col.key} className={`flex-shrink-0 w-64 flex flex-col rounded-2xl border ${col.color} overflow-hidden`}>
+            {/* Header colonne */}
+            <div className={`flex items-center justify-between px-3 py-2.5 ${col.header}`}>
+              <span className="text-xs font-bold">{col.label}</span>
+              <span className="text-xs font-bold bg-white/60 px-1.5 py-0.5 rounded-full">{colTickets.length}</span>
+            </div>
+            {/* Cartes */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-2">
+              {colTickets.length === 0 && (
+                <div className="text-center py-8 text-xs text-gray-400 opacity-60">Aucun ticket</div>
+              )}
+              {colTickets.map(ticket => (
+                <KanbanCard key={ticket.id} ticket={ticket} onOpen={onOpen} onMove={onMove}
+                  users={users} isStaff={isStaff} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Ordre de priorité pour le tri ───────────────────────────────────────────
 const PRIORITY_ORDER = { urgent: 0, haute: 1, normale: 2, basse: 3 };
 
@@ -1247,6 +1447,7 @@ export default function Tickets() {
   const [filterPriority, setFilterPriority] = useState('all');
   const [activeTab, setActiveTab] = useState('actifs');
   const [sortBy, setSortBy] = useState('date_desc');
+  const [viewMode, setViewMode] = useState('list'); // 'list' | 'kanban'
 
   const currentUser = { uid: auth.uid, username: auth.username, role: auth.role };
 
@@ -1317,6 +1518,7 @@ export default function Tickets() {
   const stats = {
     open:        activeTickets.filter(t => t.status === 'open').length,
     in_progress: activeTickets.filter(t => t.status === 'in_progress').length,
+    testing:     activeTickets.filter(t => t.status === 'testing').length,
     resolved:    activeTickets.filter(t => t.status === 'resolved').length,
   };
 
@@ -1329,14 +1531,30 @@ export default function Tickets() {
     setSelectedTicket(updated);
   };
 
-  // Le super_admin résout les tickets — il n'en crée pas
-  const canCreate = auth.role === 'cq_ia' || auth.role === 'manager';
+  const isStaff = ['super_admin', 'manager', 'support'].includes(auth.role);
+  const canCreate = auth.role === 'cq_ia' || auth.role === 'manager' || auth.role === 'support';
+
+  // Déplacement rapide depuis la vue Kanban
+  const handleQuickMove = async (ticket, newStatus) => {
+    try {
+      const updates = { status: newStatus };
+      if (newStatus === 'in_progress' && !ticket.assigneeId) {
+        updates.assigneeId = auth.uid || auth.username;
+        updates.assigneeUsername = auth.username;
+      }
+      await updateTicketDoc(ticket.id, updates);
+      dispatch(updateTicket({ id: ticket.id, ...updates }));
+      toast.success(`Ticket déplacé : ${STATUSES[newStatus]?.label || newStatus}`);
+    } catch {
+      toast.error('Erreur lors du déplacement');
+    }
+  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden gap-3">
 
-      {/* ── LIGNE 1 : Titre + onglets + bouton ── */}
-      <div className="flex-shrink-0 flex items-center gap-3">
+      {/* ── LIGNE 1 : Titre + onglets + toggle vue + bouton ── */}
+      <div className="flex-shrink-0 flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-2 flex-shrink-0">
           <Bug size={20} className="text-blue-500" />
           <h1 className="text-xl font-bold text-gray-900">Tickets</h1>
@@ -1344,33 +1562,39 @@ export default function Tickets() {
 
         {/* Onglets Actifs / Historique */}
         <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1 flex-shrink-0">
-          <button
-            onClick={() => setActiveTab('actifs')}
-            className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
-              activeTab === 'actifs' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Actifs
-            {activeTickets.length > 0 && (
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
-                activeTab === 'actifs' ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-500'
-              }`}>{activeTickets.length}</span>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('historique')}
-            className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
-              activeTab === 'historique' ? 'bg-white text-gray-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Historique
-            {closedTickets.length > 0 && (
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
-                activeTab === 'historique' ? 'bg-gray-100 text-gray-600' : 'bg-gray-200 text-gray-500'
-              }`}>{closedTickets.length}</span>
-            )}
-          </button>
+          {[
+            { key: 'actifs',     label: 'Actifs',     count: activeTickets.length },
+            { key: 'historique', label: 'Historique', count: closedTickets.length },
+          ].map(tab => (
+            <button key={tab.key} onClick={() => { setActiveTab(tab.key); if (tab.key === 'historique') setViewMode('list'); }}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+                activeTab === tab.key ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}>
+              {tab.label}
+              {tab.count > 0 && (
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
+                  activeTab === tab.key ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-500'
+                }`}>{tab.count}</span>
+              )}
+            </button>
+          ))}
         </div>
+
+        {/* Toggle Liste / Kanban (actifs seulement) */}
+        {activeTab === 'actifs' && (
+          <div className="flex items-center gap-0.5 bg-gray-100 rounded-xl p-1 flex-shrink-0">
+            <button onClick={() => setViewMode('list')}
+              className={`p-1.5 rounded-lg transition-all ${viewMode === 'list' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+              title="Vue liste">
+              <LayoutList size={14} />
+            </button>
+            <button onClick={() => setViewMode('kanban')}
+              className={`p-1.5 rounded-lg transition-all ${viewMode === 'kanban' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+              title="Vue Kanban">
+              <LayoutGrid size={14} />
+            </button>
+          </div>
+        )}
 
         <div className="flex-1" />
 
@@ -1382,13 +1606,14 @@ export default function Tickets() {
         )}
       </div>
 
-      {/* ── LIGNE 2 : Stats pills (actifs) + Filtres + Tri ── */}
+      {/* ── LIGNE 2 : Stats pills (actifs, liste seulement) + Filtres + Tri ── */}
       <div className="flex-shrink-0 flex items-center gap-2 flex-wrap">
-        {/* Stats pills — uniquement pour l'onglet Actifs */}
-        {activeTab === 'actifs' && [
-          { key: 'open',        label: 'Ouverts',  color: 'bg-yellow-50 text-yellow-700 border-yellow-200', count: stats.open },
-          { key: 'in_progress', label: 'En cours', color: 'bg-blue-50 text-blue-700 border-blue-200',       count: stats.in_progress },
-          { key: 'resolved',    label: 'Résolus',  color: 'bg-green-50 text-green-700 border-green-200',    count: stats.resolved },
+        {/* Stats pills */}
+        {activeTab === 'actifs' && viewMode === 'list' && [
+          { key: 'open',        label: 'Ouverts',   color: 'bg-yellow-50 text-yellow-700 border-yellow-200',   count: stats.open        },
+          { key: 'in_progress', label: 'En cours',  color: 'bg-blue-50 text-blue-700 border-blue-200',         count: stats.in_progress },
+          { key: 'testing',     label: 'À tester',  color: 'bg-purple-50 text-purple-700 border-purple-200',   count: stats.testing     },
+          { key: 'resolved',    label: 'Résolus',   color: 'bg-green-50 text-green-700 border-green-200',      count: stats.resolved    },
         ].map(({ key, label, color, count }) => (
           <button key={key} onClick={() => setFilterStatus(filterStatus === key ? 'all' : key)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold transition-all ${color} ${filterStatus === key ? 'shadow-sm ring-1 ring-current ring-offset-1' : 'opacity-70 hover:opacity-100'}`}>
@@ -1428,51 +1653,86 @@ export default function Tickets() {
         </select>
       </div>
 
-      {/* ── LIGNE 3 : Contenu split (prend tout l'espace restant) ── */}
-      <div className="flex-1 min-h-0 flex gap-4 overflow-hidden">
+      {/* ── LIGNE 3 : Contenu (prend tout l'espace restant) ── */}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {loading && (
+          <div className="flex items-center justify-center py-12 text-gray-400 h-full">
+            <RefreshCw size={18} className="animate-spin mr-2" /> Chargement...
+          </div>
+        )}
 
-        {/* Liste des tickets */}
-        <div className={`flex flex-col gap-2 overflow-y-auto pr-1 transition-all flex-shrink-0 ${selectedTicket ? 'w-72' : 'w-full'}`}>
-          {loading && (
-            <div className="flex items-center justify-center py-12 text-gray-400">
-              <RefreshCw size={18} className="animate-spin mr-2" /> Chargement...
-            </div>
-          )}
-          {!loading && sorted.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-              <Bug size={32} className="mb-3 opacity-30" />
-              <p className="text-sm">{activeTab === 'historique' ? 'Aucun ticket fermé' : 'Aucun ticket trouvé'}</p>
-            </div>
-          )}
-          {!loading && sorted.map(ticket => (
-            <TicketCard key={ticket.id} ticket={ticket}
-              selected={selectedTicket?.id === ticket.id}
-              onClick={() => setSelectedTicket(ticket)} />
-          ))}
-        </div>
+        {/* ── VUE KANBAN ── */}
+        {!loading && viewMode === 'kanban' && activeTab === 'actifs' && (
+          <KanbanView
+            tickets={activeTickets}
+            onOpen={t => setSelectedTicket(t)}
+            onMove={handleQuickMove}
+            users={users}
+            isStaff={isStaff}
+            search={search}
+            filterCategory={filterCategory}
+            filterPriority={filterPriority}
+          />
+        )}
 
-        {/* Panneau détail */}
-        <AnimatePresence>
-          {selectedTicket ? (
-            <div className="flex-1 min-w-0 bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-              <TicketDetail
-                ticket={selectedTicket}
-                onClose={() => setSelectedTicket(null)}
-                onUpdate={handleTicketUpdate}
-                currentUser={currentUser}
-                users={users}
-                history={history}
-              />
+        {/* ── VUE LISTE ── */}
+        {!loading && viewMode === 'list' && (
+          <div className="flex gap-4 h-full overflow-hidden">
+            {/* Liste */}
+            <div className={`flex flex-col gap-2 overflow-y-auto pr-1 transition-all flex-shrink-0 ${selectedTicket ? 'w-72' : 'w-full'}`}>
+              {sorted.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+                  <Bug size={32} className="mb-3 opacity-30" />
+                  <p className="text-sm">{activeTab === 'historique' ? 'Aucun ticket fermé' : 'Aucun ticket trouvé'}</p>
+                </div>
+              )}
+              {sorted.map(ticket => (
+                <TicketCard key={ticket.id} ticket={ticket} users={users}
+                  selected={selectedTicket?.id === ticket.id}
+                  onClick={() => setSelectedTicket(ticket)} />
+              ))}
             </div>
-          ) : (
-            !loading && tickets.length > 0 && (
-              <div className="flex-1 flex flex-col items-center justify-center text-gray-300 gap-3">
-                <MessageSquare size={40} className="opacity-30" />
-                <p className="text-sm">Sélectionnez un ticket pour voir les détails</p>
-              </div>
-            )
-          )}
-        </AnimatePresence>
+
+            {/* Panneau détail */}
+            <AnimatePresence>
+              {selectedTicket ? (
+                <div className="flex-1 min-w-0 bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                  <TicketDetail
+                    ticket={selectedTicket}
+                    onClose={() => setSelectedTicket(null)}
+                    onUpdate={handleTicketUpdate}
+                    currentUser={currentUser}
+                    users={users}
+                    history={history}
+                  />
+                </div>
+              ) : (
+                sorted.length > 0 && (
+                  <div className="flex-1 flex flex-col items-center justify-center text-gray-300 gap-3">
+                    <MessageSquare size={40} className="opacity-30" />
+                    <p className="text-sm">Sélectionnez un ticket pour voir les détails</p>
+                  </div>
+                )
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+
+        {/* Kanban + détail : panneau flottant */}
+        {!loading && viewMode === 'kanban' && selectedTicket && (
+          <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
+            className="fixed inset-y-0 right-0 w-[480px] bg-white shadow-2xl border-l border-gray-100 z-40 flex flex-col overflow-hidden"
+            style={{ top: 64 }}>
+            <TicketDetail
+              ticket={selectedTicket}
+              onClose={() => setSelectedTicket(null)}
+              onUpdate={handleTicketUpdate}
+              currentUser={currentUser}
+              users={users}
+              history={history}
+            />
+          </motion.div>
+        )}
       </div>
 
       {/* Modal nouveau ticket */}
