@@ -106,17 +106,7 @@ function TicketCard({ ticket, selected, onClick, users, canDelete, onDelete }) {
       }`}
       style={{ backdropFilter: 'blur(8px)' }}
     >
-      {/* Bouton suppression — visible au survol si autorisé */}
-      {canDelete && (
-        <button
-          onClick={e => { e.stopPropagation(); onDelete(ticket.id, e); }}
-          className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all z-10"
-          title="Supprimer le ticket"
-        >
-          <Trash2 size={13} />
-        </button>
-      )}
-      {/* Ligne 1 : titre + badge non-lu + statut */}
+      {/* Ligne 1 : titre + badge non-lu + bouton suppression + statut */}
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
@@ -126,6 +116,15 @@ function TicketCard({ ticket, selected, onClick, users, canDelete, onDelete }) {
             <p className="font-semibold text-gray-900 text-sm leading-snug line-clamp-2">{ticket.title}</p>
           </div>
         </div>
+        {canDelete && (
+          <button
+            onClick={e => { e.stopPropagation(); onDelete(ticket.id, e); }}
+            className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all"
+            title="Supprimer le ticket"
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${status.color}`}>
           {status.label}
         </span>
@@ -1379,17 +1378,17 @@ function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, o
         isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md hover:-translate-y-0.5'
       } ${selected ? 'ring-2 ring-blue-300' : ''} ${isStaff ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
     >
-      {/* Poignée de drag (visible au survol pour le staff) */}
+      {/* Poignée de drag (visible au survol pour le staff, masquée si bouton suppression présent) */}
       {isStaff && (
         <div className="absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-40 transition-opacity pointer-events-none">
           <GripVertical size={13} className="text-gray-400" />
         </div>
       )}
-      {/* Bouton suppression */}
+      {/* Bouton suppression — recouvre la poignée au survol grâce à z-20 */}
       {canDelete && (
         <button
           onClick={e => { e.stopPropagation(); onDelete(ticket.id, e); }}
-          className="absolute right-1.5 bottom-1.5 opacity-0 group-hover:opacity-100 p-1 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all z-10"
+          className="absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 p-1 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all z-20"
           title="Supprimer"
         >
           <Trash2 size={11} />
