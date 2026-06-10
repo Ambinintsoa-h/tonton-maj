@@ -13,7 +13,7 @@ import { saveArticle, initArticleSeoTracking, saveSeoSnapshot } from '../service
 import tracker from '../services/activityTracker';
 import AgentThinking from '../components/agent/AgentThinking';
 import ArticleResult from '../components/agent/ArticleResult';
-import { applyAllDiffs } from '../utils/diff';
+import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
 
 const TAB_URL = 'url';
 const TAB_TEXT = 'text';
@@ -152,7 +152,8 @@ export default function Articles() {
       //   - Texte brut de Jina / coller manuel → conversion pour afficher les sauts de ligne
       //   - HTML pauvre (Readability sans <p>) → conversion pour éviter le mur de texte
       const hasBlockStructure = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(rawHtml);
-      const updatedHtml = hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>');
+      const baseHtml    = hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>');
+      const updatedHtml = moveFaqToEnd(baseHtml);
 
       const appliedUpdates = allUpdatesWithStatus.filter(u => u.applied);
       dispatch(setUpdatedContent(updatedHtml));
