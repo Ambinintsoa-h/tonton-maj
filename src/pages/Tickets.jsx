@@ -189,6 +189,67 @@ const fmtSize = (bytes) => {
 const isImage = (type) => type?.startsWith('image/');
 const isVideo = (type) => type?.startsWith('video/');
 
+// ── Extraction des images d'un événement de collage (capture d'écran Ctrl+V) ──
+// Robuste : lit d'abord clipboardData.items (kind=file → getAsFile), puis se
+// rabat sur clipboardData.files. Les captures collées sont des Blob sans nom →
+// on génère un nom lisible avec la bonne extension.
+const extractPastedImageFiles = (e) => {
+  const dt = e.clipboardData || e.nativeEvent?.clipboardData;
+  if (!dt) return [];
+  const out = [];
+
+  // 1) DataTransferItemList — cas des captures d'écran (Win+Maj+S, Impr.écran)
+  for (const it of Array.from(dt.items || [])) {
+    if (it.kind === 'file' && it.type && it.type.startsWith('image/')) {
+      const blob = it.getAsFile();
+      if (blob) out.push(blob);
+    }
+  }
+  // 2) Fallback FileList — certains navigateurs n'exposent que dt.files
+  if (out.length === 0) {
+    for (const f of Array.from(dt.files || [])) {
+      if (f.type && f.type.startsWith('image/')) out.push(f);
+    }
+  }
+
+  // Normaliser en File avec un nom exploitable côté serveur
+  return out.map((blob, i) => {
+    if (blob.name && /\.[a-z0-9]+$/i.test(blob.name)) return blob; // déjà nommé
+    const ext = (blob.type.split('/')[1] || 'png').split(';')[0];
+    const name = `capture-${Date.now()}${out.length > 1 ? `-${i + 1}` : ''}.${ext}`;
+    return new File([blob], name, { type: blob.type || 'image/png' });
+  });
+};
+
+// ── Vignette d'aperçu d'un fichier image local (avant upload) ─────────────────
+// Crée/révoque proprement un object URL pour éviter les fuites mémoire.
+function LocalImagePreview({ file, onRemove }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    if (!file || !file.type?.startsWith('image/')) return undefined;
+    const u = URL.createObjectURL(file);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+
+  if (!url) return null;
+  return (
+    <div className="relative group/preview">
+      <img src={url} alt={file.name} className="h-16 w-16 object-cover rounded-lg border border-gray-200" />
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="absolute -top-1.5 -right-1.5 bg-white border border-gray-200 rounded-full p-0.5 shadow-sm text-gray-400 hover:text-red-500 transition-colors"
+          title="Retirer"
+        >
+          <X size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── Lecture des PJ avec authentification JWT ─────────────────────────────────
 // L'endpoint /api/ticket-attachments requiert un Bearer token → on fetche côté JS
 // et on crée un blob URL pour afficher l'image/vidéo sans exposer l'URL directe.
@@ -534,23 +595,17 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
   // Coller une capture d'écran (Ctrl+V) dans le commentaire → ajout aux pièces jointes.
   // Le texte du commentaire reste brut ; l'image rejoint le pipeline d'upload existant.
   const handleCommentPaste = (e) => {
-    const items = Array.from(e.clipboardData?.items || []);
-    const imageItems = items.filter(it => it.type?.startsWith('image/'));
-    if (imageItems.length === 0) return; // collage texte normal → comportement par défaut
+    const hasImageHint = Array.from(e.clipboardData?.items || []).some(it => it.type?.startsWith('image/'))
+      || Array.from(e.clipboardData?.files || []).some(f => f.type?.startsWith('image/'));
+    if (!hasImageHint) return; // collage de texte normal → comportement par défaut
 
-    e.preventDefault(); // évite l'insertion d'un éventuel texte parasite
-    const pasted = [];
-    imageItems.forEach((it, i) => {
-      const blob = it.getAsFile();
-      if (!blob) return;
-      const ext = (blob.type.split('/')[1] || 'png').split(';')[0];
-      // Les captures collées sont des Blob sans nom → on en génère un lisible
-      const name = blob.name || `capture-${Date.now()}${imageItems.length > 1 ? `-${i + 1}` : ''}.${ext}`;
-      pasted.push(new File([blob], name, { type: blob.type }));
-    });
+    e.preventDefault(); // on gère l'image nous-mêmes
+    const pasted = extractPastedImageFiles(e);
     if (pasted.length > 0) {
       setFiles(prev => [...prev, ...pasted]);
       toast.success(`${pasted.length} capture${pasted.length > 1 ? 's' : ''} ajoutée${pasted.length > 1 ? 's' : ''} aux pièces jointes`);
+    } else {
+      toast.error("Impossible de lire l'image collée — réessayez ou utilisez le bouton de pièce jointe");
     }
   };
 
@@ -714,12 +769,16 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
               }}
             />
             {files.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
+              <div className="flex flex-wrap gap-2 mt-1 items-start">
                 {files.map((f, i) => (
-                  <span key={i} className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
-                    {f.name}
-                    <button onClick={() => setFiles(files.filter((_, j) => j !== i))}><X size={10} /></button>
-                  </span>
+                  isImage(f.type) ? (
+                    <LocalImagePreview key={i} file={f} onRemove={() => setFiles(files.filter((_, j) => j !== i))} />
+                  ) : (
+                    <span key={i} className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      {f.name}
+                      <button onClick={() => setFiles(files.filter((_, j) => j !== i))}><X size={10} /></button>
+                    </span>
+                  )
                 ))}
               </div>
             )}
@@ -1150,23 +1209,17 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
   // Coller une capture d'écran (Ctrl+V) dans la description → ajout aux pièces jointes.
   // La description reste du texte brut ; l'image rejoint le pipeline d'upload existant.
   const handleDescriptionPaste = (e) => {
-    const items = Array.from(e.clipboardData?.items || []);
-    const imageItems = items.filter(it => it.type?.startsWith('image/'));
-    if (imageItems.length === 0) return; // collage texte normal → comportement par défaut
+    const hasImageHint = Array.from(e.clipboardData?.items || []).some(it => it.type?.startsWith('image/'))
+      || Array.from(e.clipboardData?.files || []).some(f => f.type?.startsWith('image/'));
+    if (!hasImageHint) return; // collage de texte normal → comportement par défaut
 
-    e.preventDefault(); // évite l'insertion d'un éventuel texte parasite
-    const pasted = [];
-    imageItems.forEach((it, i) => {
-      const blob = it.getAsFile();
-      if (!blob) return;
-      const ext = (blob.type.split('/')[1] || 'png').split(';')[0];
-      // Les captures collées sont des Blob sans nom → on en génère un lisible
-      const name = blob.name || `capture-${Date.now()}${imageItems.length > 1 ? `-${i + 1}` : ''}.${ext}`;
-      pasted.push(new File([blob], name, { type: blob.type }));
-    });
+    e.preventDefault(); // on gère l'image nous-mêmes
+    const pasted = extractPastedImageFiles(e);
     if (pasted.length > 0) {
       setFiles(prev => [...prev, ...pasted]);
       toast.success(`${pasted.length} capture${pasted.length > 1 ? 's' : ''} ajoutée${pasted.length > 1 ? 's' : ''} aux pièces jointes`);
+    } else {
+      toast.error("Impossible de lire l'image collée — réessayez ou utilisez le bouton de pièce jointe");
     }
   };
 
@@ -1375,12 +1428,16 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
               onChange={e => setFiles(prev => [...prev, ...Array.from(e.target.files)])}
             />
             {files.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-2">
+              <div className="flex flex-wrap gap-2 mt-2 items-start">
                 {files.map((f, i) => (
-                  <span key={i} className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
-                    {f.name}
-                    <button onClick={() => setFiles(files.filter((_, j) => j !== i))}><X size={10} /></button>
-                  </span>
+                  isImage(f.type) ? (
+                    <LocalImagePreview key={i} file={f} onRemove={() => setFiles(files.filter((_, j) => j !== i))} />
+                  ) : (
+                    <span key={i} className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      {f.name}
+                      <button onClick={() => setFiles(files.filter((_, j) => j !== i))}><X size={10} /></button>
+                    </span>
+                  )
                 ))}
               </div>
             )}
