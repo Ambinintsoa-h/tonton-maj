@@ -10,8 +10,11 @@ const ticketsSlice = createSlice({
       const idx = state.list.findIndex(t => t.id === action.payload.id);
       if (idx !== -1) state.list[idx] = { ...state.list[idx], ...action.payload };
     },
+    removeTicket: (state, action) => {
+      state.list = state.list.filter(t => t.id !== action.payload);
+    },
     setLoading: (state, action) => { state.loading = action.payload; },
   },
 });
-export const { setTickets, addTicket, updateTicket, setLoading } = ticketsSlice.actions;
+export const { setTickets, addTicket, updateTicket, removeTicket, setLoading } = ticketsSlice.actions;
 export default ticketsSlice.reducer;

@@ -62,7 +62,16 @@ service cloud.firestore {
       allow create: if isAuthenticated();
       allow update: if isAuthenticated()
         && (resource.data.creatorId == request.auth.uid || isAdmin() || isSupport());
-      allow delete: if isAdmin();
+      // Suppression selon le rôle :
+      // super_admin → tous | manager → ses tickets + tickets cq_ia | cq_ia → ses tickets | support → aucun
+      allow delete: if isAuthenticated() && (
+        userRole() == 'super_admin' ||
+        (userRole() == 'manager' && (
+          resource.data.creatorId == request.auth.uid ||
+          resource.data.creatorRole == 'cq_ia'
+        )) ||
+        (userRole() == 'cq_ia' && resource.data.creatorId == request.auth.uid)
+      );
     }
 
     // ── ticket_comments : lisibles par les parties prenantes du ticket ────────
