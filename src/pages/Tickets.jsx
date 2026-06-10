@@ -9,11 +9,12 @@ import {
   Search, User, Calendar, Link2, FileText, Film, FileImage, File,
   ZoomIn, ZoomOut, Download, RotateCcw, ChevronLeft, ChevronRight,
   ChevronDown, AtSign, LayoutList, LayoutGrid, FlaskConical, MoveRight,
-  GripVertical, Inbox,
+  GripVertical, Inbox, Trash2,
 } from 'lucide-react';
-import { addTicket, updateTicket, setTickets } from '../store/slices/ticketsSlice';
+import { addTicket, updateTicket, removeTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
-  getTickets, createTicket, updateTicketDoc, subscribeToComments, addComment,
+  getTickets, createTicket, updateTicketDoc, deleteTicketDoc,
+  subscribeToComments, addComment,
   uploadTicketFile, updateCommentAttachments, createNotification,
 } from '../services/firebase';
 import { AccountAvatar } from '../components/account/MonComptePanel';
@@ -86,7 +87,7 @@ function formatDate(ts) {
 
 // ─── Composant carte ticket ───────────────────────────────────────────────────
 
-function TicketCard({ ticket, selected, onClick, users }) {
+function TicketCard({ ticket, selected, onClick, users, canDelete, onDelete }) {
   const prio    = PRIORITIES[ticket.priority] || PRIORITIES.normale;
   const status  = STATUSES[ticket.status]     || STATUSES.open;
   const cat     = CATEGORIES[ticket.category] || CATEGORIES.other;
@@ -98,13 +99,23 @@ function TicketCard({ ticket, selected, onClick, users }) {
       whileHover={{ y: -2 }}
       whileTap={{ scale: 0.99 }}
       onClick={onClick}
-      className={`cursor-pointer rounded-2xl border-l-[3px] p-3.5 transition-all ${prio.border} ${
+      className={`relative group cursor-pointer rounded-2xl border-l-[3px] p-3.5 transition-all ${prio.border} ${
         selected
           ? 'bg-blue-50/80 shadow-md ring-1 ring-blue-200'
           : 'bg-white/90 shadow-sm hover:shadow-md border border-gray-100/80 border-l-[3px]'
       }`}
       style={{ backdropFilter: 'blur(8px)' }}
     >
+      {/* Bouton suppression — visible au survol si autorisé */}
+      {canDelete && (
+        <button
+          onClick={e => { e.stopPropagation(); onDelete(ticket.id, e); }}
+          className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all z-10"
+          title="Supprimer le ticket"
+        >
+          <Trash2 size={13} />
+        </button>
+      )}
       {/* Ligne 1 : titre + badge non-lu + statut */}
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
@@ -710,7 +721,7 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
 
 // ─── Détail d'un ticket ───────────────────────────────────────────────────────
 
-function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }) {
+function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, canDelete, onDelete }) {
   const [actionLoading, setActionLoading] = useState(false);
   const [assignOpen, setAssignOpen]       = useState(false);
   const dispatch = useDispatch();
@@ -908,6 +919,15 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
             <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${status.dot}`} />
             <h2 className="text-base font-bold text-gray-900 leading-snug">{ticket.title}</h2>
           </div>
+          {canDelete && onDelete && (
+            <button
+              onClick={() => onDelete(ticket.id)}
+              className="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 flex-shrink-0 transition-colors"
+              title="Supprimer le ticket"
+            >
+              <Trash2 size={16} />
+            </button>
+          )}
           <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 flex-shrink-0">
             <X size={18} />
           </button>
@@ -1339,7 +1359,7 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
 
 // ─── Carte Kanban (compacte) ──────────────────────────────────────────────────
 
-function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, onDragEnd, selected }) {
+function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, onDragEnd, selected, canDelete, onDelete }) {
   const prio     = PRIORITIES[ticket.priority] || PRIORITIES.normale;
   const cat      = CATEGORIES[ticket.category] || CATEGORIES.other;
   const unread   = ticketHasUnread(ticket);
@@ -1364,6 +1384,16 @@ function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, o
         <div className="absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-40 transition-opacity pointer-events-none">
           <GripVertical size={13} className="text-gray-400" />
         </div>
+      )}
+      {/* Bouton suppression */}
+      {canDelete && (
+        <button
+          onClick={e => { e.stopPropagation(); onDelete(ticket.id, e); }}
+          className="absolute right-1.5 bottom-1.5 opacity-0 group-hover:opacity-100 p-1 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all z-10"
+          title="Supprimer"
+        >
+          <Trash2 size={11} />
+        </button>
       )}
 
       {/* Titre + unread */}
@@ -1411,7 +1441,7 @@ function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, o
 
 // ─── Colonne Kanban (zone de drop) ────────────────────────────────────────────
 
-function KanbanColumn({ col, tickets, onOpen, onDropTicket, users, isStaff, draggingId, onDragStart, onDragEnd, selectedId }) {
+function KanbanColumn({ col, tickets, onOpen, onDropTicket, users, isStaff, draggingId, onDragStart, onDragEnd, selectedId, onDelete, canDeleteFn }) {
   const [over, setOver] = useState(false);
 
   const handleDrop = (e) => {
@@ -1450,7 +1480,9 @@ function KanbanColumn({ col, tickets, onOpen, onDropTicket, users, isStaff, drag
         {tickets.map(ticket => (
           <KanbanCard key={ticket.id} ticket={ticket} onOpen={onOpen} users={users} isStaff={isStaff}
             isDragging={draggingId === ticket.id} onDragStart={onDragStart} onDragEnd={onDragEnd}
-            selected={selectedId === ticket.id} />
+            selected={selectedId === ticket.id}
+            canDelete={canDeleteFn ? canDeleteFn(ticket) : false}
+            onDelete={onDelete} />
         ))}
       </div>
     </div>
@@ -1459,7 +1491,7 @@ function KanbanColumn({ col, tickets, onOpen, onDropTicket, users, isStaff, drag
 
 // ─── Vue Kanban ───────────────────────────────────────────────────────────────
 
-function KanbanView({ tickets, onOpen, onDropTicket, users, isStaff, search, filterCategory, filterPriority, selectedId }) {
+function KanbanView({ tickets, onOpen, onDropTicket, users, isStaff, search, filterCategory, filterPriority, selectedId, onDelete, canDeleteFn }) {
   const [draggingId, setDraggingId] = useState(null);
 
   const filtered = tickets.filter(t => {
@@ -1483,6 +1515,7 @@ function KanbanView({ tickets, onOpen, onDropTicket, users, isStaff, search, fil
           draggingId={draggingId} selectedId={selectedId}
           onDragStart={(t) => setDraggingId(t.id)}
           onDragEnd={() => setDraggingId(null)}
+          onDelete={onDelete} canDeleteFn={canDeleteFn}
         />
       ))}
     </div>
@@ -1596,7 +1629,53 @@ export default function Tickets() {
   };
 
   const isStaff = ['super_admin', 'manager', 'support'].includes(auth.role);
-  const canCreate = auth.role === 'cq_ia' || auth.role === 'manager' || auth.role === 'support';
+  const canCreate = ['cq_ia', 'manager', 'support', 'super_admin'].includes(auth.role);
+
+  // Vérifie si l'utilisateur courant peut supprimer un ticket donné
+  const canDeleteTicket = useCallback((ticket) => {
+    if (auth.role === 'super_admin') return true;
+    if (auth.role === 'manager') {
+      const isOwn = ticket.creatorId === auth.uid || ticket.creatorUsername === auth.username;
+      return isOwn || ticket.creatorRole === 'cq_ia';
+    }
+    if (auth.role === 'cq_ia') {
+      return ticket.creatorId === auth.uid || ticket.creatorUsername === auth.username;
+    }
+    return false; // support : aucune suppression
+  }, [auth.role, auth.uid, auth.username]);
+
+  // Suppression avec confirmation via toast
+  const handleDeleteTicket = useCallback(async (ticketId, e) => {
+    if (e) e.stopPropagation();
+    const ticket = tickets.find(t => t.id === ticketId);
+    if (!ticket) return;
+    toast((t) => (
+      <div className="flex flex-col gap-2 min-w-[200px]">
+        <p className="text-sm font-semibold text-gray-800">Supprimer ce ticket ?</p>
+        <p className="text-xs text-gray-500 line-clamp-1">« {ticket.title} »</p>
+        <div className="flex gap-2 mt-1">
+          <button
+            onClick={async () => {
+              toast.dismiss(t.id);
+              try {
+                await deleteTicketDoc(ticketId);
+                dispatch(removeTicket(ticketId));
+                if (selectedTicket?.id === ticketId) setSelectedTicket(null);
+                toast.success('Ticket supprimé');
+              } catch {
+                toast.error('Erreur lors de la suppression');
+              }
+            }}
+            className="flex-1 px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-semibold hover:bg-red-600 transition-colors"
+          >Supprimer</button>
+          <button
+            onClick={() => toast.dismiss(t.id)}
+            className="flex-1 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-200 transition-colors"
+          >Annuler</button>
+        </div>
+      </div>
+    ), { duration: 10000 });
+  }, [dispatch, tickets, selectedTicket]);
 
   // Déplacement par drag & drop dans le Kanban (id ticket + colonne cible)
   const handleDropTicket = async (ticketId, colKey) => {
@@ -1765,6 +1844,8 @@ export default function Tickets() {
             filterCategory={filterCategory}
             filterPriority={filterPriority}
             selectedId={selectedTicket?.id}
+            onDelete={handleDeleteTicket}
+            canDeleteFn={canDeleteTicket}
           />
         )}
 
@@ -1781,7 +1862,9 @@ export default function Tickets() {
                 {sorted.map(ticket => (
                   <TicketCard key={ticket.id} ticket={ticket} users={users}
                     selected={selectedTicket?.id === ticket.id}
-                    onClick={() => setSelectedTicket(ticket)} />
+                    onClick={() => setSelectedTicket(ticket)}
+                    canDelete={canDeleteTicket(ticket)}
+                    onDelete={handleDeleteTicket} />
                 ))}
               </div>
             )}
@@ -1797,6 +1880,8 @@ export default function Tickets() {
         currentUser={currentUser}
         users={users}
         history={history}
+        canDelete={selectedTicket ? canDeleteTicket(selectedTicket) : false}
+        onDelete={handleDeleteTicket}
       />
 
       {/* Modal nouveau ticket */}

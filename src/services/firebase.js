@@ -346,6 +346,11 @@ export const updateTicketDoc = async (ticketId, updates) => {
   await updateDoc(doc(db, 'tickets', ticketId), { ...updates, updatedAt: Date.now() });
 };
 
+export const deleteTicketDoc = async (ticketId) => {
+  if (!db) throw new Error('Firebase non initialisé');
+  await deleteDoc(doc(db, 'tickets', ticketId));
+};
+
 export const getComments = async (ticketId) => {
   if (!db) return [];
   const q = query(collection(db, 'ticket_comments'), where('ticketId', '==', ticketId));
