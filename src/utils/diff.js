@@ -254,6 +254,66 @@ export const applyAddition = (html, anchor, updated) => {
 };
 
 /**
+ * Détecte la section FAQ dans le HTML et la déplace à la fin.
+ * Supporte : class/id contenant "faq", headings contenant "faq" / "questions fréquentes".
+ * Retourne le HTML réorganisé, ou l'original si aucune FAQ n'est trouvée / déjà en fin.
+ */
+export const moveFaqToEnd = (html) => {
+  if (!html || typeof document === 'undefined') return html;
+
+  const container = document.createElement('div');
+  container.innerHTML = html;
+
+  // Stratégie 1 : enfant direct avec classe/id contenant "faq"
+  // Ex: <div class="schema-faq">, <section id="faq">, <div class="wp-block-yoast-faq-block">
+  for (const child of Array.from(container.children)) {
+    const cls = (child.className || '').toLowerCase();
+    const id  = (child.id || '').toLowerCase();
+    if (cls.includes('faq') || id.includes('faq') || id === 'foire-aux-questions') {
+      if (child === container.lastElementChild) return html;
+      container.appendChild(child);
+      return container.innerHTML;
+    }
+  }
+
+  // Stratégie 2 : heading direct (h1-h4) contenant "faq" ou "questions fréquentes"
+  for (const h of Array.from(container.querySelectorAll('h1, h2, h3, h4'))) {
+    if (h.parentNode !== container) continue;          // pas un enfant direct → skip
+    const text = h.textContent.toLowerCase().trim();
+    if (
+      !text.includes('faq') &&
+      !text.includes('questions fréquentes') &&
+      !text.includes('questions frequentes') &&
+      !text.includes('foire aux questions')
+    ) continue;
+
+    const headingLevel = parseInt(h.tagName[1], 10);
+
+    // Collecter le heading + ses frères suivants jusqu'au prochain heading ≤ même niveau
+    const faqNodes = [];
+    let node = h;
+    while (node) {
+      const next = node.nextSibling;
+      if (node !== h && node.nodeType === Node.ELEMENT_NODE) {
+        const lvl = node.tagName?.match(/^H([1-6])$/i)?.[1];
+        if (lvl && parseInt(lvl, 10) <= headingLevel) break;
+      }
+      faqNodes.push(node);
+      node = next;
+    }
+    if (!faqNodes.length) continue;
+
+    // Déjà à la fin ?
+    if (faqNodes[faqNodes.length - 1] === container.lastChild) return html;
+
+    for (const n of faqNodes) container.appendChild(n);
+    return container.innerHTML;
+  }
+
+  return html;
+};
+
+/**
  * Applique une liste de mises à jour sur un HTML, retourne le HTML annoté
  * et les updates avec leur flag applied + pass.
  */
