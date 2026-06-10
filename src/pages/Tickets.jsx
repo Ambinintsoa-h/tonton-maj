@@ -8,6 +8,7 @@ import {
   CheckCircle2, RefreshCw, ArrowUpRight, MessageSquare,
   Search, User, Calendar, Link2, FileText, Film, FileImage, File,
   ZoomIn, ZoomOut, Download, RotateCcw, ChevronLeft, ChevronRight,
+  ChevronDown, AtSign,
 } from 'lucide-react';
 import { addTicket, updateTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
@@ -418,6 +419,18 @@ function AttachmentList({ attachments, className = '' }) {
   );
 }
 
+// ─── Rendu du contenu avec @mentions en surbrillance ─────────────────────────
+
+function renderContent(text) {
+  if (!text) return null;
+  const parts = text.split(/(@[\w.]+)/g);
+  return parts.map((part, i) =>
+    /^@[\w.]/.test(part)
+      ? <span key={i} className="text-blue-600 font-semibold bg-blue-50 rounded px-0.5">{part}</span>
+      : part
+  );
+}
+
 // ─── Fil de commentaires ──────────────────────────────────────────────────────
 
 function CommentThread({ ticket, currentUser, onCommentAdded }) {
@@ -426,9 +439,37 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
   const [text, setText]         = useState('');
   const [files, setFiles]       = useState([]);
   const [sending, setSending]   = useState(false);
-  const fileRef   = useRef();
-  const bottomRef = useRef();
+  const [mention, setMention]   = useState(null); // { query } | null
+  const fileRef      = useRef();
+  const bottomRef    = useRef();
+  const textareaRef  = useRef();
   const users = useSelector(s => s.users.list);
+
+  // Utilisateurs filtrés pour l'autocomplétion @mention
+  const mentionUsers = mention
+    ? users.filter(u => u.username && u.username.toLowerCase().startsWith(mention.query.toLowerCase())).slice(0, 6)
+    : [];
+
+  const handleTextChange = (e) => {
+    const val = e.target.value;
+    setText(val);
+    const pos = e.target.selectionStart;
+    const beforeCursor = val.slice(0, pos);
+    const match = beforeCursor.match(/@([\w.]*)$/);
+    setMention(match ? { query: match[1] } : null);
+  };
+
+  const insertMention = (username) => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const pos = ta.selectionStart;
+    const before = text.slice(0, pos);
+    const after  = text.slice(pos);
+    const atIdx  = before.lastIndexOf('@');
+    setText(text.slice(0, atIdx) + '@' + username + ' ' + after);
+    setMention(null);
+    setTimeout(() => ta.focus(), 0);
+  };
 
   // Abonnement onSnapshot — cache local Firestore = affichage quasi-instantané
   useEffect(() => {
@@ -494,15 +535,28 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
       onCommentAdded && onCommentAdded();
 
       // Notifications en arrière-plan (non bloquant)
+      // — créateur + assigné + utilisateurs mentionnés (@username)
+      const mentionedUsernames = [...(text.matchAll(/@([\w.]+)/g))].map(m => m[1]);
+      const mentionedIds = users
+        .filter(u => mentionedUsernames.includes(u.username))
+        .map(u => u.id || u.uid)
+        .filter(Boolean);
       const toNotify = [...new Set([
         ticket.creatorId  !== commentData.authorId ? ticket.creatorId  : null,
         ticket.assigneeId !== commentData.authorId ? ticket.assigneeId : null,
+        ...mentionedIds.filter(id => id !== commentData.authorId),
       ].filter(Boolean))];
-      Promise.all(toNotify.map(uid => createNotification({
-        toUserId: uid, fromUsername: currentUser.username,
-        type: 'new_comment', ticketId: ticket.id, ticketTitle: ticket.title,
-        message: `${currentUser.username} a commenté le ticket "${ticket.title}"`,
-      }))).catch(() => {});
+      Promise.all(toNotify.map(uid => {
+        const isMention = mentionedIds.includes(uid) && uid !== ticket.creatorId && uid !== ticket.assigneeId;
+        return createNotification({
+          toUserId: uid, fromUsername: currentUser.username,
+          type: isMention ? 'mention' : 'new_comment',
+          ticketId: ticket.id, ticketTitle: ticket.title,
+          message: isMention
+            ? `${currentUser.username} vous a mentionné dans le ticket "${ticket.title}"`
+            : `${currentUser.username} a commenté le ticket "${ticket.title}"`,
+        });
+      })).catch(() => {});
     } catch (e) {
       toast.error('Erreur lors de l\'envoi du commentaire');
     } finally {
@@ -531,7 +585,7 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
                   <span className="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-full">{c.authorRole}</span>
                   <span className="text-[10px] text-gray-400 ml-auto">{timeAgo(c.createdAt)}</span>
                 </div>
-                {c.content && <p className="text-xs text-gray-700 whitespace-pre-wrap">{c.content}</p>}
+                {c.content && <p className="text-xs text-gray-700 whitespace-pre-wrap leading-relaxed">{renderContent(c.content)}</p>}
                 <AttachmentList attachments={c.attachments} className="mt-2" />
               </div>
             </div>
@@ -546,14 +600,34 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
       {/* Formulaire fixe en bas */}
       <div className="flex-shrink-0 border-t border-gray-100 px-5 py-3">
         <div className="flex gap-2 items-end">
-          <div className="flex-1">
+          <div className="flex-1 relative">
+            {/* Dropdown @mention */}
+            {mention && mentionUsers.length > 0 && (
+              <div className="absolute bottom-full left-0 mb-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden w-52">
+                {mentionUsers.map(u => (
+                  <button
+                    key={u.id || u.uid}
+                    onMouseDown={e => { e.preventDefault(); insertMention(u.username); }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-center gap-2 transition-colors"
+                  >
+                    <AccountAvatar avatarUrl={u.avatarUrl} prenom={u.prenom} nom={u.nom} username={u.username} size={22} />
+                    <span className="font-medium text-gray-800">{u.username}</span>
+                    <span className="text-[10px] text-gray-400 ml-auto">{u.role}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <textarea
+              ref={textareaRef}
               value={text}
-              onChange={e => setText(e.target.value)}
-              placeholder="Ajouter un commentaire... (Ctrl+Entrée pour envoyer)"
+              onChange={handleTextChange}
+              placeholder="Ajouter un commentaire... @ pour mentionner"
               rows={2}
               className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-200"
-              onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSend(); }}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { setMention(null); return; }
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSend();
+              }}
             />
             {files.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-1">
@@ -588,7 +662,16 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
 
 function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }) {
   const [actionLoading, setActionLoading] = useState(false);
+  const [assignOpen, setAssignOpen]       = useState(false);
   const dispatch = useDispatch();
+
+  // Fermer le dropdown d'assignation au clic extérieur
+  useEffect(() => {
+    if (!assignOpen) return;
+    const close = () => setAssignOpen(false);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [assignOpen]);
 
   const isCreator = ticket.creatorId === (currentUser.uid || currentUser.username);
   const role = currentUser.role;
@@ -711,6 +794,26 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
     });
   };
 
+  const handleAssign = async (user) => {
+    setAssignOpen(false);
+    const updates = {
+      assigneeId:       user ? (user.id || user.uid || null) : null,
+      assigneeUsername: user ? user.username : null,
+    };
+    await doAction(updates, user ? `Assigné à ${user.username}` : 'Assignation retirée', async () => {
+      if (user) {
+        await createNotification({
+          toUserId: user.id || user.uid,
+          fromUsername: currentUser.username,
+          type: 'ticket_assigned',
+          ticketId: ticket.id,
+          ticketTitle: ticket.title,
+          message: `${currentUser.username} vous a assigné le ticket "${ticket.title}"`,
+        });
+      }
+    });
+  };
+
   const handlePriorityChange = async (priority) => {
     await doAction({ priority }, `Priorité changée : ${PRIORITIES[priority]?.label}`);
   };
@@ -757,7 +860,54 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
         <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
           <span className="flex items-center gap-1"><User size={11} /><strong>{ticket.creatorUsername}</strong></span>
           <span className="flex items-center gap-1"><Calendar size={11} />{formatDate(ticket.createdAt)}</span>
-          {ticket.assigneeUsername && <span className="flex items-center gap-1 text-blue-600"><User size={11} />{ticket.assigneeUsername}</span>}
+
+          {/* Assignation — interactive pour le staff, lecture seule sinon */}
+          {(role === 'manager' || role === 'super_admin' || role === 'support') ? (
+            <div className="relative">
+              <button
+                onClick={() => setAssignOpen(v => !v)}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded-lg hover:bg-blue-50 transition-colors ${ticket.assigneeUsername ? 'text-blue-600' : 'text-gray-400'}`}
+              >
+                <User size={11} />
+                {ticket.assigneeUsername || 'Assigner…'}
+                <ChevronDown size={10} />
+              </button>
+              {assignOpen && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden w-56" onMouseDown={e => e.stopPropagation()}>
+                  <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Assigner à</p>
+                  <div className="max-h-48 overflow-y-auto">
+                    {users
+                      .filter(u => u.username && ['super_admin', 'manager', 'support', 'cq_ia'].includes(u.role))
+                      .map(u => (
+                        <button
+                          key={u.id || u.uid}
+                          onClick={() => handleAssign(u)}
+                          className={`w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center gap-2 transition-colors ${(u.id || u.uid) === ticket.assigneeId ? 'bg-blue-50' : ''}`}
+                        >
+                          <AccountAvatar avatarUrl={u.avatarUrl} prenom={u.prenom} nom={u.nom} username={u.username} size={22} />
+                          <span className="text-sm font-medium text-gray-800 flex-1">{u.username}</span>
+                          {(u.id || u.uid) === ticket.assigneeId && <CheckCircle2 size={13} className="text-blue-500 flex-shrink-0" />}
+                        </button>
+                      ))
+                    }
+                  </div>
+                  {ticket.assigneeId && (
+                    <div className="border-t border-gray-100">
+                      <button
+                        onClick={() => handleAssign(null)}
+                        className="w-full text-left px-3 py-2 text-xs text-red-500 hover:bg-red-50 transition-colors"
+                      >
+                        Retirer l'assignation
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            ticket.assigneeUsername && <span className="flex items-center gap-1 text-blue-600"><User size={11} />{ticket.assigneeUsername}</span>
+          )}
+
           <div className="flex items-center gap-1 ml-auto">
             <span className="text-gray-400">Priorité :</span>
             <select value={ticket.priority || 'normale'} onChange={e => handlePriorityChange(e.target.value)}
