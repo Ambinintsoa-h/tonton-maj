@@ -39,7 +39,7 @@ jobs:
             User ${{ secrets.N0C_USERNAME }}
             IdentityFile ~/.ssh/id_rsa
             StrictHostKeyChecking no
-            ConnectTimeout 30
+            ConnectTimeout 60
             ServerAliveInterval 15
             ServerAliveCountMax 4
           EOF
@@ -59,14 +59,19 @@ jobs:
 
       - name: Install deps + restart sur n0c
         run: |
-          ssh -F ~/.ssh/config n0c bash << 'SCRIPT'
-            set -e
-            source ~/nodevenv/maj.stomos.net/22/bin/activate
-            cd ~/maj.stomos.net
-            npm install --omit=dev
-            mkdir -p data
-            chmod -R 755 build/
-            cp -rv build/* public/
-            touch tmp/restart.txt
-            echo "Déploiement terminé"
-          SCRIPT
+          REMOTE_CMD='set -e
+          source ~/nodevenv/maj.stomos.net/22/bin/activate
+          cd ~/maj.stomos.net
+          npm install --omit=dev
+          mkdir -p data
+          chmod -R 755 build/
+          cp -rv build/* public/
+          touch tmp/restart.txt
+          echo "Déploiement terminé"'
+
+          for attempt in 1 2 3; do
+            echo "Tentative SSH $attempt/3..."
+            ssh -F ~/.ssh/config n0c bash -s <<< "$REMOTE_CMD" && { echo "SSH OK"; break; }
+            echo "Échec tentative $attempt, attente 20s..."
+            sleep 20
+          done
