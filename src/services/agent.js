@@ -1136,3 +1136,44 @@ ${content}
   const costUsd = calcCost(tokenAcc.calls, modelPricing);
   return { ...result, sources: dedupeByUrl(allSources).slice(0, 10), tokenUsage: { ...tokenAcc, costUsd } };
 };
+
+// ── Génération des meta SEO (Yoast / SEOPress) ────────────────────────────────
+/**
+ * Génère un meta title (≤60 chars) et une meta description (≤155 chars) optimisés SEO
+ * à partir du HTML final de l'article. Utilise Haiku (rapide, économique).
+ * Retourne { seoTitle, seoDescription } — chaînes vides en cas d'échec.
+ */
+export const generateSeoMeta = async (articleHtml = '', articleTitle = '') => {
+  const { fr } = getDateContext();
+  const articleText = stripHtml(articleHtml).substring(0, 3000);
+
+  try {
+    const { text } = await callClaude(null, {
+      model: MODELS.FAST,
+      max_tokens: 250,
+      system: 'Tu génères des balises SEO optimisées pour des articles de blog français. Réponds UNIQUEMENT avec le JSON demandé, sans texte autour.',
+      messages: [{
+        role: 'user',
+        content: `Date : ${fr}
+Titre de l'article : ${articleTitle || '(non renseigné)'}
+
+Contenu (extrait) :
+${articleText}
+
+Génère :
+- "seoTitle" : meta title SEO optimisé, 50-60 caractères, mot-clé principal en début, en français
+- "seoDescription" : meta description engageante, 140-155 caractères, call-to-action, en français
+
+Réponds UNIQUEMENT : {"seoTitle":"...","seoDescription":"..."}`,
+      }],
+    });
+
+    const parsed = parseJsonResponse(text, {}, '[generateSeoMeta]');
+    return {
+      seoTitle:       (parsed.seoTitle       || '').trim().substring(0, 70),
+      seoDescription: (parsed.seoDescription || '').trim().substring(0, 165),
+    };
+  } catch {
+    return { seoTitle: '', seoDescription: '' };
+  }
+};
