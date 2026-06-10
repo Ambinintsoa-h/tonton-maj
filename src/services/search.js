@@ -24,7 +24,7 @@ const searchTavily = async (query) => {
   try {
     const resp = await axios.post('/api/tavily', {
       query, search_depth: 'advanced', max_results: 8,
-      days: 180, exclude_domains: EXCLUDED_DOMAINS,
+      days: 365, exclude_domains: EXCLUDED_DOMAINS,
     }, { timeout: 22000 });
     return (resp.data?.results || []).map(r => ({
       title: r.title, url: r.url,
@@ -85,24 +85,38 @@ const EXCLUDED_DOMAINS = [
 ];
 const isExcluded = (url = '') => EXCLUDED_DOMAINS.some(d => url.includes(d));
 
-// ─── Interface publique : cascade automatique (aucune clé côté client) ────────
-// Ordre : Brave → Tavily → SearXNG → Jina
-// Les clés API sont lues côté serveur depuis data/settings.json.
-// Si un service n'est pas configuré, le proxy répond 503 et on passe au suivant.
+// ─── Déduplique par URL ───────────────────────────────────────────────────────
+const dedupeByUrl = (items) => {
+  const seen = new Set();
+  return items.filter(r => {
+    if (!r.url || seen.has(r.url)) return false;
+    seen.add(r.url); return true;
+  });
+};
+
+// ─── Interface publique ───────────────────────────────────────────────────────
+// Brave + Tavily lancés en PARALLÈLE : Brave apporte les URLs récentes,
+// Tavily apporte le contenu complet (jusqu'à 3000 chars/source) indispensable
+// pour que Claude génère de vraies mises à jour plutôt que des reformulations.
+// SearXNG et Jina restent en fallback si les deux premiers échouent.
 export const searchWeb = async (query) => {
-  let results = [];
+  // 1. Brave + Tavily en parallèle
+  const [braveRes, tavilyRes] = await Promise.allSettled([
+    searchBrave(query),
+    searchTavily(query),
+  ]);
 
-  // 1. Brave (proxy vérifie si braveKey configurée)
-  results = await searchBrave(query);
+  const merged = [
+    ...(braveRes.status  === 'fulfilled' ? braveRes.value  : []),
+    ...(tavilyRes.status === 'fulfilled' ? tavilyRes.value : []),
+  ];
 
-  // 2. Tavily
-  if (!results.length) results = await searchTavily(query);
+  if (merged.length) return dedupeByUrl(merged).filter(r => !isExcluded(r.url));
 
-  // 3. SearXNG
-  if (!results.length) results = await searchSearXNG(query);
+  // 2. SearXNG (si Brave et Tavily ont tous les deux échoué)
+  const searxng = await searchSearXNG(query);
+  if (searxng.length) return searxng.filter(r => !isExcluded(r.url));
 
-  // 4. Jina (dernier recours)
-  if (!results.length) results = await searchJina(query);
-
-  return results.filter(r => !isExcluded(r.url));
+  // 3. Jina (dernier recours)
+  return (await searchJina(query)).filter(r => !isExcluded(r.url));
 };
