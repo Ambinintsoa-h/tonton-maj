@@ -668,7 +668,7 @@ ${content.substring(0, 5000)}`,
   // Scraping des top URLs sans contenu (Brave, SearXNG)
   const urlsToScrape = searchResults
     .filter(r => !r.content || r.content.length < 100)
-    .slice(0, 3)   // max 3 pages scrapées pour limiter les connexions en vol
+    .slice(0, 5)   // max 5 pages scrapées (Tavily fournit déjà le contenu — ces URLs viennent surtout de Brave)
     .map(r => r.url);
 
   if (urlsToScrape.length > 0) {
@@ -1048,7 +1048,7 @@ ${content.substring(0, 3000)}`,
 
     const toScrape = searchResults
       .filter(r => !r.content || r.content.length < 100)
-      .slice(0, 3).map(r => r.url);
+      .slice(0, 5).map(r => r.url);
 
     if (toScrape.length > 0) {
       onStep(`Lecture de ${toScrape.length} source${toScrape.length > 1 ? 's' : ''} complémentaire${toScrape.length > 1 ? 's' : ''}...`);
