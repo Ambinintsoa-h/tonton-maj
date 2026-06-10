@@ -137,13 +137,16 @@ function TicketCard({ ticket, selected, onClick, users }) {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Assigné */}
+          {/* Assigné — avatar + prénom */}
           {ticket.assigneeUsername && (
-            <div className="flex items-center gap-1" title={`Assigné : ${ticket.assigneeUsername}`}>
+            <div className="flex items-center gap-1 bg-gray-50 rounded-full pl-0.5 pr-2 py-0.5" title={`Assigné : ${ticket.assigneeUsername}`}>
               <AccountAvatar
                 avatarUrl={assignee?.avatarUrl} prenom={assignee?.prenom}
                 nom={assignee?.nom} username={ticket.assigneeUsername} size={18}
               />
+              <span className="text-[11px] font-medium text-gray-600 truncate max-w-[80px]">
+                {assignee?.prenom || ticket.assigneeUsername}
+              </span>
             </div>
           )}
           {/* Compteurs */}
@@ -935,9 +938,9 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
                 <ChevronDown size={10} />
               </button>
               {assignOpen && (
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden w-56" onMouseDown={e => e.stopPropagation()}>
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden w-64" onMouseDown={e => e.stopPropagation()}>
                   <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Assigner à</p>
-                  <div className="max-h-48 overflow-y-auto">
+                  <div className="max-h-48 overflow-y-auto overflow-x-hidden">
                     {users
                       .filter(u => u.username && ['super_admin', 'manager', 'support', 'cq_ia'].includes(u.role))
                       .map(u => (
@@ -946,8 +949,10 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history }
                           onClick={() => handleAssign(u)}
                           className={`w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center gap-2 transition-colors ${(u.id || u.uid) === ticket.assigneeId ? 'bg-blue-50' : ''}`}
                         >
-                          <AccountAvatar avatarUrl={u.avatarUrl} prenom={u.prenom} nom={u.nom} username={u.username} size={22} />
-                          <span className="text-sm font-medium text-gray-800 flex-1">{u.username}</span>
+                          <div className="flex-shrink-0">
+                            <AccountAvatar avatarUrl={u.avatarUrl} prenom={u.prenom} nom={u.nom} username={u.username} size={22} />
+                          </div>
+                          <span className="text-sm font-medium text-gray-800 flex-1 min-w-0 truncate">{u.username}</span>
                           {(u.id || u.uid) === ticket.assigneeId && <CheckCircle2 size={13} className="text-blue-500 flex-shrink-0" />}
                         </button>
                       ))
@@ -1066,18 +1071,18 @@ function TicketDrawer({ ticket, onClose, ...rest }) {
     <AnimatePresence>
       {ticket && (
         <>
-          {/* Backdrop */}
+          {/* Backdrop — au-dessus du header (z-100) */}
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
             onClick={onClose}
-            className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[110] bg-black/30 backdrop-blur-[2px]"
           />
-          {/* Panneau */}
+          {/* Panneau — premier plan absolu */}
           <motion.div
             initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
             transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-            className="fixed inset-y-0 right-0 z-50 w-full max-w-[540px] bg-white shadow-2xl flex flex-col overflow-hidden"
+            className="fixed inset-y-0 right-0 z-[120] w-full max-w-[540px] bg-white shadow-2xl flex flex-col overflow-hidden"
           >
             <TicketDetail ticket={ticket} onClose={onClose} {...rest} />
           </motion.div>
@@ -1421,7 +1426,7 @@ function KanbanColumn({ col, tickets, onOpen, onDropTicket, users, isStaff, drag
       onDragOver={(e) => { if (isStaff) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setOver(true); } }}
       onDragLeave={() => setOver(false)}
       onDrop={handleDrop}
-      className={`flex-shrink-0 w-[270px] flex flex-col rounded-2xl border transition-all ${col.color} ${
+      className={`flex-1 min-w-[260px] flex flex-col rounded-2xl border transition-all ${col.color} ${
         over ? 'ring-2 ring-blue-400 ring-offset-1 bg-blue-50/40' : ''
       }`}
     >
