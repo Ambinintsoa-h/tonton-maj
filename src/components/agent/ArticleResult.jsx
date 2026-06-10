@@ -840,7 +840,25 @@ export default function ArticleResult() {
     }
   };
 
-  const handlePublish = async (site, mode = 'draft') => {
+  // Publication directe quand le site est déjà connu via MCP (pas de dropdown)
+  const handlePublishDirect = () => {
+    if (!wpMcpData?.siteId) return;
+    const site = wpSites.find(s => s.id === wpMcpData.siteId);
+    if (!site) { toast.error('Site WordPress introuvable'); return; }
+    const post = {
+      id:       wpMcpData.postId,
+      title:    { rendered: currentArticle?.title || articleUrl },
+      slug:     '',
+      postType: wpMcpData.postType || 'posts',
+      link:     wpMcpData.postLink || '',
+      _fromMcp: true,
+    };
+    handlePublish(site, 'update', post);
+  };
+
+  // foundPost (optionnel) : permet la publication directe depuis handlePublishDirect
+  // sans passer par le state wpFoundPost (qui nécessiterait un cycle de rendu)
+  const handlePublish = async (site, mode = 'draft', foundPost = null) => {
     setPublishing(true);
     const rawHtml = exportAsHtml(getFinalHtml());
 
@@ -863,13 +881,14 @@ export default function ArticleResult() {
     // l'image à la une réelle (≠ contenu) — tant qu'un ID est disponible via MCP.
     const hasFeaturedMedia = !!wpMcpData?.featuredMediaId;
 
+    // foundPost prioritaire sur le state (publication directe MCP)
+    const postToUse = foundPost || wpFoundPost;
     let result;
 
-    if (mode === 'update' && wpFoundPost) {
+    if (mode === 'update' && postToUse) {
       // Mise à jour d'un article existant :
       // • Ne jamais changer l'auteur (non inclus dans le body)
       // • Ne jamais changer le titre sauf si l'utilisateur l'a édité manuellement
-      // • Ne jamais toucher aux champs SEO (SEOPRESS, Yoast…) — non inclus
       const postData = { content: htmlContent, status: 'publish' };
       if (titleDirty && editedTitle) postData.title = editedTitle;
       if (hasFeaturedMedia) postData.featured_media = wpMcpData.featuredMediaId;
@@ -879,9 +898,9 @@ export default function ArticleResult() {
       if (seoTitle || seoDescription) postData.seoMeta = { seoTitle, seoDescription };
       result = await updatePost(
         site,
-        wpFoundPost.id,
+        postToUse.id,
         postData,
-        wpFoundPost.postType || 'posts'
+        postToUse.postType || 'posts'
       );
       if (result.success) {
         toast.success(
@@ -1245,12 +1264,26 @@ export default function ArticleResult() {
 
             {wpSites.length > 0 && (
               <div className="relative">
+                {/* Si MCP connu → publication directe (pas de dropdown) */}
+                {/* Sinon → dropdown de sélection du site */}
                 <button
-                  onClick={() => { setShowWP(showWP ? null : '__menu__'); setWpFoundPost(null); setWpNotFoundReason(''); setShowExport(false); }}
+                  onClick={() => {
+                    if (wpMcpData?.siteId && wpMcpData?.postId) {
+                      handlePublishDirect();
+                    } else {
+                      setShowWP(showWP ? null : '__menu__');
+                      setWpFoundPost(null);
+                      setWpNotFoundReason('');
+                      setShowExport(false);
+                    }
+                  }}
+                  disabled={publishing}
                   className="btn-primary text-xs"
                 >
                   {publishing ? <Loader size={13} className="animate-spin" /> : <Globe size={13} />}
-                  Publier<ChevronDown size={12} />
+                  Publier
+                  {/* Chevron uniquement si sélection manuelle nécessaire */}
+                  {!(wpMcpData?.siteId && wpMcpData?.postId) && <ChevronDown size={12} />}
                 </button>
                 <AnimatePresence>
                   {showWP && (
