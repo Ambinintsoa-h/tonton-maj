@@ -3,15 +3,15 @@
 ## Collections
 | Collection | Description |
 |-----------|-------------|
-| `skills` | Skills IA |
+| `users` | Membres (avatarUrl, prenom, nom, role) |
+| `skills` | Skills IA actifs |
 | `knowledge` | Base de connaissances |
 | `articles` | Historique MAJ (HTML dans Storage) |
-| `wordpress_sites` | Sites WP (sans password) |
-| `users` | Membres (avatarUrl, firstName, lastName) |
+| `wordpress_sites` | Sites WP (Application Passwords) |
 | `pending` | File d'attente partagée |
-| `settings` | Config partagée |
+| `settings` | Config partagée (lecture tous, écriture super_admin) |
 | `stats` | Statistiques globales |
-| `tickets` | Tickets |
+| `tickets` | Tickets — voir `.claude/tickets.md` |
 | `ticket_comments` | Commentaires tickets |
 | `notifications` | Notifications in-app |
 | `activity_sessions` | Tracking — 1 doc par user par jour |
@@ -23,19 +23,22 @@
   firstActivityAt: number,   // ⚠️ JAMAIS écrasé (getDoc avant write)
   lastActivityAt:  number,
   totalActiveMinutes: number,
-  connections: [{ at: number }],             // reconnexions
-  closes: [number],                          // timestamps fermeture onglet
-  pauses: [{ start: number, end: number }],  // inactivité > 10 min
+  connections: [{ at: number }],
+  closes: [number],
+  pauses: [{ start: number, end: number }],
   hourlyActivity: { "8": 5, "14": 12 },
   actions: { articlesUpdated, ticketsCreated, ticketsCommented, ticketsResolved, total }
 }
 ```
 
-**Règle `saveActivitySession`** : `getDoc` avant écriture → `setDoc` si nouveau, `updateDoc` si existant (`firstActivityAt` jamais touché).
+**Règle `saveActivitySession`** : `getDoc` avant écriture → `setDoc` si nouveau doc, `updateDoc` si existant (`firstActivityAt` jamais touché).
 
-## Règles Firestore
-- `where` + `orderBy` sur champs différents = index composite requis → **tri client-side**
-- Range de dates OK sur champ unique : `where('date', '>=', X) AND where('date', '<=', Y)`
-- Clés API (Anthropic/Groq/Brave/Tavily/Haloscan) **jamais** dans Firestore
-- Application Passwords WP **oui** (révocables)
-- Firebase Console : Action URL → `https://maj.stomos.net/reset-password`
+## Règles Firestore importantes
+- `where` + `orderBy` sur champs différents → index composite requis → **préférer tri client-side**
+- Range dates OK sur champ unique : `where('date', '>=', X)` + `where('date', '<=', Y)`
+- Clés API (Anthropic/Groq/Brave/Tavily) **jamais** dans Firestore → `data/settings.json`
+- Application Passwords WP **oui** dans Firestore (révocables indépendamment)
+
+## Firebase Console
+- Action URL reset MDP → `https://maj.stomos.net/reset-password`
+- Project ID : `tonton-ai-c8196`
