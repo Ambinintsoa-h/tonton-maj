@@ -815,16 +815,24 @@ export default function ArticleResult() {
     setPublishing(true);
     const rawHtml = exportAsHtml(getFinalHtml());
 
-    // Si featured_media est défini via MCP, supprimer figure[data-featured] du contenu publié :
-    // WordPress l'affiche déjà via le thème → l'inclure en dur créerait un doublon visuel.
+    // ── Suppression SYSTÉMATIQUE de figure[data-featured] du contenu publié ──────
+    // figure[data-featured] est un artefact interne TONTON AI : injecté par le proxy
+    // (proxy.js ~2078) UNIQUEMENT pour la preview dans l'éditeur. Le thème WordPress
+    // affiche déjà l'image à la une via son widget « Image mise en avant ».
+    // L'inclure dans le contenu publié crée un DOUBLON visuel (l'image apparaît une
+    // 2e fois dans le widget « Contenu de la publication »).
+    // → On la retire toujours, indépendamment de l'état de featured_media.
     let htmlContent = rawHtml;
-    const hasFeaturedMedia = !!(wpMcpData?.featuredMediaId && wpFoundPost && wpMcpData.postId === wpFoundPost.id);
-    if (hasFeaturedMedia) {
+    {
       const tmp = document.createElement('div');
       tmp.innerHTML = rawHtml;
       tmp.querySelectorAll('figure[data-featured]').forEach(f => f.remove());
       htmlContent = tmp.innerHTML;
     }
+
+    // featured_media est envoyé séparément à l'API WP REST pour mettre à jour
+    // l'image à la une réelle (≠ contenu) — tant qu'un ID est disponible via MCP.
+    const hasFeaturedMedia = !!wpMcpData?.featuredMediaId;
 
     let result;
 
