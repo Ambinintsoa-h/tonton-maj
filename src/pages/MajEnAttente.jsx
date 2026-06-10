@@ -26,7 +26,7 @@ import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
 import { initArticleSeoTracking, saveSeoSnapshot } from '../services/firebase';
-import { applyAllDiffs } from '../utils/diff';
+import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
 import { detectAgent } from '../constants/agents';
@@ -1090,7 +1090,7 @@ export default function MajEnAttente() {
       // ── Étape 3 : Application des diffs ───────────────────────────────────
       const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1);
       const hasBlockStructure = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(rawHtml);
-      const updatedHtml = hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>');
+      const updatedHtml = moveFaqToEnd(hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>'));
 
       // ── Étape 4 : Stats tokens ────────────────────────────────────────────
       const extractH1 = (html) => {

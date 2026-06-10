@@ -16,7 +16,7 @@ import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wo
 import BubbleToolbar from './BubbleToolbar';
 import { runReviewAgent, generateAltText } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
-import { applyAllDiffs } from '../../utils/diff';
+import { applyAllDiffs, moveFaqToEnd } from '../../utils/diff';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
@@ -379,7 +379,7 @@ export default function ArticleResult() {
       const { html: newHtml, updates: p2Updates } = applyAllDiffs(contentRef.current, result.updates, 2);
       // Conversion \n→<br> uniquement si pas de structure de blocs HTML
       const p2HasBlocks = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(newHtml);
-      const finalHtml = p2HasBlocks ? newHtml : newHtml.replace(/\n/g, '<br>');
+      const finalHtml = moveFaqToEnd(p2HasBlocks ? newHtml : newHtml.replace(/\n/g, '<br>'));
 
       // Mettre à jour le DOM — finalHtml contient maintenant passe 1 + passe 2
       // Conserver le scroll pour ne pas remonter en haut lors de l'injection innerHTML
