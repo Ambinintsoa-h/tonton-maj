@@ -61,6 +61,7 @@ export default function Parametres() {
     smtpUser:  stored.smtpUser  || '',
     smtpPass:  stored.smtpPass  || '',
     smtpFrom:    stored.smtpFrom    || '',
+    defaultTicketAssigneeEmail: stored.defaultTicketAssigneeEmail || '',
     haloscanKey: stored.haloscanKey || '',
   });
 
@@ -117,6 +118,7 @@ export default function Parametres() {
       smtpUser:    form.smtpUser,
       smtpPass:    form.smtpPass,
       smtpFrom:    form.smtpFrom,
+      defaultTicketAssigneeEmail: form.defaultTicketAssigneeEmail,
       haloscanKey: form.haloscanKey,
     };
 
@@ -181,6 +183,7 @@ export default function Parametres() {
       smtpUser:    stored.smtpUser    || '',
       smtpPass:    stored.smtpPass    || '',
       smtpFrom:    stored.smtpFrom    || '',
+      defaultTicketAssigneeEmail: stored.defaultTicketAssigneeEmail || '',
       haloscanKey: stored.haloscanKey || '',
     }));
   }, [stored]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -462,6 +465,18 @@ export default function Parametres() {
           <p>• <strong>Gmail</strong> : smtp.gmail.com · port 587 · App Password requis</p>
           <p>• <strong>OVH / Infomaniak</strong> : ssl0.ovh.net ou mail.infomaniak.com · port 587</p>
           <p>• <strong>Brevo (gratuit)</strong> : smtp-relay.brevo.com · port 587 · 300 emails/jour</p>
+        </div>
+
+        <div className="space-y-1.5 pt-2 border-t border-gray-100">
+          <label className="text-sm font-medium text-gray-700">Responsable tickets (auto-assignation)</label>
+          <input
+            type="email"
+            value={form.defaultTicketAssigneeEmail}
+            onChange={e => set('defaultTicketAssigneeEmail', e.target.value)}
+            placeholder="ambinintsoa@publithings.com"
+            className="input-glass"
+          />
+          <p className="text-xs text-gray-400">Chaque nouveau ticket est automatiquement assigné à cet email</p>
         </div>
       </motion.div>
 
