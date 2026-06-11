@@ -371,7 +371,10 @@ body {
 .md-content a:hover { color: #1d4ed8; border-color: #93c5fd; }
 
 /* ── Texte fort / italique ── */
-.md-content strong { font-weight: 600; color: #111827; }
+/* <strong> (gras d'origine / markdown) ET <b> (gras inséré via execCommand dans
+   l'éditeur) unifiés sur la même graisse pour éviter deux types de gras visibles. */
+.md-content strong,
+.md-content b      { font-weight: 700; color: #111827; }
 .md-content em     { font-style: italic; color: #4b5563; }
 .md-content del    { color: #9ca3af; text-decoration: line-through; }
 
