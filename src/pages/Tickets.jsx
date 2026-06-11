@@ -672,6 +672,26 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
       setFiles([]);
       onCommentAdded && onCommentAdded();
 
+      // Email aux personnes concernées (non bloquant)
+      {
+        const myId = currentUser.uid || currentUser.username;
+        const commenterIds = new Set(comments.map(c => c.authorId).filter(id => id && id !== myId));
+        const creatorId = ticket.creatorId !== myId ? ticket.creatorId : null;
+        const assigneeId = ticket.assigneeId !== myId ? ticket.assigneeId : null;
+        const allIds = [...new Set([creatorId, assigneeId, ...commenterIds].filter(Boolean))];
+        const recipientEmails = allIds
+          .map(id => users.find(u => u.id === id || u.uid === id)?.email)
+          .filter(Boolean);
+        if (recipientEmails.length) {
+          const token = sessionStorage.getItem('tonton_auth_token');
+          fetch('/api/notify/ticket-comment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: JSON.stringify({ ticketTitle: ticket.title, recipientEmails, commenterUsername: currentUser.username, commentContent: commentData.content }),
+          }).catch(() => {});
+        }
+      }
+
       // Notifications en arrière-plan (non bloquant)
       // — créateur + assigné + utilisateurs mentionnés (@username)
       const mentionedUsernames = [...(text.matchAll(/@([\w.]+)/g))].map(m => m[1]);
@@ -836,6 +856,17 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
 
   const getSuperAdmins = () => users.filter(u => u.role === 'super_admin');
 
+  const notifyStatusEmail = (newStatus) => {
+    const creator = users.find(u => u.id === ticket.creatorId || u.uid === ticket.creatorId);
+    if (!creator?.email) return;
+    const token = sessionStorage.getItem('tonton_auth_token');
+    fetch('/api/notify/ticket-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ ticketTitle: ticket.title, creatorEmail: creator.email, newStatus, changerUsername: currentUser.username }),
+    }).catch(() => {});
+  };
+
   const handleEscalate = async () => {
     await doAction({ level: 2, assigneeId: null, assigneeUsername: null }, 'Ticket escaladé au niveau 2', async () => {
       // Escalade → notifier tous les SA en parallèle (ticket sans assigné fixe)
@@ -853,6 +884,7 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
   const handleResolve = async () => {
     tracker.trackAction('ticketsResolved');
     const now = Date.now();
+    notifyStatusEmail('resolved');
     await doAction({ status: 'resolved', resolvedAt: now }, 'Ticket marqué comme résolu', async () => {
       if (ticket.creatorId) {
         await createNotification({
@@ -869,6 +901,7 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
 
   const handleClose = async () => {
     const now = Date.now();
+    notifyStatusEmail('closed');
     await doAction({ status: 'closed', closedAt: now }, 'Ticket fermé', async () => {
       if (ticket.assigneeId) {
         await createNotification({
@@ -885,6 +918,7 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
 
   const handleConfirmResolved = async () => {
     const now = Date.now();
+    notifyStatusEmail('closed');
     await doAction({ status: 'closed', closedAt: now }, 'Résolution confirmée, ticket fermé', async () => {
       // Notifier l'assigné que le créateur a confirmé la résolution
       if (ticket.assigneeId) {
@@ -1197,6 +1231,7 @@ function TicketDrawer({ ticket, onClose, ...rest }) {
 // ─── Modal nouveau ticket ─────────────────────────────────────────────────────
 
 function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
+  const settings = useSelector(s => s.settings);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('bug_app');
   const [priority, setPriority] = useState('normale');
@@ -1227,13 +1262,11 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
     if (!title.trim()) { toast.error('Le titre est obligatoire'); return; }
     setLoading(true);
     try {
-      // CQ IA → assigné au premier manager disponible (niveau 1)
-      // Manager → assigné au super_admin directement (niveau 2)
       const isManagerCreating = currentUser.role === 'manager';
-      const assigneeCandidates = isManagerCreating
-        ? users.filter(u => u.role === 'super_admin')
-        : users.filter(u => u.role === 'manager');
-      const assignee = assigneeCandidates[0] || null;
+      const defaultEmail = settings?.defaultTicketAssigneeEmail;
+      const assignee = (defaultEmail && users.find(u => u.email === defaultEmail))
+        || (isManagerCreating ? users.filter(u => u.role === 'super_admin')[0] : users.filter(u => u.role === 'manager')[0])
+        || null;
 
       const linkedArticle = history.find(a => a.id === linkedArticleId);
       const ticketLevel = isManagerCreating ? 2 : 1;
@@ -1295,6 +1328,16 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
       onCreated(newTicket);
       toast.success('Ticket créé avec succès');
       onClose();
+
+      // Email au responsable assigné
+      if (assignee?.email) {
+        const token = sessionStorage.getItem('tonton_auth_token');
+        fetch('/api/notify/ticket-created', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ ticketTitle: title.trim(), assigneeEmail: assignee.email, assigneeUsername: assignee.username, creatorUsername: currentUser.username }),
+        }).catch(() => {});
+      }
 
       // Notifications en arrière-plan
       Promise.all(notifTargets.map(u => createNotification({
