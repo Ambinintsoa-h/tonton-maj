@@ -341,6 +341,29 @@ const sendInviteEmail = async ({ toEmail, firstName, username, resetLink }) => {
   console.log(`[invite] ✓ Email d'invitation envoyé à ${toEmail}`);
 };
 
+// ─── Envoi email notifications tickets ───────────────────────────────────────
+const sendTicketEmail = async (toEmails, subject, textBody, htmlBody) => {
+  const s = readServerSettings();
+  if (!s.smtpHost || !s.smtpUser || !s.smtpPass) {
+    console.warn('[ticket-email] SMTP non configuré — email non envoyé');
+    return;
+  }
+  const recipients = (Array.isArray(toEmails) ? toEmails : [toEmails]).filter(Boolean);
+  if (!recipients.length) return;
+  const transporter = nodemailer.createTransport({
+    host: s.smtpHost, port: s.smtpPort || 587, secure: (s.smtpPort || 587) === 465,
+    auth: { user: s.smtpUser, pass: s.smtpPass },
+  });
+  await transporter.sendMail({
+    from: s.smtpFrom || s.smtpUser,
+    to: recipients.join(', '),
+    subject,
+    text: textBody,
+    html: htmlBody,
+  });
+  console.log(`[ticket-email] ✓ ${subject} → ${recipients.join(', ')}`);
+};
+
 // ─── Rate limiter intégré ─────────────────────────────────────────────────────
 // Enregistré ICI, avant les routes auth, pour couvrir /api/auth/login etc.
 // Limite générale : 60 req/min/IP. Limite auth : 10 req/min/IP (anti brute-force).
@@ -2542,6 +2565,144 @@ app.get('/health', (_, res) => {
 });
 
 // ─── SPA fallback (prod) — toute route non-API renvoie index.html ─────────────
+// ── Notifications email tickets ──────────────────────────────────────────────
+
+// POST /api/notify/ticket-created — email au responsable assigné
+app.post('/api/notify/ticket-created', requireAuth, async (req, res) => {
+  const { ticketTitle, assigneeEmail, assigneeUsername, creatorUsername } = req.body;
+  if (!assigneeEmail || !ticketTitle) return res.json({ ok: false, reason: 'missing data' });
+  try {
+    const appUrl = IS_PROD ? 'https://maj.stomos.net' : 'http://localhost:3000';
+    await sendTicketEmail(
+      [assigneeEmail],
+      `TONTON AI — Nouveau ticket assigné : "${ticketTitle}"`,
+      [
+        `Bonjour ${assigneeUsername || ''},`,
+        '',
+        `Un nouveau ticket vous a été assigné par ${creatorUsername || "un membre de l'équipe"}.`,
+        `Ticket : ${ticketTitle}`,
+        `Lien : ${appUrl}/tickets`,
+        '',
+        "L'équipe PUBLITHINGS",
+      ].join('\n'),
+      `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">
+        <div style="background:#111;padding:32px 36px 24px">
+          <p style="margin:0;color:#fff;font-size:20px;font-weight:800;letter-spacing:-0.02em">TONTON AI</p>
+          <p style="margin:4px 0 0;color:#aaa;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em">TICKETS</p>
+        </div>
+        <div style="padding:32px 36px">
+          <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#111">Nouveau ticket assigné</p>
+          <p style="margin:0 0 20px;color:#555;font-size:14px;line-height:1.6">
+            <strong>${creatorUsername || 'Un membre'}</strong> a ouvert un ticket et vous a désigné comme responsable.
+          </p>
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:20px 24px;margin-bottom:24px">
+            <p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.06em">Ticket</p>
+            <p style="margin:0;font-size:15px;font-weight:700;color:#111">${ticketTitle}</p>
+          </div>
+          <a href="${appUrl}/tickets" style="display:inline-block;background:#111;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:14px 28px;border-radius:999px">
+            Voir le ticket →
+          </a>
+        </div>
+      </div>`
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[notify/ticket-created]', e.message);
+    res.json({ ok: false, reason: e.message });
+  }
+});
+
+// POST /api/notify/ticket-comment — email au créateur + commentateurs précédents + assigné
+app.post('/api/notify/ticket-comment', requireAuth, async (req, res) => {
+  const { ticketTitle, recipientEmails, commenterUsername, commentContent } = req.body;
+  if (!recipientEmails?.length || !ticketTitle) return res.json({ ok: false, reason: 'missing data' });
+  try {
+    const appUrl = IS_PROD ? 'https://maj.stomos.net' : 'http://localhost:3000';
+    const preview = (commentContent || '').substring(0, 200);
+    await sendTicketEmail(
+      recipientEmails,
+      `TONTON AI — Nouveau commentaire : "${ticketTitle}"`,
+      [
+        `${commenterUsername || "Quelqu'un"} a commenté le ticket "${ticketTitle}".`,
+        '',
+        preview ? `"${preview}"` : '',
+        `Voir : ${appUrl}/tickets`,
+        '',
+        "L'équipe PUBLITHINGS",
+      ].join('\n'),
+      `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">
+        <div style="background:#111;padding:32px 36px 24px">
+          <p style="margin:0;color:#fff;font-size:20px;font-weight:800;letter-spacing:-0.02em">TONTON AI</p>
+          <p style="margin:4px 0 0;color:#aaa;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em">TICKETS</p>
+        </div>
+        <div style="padding:32px 36px">
+          <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#111">Nouveau commentaire</p>
+          <p style="margin:0 0 20px;color:#555;font-size:14px;line-height:1.6">
+            <strong>${commenterUsername || 'Un membre'}</strong> a commenté le ticket <strong>"${ticketTitle}"</strong>.
+          </p>
+          ${preview ? `<div style="background:#f9fafb;border-left:4px solid #d1d5db;padding:16px 20px;margin-bottom:24px;border-radius:0 8px 8px 0">
+            <p style="margin:0;font-size:14px;color:#444;line-height:1.6;font-style:italic">${preview}</p>
+          </div>` : ''}
+          <a href="${appUrl}/tickets" style="display:inline-block;background:#111;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:14px 28px;border-radius:999px">
+            Répondre →
+          </a>
+        </div>
+      </div>`
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[notify/ticket-comment]', e.message);
+    res.json({ ok: false, reason: e.message });
+  }
+});
+
+// POST /api/notify/ticket-status — email au créateur du ticket
+app.post('/api/notify/ticket-status', requireAuth, async (req, res) => {
+  const { ticketTitle, creatorEmail, newStatus, changerUsername } = req.body;
+  if (!creatorEmail || !ticketTitle) return res.json({ ok: false, reason: 'missing data' });
+  const STATUS_LABELS = { in_progress: 'En cours', resolved: 'Résolu', closed: 'Fermé' };
+  const statusLabel = STATUS_LABELS[newStatus] || newStatus;
+  try {
+    const appUrl = IS_PROD ? 'https://maj.stomos.net' : 'http://localhost:3000';
+    await sendTicketEmail(
+      [creatorEmail],
+      `TONTON AI — Ticket mis à jour : "${ticketTitle}"`,
+      [
+        `Votre ticket "${ticketTitle}" a changé de statut.`,
+        '',
+        `Nouveau statut : ${statusLabel}`,
+        `Modifié par : ${changerUsername || "l'équipe"}`,
+        `Voir : ${appUrl}/tickets`,
+        '',
+        "L'équipe PUBLITHINGS",
+      ].join('\n'),
+      `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">
+        <div style="background:#111;padding:32px 36px 24px">
+          <p style="margin:0;color:#fff;font-size:20px;font-weight:800;letter-spacing:-0.02em">TONTON AI</p>
+          <p style="margin:4px 0 0;color:#aaa;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em">TICKETS</p>
+        </div>
+        <div style="padding:32px 36px">
+          <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#111">Statut mis à jour</p>
+          <p style="margin:0 0 20px;color:#555;font-size:14px;line-height:1.6">
+            Votre ticket <strong>"${ticketTitle}"</strong> a été mis à jour par <strong>${changerUsername || "l'équipe"}</strong>.
+          </p>
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:20px 24px;margin-bottom:24px">
+            <p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.06em">Nouveau statut</p>
+            <p style="margin:0;font-size:18px;font-weight:700;color:#111">${statusLabel}</p>
+          </div>
+          <a href="${appUrl}/tickets" style="display:inline-block;background:#111;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:14px 28px;border-radius:999px">
+            Voir le ticket →
+          </a>
+        </div>
+      </div>`
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[notify/ticket-status]', e.message);
+    res.json({ ok: false, reason: e.message });
+  }
+});
+
 // ── Tickets admin (Admin SDK — bypass règles Firestore) ──────────────────────
 // GET /api/admin/tickets — tous les tickets sans restriction (super_admin + manager)
 app.get('/api/admin/tickets', requireAuth, async (req, res) => {
