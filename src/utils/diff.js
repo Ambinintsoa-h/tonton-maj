@@ -270,9 +270,14 @@ export const moveFaqToEnd = (html) => {
     const cls = (child.className || '').toLowerCase();
     const id  = (child.id || '').toLowerCase();
     if (cls.includes('faq') || id.includes('faq') || id === 'foire-aux-questions') {
-      if (child === container.lastElementChild) return html;
-      container.appendChild(child);
-      return container.innerHTML;
+      // Extraire les <ins class="added-content"> qui ont atterri à l'intérieur du bloc FAQ
+      // (cas : passe 2 a ancré sur du texte à l'intérieur du FAQ → insertion enfouie dedans)
+      const insertions = Array.from(child.querySelectorAll('ins.added-content'));
+      for (const ins of insertions) container.insertBefore(ins, child);
+
+      const alreadyLast = child === container.lastElementChild;
+      if (!alreadyLast) container.appendChild(child);
+      return (insertions.length || !alreadyLast) ? container.innerHTML : html;
     }
   }
 
@@ -303,8 +308,19 @@ export const moveFaqToEnd = (html) => {
     }
     if (!faqNodes.length) continue;
 
-    // Déjà à la fin ?
-    if (faqNodes[faqNodes.length - 1] === container.lastChild) return html;
+    // Extraire les <ins class="added-content"> enfouies à l'intérieur des nœuds FAQ
+    const insertions = [];
+    for (const n of faqNodes) {
+      if (n.nodeType === Node.ELEMENT_NODE) {
+        for (const ins of Array.from(n.querySelectorAll('ins.added-content'))) {
+          insertions.push(ins);
+        }
+      }
+    }
+    for (const ins of insertions) container.insertBefore(ins, h);
+
+    const alreadyAtEnd = faqNodes[faqNodes.length - 1] === container.lastChild;
+    if (alreadyAtEnd && !insertions.length) return html;
 
     for (const n of faqNodes) container.appendChild(n);
     return container.innerHTML;
