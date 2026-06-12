@@ -272,6 +272,45 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted }
     setInputVal('');
   }, [popRange, articleEl, contentRef]);
 
+  /**
+   * Retire le background-color (surlignage) de la sélection — y compris quand il
+   * provient d'un style inline d'un élément scrapé (ex: <strong style="background-color:…">),
+   * cas que execCommand('removeFormat') ne traite pas de façon fiable.
+   *
+   * Stratégie DOM : parcourt tous les éléments qui intersectent la sélection et
+   * supprime UNIQUEMENT les propriétés background/background-color de leur style inline.
+   * Ne touche pas aux marques de diff (mark.updated-content), dont le fond vient
+   * d'une classe CSS et non d'un style inline.
+   */
+  const clearBackground = useCallback(() => {
+    popRange();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !articleEl) return;
+    const range = sel.getRangeAt(0);
+
+    const root  = range.commonAncestorContainer;
+    const scope = root.nodeType === 1 ? root : root.parentElement;
+    if (!scope) return;
+
+    const candidates = [scope, ...scope.querySelectorAll('*')];
+    candidates.forEach((el) => {
+      if (!el.style) return;
+      try { if (!range.intersectsNode(el)) return; } catch { return; }
+      if (el.style.backgroundColor || el.style.background) {
+        el.style.removeProperty('background-color');
+        el.style.removeProperty('background');
+        // Nettoyer l'attribut style s'il devient vide
+        if (!el.getAttribute('style')?.trim()) el.removeAttribute('style');
+      }
+    });
+
+    // Filet : retire aussi un éventuel surlignage posé par execCommand (span hiliteColor)
+    document.execCommand('hiliteColor', false, 'transparent');
+
+    if (contentRef) contentRef.current = articleEl.innerHTML;
+    setPanel(null);
+  }, [popRange, articleEl, contentRef]);
+
   const closePanel = useCallback(() => { setPanel(null); setInputVal(''); }, []);
 
   const openPanel = useCallback((name) => {
@@ -594,9 +633,9 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted }
           {HL_COLORS.map((c) => (
             <Swatch key={c.value} color={c.value} label={c.label}
               onClick={() => {
+                if (c.value === 'transparent') { clearBackground(); return; }
                 popRange();
-                if (c.value === 'transparent') format('removeFormat');
-                else format('hiliteColor', c.value);
+                format('hiliteColor', c.value);
               }}
             />
           ))}
