@@ -685,40 +685,56 @@ export default function ArticleResult() {
 
     let injected = 0;
 
+    // Candidats d'ancrage : l'ancre complète, puis des variantes de plus en plus
+    // courtes (on retire le dernier mot) jusqu'à 2 mots. Permet de surligner même
+    // quand l'ancre exacte choisie par l'IA n'existe pas mot-pour-mot dans l'article.
+    const anchorCandidates = (anchor) => {
+      const words = (anchor || '').trim().split(/\s+/).filter(Boolean);
+      if (words.length <= 1) return words;
+      const out = [];
+      for (let len = words.length; len >= 2; len--) out.push(words.slice(0, len).join(' '));
+      return out;
+    };
+
     internalLinks.forEach((link, i) => {
-      const escaped   = link.anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const textRegex = new RegExp(escaped, 'i');
+      let done = false;
+      for (const candidate of anchorCandidates(link.anchor)) {
+        if (done) break;
+        const escaped   = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const textRegex = new RegExp(escaped, 'i');
 
-      const walker = document.createTreeWalker(
-        articleRef.current,
-        NodeFilter.SHOW_TEXT,
-        null
-      );
+        const walker = document.createTreeWalker(
+          articleRef.current,
+          NodeFilter.SHOW_TEXT,
+          null
+        );
 
-      let node;
-      while ((node = walker.nextNode())) {
-        // Ignorer le contenu supprimé (<del>) et les spans déjà surlignés
-        if (node.parentElement?.closest('del, [data-il-idx]')) continue;
+        let node;
+        while ((node = walker.nextNode())) {
+          // Ignorer le contenu supprimé (<del>) et les spans déjà surlignés
+          if (node.parentElement?.closest('del, [data-il-idx]')) continue;
 
-        const text  = node.textContent;
-        const match = text.match(textRegex);
-        if (!match) continue;
+          const text  = node.textContent;
+          const match = text.match(textRegex);
+          if (!match) continue;
 
-        const idx = text.search(textRegex);
-        // Découper le nœud texte : [avant][ancre][après]
-        const anchorNode = node.splitText(idx);       // anchorNode = [ancre][après]
-        anchorNode.splitText(match[0].length);        // anchorNode = [ancre] seulement
+          const idx = text.search(textRegex);
+          // Découper le nœud texte : [avant][ancre][après]
+          const anchorNode = node.splitText(idx);       // anchorNode = [ancre][après]
+          anchorNode.splitText(match[0].length);        // anchorNode = [ancre] seulement
 
-        // Envelopper anchorNode dans un span highlight
-        const span = document.createElement('span');
-        span.setAttribute('data-il-idx', String(i));
-        span.setAttribute('data-il-url', link.url);
-        span.className = 'il-highlight';
-        anchorNode.parentNode.insertBefore(span, anchorNode);
-        span.appendChild(anchorNode);
+          // Envelopper anchorNode dans un span highlight
+          const span = document.createElement('span');
+          span.setAttribute('data-il-idx', String(i));
+          span.setAttribute('data-il-url', link.url);
+          span.className = 'il-highlight';
+          anchorNode.parentNode.insertBefore(span, anchorNode);
+          span.appendChild(anchorNode);
 
-        injected++;
-        break; // Une injection par lien interne
+          injected++;
+          done = true;
+          break; // Une injection par lien interne
+        }
       }
     });
 

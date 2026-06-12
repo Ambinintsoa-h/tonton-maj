@@ -218,14 +218,14 @@ body {
 
 /* Surlignage liens internes suggérés ── visible dans l'éditeur, strippé à l'export */
 .il-highlight {
-  background-color: rgba(156, 163, 175, 0.22); /* gris clair */
+  background-color: rgba(255, 126, 71, 0.30); /* orange coucher de soleil */
   border-radius: 3px;
   padding: 0 2px;
   cursor: pointer;
   transition: background-color 0.15s;
 }
 .il-highlight:hover {
-  background-color: rgba(156, 163, 175, 0.42);
+  background-color: rgba(255, 126, 71, 0.50);
 }
 
 /* Skills editor */

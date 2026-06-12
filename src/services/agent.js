@@ -423,7 +423,7 @@ const extractIlCount = (skills) => {
       return { min: n, max: n, exact: true };
     }
   }
-  return { min: 2, max: 4, exact: false };
+  return { min: 3, max: 5, exact: false };
 };
 
 /** Construit le bloc Skills pour le system prompt. */
@@ -936,7 +936,7 @@ ${content}
         });
         const relatedPosts = resp.data?.posts || [];
 
-        if (relatedPosts.length >= 2) {
+        if (relatedPosts.length >= 1) {
           // 3. Demander à Claude de suggérer N liens internes (paramétré via skills)
           const postsList = relatedPosts.map((p, i) => `${i + 1}. "${p.title}" — ${p.url}`).join('\n');
           const articlePreviewText = stripHtml(content).substring(0, 2000);
@@ -953,8 +953,8 @@ ${articlePreviewText}
 Articles disponibles sur le même site :
 ${postsList}
 
-Suggère ${ilExact ? `exactement ${ilMax}` : `${ilMin} à ${ilMax}`} lien(s) interne(s) pertinent(s). Pour chaque lien :
-- "anchor" : une expression EXACTE présente dans l'article (2-5 mots, riche en mots-clés)
+Suggère ${ilExact ? `exactement ${ilMax}` : `AU MOINS ${ilMin} et jusqu'à ${ilMax}`} lien(s) interne(s) pertinent(s). ${ilExact ? '' : `Le minimum de ${ilMin} liens est IMPÉRATIF tant qu'il reste des articles pertinents dans la liste ci-dessus — ne descends en dessous que si la liste compte moins de ${ilMin} articles réellement liés.`} Pour chaque lien :
+- "anchor" : une expression COURTE (2-5 mots) et EXACTEMENT présente mot-pour-mot dans l'article, riche en mots-clés. Choisis une expression simple et certaine d'exister, pas une longue phrase.
 - "url" : l'URL de l'article lié
 - "title" : le titre de l'article lié
 - "reason" : pourquoi ce lien est pertinent (1 phrase)
