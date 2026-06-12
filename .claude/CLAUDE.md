@@ -7,6 +7,8 @@
 4. Travailler sur une **branche** (`feat/...` ou `fix/...`), ouvrir une **PR** vers `main`
 5. Merger via PR uniquement — CI (`Build & Lint`) doit être vert
 6. `git pull --rebase` avant chaque push
+7. **NE JAMAIS TOUCHER AUX FONCTIONNALITÉS EXISTANTES QUI FONCTIONNENT.**
+   - Si on est dans l'obligation d'y toucher : **toujours demander avant**, et **vérifier qu'aucun conflit/régression n'existe**. Rester très vigilant.
 
 ## Docs chargées automatiquement
 @.claude/git-deploy.md
