@@ -202,6 +202,14 @@ export const deleteWordPressSite = async (id) => {
   await deleteDoc(doc(db, 'wordpress_sites', id));
 };
 
+// Persiste les polices détectées d'un site (champ `fonts` uniquement).
+// Survit au vidage du cache / localStorage : rechargé au boot via getWordPressSites.
+// Mise à jour ciblée (updateDoc d'un seul champ) → ne réécrit pas le reste du doc.
+export const saveSiteFonts = async (siteId, fonts) => {
+  if (!db || !siteId || !Array.isArray(fonts) || fonts.length === 0) return;
+  await updateDoc(doc(db, 'wordpress_sites', siteId), { fonts });
+};
+
 // Knowledge base
 export const getKnowledge = async () => {
   if (!db) return [];

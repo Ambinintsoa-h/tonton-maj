@@ -27,7 +27,7 @@ import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
-import { initArticleSeoTracking, saveSeoSnapshot } from '../services/firebase';
+import { initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
@@ -1064,7 +1064,12 @@ export default function MajEnAttente() {
                 siteFonts:       r.site_fonts || [],  // polices déclarées sur le site (sélecteur de police)
               };
               // Cache des polices du site → réutilisées à la réouverture depuis l'historique (sans requête)
-              dispatch(cacheSiteFonts({ siteId: matchingSite.id, fonts: r.site_fonts || [] }));
+              const detectedFonts = r.site_fonts || [];
+              dispatch(cacheSiteFonts({ siteId: matchingSite.id, fonts: detectedFonts }));
+              // Persistance Firestore (survit au vidage du cache) — uniquement si changé
+              if (detectedFonts.length && JSON.stringify(detectedFonts) !== JSON.stringify(matchingSite.fonts || [])) {
+                saveSiteFonts(matchingSite.id, detectedFonts).catch(() => {});
+              }
             }
           }
         } catch { /* non-fatal */ }

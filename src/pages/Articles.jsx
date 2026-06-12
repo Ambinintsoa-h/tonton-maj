@@ -10,7 +10,7 @@ import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
-import { saveArticle, initArticleSeoTracking, saveSeoSnapshot } from '../services/firebase';
+import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
 import tracker from '../services/activityTracker';
 import AgentThinking from '../components/agent/AgentThinking';
 import ArticleResult from '../components/agent/ArticleResult';
@@ -95,7 +95,12 @@ export default function Articles() {
             };
             dispatch(setWpData(prefetchedWpData));
             // Cache des polices du site → réutilisées à la réouverture depuis l'historique (sans requête)
-            dispatch(cacheSiteFonts({ siteId: matchingSite.id, fonts: r.site_fonts || [] }));
+            const detectedFonts = r.site_fonts || [];
+            dispatch(cacheSiteFonts({ siteId: matchingSite.id, fonts: detectedFonts }));
+            // Persistance Firestore (survit au vidage du cache) — uniquement si changé
+            if (detectedFonts.length && JSON.stringify(detectedFonts) !== JSON.stringify(matchingSite.fonts || [])) {
+              saveSiteFonts(matchingSite.id, detectedFonts).catch(() => {});
+            }
             dispatch(addStep(`WordPress MCP OK — article lu directement (ID ${r.post_id})`));
             wpFetched = true;
           }
