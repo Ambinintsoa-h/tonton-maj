@@ -591,12 +591,59 @@ app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager')
   } catch (e) { return res.status(400).json({ error: e.message }); }
 });
 
-// ─── Supprimer un compte membre ───────────────────────────────────────────────
+// ─── Modifier un compte membre (Auth + Firestore) ─────────────────────────────
+// Propage email / mot de passe / rôle vers Firebase Auth — sans quoi la modif
+// reste cosmétique côté Firestore et le login continue d'utiliser l'ancienne valeur.
+app.put('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
+  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
+  const { uid } = req.params;
+  const { firstName, lastName, email, role, status, note, password } = req.body || {};
+  if (req.user.role === 'manager' && role && role !== 'cq_ia') {
+    return res.status(403).json({ error: 'Un manager ne peut gérer que des comptes CQ IA' });
+  }
+  if (role && !VALID_ROLES.has(role)) return res.status(400).json({ error: 'Rôle invalide' });
+  if (password && password.length < 6) return res.status(400).json({ error: 'Mot de passe trop court (6 caractères min)' });
+  try {
+    const db = firebaseAdmin.firestore();
+    const existing = (await db.collection('users').doc(uid).get()).data() || {};
+    const username = existing.username || (email ? email.split('@')[0] : uid);
+
+    // 1. Firebase Auth — email + mot de passe (ignore si le compte Auth n'existe pas)
+    const authUpdate = {};
+    if (email && email !== existing.email) authUpdate.email = email;
+    if (password) authUpdate.password = password;
+    if (Object.keys(authUpdate).length) {
+      try { await firebaseAdmin.auth().updateUser(uid, authUpdate); }
+      catch (e) { if (e.code !== 'auth/user-not-found') throw e; }
+    }
+    // 2. Custom claims — le rôle lu par le login vient d'ici, pas de Firestore
+    if (role && role !== existing.role) {
+      try { await firebaseAdmin.auth().setCustomUserClaims(uid, { role, username }); }
+      catch (e) { if (e.code !== 'auth/user-not-found') throw e; }
+    }
+    // 3. Fiche Firestore — jamais de mot de passe en clair ; purge un éventuel legacy
+    const docUpdate = { updatedAt: Date.now(), password: firebaseAdmin.firestore.FieldValue.delete() };
+    if (firstName !== undefined) docUpdate.firstName = firstName;
+    if (lastName  !== undefined) docUpdate.lastName  = lastName;
+    if (email     !== undefined) docUpdate.email     = email;
+    if (role      !== undefined) docUpdate.role      = role;
+    if (status    !== undefined) docUpdate.status    = status;
+    if (note      !== undefined) docUpdate.note      = note;
+    await db.collection('users').doc(uid).set(docUpdate, { merge: true });
+
+    return res.json({ success: true, uid });
+  } catch (e) { return res.status(400).json({ error: e.message }); }
+});
+
+// ─── Supprimer un compte membre (Auth + Firestore) ────────────────────────────
 app.delete('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
   if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   const { uid } = req.params;
   try {
-    await firebaseAdmin.auth().deleteUser(uid);
+    // Supprimer le compte Auth (sinon l'utilisateur peut toujours se connecter)
+    // — on tolère son absence pour nettoyer quand même la fiche Firestore.
+    try { await firebaseAdmin.auth().deleteUser(uid); }
+    catch (e) { if (e.code !== 'auth/user-not-found') throw e; }
     await firebaseAdmin.firestore().collection('users').doc(uid).delete();
     return res.json({ success: true });
   } catch (e) { return res.status(400).json({ error: e.message }); }
