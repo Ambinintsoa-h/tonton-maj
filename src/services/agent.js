@@ -233,8 +233,8 @@ export const generateAltText = async (imageUrl, apiKey) => {
  * Retourne les updates enrichis d'un flag `coherent` et d'un champ `coherenceIssue`.
  * Silencieux en cas d'erreur — ne bloque jamais l'affichage des résultats.
  */
-const checkCoherence = async (articleHtml, updates, apiKey) => {
-  if (!updates?.length || !apiKey) return updates;
+const checkCoherence = async (articleHtml, updates) => {
+  if (!updates?.length) return updates;
 
   // Texte brut de l'article (2000 chars suffisent pour le contexte)
   const articleText = articleHtml
@@ -252,7 +252,7 @@ const checkCoherence = async (articleHtml, updates, apiKey) => {
     type:     u.type || 'replacement',
   }));
 
-  const { text } = await callClaude(apiKey, {
+  const { text } = await callClaude(null, {
     system: `Tu valides des modifications d'article proposées par un agent IA. Pour chaque update :
 - "valid": true si la modification semble correcte et cohérente avec l'article
 - "valid": false si : le texte "original" ne semble pas issu de l'article, le "updated" introduit un doublon évident, ou la modification est incohérente / contra-factuelle
@@ -276,6 +276,70 @@ Réponds UNIQUEMENT avec le JSON : {"results":[{"i":0,"valid":true},{"i":1,"vali
       ? { ...u, coherent: true }
       : { ...u, coherent: false, coherenceIssue: check.issue || 'Incohérence détectée' };
   });
+};
+
+/**
+ * Vérifie que chaque skill et document de la base de connaissances a bien été
+ * appliqué dans les updates générés. Retourne les updates manquants à ajouter.
+ * Silencieux en cas d'erreur — ne bloque jamais.
+ */
+const checkSkillsCompliance = async (articleContent, updates, skills, knowledge) => {
+  const activeSkills = skills.filter(s => s.content);
+  const activeDocs   = knowledge.filter(k => k.content);
+  if (!activeSkills.length && !activeDocs.length) return [];
+
+  const articleText = stripHtml(articleContent).substring(0, 3000);
+
+  const updatesJson = JSON.stringify(
+    updates.slice(0, 30).map(u => ({
+      original: (u.original || '').substring(0, 100),
+      updated:  (u.updated  || '').substring(0, 100),
+      reason:   u.reason   || '',
+      source:   u.source   || '',
+    }))
+  );
+
+  const skillsList = activeSkills.map((s, i) => {
+    const text = s.content?.trimStart().startsWith('<') ? stripHtml(s.content) : (s.content || '');
+    return `### SKILL ${i + 1} — ${s.name}\n${text.substring(0, 600)}`;
+  }).join('\n\n');
+
+  const docsList = activeDocs.map((k, i) => {
+    const isHtml = k.isHtml || k.source === 'manual' || k.content?.trimStart().startsWith('<');
+    const text   = isHtml ? stripHtml(k.content) : (k.content || '');
+    return `### DOCUMENT ${i + 1} — ${k.name}\n${text.substring(0, 600)}`;
+  }).join('\n\n');
+
+  const { text } = await callClaude(null, {
+    model:      MODELS.FAST,
+    max_tokens: 4000,
+    system: `Tu es un auditeur de conformité SEO. Tu vérifie que les modifications générées respectent bien chaque skill et chaque document de la base de connaissances.
+Pour chaque règle NON respectée ou insuffisamment couverte, tu génères la modification manquante.
+Réponds UNIQUEMENT avec un JSON valide :
+{"missing_updates":[{"original":"texte exact présent dans l'article","updated":"texte corrigé","reason":"Skill N — [nom] : explication","source":"Conformité skills"}]}
+Si tout est respecté : {"missing_updates":[]}`,
+    messages: [{
+      role: 'user',
+      content: `## SKILLS À VÉRIFIER
+${skillsList || '(aucun)'}
+
+## BASE DE CONNAISSANCES À VÉRIFIER
+${docsList || '(aucune)'}
+
+## MODIFICATIONS DÉJÀ GÉNÉRÉES
+${updatesJson}
+
+## ARTICLE (extrait — 3000 premiers caractères)
+${articleText}
+
+Vérifie si chaque skill et chaque document a été appliqué dans les modifications existantes.
+Pour chaque élément ignoré ou insuffisamment traité : génère la modification manquante avec le texte EXACT de l'article dans "original".
+Ne génère PAS de doublons avec les modifications déjà présentes.`,
+    }],
+  });
+
+  const { missing_updates = [] } = parseJsonResponse(text, { missing_updates: [] }, '[compliance]');
+  return missing_updates.filter(u => u.original && u.updated && u.reason);
 };
 
 // ── Helpers partagés ─────────────────────────────────────────────────────────
@@ -736,10 +800,11 @@ ${content.substring(0, 5000)}`,
       ).join('\n') + '\n'
     : '';
 
-  const skillsCount = skills.filter(s => s.content).length;
-  const skillsReminder = skillsCount > 0
-    ? `\n## RAPPEL — SKILLS ACTIFS (${skillsCount} dans le system prompt)\n` +
-      `Tes ${skillsCount} skill(s) définissent tes règles d'écriture. Chaque modification doit les respecter.\n`
+  const activeSkillsList = skills.filter(s => s.content);
+  const skillsReminder = activeSkillsList.length > 0
+    ? `\n## RAPPEL — SKILLS ACTIFS (${activeSkillsList.length} règles obligatoires dans le system prompt)\n` +
+      `Chaque modification DOIT respecter ces ${activeSkillsList.length} skill(s) :\n` +
+      activeSkillsList.map((s, i) => `- Skill ${i + 1} : **${s.name}**`).join('\n') + '\n'
     : '';
 
   const kwBlock = targetKeyword
@@ -791,12 +856,29 @@ ${content}
     '[agent] JSON parse failed — réponse brute:'
   );
 
-  // ── Étape 4 : Vérification de cohérence ──────────────────────────────────────
+  // ── Étape 4 : Conformité skills + base de connaissances ──────────────────────
+  if (activeSkillsList.length > 0 || knowledge.filter(k => k.content).length > 0) {
+    onStep('Vérification de conformité skills et base de connaissances...');
+    onProgress(90);
+    try {
+      const complianceUpdates = await checkSkillsCompliance(
+        content, result.updates || [], skills, knowledge
+      );
+      if (complianceUpdates.length > 0) {
+        result.updates = [...(result.updates || []), ...complianceUpdates];
+        onStep(`Conformité : ${complianceUpdates.length} correction(s) ajoutée(s)`);
+      }
+    } catch (e) {
+      console.warn('[compliance] Échec de la vérification :', e.message);
+    }
+  }
+
+  // ── Étape 5 : Vérification de cohérence ──────────────────────────────────────
   if ((result.updates || []).length > 0) {
     onStep('Vérification de cohérence des modifications...');
-    onProgress(93);
+    onProgress(95);
     try {
-      result.updates = await checkCoherence(content, result.updates, null);
+      result.updates = await checkCoherence(content, result.updates);
     } catch (e) {
       console.warn('[coherence] Échec de la vérification :', e.message);
     }

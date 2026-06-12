@@ -117,7 +117,10 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
       getKnowledge().catch(() => []),
     ]);
 
-    if (skills.length > 0) {
+    // localStorage = source de vérité pour skills + knowledge.
+    // Firestore ne remplace que si le localStorage est vide (premier chargement ou cache vidé).
+    const localSkills = store.getState().skills.list;
+    if (localSkills.length === 0 && skills.length > 0) {
       dispatch(setSkills(skills));
       localStorage.setItem(STORAGE_KEYS.skills, JSON.stringify(skills));
     }
@@ -139,7 +142,8 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     if (stats) {
       dispatch(setStats(stats));
     }
-    if (knowledge.length > 0) {
+    const localKnowledge = store.getState().knowledge.list;
+    if (localKnowledge.length === 0 && knowledge.length > 0) {
       dispatch(setKnowledge(knowledge));
       localStorage.setItem(STORAGE_KEYS.knowledge, JSON.stringify(knowledge));
     }
