@@ -1060,6 +1060,7 @@ export default function MajEnAttente() {
                 featuredMediaUrl:r.featured_media_url || null,
                 postLink:        r.link || null,
                 wpTitle:         r.title || '',
+                siteFonts:       r.site_fonts || [],  // polices déclarées sur le site (sélecteur de police)
               };
             }
           }
