@@ -8,8 +8,8 @@ import {
   Mail, Phone, StickyNote, UserCheck, UserX, Search,
   Bot, UserPlus, KeyRound, Eye, EyeOff,
 } from 'lucide-react';
-import { addUser, updateUser, removeUser, setUsers } from '../store/slices/usersSlice';
-import { saveUser, deleteUser, getUsers } from '../services/firebase';
+import { removeUser, setUsers } from '../store/slices/usersSlice';
+import { getUsers } from '../services/firebase';
 import { AccountAvatar } from '../components/account/MonComptePanel';
 import { IA_AGENTS } from '../constants/agents';
 import MemberStatsPanel from '../components/stats/MemberStatsPanel';
@@ -254,7 +254,6 @@ function UserForm({ user, onSave, onCancel }) {
 
 // ─── Carte membre ─────────────────────────────────────────────────────────────
 function UserCard({ user, onEdit, onDelete, isSuperAdmin, onViewStats }) {
-  const [showPass, setShowPass] = useState(false);
   const createdDate = user.createdAt
     ? new Date(user.createdAt).toLocaleDateString('fr-FR', {
         day: 'numeric', month: 'short', year: 'numeric',
@@ -296,22 +295,6 @@ function UserCard({ user, onEdit, onDelete, isSuperAdmin, onViewStats }) {
             {user.email}
           </a>
         </div>
-
-        {/* Mot de passe — visible super_admin uniquement */}
-        {isSuperAdmin && user.password && (
-          <div className="flex items-center gap-1.5 mt-1">
-            <KeyRound size={12} className="text-gray-400 flex-shrink-0" />
-            <span className="text-xs font-mono text-gray-500 tracking-wide">
-              {showPass ? user.password : '••••••••'}
-            </span>
-            <button
-              onClick={() => setShowPass(v => !v)}
-              className="text-gray-400 hover:text-gray-700 transition-colors"
-            >
-              {showPass ? <EyeOff size={11} /> : <Eye size={11} />}
-            </button>
-          </div>
-        )}
 
         {/* Téléphone */}
         {user.phone && (
@@ -588,29 +571,46 @@ export default function Equipe() {
   const [search,      setSearch]      = useState('');
   const [statsUser,   setStatsUser]   = useState(null);
 
-  // ── Sauvegarde ──
-  const handleSave = async (user) => {
-    if (firebaseReady) {
-      try {
-        const id = await saveUser(user);
-        if (user.id) dispatch(updateUser({ ...user, id }));
-        else         dispatch(addUser({ ...user, id }));
-      } catch {
-        if (user.id) dispatch(updateUser(user));
-        else         dispatch(addUser({ ...user, id: Date.now().toString() }));
-      }
-    } else {
-      if (user.id) dispatch(updateUser(user));
-      else         dispatch(addUser({ ...user, id: Date.now().toString() }));
-    }
-    toast.success(user.id ? 'Membre mis à jour !' : 'Membre ajouté !');
-    setEditing(null);
-    setShowNew(false);
+  const refreshUsers = async () => {
+    try { dispatch(setUsers(await getUsers())); } catch { /* liste rafraîchie au prochain chargement */ }
   };
 
-  // ── Suppression ──
+  // ── Sauvegarde — passe par l'Admin SDK pour synchroniser Firebase Auth ──
+  const handleSave = async (user) => {
+    try {
+      if (user.id) {
+        await axios.put(`/api/users/${user.uid || user.id}`, {
+          firstName: user.firstName, lastName: user.lastName,
+          email: user.email, role: user.role, status: user.status,
+          note: user.note || '', password: user.password || undefined,
+        });
+      } else {
+        const sanitize = (s = '') => s.toLowerCase().trim().replace(/\s+/g, '_').replace(/[^a-z0-9_-]/g, '');
+        const username = `${sanitize(user.firstName)}_${sanitize(user.lastName)}`.replace(/^_+|_+$/g, '')
+          || sanitize(user.email.split('@')[0]);
+        await axios.post('/api/users/create', {
+          firstName: user.firstName, lastName: user.lastName,
+          email: user.email, username, role: user.role, password: user.password,
+        });
+      }
+      await refreshUsers();
+      toast.success(user.id ? 'Membre mis à jour !' : 'Membre ajouté !');
+      setEditing(null);
+      setShowNew(false);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Erreur enregistrement');
+    }
+  };
+
+  // ── Suppression — Admin SDK : retire le compte Auth ET la fiche Firestore ──
   const handleDelete = async (id) => {
-    if (firebaseReady) { try { await deleteUser(id); } catch {} }
+    const target = users.find(u => u.id === id);
+    try {
+      await axios.delete(`/api/users/${target?.uid || id}`);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Erreur suppression');
+      return;
+    }
     dispatch(removeUser(id));
     toast.success('Membre supprimé');
   };

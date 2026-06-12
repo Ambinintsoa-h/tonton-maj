@@ -240,20 +240,9 @@ export const getUsers = async () => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
-export const saveUser = async (user) => {
-  if (!db) throw new Error('Firebase non initialisé');
-  if (user.id) {
-    await updateDoc(doc(db, 'users', user.id), { ...user, updatedAt: Date.now() });
-    return user.id;
-  }
-  const ref = await addDoc(collection(db, 'users'), { ...user, createdAt: Date.now() });
-  return ref.id;
-};
-
-export const deleteUser = async (id) => {
-  if (!db) throw new Error('Firebase non initialisé');
-  await deleteDoc(doc(db, 'users', id));
-};
+// Création / modification / suppression de membres : voir les routes Admin SDK
+// du proxy (/api/users/create, PUT /api/users/:uid, DELETE /api/users/:uid) —
+// elles synchronisent Firebase Auth (email, mot de passe, rôle) avec Firestore.
 
 // Pending items (file d'attente partagée entre membres de l'équipe)
 export const getPendingItems = async () => {
