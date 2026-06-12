@@ -1756,6 +1756,7 @@ export default function ArticleResult() {
           <BubbleToolbar
             articleEl={articleEl}
             contentRef={contentRef}
+            siteFonts={wpMcpData?.siteFonts || []}
             onImageInserted={settings.anthropicKey ? (url) => {
               generateAltText(url, settings.anthropicKey).then(altText => {
                 if (!altText || !articleRef.current) return;

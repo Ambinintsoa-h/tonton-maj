@@ -90,6 +90,7 @@ export default function Articles() {
               wpTitle:         r.title || '',
               categories:      r.categories || [],  // IDs des catégories actuelles de l'article
               tags:            r.tags       || [],  // IDs des tags actuels
+              siteFonts:       r.site_fonts || [],  // polices déclarées sur le site (sélecteur de police)
             };
             dispatch(setWpData(prefetchedWpData));
             dispatch(addStep(`WordPress MCP OK — article lu directement (ID ${r.post_id})`));

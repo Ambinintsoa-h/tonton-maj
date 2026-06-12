@@ -2100,6 +2100,68 @@ const processWpHtml = (html, siteUrl) => {
   return doc.body ? doc.body.innerHTML.trim() : html;
 };
 
+// ─── Extraction des polices déclarées sur une page du site ───────────────────
+// Récupère la page publique rendue (même origine, déjà validée SSRF) et parse les
+// familles de polices déclarées : font-family (styles inline + <style>), @font-face,
+// et liens Google Fonts. Lecture seule, résultat plafonné, fallback [] silencieux.
+// Ne fetch PAS de CSS externe arbitraire (surface SSRF + latence) — uniquement la page.
+const GENERIC_FONTS = new Set([
+  'inherit', 'initial', 'unset', 'revert', 'sans-serif', 'serif', 'monospace',
+  'cursive', 'fantasy', 'system-ui', 'ui-sans-serif', 'ui-serif', 'ui-monospace',
+  '-apple-system', 'blinkmacsystemfont', 'auto', 'none',
+]);
+
+const extractSiteFonts = async (pageUrl) => {
+  if (!pageUrl) return [];
+  try {
+    await assertSafeUrl(pageUrl, 'URL page article');
+    const resp = await axios.get(pageUrl, {
+      timeout: 10000,
+      maxRedirects: 2,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    });
+    const html = typeof resp.data === 'string' ? resp.data : '';
+    if (!html) return [];
+
+    const fonts = new Map(); // clé normalisée (lowercase) → libellé d'origine
+
+    const addFamily = (raw) => {
+      if (!raw) return;
+      const first = raw.split(',')[0].trim().replace(/^["']|["']$/g, '').trim();
+      if (!first || first.length > 40) return;
+      const key = first.toLowerCase();
+      if (GENERIC_FONTS.has(key) || key.startsWith('var(')) return;
+      if (!/[a-z]/i.test(first)) return; // ignore valeurs non textuelles
+      if (!fonts.has(key)) fonts.set(key, first);
+    };
+
+    // 1) Déclarations font-family (styles inline + blocs <style>)
+    const reFF = /font-family\s*:\s*([^;}{"]+)/gi;
+    let m;
+    while ((m = reFF.exec(html)) && fonts.size < 40) addFamily(m[1]);
+
+    // 2) @font-face { font-family: "X" }
+    const reFace = /@font-face[^}]*font-family\s*:\s*([^;}]+)/gi;
+    while ((m = reFace.exec(html)) && fonts.size < 40) addFamily(m[1]);
+
+    // 3) Liens Google Fonts (family=Roboto:wght@400;700&family=Lora)
+    const reGoogle = /fonts\.googleapis\.com\/css2?\?([^"'\s>]+)/gi;
+    while ((m = reGoogle.exec(html))) {
+      const qs = m[1].replace(/&amp;/g, '&');
+      for (const fam of qs.matchAll(/family=([^&:]+)/gi)) {
+        addFamily(decodeURIComponent(fam[1].replace(/\+/g, ' ')));
+      }
+    }
+
+    return [...fonts.values()].slice(0, 20);
+  } catch {
+    return [];
+  }
+};
+
 // ─── MCP WordPress : exécution d'outils ──────────────────────────────────────
 // Appelé soit directement (/api/wp-tool) soit depuis la boucle /api/claude-tools.
 // wpSites : liste des sites configurés dans l'app, avec credentials complets.
@@ -2148,14 +2210,18 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
       }
       if (!post) return { error: `Aucun article trouvé pour le slug "${slug}"` };
 
-      let featuredMediaUrl = null;
-      if (post.featured_media) {
-        try {
-          const media = await wpApi(site, 'GET',
-            `/wp-json/wp/v2/media/${post.featured_media}?_fields=id,source_url,alt_text`);
-          featuredMediaUrl = media.source_url || null;
-        } catch {}
-      }
+      // Image à la une + polices du site récupérées en parallèle (gain de latence)
+      const [featuredMediaUrl, siteFonts] = await Promise.all([
+        (async () => {
+          if (!post.featured_media) return null;
+          try {
+            const media = await wpApi(site, 'GET',
+              `/wp-json/wp/v2/media/${post.featured_media}?_fields=id,source_url,alt_text`);
+            return media.source_url || null;
+          } catch { return null; }
+        })(),
+        extractSiteFonts(post.link),
+      ]);
 
       let processedContent = processWpHtml(post.content?.rendered || '', site.url);
       // Injecter l'image à la une en tête — même logique que le scraper (ligne ~706)
@@ -2177,6 +2243,7 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
         featured_media_url: featuredMediaUrl,
         categories:         post.categories || [],
         tags:               post.tags || [],
+        site_fonts:         siteFonts || [],
       };
     }
 

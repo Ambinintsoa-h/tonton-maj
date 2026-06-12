@@ -19,7 +19,11 @@ import {
   Link, Unlink2,
   Image, Film, Code2,
   Check, X, Trash2,
+  CaseSensitive,
 } from 'lucide-react';
+
+// Polices web-safe de repli si le site n'expose aucune police détectable
+const FALLBACK_FONTS = ['Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Verdana', 'Courier New'];
 
 // ── Palettes couleurs ─────────────────────────────────────────────────────────
 const TEXT_COLORS = [
@@ -184,7 +188,9 @@ const Swatch = ({ color, label, onClick }) => (
 
 // ── Composant principal ───────────────────────────────────────────────────────
 
-export default function BubbleToolbar({ articleEl, contentRef, onImageInserted }) {
+export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, siteFonts = [] }) {
+  // Polices proposées : celles détectées sur le site, sinon repli web-safe
+  const fontList = (Array.isArray(siteFonts) && siteFonts.length > 0) ? siteFonts : FALLBACK_FONTS;
   const [visible, setVisible]   = useState(false);
   const [pos, setPos]           = useState({ top: 0, left: 0, below: false });
   const [panel, setPanel]       = useState(null);
@@ -270,6 +276,85 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted }
     if (contentRef) contentRef.current = articleEl?.innerHTML || '';
     setPanel(null);
     setInputVal('');
+  }, [popRange, articleEl, contentRef]);
+
+  /**
+   * Retire le background-color (surlignage) de la sélection — y compris quand il
+   * provient d'un style inline d'un élément scrapé (ex: <strong style="background-color:…">),
+   * cas que execCommand('removeFormat') ne traite pas de façon fiable.
+   *
+   * Stratégie DOM : parcourt tous les éléments qui intersectent la sélection et
+   * supprime UNIQUEMENT les propriétés background/background-color de leur style inline.
+   * Ne touche pas aux marques de diff (mark.updated-content), dont le fond vient
+   * d'une classe CSS et non d'un style inline.
+   */
+  const clearBackground = useCallback(() => {
+    popRange();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !articleEl) return;
+    const range = sel.getRangeAt(0);
+
+    const root  = range.commonAncestorContainer;
+    const scope = root.nodeType === 1 ? root : root.parentElement;
+    if (!scope) return;
+
+    const candidates = [scope, ...scope.querySelectorAll('*')];
+    candidates.forEach((el) => {
+      if (!el.style) return;
+      try { if (!range.intersectsNode(el)) return; } catch { return; }
+      if (el.style.backgroundColor || el.style.background) {
+        el.style.removeProperty('background-color');
+        el.style.removeProperty('background');
+        // Nettoyer l'attribut style s'il devient vide
+        if (!el.getAttribute('style')?.trim()) el.removeAttribute('style');
+      }
+    });
+
+    // Filet : retire aussi un éventuel surlignage posé par execCommand (span hiliteColor)
+    document.execCommand('hiliteColor', false, 'transparent');
+
+    if (contentRef) contentRef.current = articleEl.innerHTML;
+    setPanel(null);
+  }, [popRange, articleEl, contentRef]);
+
+  /**
+   * Applique une police à la sélection. styleWithCSS=true force execCommand à
+   * produire <span style="font-family:…"> (propre + compatible WordPress) plutôt
+   * que la balise dépréciée <font face="…"> (strippée par wp_kses).
+   */
+  const applyFont = useCallback((font) => {
+    popRange();
+    const scrollTop = articleEl?.scrollTop ?? 0;
+    try { document.execCommand('styleWithCSS', false, true); } catch {}
+    document.execCommand('fontName', false, font);
+    try { document.execCommand('styleWithCSS', false, false); } catch {}
+    if (articleEl) articleEl.scrollTop = scrollTop;
+    if (contentRef) contentRef.current = articleEl?.innerHTML || '';
+    setPanel(null);
+  }, [popRange, articleEl, contentRef]);
+
+  /**
+   * Retire la police (revient à la police par défaut) : supprime la propriété
+   * font-family des styles inline des éléments intersectant la sélection.
+   */
+  const clearFont = useCallback(() => {
+    popRange();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !articleEl) return;
+    const range = sel.getRangeAt(0);
+    const root  = range.commonAncestorContainer;
+    const scope = root.nodeType === 1 ? root : root.parentElement;
+    if (!scope) return;
+    [scope, ...scope.querySelectorAll('*')].forEach((el) => {
+      if (!el.style) return;
+      try { if (!range.intersectsNode(el)) return; } catch { return; }
+      if (el.style.fontFamily) {
+        el.style.removeProperty('font-family');
+        if (!el.getAttribute('style')?.trim()) el.removeAttribute('style');
+      }
+    });
+    if (contentRef) contentRef.current = articleEl.innerHTML;
+    setPanel(null);
   }, [popRange, articleEl, contentRef]);
 
   const closePanel = useCallback(() => { setPanel(null); setInputVal(''); }, []);
@@ -525,6 +610,9 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted }
         <Btn onClick={() => openPanel('highlight')} title="Surligner"        active={panel === 'highlight'}>
           <Highlighter size={13} />
         </Btn>
+        <Btn onClick={() => openPanel('font')} title="Police du texte" active={panel === 'font'}>
+          <CaseSensitive size={15} />
+        </Btn>
 
         <Sep />
 
@@ -594,11 +682,37 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted }
           {HL_COLORS.map((c) => (
             <Swatch key={c.value} color={c.value} label={c.label}
               onClick={() => {
+                if (c.value === 'transparent') { clearBackground(); return; }
                 popRange();
-                if (c.value === 'transparent') format('removeFormat');
-                else format('hiliteColor', c.value);
+                format('hiliteColor', c.value);
               }}
             />
+          ))}
+        </div>
+      )}
+      {panel === 'font' && (
+        <div className="flex flex-col bg-gray-900 border border-gray-700 rounded-xl py-1.5 mt-1.5 shadow-2xl max-h-64 overflow-y-auto min-w-[180px]">
+          <div className="px-3 py-1 text-[10px] text-white/40 font-medium tracking-wide uppercase">
+            {siteFonts.length > 0 ? 'Polices du site' : 'Polices standard'}
+          </div>
+          <button
+            type="button"
+            onMouseDown={(e) => { e.preventDefault(); clearFont(); }}
+            className="text-left px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 transition-colors"
+          >
+            Police par défaut
+          </button>
+          {fontList.map((f) => (
+            <button
+              key={f}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); applyFont(f); }}
+              className="text-left px-3 py-1.5 text-sm text-gray-100 hover:bg-white/10 transition-colors truncate"
+              style={{ fontFamily: f }}
+              title={f}
+            >
+              {f}
+            </button>
           ))}
         </div>
       )}
