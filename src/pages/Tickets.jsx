@@ -30,6 +30,13 @@ const CATEGORIES = {
   other:         { label: '❓ Autre',                color: 'bg-gray-100 text-gray-600' },
 };
 
+// Type d'intervention — indique QUI traite le ticket (axe distinct des catégories).
+// SKILLS = pris en charge par les managers ; TECHNIQUE = équipe technique.
+const INTERVENTION_TYPES = {
+  technique: { label: '🔧 Technique', color: 'bg-slate-100 text-slate-700' },
+  skills:    { label: '🧩 Skills',    color: 'bg-indigo-100 text-indigo-700' },
+};
+
 const PRIORITIES = {
   urgent:  { label: '🔴 Urgent',  color: 'bg-red-100 text-red-700',       border: 'border-l-red-500' },
   haute:   { label: '🟠 Haute',   color: 'bg-orange-100 text-orange-700', border: 'border-l-orange-400' },
@@ -91,6 +98,7 @@ function TicketCard({ ticket, selected, onClick, users, canDelete, onDelete }) {
   const prio    = PRIORITIES[ticket.priority] || PRIORITIES.normale;
   const status  = STATUSES[ticket.status]     || STATUSES.open;
   const cat     = CATEGORIES[ticket.category] || CATEGORIES.other;
+  const itype   = INTERVENTION_TYPES[ticket.interventionType] || INTERVENTION_TYPES.technique;
   const unread  = ticketHasUnread(ticket);
   const assignee = users?.find(u => u.id === ticket.assigneeId || u.uid === ticket.assigneeId);
 
@@ -130,8 +138,9 @@ function TicketCard({ ticket, selected, onClick, users, canDelete, onDelete }) {
         </span>
       </div>
 
-      {/* Ligne 2 : catégorie + priorité + niveau */}
+      {/* Ligne 2 : type d'intervention + catégorie + priorité + niveau */}
       <div className="flex items-center gap-1 mt-2 flex-wrap">
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${itype.color}`}>{itype.label}</span>
         <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
         <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${prio.color}`}>{prio.label}</span>
         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">L{ticket.level || 1}</span>
@@ -1012,6 +1021,10 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
     await doAction({ priority }, `Priorité changée : ${PRIORITIES[priority]?.label}`);
   };
 
+  const handleInterventionTypeChange = async (interventionType) => {
+    await doAction({ interventionType }, `Type : ${INTERVENTION_TYPES[interventionType]?.label}`);
+  };
+
   const handleCommentAdded = async () => {
     // Recharger le ticket pour avoir le bon commentCount
     try {
@@ -1023,6 +1036,7 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
   const prio = PRIORITIES[ticket.priority] || PRIORITIES.normale;
   const status = STATUSES[ticket.status] || STATUSES.open;
   const cat = CATEGORIES[ticket.category] || CATEGORIES.other;
+  const itype = INTERVENTION_TYPES[ticket.interventionType] || INTERVENTION_TYPES.technique;
   const linkedArticle = ticket.linkedArticleId ? history.find(a => a.id === ticket.linkedArticleId) : null;
 
   return (
@@ -1052,6 +1066,7 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
         {/* Badges */}
         <div className="flex flex-wrap gap-1.5">
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${status.color}`}>{status.label}</span>
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${itype.color}`}>{itype.label}</span>
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${prio.color}`}>{prio.label}</span>
           <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Niveau {ticket.level || 1}</span>
@@ -1111,7 +1126,17 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
             ticket.assigneeUsername && <span className="flex items-center gap-1 text-blue-600"><User size={11} />{ticket.assigneeUsername}</span>
           )}
 
-          <div className="flex items-center gap-1 ml-auto">
+          {(role === 'manager' || role === 'super_admin' || role === 'support') && (
+            <div className="flex items-center gap-1 ml-auto">
+              <span className="text-gray-400">Type :</span>
+              <select value={ticket.interventionType || 'technique'} onChange={e => handleInterventionTypeChange(e.target.value)}
+                className="text-xs border border-gray-200 rounded-lg px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-200 bg-white">
+                {Object.entries(INTERVENTION_TYPES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </div>
+          )}
+
+          <div className={`flex items-center gap-1 ${(role === 'manager' || role === 'super_admin' || role === 'support') ? '' : 'ml-auto'}`}>
             <span className="text-gray-400">Priorité :</span>
             <select value={ticket.priority || 'normale'} onChange={e => handlePriorityChange(e.target.value)}
               className="text-xs border border-gray-200 rounded-lg px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-200 bg-white">
@@ -1234,6 +1259,7 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
   const settings = useSelector(s => s.settings);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('bug_app');
+  const [interventionType, setInterventionType] = useState('technique');
   const [priority, setPriority] = useState('normale');
   const [description, setDescription] = useState('');
   const [linkedArticleId, setLinkedArticleId] = useState('');
@@ -1273,6 +1299,7 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
       const ticketData = {
         title: title.trim(),
         category,
+        interventionType,
         priority,
         description: description.trim(),
         creatorId: currentUser.uid || currentUser.username,
@@ -1405,6 +1432,20 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
             </select>
           </div>
 
+          {/* Type d'intervention — SKILLS (managers) vs TECHNIQUE */}
+          <div>
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1">Type d'intervention</label>
+            <select
+              value={interventionType}
+              onChange={e => setInterventionType(e.target.value)}
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
+            >
+              {Object.entries(INTERVENTION_TYPES).map(([k, v]) => (
+                <option key={k} value={k}>{v.label}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Article lié si article_issue */}
           {category === 'article_issue' && (
             <div>
@@ -1512,6 +1553,7 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
 function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, onDragEnd, selected, canDelete, onDelete }) {
   const prio     = PRIORITIES[ticket.priority] || PRIORITIES.normale;
   const cat      = CATEGORIES[ticket.category] || CATEGORIES.other;
+  const itype    = INTERVENTION_TYPES[ticket.interventionType] || INTERVENTION_TYPES.technique;
   const unread   = ticketHasUnread(ticket);
   const assignee = users?.find(u => u.id === ticket.assigneeId || u.uid === ticket.assigneeId);
 
@@ -1554,6 +1596,7 @@ function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, o
 
       {/* Badges */}
       <div className="flex flex-wrap gap-1 mb-2.5">
+        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${itype.color}`}>{itype.label}</span>
         <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
         <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${prio.color}`}>{prio.label}</span>
         {ticket.level > 1 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">L{ticket.level}</span>}
