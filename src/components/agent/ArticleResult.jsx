@@ -16,7 +16,7 @@ import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wo
 import BubbleToolbar from './BubbleToolbar';
 import { runReviewAgent, generateAltText, generateSeoMeta } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
-import { applyAllDiffs, moveFaqToEnd } from '../../utils/diff';
+import { applyAllDiffs, applyDiff, applyAddition, insertNearClosestParagraph, moveFaqToEnd } from '../../utils/diff';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
@@ -745,14 +745,63 @@ export default function ArticleResult() {
   // Total mots dans l'article final
   const totalWords = useMemo(() => countWords(agent.updatedContent || ''), [agent.updatedContent]);
   const showWordStats = !!(agent.updatedContent && appliedUpdates.length > 0);
-  const [copiedIdx, setCopiedIdx] = useState(null);
+  const [addedIdx, setAddedIdx] = useState(null);
 
-  const copyMissed = async (text, idx) => {
-    await copyToClipboard(text);
-    setCopiedIdx(idx);
-    toast.success('Correction copiée !');
-    setTimeout(() => setCopiedIdx(null), 2000);
-  };
+  const applyMissed = useCallback((update, missedIdx) => {
+    if (!articleRef.current) {
+      toast.error('Basculez en vue diff pour appliquer la correction.');
+      return;
+    }
+
+    const currentHtml = contentRef.current;
+    let newHtml = currentHtml;
+    let matched = false;
+
+    // Stratégie 1 : remplacement exact (applyDiff — toutes stratégies)
+    if (update.type !== 'addition' && update.original) {
+      const r = applyDiff(currentHtml, update.original, update.updated, update.reason);
+      if (r.matched) { newHtml = r.html; matched = true; }
+    }
+
+    // Stratégie 2 : insertion par ancre (applyAddition)
+    if (!matched && update.anchor) {
+      const r = applyAddition(currentHtml, update.anchor, update.updated);
+      if (r.matched) { newHtml = r.html; matched = true; }
+    }
+
+    // Stratégie 3 : paragraphe le plus proche par chevauchement lexical
+    if (!matched) {
+      const r = insertNearClosestParagraph(currentHtml, update.original || update.updated, update.updated);
+      newHtml = r.html;
+      matched = true;
+    }
+
+    // Mettre à jour le DOM
+    articleRef.current.innerHTML = newHtml;
+    contentRef.current = articleRef.current.innerHTML;
+    lockMedia(articleRef.current);
+
+    // Marquer comme appliqué dans Redux
+    const newDiff = updates.map(d =>
+      d.applied === false &&
+      d.original === update.original &&
+      d.updated  === update.updated &&
+      d.reason   === update.reason
+        ? { ...d, applied: true }
+        : d
+    );
+    dispatch(setDiff(newDiff));
+
+    // Scroll vers la correction insérée
+    setTimeout(() => {
+      const els = articleRef.current?.querySelectorAll('ins.added-content, mark.updated-content');
+      if (els?.length) els[els.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+
+    setAddedIdx(missedIdx);
+    toast.success('Correction ajoutée dans l\'article !');
+    setTimeout(() => setAddedIdx(null), 2000);
+  }, [updates, dispatch, lockMedia]);
 
   const handleExport = async (format) => {
     const finalContent = getFinalHtml();
@@ -1705,8 +1754,8 @@ export default function ArticleResult() {
                   <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-100/70 border-b border-amber-200">
                     <AlertTriangle size={13} className="text-amber-600 flex-shrink-0" />
                     <p className="text-[11px] font-semibold text-amber-700 flex-1">
-                      {missedUpdates.length} suggestion{missedUpdates.length > 1 ? 's' : ''} à appliquer manuellement
-                      <span className="font-normal ml-1">— texte légèrement différent de la source, copiez la correction et collez-la dans l'article ci-dessus</span>
+                      {missedUpdates.length} suggestion{missedUpdates.length > 1 ? 's' : ''} à appliquer
+                      <span className="font-normal ml-1">— cliquez sur Ajouter pour insérer directement dans l'article</span>
                     </p>
                   </div>
                   <div className="divide-y divide-amber-100">
@@ -1726,13 +1775,13 @@ export default function ArticleResult() {
                           )}
                         </div>
                         <button
-                          onClick={() => copyMissed(u.updated, i)}
-                          title="Copier la correction"
-                          className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-white border border-amber-200 text-amber-700 hover:bg-amber-50 transition-colors"
+                          onClick={() => applyMissed(u, i)}
+                          title="Insérer la correction dans l'article"
+                          className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-white border border-blue-200 text-blue-700 hover:bg-blue-50 transition-colors"
                         >
-                          {copiedIdx === i
-                            ? <><ClipboardCheck size={11} className="text-green-500" /> Copié</>
-                            : <><Clipboard size={11} /> Copier</>
+                          {addedIdx === i
+                            ? <><CheckCircle2 size={11} className="text-green-500" /> Ajouté</>
+                            : <><Plus size={11} /> Ajouter</>
                           }
                         </button>
                       </div>

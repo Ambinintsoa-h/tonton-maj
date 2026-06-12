@@ -254,6 +254,51 @@ export const applyAddition = (html, anchor, updated) => {
 };
 
 /**
+ * Insère `newContent` après le bloc le plus proche de `referenceText` par chevauchement lexical.
+ * Fallback utilisé quand applyDiff et applyAddition échouent tous les deux.
+ * @returns {{ html: string, matched: boolean }}
+ */
+export const insertNearClosestParagraph = (html, referenceText, newContent) => {
+  const div = document.createElement('div');
+  div.innerHTML = html;
+
+  const blocks = Array.from(div.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td'));
+  if (!blocks.length) {
+    // Pas de blocs : ajouter à la fin
+    const ins = document.createElement('ins');
+    ins.className = 'added-content';
+    ins.innerHTML = newContent;
+    div.appendChild(ins);
+    return { html: div.innerHTML, matched: true };
+  }
+
+  // Score chaque bloc par chevauchement de mots avec referenceText
+  const refWords = new Set(
+    normalizeText((referenceText || '').replace(/<[^>]+>/g, ' '))
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 3)
+  );
+
+  let bestBlock = blocks[blocks.length - 1]; // défaut : dernier bloc
+  if (refWords.size > 0) {
+    let bestScore = 0;
+    for (const block of blocks) {
+      const blockWords = (block.textContent || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      const overlap = blockWords.filter(w => refWords.has(w)).length;
+      const score = overlap / refWords.size;
+      if (score > bestScore) { bestScore = score; bestBlock = block; }
+    }
+  }
+
+  const ins = document.createElement('ins');
+  ins.className = 'added-content';
+  ins.innerHTML = newContent;
+  bestBlock.insertAdjacentElement('afterend', ins);
+  return { html: div.innerHTML, matched: true };
+};
+
+/**
  * Détecte la section FAQ dans le HTML et la déplace à la fin.
  * Supporte : class/id contenant "faq", headings contenant "faq" / "questions fréquentes".
  * Retourne le HTML réorganisé, ou l'original si aucune FAQ n'est trouvée / déjà en fin.
