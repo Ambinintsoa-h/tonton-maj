@@ -19,8 +19,17 @@ const wordpressSlice = createSlice({
     },
     removeSite: (state, action) => { state.sites = state.sites.filter(s => s.id !== action.payload); },
     setLoading: (state, action) => { state.loading = action.payload; },
+    // Met en cache les polices détectées d'un site (réutilisées à la réouverture
+    // d'un article depuis l'historique, sans nouvelle requête). N'écrase jamais
+    // un cache existant par une liste vide.
+    cacheSiteFonts: (state, action) => {
+      const { siteId, fonts } = action.payload || {};
+      if (!siteId || !Array.isArray(fonts) || fonts.length === 0) return;
+      const site = state.sites.find(s => s.id === siteId);
+      if (site) site.fonts = fonts;
+    },
   },
 });
 
-export const { setSites, addSite, updateSite, removeSite, setLoading } = wordpressSlice.actions;
+export const { setSites, addSite, updateSite, removeSite, setLoading, cacheSiteFonts } = wordpressSlice.actions;
 export default wordpressSlice.reducer;
