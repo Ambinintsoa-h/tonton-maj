@@ -564,9 +564,26 @@ app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager')
   if (!SAFE_USERNAME_RE.test(username)) return res.status(400).json({ error: 'Username invalide — lettres, chiffres, tirets et underscores uniquement (1–64 caractères)' });
   if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Rôle invalide' });
   try {
-    const userRecord = await firebaseAdmin.auth().createUser({ email, password, displayName: username });
+    const db = firebaseAdmin.firestore();
+
+    // Création — ou réadoption d'un compte Auth orphelin (email présent dans Auth
+    // mais sans fiche Firestore, séquelle d'une suppression antérieure incomplète).
+    let userRecord;
+    try {
+      userRecord = await firebaseAdmin.auth().createUser({ email, password, displayName: username });
+    } catch (e) {
+      if (e.code !== 'auth/email-already-exists') throw e;
+      const orphan = await firebaseAdmin.auth().getUserByEmail(email);
+      const hasDoc = (await db.collection('users').doc(orphan.uid).get()).exists
+        || !(await db.collection('users').where('email', '==', email).limit(1).get()).empty;
+      if (hasDoc) return res.status(400).json({ error: 'Un compte actif utilise déjà cet email' });
+      // Orphelin → on le réadopte avec le nouveau mot de passe / username
+      await firebaseAdmin.auth().updateUser(orphan.uid, { password, displayName: username });
+      userRecord = orphan;
+    }
+
     await firebaseAdmin.auth().setCustomUserClaims(userRecord.uid, { role, username });
-    await firebaseAdmin.firestore().collection('users').doc(userRecord.uid).set({
+    await db.collection('users').doc(userRecord.uid).set({
       uid: userRecord.uid, username, firstName: firstName || '', lastName: lastName || '',
       email, role, status: 'active', createdAt: Date.now(),
       // password volontairement omis — Firebase Auth gère le hash côté serveur
