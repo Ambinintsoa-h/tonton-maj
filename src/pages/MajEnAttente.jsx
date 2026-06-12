@@ -23,6 +23,7 @@ import {
   setWpData,
 } from '../store/slices/agentSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
+import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
@@ -1062,6 +1063,8 @@ export default function MajEnAttente() {
                 wpTitle:         r.title || '',
                 siteFonts:       r.site_fonts || [],  // polices déclarées sur le site (sélecteur de police)
               };
+              // Cache des polices du site → réutilisées à la réouverture depuis l'historique (sans requête)
+              dispatch(cacheSiteFonts({ siteId: matchingSite.id, fonts: r.site_fonts || [] }));
             }
           }
         } catch { /* non-fatal */ }

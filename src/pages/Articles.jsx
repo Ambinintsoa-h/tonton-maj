@@ -6,6 +6,7 @@ import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus,
 import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks } from '../store/slices/agentSlice';
 import { addToHistory, updateInHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
+import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
@@ -93,6 +94,8 @@ export default function Articles() {
               siteFonts:       r.site_fonts || [],  // polices déclarées sur le site (sélecteur de police)
             };
             dispatch(setWpData(prefetchedWpData));
+            // Cache des polices du site → réutilisées à la réouverture depuis l'historique (sans requête)
+            dispatch(cacheSiteFonts({ siteId: matchingSite.id, fonts: r.site_fonts || [] }));
             dispatch(addStep(`WordPress MCP OK — article lu directement (ID ${r.post_id})`));
             wpFetched = true;
           }

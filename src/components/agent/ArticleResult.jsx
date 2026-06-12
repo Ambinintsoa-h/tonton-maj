@@ -48,6 +48,23 @@ export default function ArticleResult() {
   const currentArticle = articlesHistory.find(a => a.id === agent.currentArticleId);
   const articleUrl     = cqItem?.url || currentArticle?.url || '';
 
+  // Polices proposées dans la barre d'outils :
+  //  • analyse fraîche → wpMcpData.siteFonts (récupéré via MCP)
+  //  • réouverture historique (wpMcpData null) → cache du site correspondant à l'URL
+  //    (renseigné lors d'une analyse précédente, persisté en localStorage) — aucune requête
+  const resolvedSiteFonts = useMemo(() => {
+    if (wpMcpData?.siteFonts?.length) return wpMcpData.siteFonts;
+    if (!articleUrl) return [];
+    try {
+      const h = new URL(articleUrl).hostname.replace(/^www\./, '');
+      const site = wpSites.find(s => {
+        try { return new URL(s.url).hostname.replace(/^www\./, '') === h; }
+        catch { return false; }
+      });
+      return site?.fonts || [];
+    } catch { return []; }
+  }, [wpMcpData, articleUrl, wpSites]);
+
   const [activeTab, setActiveTab] = useState(TAB_APRES);
   const [showExport, setShowExport] = useState(false);
   const [showWP, setShowWP] = useState(false);
@@ -1805,7 +1822,7 @@ export default function ArticleResult() {
           <BubbleToolbar
             articleEl={articleEl}
             contentRef={contentRef}
-            siteFonts={wpMcpData?.siteFonts || []}
+            siteFonts={resolvedSiteFonts}
             onImageInserted={settings.anthropicKey ? (url) => {
               generateAltText(url, settings.anthropicKey).then(altText => {
                 if (!altText || !articleRef.current) return;
