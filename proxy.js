@@ -2415,9 +2415,21 @@ app.post('/api/wp-related-posts', requireAuth, async (req, res) => {
     );
     const results = await Promise.all(searches);
 
+    // Top-up : si la recherche par mots-clés ramène trop peu d'articles, compléter
+    // avec les articles publiés les plus récents pour atteindre un minimum exploitable.
+    let flat = results.flat();
+    const uniqueCount = new Set(flat.map(p => p.id)).size;
+    if (uniqueCount < 5) {
+      const recent = await axios.get(
+        `${base}/wp-json/wp/v2/posts?per_page=10&status=publish&orderby=date&order=desc&_fields=id,title,link,excerpt`,
+        { headers, timeout: 10000 }
+      ).then(r => r.data).catch(() => []);
+      flat = [...flat, ...recent];
+    }
+
     // Dédupliquer par ID, exclure l'article en cours
     const seen = new Set();
-    const posts = results.flat()
+    const posts = flat
       .filter(p => {
         if (seen.has(p.id)) return false;
         seen.add(p.id);

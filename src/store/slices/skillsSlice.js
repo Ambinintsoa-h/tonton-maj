@@ -1,16 +1,19 @@
 import { createSlice } from '@reduxjs/toolkit';
 import { STORAGE_KEYS } from '../../constants/storage';
+import { mergeDefaultSkills } from '../../constants/defaultSkills';
 
 const load = (key) => {
-  try { return JSON.parse(localStorage.getItem(key) || 'null') || []; }
-  catch { return []; }
+  try {
+    const stored = JSON.parse(localStorage.getItem(key) || 'null') || [];
+    return mergeDefaultSkills(stored);
+  } catch { return mergeDefaultSkills([]); }
 };
 
 const skillsSlice = createSlice({
   name: 'skills',
   initialState: { list: load(STORAGE_KEYS.skills), loading: false },
   reducers: {
-    setSkills: (state, action) => { state.list = action.payload; },
+    setSkills: (state, action) => { state.list = mergeDefaultSkills(action.payload); },
     addSkill: (state, action) => { state.list.unshift(action.payload); },
     updateSkill: (state, action) => {
       const idx = state.list.findIndex(s => s.id === action.payload.id);

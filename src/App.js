@@ -24,6 +24,7 @@ import Tickets from './pages/Tickets';
 import SupportDashboard from './pages/SupportDashboard';
 import { setSettings, setFirebaseReady, DEFAULT_FIREBASE_CONFIG } from './store/slices/settingsSlice';
 import { setSkills } from './store/slices/skillsSlice';
+import { countCustomSkills } from './constants/defaultSkills';
 import { setKnowledge } from './store/slices/knowledgeSlice';
 import { setHistory } from './store/slices/articlesSlice';
 import { setSites } from './store/slices/wordpressSlice';
@@ -118,9 +119,10 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     ]);
 
     // localStorage = source de vérité pour skills + knowledge.
-    // Firestore ne remplace que si le localStorage est vide (premier chargement ou cache vidé).
+    // Firestore ne remplace que si aucun skill PERSONNALISÉ n'existe en local
+    // (le skill par défaut « Skills par Tonton AI » est toujours présent et ne compte pas).
     const localSkills = store.getState().skills.list;
-    if (localSkills.length === 0 && skills.length > 0) {
+    if (countCustomSkills(localSkills) === 0 && skills.length > 0) {
       dispatch(setSkills(skills));
       localStorage.setItem(STORAGE_KEYS.skills, JSON.stringify(skills));
     }
