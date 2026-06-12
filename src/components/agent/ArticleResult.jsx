@@ -28,6 +28,63 @@ import { useNavigate } from 'react-router-dom';
 const TAB_AVANT = 'avant';
 const TAB_APRES = 'apres';
 
+// ── Nettoyage du contenu collé dans la vue diff ──────────────────────────────
+// Règle : aucun style collé. On conserve la STRUCTURE (paragraphes, titres,
+// listes, liens, tableaux) mais on retire TOUT style inline et toute mise en
+// forme de caractère (couleurs, fonds, polices, gras, italique, souligné…).
+const PASTE_KEEP_TAGS = new Set([
+  'P', 'BR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+  'UL', 'OL', 'LI', 'A', 'BLOCKQUOTE',
+  'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'HR',
+]);
+// Balises supprimées intégralement (média / non-texte / scripts)
+const PASTE_DROP_TAGS = new Set([
+  'SCRIPT', 'STYLE', 'NOSCRIPT', 'IMG', 'PICTURE', 'SOURCE', 'IFRAME', 'VIDEO',
+  'AUDIO', 'SVG', 'CANVAS', 'OBJECT', 'EMBED', 'FORM', 'INPUT', 'BUTTON', 'SELECT',
+  'TEXTAREA', 'HEAD', 'META', 'LINK', 'TITLE',
+]);
+// Toute autre balise (SPAN, B, STRONG, I, EM, U, S, FONT, MARK, DIV…) est
+// "débalisée" : on garde son contenu mais on supprime la balise de mise en forme.
+
+const sanitizePastedHtml = (html) => {
+  const root = document.createElement('div');
+  root.innerHTML = html;
+
+  const walk = (node) => {
+    // Snapshot : on mute l'arbre pendant l'itération
+    Array.from(node.childNodes).forEach((child) => {
+      if (child.nodeType === 3) return;           // texte : conservé tel quel
+      if (child.nodeType !== 1) { child.remove(); return; } // commentaires, etc.
+
+      const tag = child.tagName;
+      if (PASTE_DROP_TAGS.has(tag)) { child.remove(); return; }
+
+      walk(child); // nettoyer les enfants AVANT de décider du sort du parent
+
+      if (PASTE_KEEP_TAGS.has(tag)) {
+        // Conserver la balise mais retirer TOUS les attributs (style, class,
+        // color, bgcolor, align, font…) — seul href des liens est gardé.
+        Array.from(child.attributes).forEach((attr) => {
+          if (tag === 'A' && attr.name.toLowerCase() === 'href') return;
+          child.removeAttribute(attr.name);
+        });
+        if (tag === 'A') {
+          child.setAttribute('target', '_blank');
+          child.setAttribute('rel', 'noopener noreferrer');
+        }
+      } else {
+        // Débaliser : remonter les enfants à la place de l'élément
+        const parent = child.parentNode;
+        while (child.firstChild) parent.insertBefore(child.firstChild, child);
+        parent.removeChild(child);
+      }
+    });
+  };
+
+  walk(root);
+  return root.innerHTML;
+};
+
 export default function ArticleResult() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -372,6 +429,25 @@ export default function ArticleResult() {
   // Frappe clavier : mise à jour du ref uniquement, SANS setState → pas de re-render
   const handleInput = useCallback((e) => {
     contentRef.current = e.currentTarget.innerHTML;
+  }, []);
+
+  // Collage dans la vue diff : on retire tout style copié d'un autre site et on
+  // ne garde que la structure + le style par défaut (cf. sanitizePastedHtml).
+  const handlePaste = useCallback((e) => {
+    e.preventDefault();
+    const cd = e.clipboardData || window.clipboardData;
+    if (!cd) return;
+    const html = cd.getData('text/html');
+    if (html && html.trim()) {
+      const clean = sanitizePastedHtml(html);
+      // insertHTML conserve la structure nettoyée (paragraphes, listes, liens…)
+      document.execCommand('insertHTML', false, clean);
+    } else {
+      // Pas de HTML dans le presse-papiers → insertion en texte brut
+      const text = cd.getData('text/plain') || '';
+      document.execCommand('insertText', false, text);
+    }
+    if (articleRef.current) contentRef.current = articleRef.current.innerHTML;
   }, []);
 
   // Navigation entre les modifications dans l'article
@@ -1741,6 +1817,7 @@ export default function ArticleResult() {
                         ref={setArticleRef}
                         className="article-diff-content md-content text-sm leading-loose p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[480px] max-h-[78vh] overflow-y-auto focus:outline-none focus:ring-2 focus:ring-black/10"
                         onInput={handleInput}
+                        onPaste={handlePaste}
                         onMouseOver={(e) => {
                           const el = e.target.closest('[data-il-idx]');
                           if (!el) return;
