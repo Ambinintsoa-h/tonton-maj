@@ -2101,15 +2101,21 @@ const processWpHtml = (html, siteUrl) => {
 };
 
 // ─── Extraction des polices déclarées sur une page du site ───────────────────
-// Récupère la page publique rendue (même origine, déjà validée SSRF) et parse les
-// familles de polices déclarées : font-family (styles inline + <style>), @font-face,
-// et liens Google Fonts. Lecture seule, résultat plafonné, fallback [] silencieux.
-// Ne fetch PAS de CSS externe arbitraire (surface SSRF + latence) — uniquement la page.
+// Récupère la page publique rendue (post.link) PUIS ses feuilles CSS de même
+// origine + Google Fonts, et parse les familles déclarées : font-family,
+// @font-face, et paramètre family= des liens Google Fonts.
+// Les polices dominantes (Montserrat, Poppins, Lato, Roboto…) sont presque
+// toujours déclarées dans le CSS externe du thème → on doit le fetcher.
+// Garde-fous : seules les CSS de MÊME ORIGINE ou fonts.googleapis.com sont
+// récupérées (assertSafeUrl sur chacune), max 6 fichiers, taille/timeout plafonnés.
+// Lecture seule, résultat plafonné, fallback [] silencieux.
 const GENERIC_FONTS = new Set([
   'inherit', 'initial', 'unset', 'revert', 'sans-serif', 'serif', 'monospace',
   'cursive', 'fantasy', 'system-ui', 'ui-sans-serif', 'ui-serif', 'ui-monospace',
   '-apple-system', 'blinkmacsystemfont', 'auto', 'none',
 ]);
+
+const FETCH_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const extractSiteFonts = async (pageUrl) => {
   if (!pageUrl) return [];
@@ -2118,14 +2124,12 @@ const extractSiteFonts = async (pageUrl) => {
     const resp = await axios.get(pageUrl, {
       timeout: 10000,
       maxRedirects: 2,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
+      headers: { 'User-Agent': FETCH_UA, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
     });
     const html = typeof resp.data === 'string' ? resp.data : '';
     if (!html) return [];
 
+    const pageOrigin = (() => { try { return new URL(pageUrl).origin; } catch { return null; } })();
     const fonts = new Map(); // clé normalisée (lowercase) → libellé d'origine
 
     const addFamily = (raw) => {
@@ -2138,23 +2142,67 @@ const extractSiteFonts = async (pageUrl) => {
       if (!fonts.has(key)) fonts.set(key, first);
     };
 
-    // 1) Déclarations font-family (styles inline + blocs <style>)
-    const reFF = /font-family\s*:\s*([^;}{"]+)/gi;
-    let m;
-    while ((m = reFF.exec(html)) && fonts.size < 40) addFamily(m[1]);
+    // Parse un bloc de texte CSS/HTML : font-family + @font-face
+    const parseCss = (text) => {
+      if (!text) return;
+      let m;
+      const reFF = /font-family\s*:\s*([^;}{"]+)/gi;
+      while ((m = reFF.exec(text)) && fonts.size < 60) addFamily(m[1]);
+      const reFace = /@font-face[^}]*font-family\s*:\s*([^;}]+)/gi;
+      while ((m = reFace.exec(text)) && fonts.size < 60) addFamily(m[1]);
+    };
 
-    // 2) @font-face { font-family: "X" }
-    const reFace = /@font-face[^}]*font-family\s*:\s*([^;}]+)/gi;
-    while ((m = reFace.exec(html)) && fonts.size < 40) addFamily(m[1]);
-
-    // 3) Liens Google Fonts (family=Roboto:wght@400;700&family=Lora)
-    const reGoogle = /fonts\.googleapis\.com\/css2?\?([^"'\s>]+)/gi;
-    while ((m = reGoogle.exec(html))) {
-      const qs = m[1].replace(/&amp;/g, '&');
-      for (const fam of qs.matchAll(/family=([^&:]+)/gi)) {
-        addFamily(decodeURIComponent(fam[1].replace(/\+/g, ' ')));
+    // Parse les liens Google Fonts (family=Roboto:wght@400;700&family=Lora)
+    const parseGoogleLinks = (text) => {
+      const reGoogle = /fonts\.googleapis\.com\/css2?\?([^"'\s>)]+)/gi;
+      let m;
+      while ((m = reGoogle.exec(text))) {
+        const qs = m[1].replace(/&amp;/g, '&');
+        for (const fam of qs.matchAll(/family=([^&:]+)/gi)) {
+          addFamily(decodeURIComponent(fam[1].replace(/\+/g, ' ')));
+        }
       }
+    };
+
+    // 1) Page elle-même : styles inline + <style> + liens Google Fonts
+    parseCss(html);
+    parseGoogleLinks(html);
+
+    // 2) Feuilles CSS référencées (<link rel="stylesheet" href="...">)
+    //    On ne garde que MÊME ORIGINE ou fonts.googleapis.com, max 6 fichiers.
+    const cssUrls = [];
+    const reLink = /<link\b[^>]*rel\s*=\s*["']?stylesheet["']?[^>]*>/gi;
+    let lm;
+    while ((lm = reLink.exec(html)) && cssUrls.length < 12) {
+      const hrefMatch = lm[0].match(/href\s*=\s*["']([^"']+)["']/i);
+      if (!hrefMatch) continue;
+      let abs;
+      try { abs = new URL(hrefMatch[1], pageUrl).href; } catch { continue; }
+      let host;
+      try { host = new URL(abs); } catch { continue; }
+      const sameOrigin = pageOrigin && host.origin === pageOrigin;
+      const isGoogle   = /(^|\.)fonts\.googleapis\.com$/i.test(host.hostname);
+      if ((sameOrigin || isGoogle) && !cssUrls.includes(abs)) cssUrls.push(abs);
     }
+
+    // Liens Google Fonts directement (family= dans l'URL) — sans fetch
+    cssUrls.filter(u => /fonts\.googleapis\.com/i.test(u)).forEach(parseGoogleLinks);
+
+    // Fetch des feuilles à parser (CSS classiques same-origin + CSS Google Fonts)
+    const toFetch = cssUrls.slice(0, 6);
+    await Promise.all(toFetch.map(async (cssUrl) => {
+      try {
+        await assertSafeUrl(cssUrl, 'URL feuille CSS');
+        const r = await axios.get(cssUrl, {
+          timeout: 6000,
+          maxRedirects: 2,
+          maxContentLength: 2 * 1024 * 1024, // 2 Mo max par feuille
+          responseType: 'text',
+          headers: { 'User-Agent': FETCH_UA, 'Accept': 'text/css,*/*;q=0.1' },
+        });
+        if (typeof r.data === 'string') parseCss(r.data);
+      } catch { /* feuille ignorée */ }
+    }));
 
     return [...fonts.values()].slice(0, 20);
   } catch {
