@@ -24,6 +24,13 @@ export const exportAsHtml = (content) => {
     if (el.parentNode) el.parentNode.replaceChild(frag, el);
   });
 
+  // Unwrap added paragraphs: keep inner HTML, discard the <ins class="added-content"> wrapper
+  div.querySelectorAll('ins.added-content').forEach(el => {
+    const frag = document.createDocumentFragment();
+    while (el.firstChild) frag.appendChild(el.firstChild);
+    if (el.parentNode) el.parentNode.replaceChild(frag, el);
+  });
+
   // Supprimer les overlays éditeur (data-media-overlay) — éléments UI uniquement,
   // ne doivent jamais être publiés dans WordPress
   div.querySelectorAll('[data-media-overlay]').forEach(el => el.remove());
@@ -54,7 +61,7 @@ export const exportAsHtml = (content) => {
     }
   });
 
-  // Filet de sécurité regex — élimine tout résidu <del>/<mark> non capturé par le DOM
+  // Filet de sécurité regex — élimine tout résidu <del>/<mark>/<ins> non capturé par le DOM
   let html = div.innerHTML;
   html = html.replace(/<del\b[^>]*>[\s\S]*?<\/del>/gi, '');
   let prev = '';
@@ -62,6 +69,7 @@ export const exportAsHtml = (content) => {
     prev = html;
     html = html.replace(/<mark\b[^>]*>([\s\S]*?)<\/mark>/gi, '$1');
   }
+  html = html.replace(/<ins\b[^>]*class="added-content"[^>]*>([\s\S]*?)<\/ins>/gi, '$1');
   return html;
 };
 
