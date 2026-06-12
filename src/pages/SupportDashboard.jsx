@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Bug, Clock, CheckCircle2, XCircle, AlertTriangle, TrendingUp, RefreshCw, ChevronRight } from 'lucide-react';
+import { Bug, Clock, CheckCircle2, XCircle, AlertTriangle, TrendingUp, RefreshCw, ChevronRight, Circle } from 'lucide-react';
 import { getTickets } from '../services/firebase';
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
@@ -174,17 +174,18 @@ export default function SupportDashboard() {
               { key: 'all',         label: 'Actifs'    },
               { key: 'open',        label: 'Ouverts'   },
               { key: 'in_progress', label: 'En cours'  },
-              { key: 'urgent',      label: '🔴 Urgents' },
+              { key: 'urgent',      label: 'Urgents'   },
             ].map(f => (
               <button
                 key={f.key}
                 onClick={() => setFilter(f.key)}
-                className={`text-xs px-2.5 py-1 rounded-lg transition-colors ${
+                className={`text-xs px-2.5 py-1 rounded-lg transition-colors inline-flex items-center gap-1 ${
                   filter === f.key
                     ? 'bg-blue-100 text-blue-700 font-semibold'
                     : 'text-gray-500 hover:bg-gray-100'
                 }`}
               >
+                {f.key === 'urgent' && <Circle size={10} className="inline fill-current text-red-500" />}
                 {f.label}
               </button>
             ))}

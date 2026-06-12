@@ -7,7 +7,7 @@ import {
   Clock, Trash2, Eye, Search, X, ExternalLink,
   Calendar, CheckCircle2, Sparkles, AlertTriangle, ChevronDown, ChevronUp,
   UserCircle2, RotateCcw, Loader, TrendingUp, TrendingDown, Minus,
-  ArrowUp, ArrowDown, Timer, Activity,
+  ArrowUp, ArrowDown, Timer, Activity, RefreshCw,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import axios from 'axios';
@@ -655,7 +655,7 @@ export default function Historique() {
       addedAt:    Date.now(),
     }));
 
-    toast.success('Article remis en attente de MAJ', { icon: '🔄' });
+    toast.success('Article remis en attente de MAJ', { icon: <RefreshCw size={18} /> });
 
     // 2. Nettoyage Firestore en arrière-plan (best-effort, non bloquant)
     if (firebaseReady) deleteArticle(article.id).catch(() => {});

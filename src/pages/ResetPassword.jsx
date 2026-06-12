@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Eye, EyeOff, CheckCircle2, AlertCircle, KeyRound, ArrowRight } from 'lucide-react';
+import { Eye, EyeOff, CheckCircle2, AlertCircle, KeyRound, ArrowRight, Circle } from 'lucide-react';
 import { confirmPasswordReset, verifyPasswordResetCode, getAuth } from 'firebase/auth';
 import { getFirebaseAuth } from '../services/firebase';
 
@@ -50,7 +50,7 @@ function PasswordStrength({ password }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
         {checks.map(c => (
           <span key={c.label} style={{ display: 'flex', alignItems: 'center', gap: 4, color: c.ok ? '#22c55e' : '#aaa' }}>
-            <span style={{ fontSize: 10 }}>{c.ok ? '✓' : '○'}</span> {c.label}
+            {c.ok ? <CheckCircle2 size={12} className="text-green-600" /> : <Circle size={12} className="text-gray-300" />} {c.label}
           </span>
         ))}
       </div>

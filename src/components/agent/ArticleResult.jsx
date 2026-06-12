@@ -9,7 +9,7 @@ import {
   ChevronDown, CheckCircle2, AlertTriangle, Info,
   RefreshCw, ArrowRight, Link, ChevronUp,
   Clipboard, ClipboardCheck, Sparkles, Loader, ShieldCheck,
-  Plus, Link2, X, Tag, Search,
+  Plus, Link2, X, Tag, Search, Image,
 } from 'lucide-react';
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
@@ -141,7 +141,7 @@ export default function ArticleResult() {
 
   // Vue finale : supprime les <del> et débalise les <mark>
   //
-  // ⚠️  On utilise la manipulation DOM (pas des regex sur string) car :
+  // On utilise la manipulation DOM (pas des regex sur string) car :
   //   - contentRef.current peut contenir des balises HTML déséquilibrées
   //     (ex: une </strong> capturée dans un <del> par la stratégie 3b du diff)
   //   - Le navigateur normalise automatiquement ces déséquilibres quand on
@@ -414,7 +414,7 @@ export default function ArticleResult() {
       });
 
       if (!result.updates?.length) {
-        toast('Deuxième passe : article déjà complet, aucune nouvelle modification', { icon: 'ℹ️' });
+        toast('Deuxième passe : article déjà complet, aucune nouvelle modification', { icon: <Info size={18} className="text-blue-500" /> });
         return;
       }
 
@@ -540,7 +540,7 @@ export default function ArticleResult() {
       if (successCount === 0) {
         toast.error('Aucune source n\'a pu être lue — vérifiez que le proxy est actif');
       } else if (successCount < validUrls.length) {
-        toast(`${successCount}/${validUrls.length} source${validUrls.length > 1 ? 's' : ''} lue${successCount > 1 ? 's' : ''} — les autres ont été ignorées`, { icon: '⚠️' });
+        toast(`${successCount}/${validUrls.length} source${validUrls.length > 1 ? 's' : ''} lue${successCount > 1 ? 's' : ''} — les autres ont été ignorées`, { icon: <AlertTriangle size={18} className="text-amber-500" /> });
       }
 
       setReviewProgress(5);
@@ -594,7 +594,7 @@ export default function ArticleResult() {
           dispatch(addToHistory({ ...articleData, id: Date.now().toString() }));
         }
         dispatch(removePendingItem(cqItem.id));
-        toast.success('Article validé et archivé dans l\'historique !', { icon: '✅' });
+        toast.success('Article validé et archivé dans l\'historique !', { icon: <CheckCircle2 size={18} className="text-green-600" /> });
         navigate('/maj-en-attente');
       } catch (e) {
         toast.error('Erreur : ' + e.message);
@@ -618,7 +618,7 @@ export default function ArticleResult() {
         finishedAt:     new Date().toISOString(),
       }));
       dispatch(resetAgent());
-      toast.success('Article archivé dans l\'historique !', { icon: '✅' });
+      toast.success('Article archivé dans l\'historique !', { icon: <CheckCircle2 size={18} className="text-green-600" /> });
       navigate('/historique');
     } catch (e) {
       toast.error('Erreur : ' + e.message);
@@ -1005,7 +1005,7 @@ export default function ArticleResult() {
                 </span>
               ) : (
                 <span
-                  title="Objectif +200 mots nets atteint ✓"
+                  title="Objectif +200 mots nets atteint OK"
                   style={{
                     fontSize: 10, fontWeight: 700,
                     background: '#d1fae5', color: '#059669',
@@ -1014,7 +1014,7 @@ export default function ArticleResult() {
                     cursor: 'help', whiteSpace: 'nowrap',
                   }}
                 >
-                  +200 ✓
+                  +200 <CheckCircle2 size={13} className="inline text-emerald-600 shrink-0" />
                 </span>
               )}
             </div>
@@ -1178,7 +1178,7 @@ export default function ArticleResult() {
           {/* Résumé sélection */}
           {selectedCategories.length > 0 && (
             <p className="text-[11px] text-indigo-600 font-medium">
-              ✓ {selectedCategories.length} catégorie{selectedCategories.length > 1 ? 's' : ''} sélectionnée{selectedCategories.length > 1 ? 's' : ''} — appliquée{selectedCategories.length > 1 ? 's' : ''} à la publication
+              <CheckCircle2 size={13} className="inline text-emerald-600 shrink-0" /> {selectedCategories.length} catégorie{selectedCategories.length > 1 ? 's' : ''} sélectionnée{selectedCategories.length > 1 ? 's' : ''} — appliquée{selectedCategories.length > 1 ? 's' : ''} à la publication
             </p>
           )}
         </motion.div>
@@ -1403,7 +1403,7 @@ export default function ArticleResult() {
                               </button>
                               {!wpFoundPost && !wpSearching && wpNotFoundReason && showWP === site.id && (
                                 <p className="px-3 py-1.5 text-[11px] text-amber-600 leading-snug">
-                                  ⚠ {wpNotFoundReason}
+                                  <AlertTriangle size={13} className="inline text-amber-500 shrink-0" /> {wpNotFoundReason}
                                 </p>
                               )}
                             </div>
@@ -1443,7 +1443,7 @@ export default function ArticleResult() {
               {/* ── Champ titre — au-dessus de l'image à la une ─────────────── */}
               {(cqItem || agent.currentArticleId) && (
                 <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-xs">
-                  <span className="text-base shrink-0">📝</span>
+                  <FileText size={16} className="shrink-0" />
                   <span className="text-[11px] font-medium text-gray-500 shrink-0 whitespace-nowrap">Titre</span>
                   <input
                     type="text"
@@ -1463,7 +1463,7 @@ export default function ArticleResult() {
                     initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
                     className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-xs"
                   >
-                    <span className="text-base shrink-0">🖼</span>
+                    <Image size={16} className="shrink-0" />
                     <span className="text-[11px] font-medium text-gray-500 shrink-0">Image à la une</span>
                     {!showImgReplace ? (
                       <>
@@ -1519,7 +1519,7 @@ export default function ArticleResult() {
                   >
                     {/* En-tête */}
                     <div className="flex items-center gap-2">
-                      <span className="text-base shrink-0">🔍</span>
+                      <Search size={16} className="shrink-0" />
                       <span className="text-[11px] font-medium text-gray-500 shrink-0">SEO Meta</span>
                       {seoGenerating && <Loader size={11} className="animate-spin text-gray-400 ml-1" />}
                       {!seoGenerating && (seoTitle || seoDescription) && (
@@ -1834,11 +1834,11 @@ export default function ArticleResult() {
                             isAddition ? 'text-blue-700 bg-blue-100'
                             : isPass2 ? 'text-purple-700 bg-purple-100' : 'text-green-600 bg-green-100'
                           }`}>
-                            ✓ {isAddition ? 'Paragraphe ajouté' : 'Appliquée dans l\'article'}
+                            <CheckCircle2 size={13} className="inline text-emerald-600 shrink-0" /> {isAddition ? 'Paragraphe ajouté' : 'Appliquée dans l\'article'}
                           </span>
                         ) : (
                           <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 rounded-full px-2 py-0.5">
-                            ⚠ Non localisée dans le texte
+                            <AlertTriangle size={13} className="inline text-amber-500 shrink-0" /> Non localisée dans le texte
                           </span>
                         )}
                         {isAddition && (
@@ -1891,7 +1891,7 @@ export default function ArticleResult() {
           {missedUpdates.length > 0 && (
             <div className="flex items-center gap-2 bg-amber-50 border border-amber-100 rounded-xl px-4 py-2.5 text-xs text-amber-600">
               <AlertTriangle size={12} className="flex-shrink-0" />
-              <p>Les suggestions ⚠ sont visibles dans l'onglet <strong>Après</strong> avec un bouton "Copier" pour les appliquer directement dans l'éditeur.</p>
+              <p>Les suggestions <AlertTriangle size={12} className="inline text-amber-500" /> sont visibles dans l'onglet <strong>Après</strong> avec un bouton "Copier" pour les appliquer directement dans l'éditeur.</p>
             </div>
           )}
         </motion.div>
@@ -2014,7 +2014,7 @@ export default function ArticleResult() {
             <span className="text-[11px] text-gray-400 ml-1">— survolez les passages surlignés dans l'article</span>
           )}
           {appliedLinks.size === internalLinks.length && internalLinks.length > 0 && (
-            <span className="text-[11px] text-emerald-600 ml-1 font-medium">✓ Tous appliqués</span>
+            <span className="text-[11px] text-emerald-600 ml-1 font-medium"><CheckCircle2 size={13} className="inline text-emerald-600 shrink-0" /> Tous appliqués</span>
           )}
         </motion.div>
       )}

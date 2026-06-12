@@ -13,7 +13,6 @@ export const PRIORITY_META = {
     border:  'border-l-red-500',
     badge:   'bg-red-100 text-red-700 border-red-300',
     section: 'text-red-600 bg-red-50 border-red-200',
-    emoji:   '🔴',
   },
   normale: {
     label:   'Normale',
@@ -21,7 +20,6 @@ export const PRIORITY_META = {
     border:  'border-l-amber-400',
     badge:   'bg-amber-50 text-amber-700 border-amber-200',
     section: 'text-amber-700 bg-amber-50 border-amber-200',
-    emoji:   '🟡',
   },
   basse:   {
     label:   'Basse',
@@ -29,7 +27,6 @@ export const PRIORITY_META = {
     border:  'border-l-gray-300',
     badge:   'bg-gray-100 text-gray-500 border-gray-200',
     section: 'text-gray-500 bg-gray-50 border-gray-200',
-    emoji:   '⚪',
   },
 };
 

@@ -377,7 +377,7 @@ const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON sty
 const buildKnowledgeBlock = (knowledge, intro = '', label = 'CHECKLIST OBLIGATOIRE') => {
   const active = knowledge.filter(k => k.content);
   if (!active.length) return '';
-  const defaultIntro = `⚠️ PROTOCOLE STRICT : Tu DOIS lire chacun des ${active.length} documents ci-dessous,\nligne par ligne, et vérifier si l'article le respecte ou en a besoin.\nPour chaque élément applicable : ajoute une entrée dans "updates" avec\nreason = "Base de connaissances n°X — [Nom du document]".`;
+  const defaultIntro = `ATTENTION - PROTOCOLE STRICT : Tu DOIS lire chacun des ${active.length} documents ci-dessous,\nligne par ligne, et vérifier si l'article le respecte ou en a besoin.\nPour chaque élément applicable : ajoute une entrée dans "updates" avec\nreason = "Base de connaissances n°X — [Nom du document]".`;
   return `\n\n## ═══ BASE DE CONNAISSANCES — ${label} (${active.length} documents) ═══\n${intro || defaultIntro}\n\n` +
     active.map((k, i) => {
       const isHtml = k.isHtml || k.source === 'manual' || k.content?.trimStart().startsWith('<');
@@ -484,7 +484,7 @@ Utilise ce type UNIQUEMENT quand les sources web scrapées révèlent une inform
 - \`"updated"\` : contenu HTML du nouveau paragraphe (enveloppé dans \`<p>...</p>\`)
 - \`"original"\` : laisser vide \`""\`
 
-⚠️ **INTERDIT pour les additions** : ne jamais créer un bloc "actualité récente", "Dernières actualités" ou similaire en te basant sur tes connaissances d'entraînement.
+ATTENTION - **INTERDIT pour les additions** : ne jamais créer un bloc "actualité récente", "Dernières actualités" ou similaire en te basant sur tes connaissances d'entraînement.
 Ton entraînement s'arrête en début ${prevYear} — soit plus de 12 mois avant aujourd'hui (${fr}). Ces informations sont PÉRIMÉES.
 **Une addition ne peut exister QUE si une source web scrapée avec URL réelle la confirme.**
 Si aucune source web récente disponible → pas d'addition, pas de bloc actualité inventé.
@@ -567,7 +567,7 @@ export const runAgent = async ({
           const mediaInfo = wpData.featuredMediaId
             ? ` · image à la une ID ${wpData.featuredMediaId}`
             : ' · pas d\'image à la une';
-          onStep(`WordPress MCP ✓ — article ID ${wpData.postId}${mediaInfo}`);
+          onStep(`WordPress MCP OK — article ID ${wpData.postId}${mediaInfo}`);
         }
       }
     } catch (e) {
@@ -682,7 +682,7 @@ ${content.substring(0, 5000)}`,
           title: match?.title || urlsToScrape[i],
           content: scraped[i].value,
         });
-        onStep(`✓ ${match?.title?.substring(0, 55) || urlsToScrape[i]}...`);
+        onStep(`OK ${match?.title?.substring(0, 55) || urlsToScrape[i]}...`);
       }
     }
   }
@@ -915,7 +915,7 @@ const buildReviewSystemPrompt = (skills, knowledge = []) => {
   const knowledgeBlock = buildKnowledgeBlock(
     knowledge,
     active.length > 0
-      ? `⚠️ PROTOCOLE PASSE 2 : La passe 1 a peut-être manqué certains documents.\nRelis chacun des ${active.length} documents ci-dessous et vérifie s'il a bien été appliqué.\nSi non → ajoute l'entrée manquante avec reason = "Base de connaissances n°X — [Nom] (non traité en passe 1)".`
+      ? `ATTENTION - PROTOCOLE PASSE 2 : La passe 1 a peut-être manqué certains documents.\nRelis chacun des ${active.length} documents ci-dessous et vérifie s'il a bien été appliqué.\nSi non → ajoute l'entrée manquante avec reason = "Base de connaissances n°X — [Nom] (non traité en passe 1)".`
       : '',
     'CHECKLIST PASSE 2'
   );
@@ -948,7 +948,7 @@ const buildReviewSystemPrompt = (skills, knowledge = []) => {
 Utilise ce type quand les sources web scrapées révèlent une information vraiment nouvelle, non présente dans l'article.
 - \`"type": "addition"\`, \`"anchor"\` : phrase EXACTE de l'article indiquant où insérer, \`"updated"\` : HTML \`<p>...</p>\`, \`"original"\` : \`""\`
 
-⚠️ **INTERDIT** : ne jamais créer une addition basée sur tes connaissances d'entraînement (qui s'arrêtent en début ${prevYear}, soit 12+ mois de retard). Source web réelle obligatoire.
+ATTENTION - **INTERDIT** : ne jamais créer une addition basée sur tes connaissances d'entraînement (qui s'arrêtent en début ${prevYear}, soit 12+ mois de retard). Source web réelle obligatoire.
 
 {
   "analysis": "Ce que la passe 2 a ajouté : skills vérifiés, documents base de connaissances appliqués, compléments SEO",
@@ -1081,7 +1081,7 @@ ${content.substring(0, 3000)}`,
     .map(s => `- [${s.title}](${s.url})\n  ${s.description || ''}`)
     .join('\n');
   const manualCtx = manualSources.filter(s => s.content).length > 0
-    ? `## ⭐ SOURCES FOURNIES PAR LE CQ IA — À INTÉGRER EN PRIORITÉ\n${
+    ? `## SOURCES FOURNIES PAR LE CQ IA — À INTÉGRER EN PRIORITÉ\n${
         manualSources
           .filter(s => s.content)
           .map(s => `### ${s.title || s.url}\nURL : ${s.url}\n\n${s.content.substring(0, 4000)}`)
@@ -1098,7 +1098,7 @@ ${manualCtx}${scrapedContext ? `## NOUVELLES SOURCES COMPLÉMENTAIRES\n${scraped
 ${content}
 
 ## Instructions
-- NE PAS re-proposer ce qui a déjà été changé en passe 1${manualSources.filter(s => s.content).length > 0 ? '\n- Intégrer EN PRIORITÉ les informations des sources fournies par le CQ IA (section ⭐ ci-dessus)' : ''}
+- NE PAS re-proposer ce qui a déjà été changé en passe 1${manualSources.filter(s => s.content).length > 0 ? '\n- Intégrer EN PRIORITÉ les informations des sources fournies par le CQ IA (section ci-dessus)' : ''}
 - Vérifier que chaque instruction des Skills est bien appliquée dans l'article
 - Intégrer les données de la base de connaissances absentes ou mal représentées
 - Identifier ce que la passe 1 n'a pas couvert (autres produits, tendances, contexte)
@@ -1127,7 +1127,7 @@ ${content}
   onStep('Deuxième passe terminée !');
 
   const allSources = [
-    ...manualSources.map(s => ({ title: s.title || s.url, url: s.url, relevance: '⭐ Source CQ IA' })),
+    ...manualSources.map(s => ({ title: s.title || s.url, url: s.url, relevance: 'Source CQ IA' })),
     ...(result.sources || []),
     ...scrapedSources.map(s => ({ title: s.title, url: s.url, relevance: 'Passe 2' })),
     ...searchResults.slice(0, 5).map(s => ({ title: s.title, url: s.url, relevance: s.description || '' })),

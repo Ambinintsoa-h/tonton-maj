@@ -372,9 +372,9 @@ function AgentCard({ agent }) {
       animate={{ opacity: 1, y: 0 }}
       className="glass-card p-5 flex items-start gap-4"
     >
-      {/* Avatar emoji */}
-      <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 text-2xl ${agent.avatarCls}`}>
-        {agent.emoji}
+      {/* Avatar icône */}
+      <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${agent.avatarCls}`}>
+        <agent.Icon size={22} className="shrink-0" />
       </div>
 
       <div className="flex-1 min-w-0">

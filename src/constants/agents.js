@@ -1,10 +1,12 @@
 // ── Définition des agents IA du SaaS ─────────────────────────────────────────
 // Source unique de vérité : importé dans Equipe, AgentThinking, MajEnAttente…
 
+import { Brain, Search, Globe, PenLine } from 'lucide-react';
+
 export const IA_AGENTS = [
   {
     id:        'tonton',
-    emoji:     '🧠',
+    Icon:      Brain,
     name:      'TONTON AI',
     pseudo:    'Le manager des agents IA',
     avatarCls: 'bg-black text-white',
@@ -16,7 +18,7 @@ export const IA_AGENTS = [
   },
   {
     id:        'sherlock',
-    emoji:     '🔍',
+    Icon:      Search,
     name:      'SHERLOCK',
     pseudo:    'Le chasseur de sources',
     avatarCls: 'bg-blue-600 text-white',
@@ -28,7 +30,7 @@ export const IA_AGENTS = [
   },
   {
     id:        'scrappy',
-    emoji:     '🕷️',
+    Icon:      Globe,
     name:      'SCRAPPY',
     pseudo:    'Le gratteur de pages',
     avatarCls: 'bg-emerald-600 text-white',
@@ -40,7 +42,7 @@ export const IA_AGENTS = [
   },
   {
     id:        'raoul',
-    emoji:     '✍️',
+    Icon:      PenLine,
     name:      'RAOUL',
     pseudo:    'Le correcteur',
     avatarCls: 'bg-purple-600 text-white',

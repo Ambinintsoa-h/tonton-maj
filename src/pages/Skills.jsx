@@ -790,7 +790,7 @@ function VideoTranscriber({ groqKey, onSaveTranscript, knowledge = [] }) {
                     <div className={`w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 text-[10px] font-bold ${
                       isDone ? 'bg-green-100 text-green-600' : 'bg-gray-200 text-gray-500'
                     }`}>
-                      {isDone ? '✓' : i + 1}
+                      {isDone ? <CheckCircle2 size={14} className="shrink-0" /> : i + 1}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className={`font-medium truncate ${isDone ? 'text-green-700' : 'text-gray-800'}`}>{v.label}</p>
@@ -832,7 +832,7 @@ function VideoTranscriber({ groqKey, onSaveTranscript, knowledge = [] }) {
                   <p className="text-sm font-medium text-gray-800">{localFile.name}</p>
                   <p className="text-xs text-gray-400">{(localFile.size / 1024 / 1024).toFixed(1)} Mo</p>
                   {localFile.size > 25 * 1024 * 1024 && (
-                    <p className="text-xs text-red-500 font-medium">⚠ Fichier trop grand — 25 Mo max pour Groq</p>
+                    <p className="text-xs text-red-500 font-medium"><AlertTriangle size={12} className="inline text-red-500 shrink-0" /> Fichier trop grand — 25 Mo max pour Groq</p>
                   )}
                 </div>
               ) : (
@@ -1003,7 +1003,7 @@ export default function Skills() {
         if (content) {
           toast.success(`"${file.name}" ajouté — ${content.length.toLocaleString()} car.`);
         } else if (warning) {
-          toast(warning, { icon: '⚠️', duration: 8000 });
+          toast(warning, { icon: <AlertTriangle size={18} className="text-amber-500" />, duration: 8000 });
         }
       } catch (e) {
         toast.dismiss(loadingToast);

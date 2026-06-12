@@ -10,6 +10,7 @@ import {
   ZoomIn, ZoomOut, Download, RotateCcw, ChevronLeft, ChevronRight,
   ChevronDown, AtSign, LayoutList, LayoutGrid, FlaskConical, MoveRight,
   GripVertical, Inbox, Trash2,
+  Bot, Lightbulb, HelpCircle, Wrench, Puzzle, Circle,
 } from 'lucide-react';
 import { addTicket, updateTicket, removeTicket, setTickets } from '../store/slices/ticketsSlice';
 import {
@@ -23,11 +24,11 @@ import tracker from '../services/activityTracker';
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
 const CATEGORIES = {
-  bug_app:       { label: '🐛 Bug application',      color: 'bg-red-100 text-red-700' },
-  article_issue: { label: '📄 Problème article/MAJ', color: 'bg-orange-100 text-orange-700' },
-  agent_issue:   { label: '🤖 Problème agent IA',    color: 'bg-purple-100 text-purple-700' },
-  improvement:   { label: '💡 Demande amélioration', color: 'bg-blue-100 text-blue-700' },
-  other:         { label: '❓ Autre',                color: 'bg-gray-100 text-gray-600' },
+  bug_app:       { label: 'Bug application',      Icon: Bug,        color: 'bg-red-100 text-red-700' },
+  article_issue: { label: 'Problème article/MAJ', Icon: FileText,   color: 'bg-orange-100 text-orange-700' },
+  agent_issue:   { label: 'Problème agent IA',    Icon: Bot,        color: 'bg-purple-100 text-purple-700' },
+  improvement:   { label: 'Demande amélioration', Icon: Lightbulb,  color: 'bg-blue-100 text-blue-700' },
+  other:         { label: 'Autre',                Icon: HelpCircle, color: 'bg-gray-100 text-gray-600' },
 };
 
 // Type d'intervention — indique QUI traite le ticket (axe distinct des catégories).
@@ -35,12 +36,12 @@ const CATEGORIES = {
 // `strong` : style solide très visible mis en avant sur chaque ticket.
 const INTERVENTION_TYPES = {
   technique: {
-    label: '🔧 Technique', icon: '🔧', name: 'Technique',
+    label: 'Technique', Icon: Wrench, name: 'Technique',
     color: 'bg-slate-100 text-slate-700',
     strong: 'bg-slate-700 text-white', ring: 'ring-slate-300',
   },
   skills: {
-    label: '🧩 Skills', icon: '🧩', name: 'Skills',
+    label: 'Skills', Icon: Puzzle, name: 'Skills',
     color: 'bg-indigo-100 text-indigo-700',
     strong: 'bg-indigo-600 text-white', ring: 'ring-indigo-300',
   },
@@ -54,16 +55,16 @@ function InterventionBadge({ type, size = 'md' }) {
     : 'text-xs px-2.5 py-1 gap-1.5';
   return (
     <span className={`inline-flex items-center font-extrabold uppercase tracking-wider rounded-lg shadow-sm ring-1 ${it.ring} ${it.strong} ${dims}`}>
-      <span aria-hidden>{it.icon}</span>{it.name}
+      <it.Icon size={size === 'sm' ? 11 : 13} className="shrink-0" />{it.name}
     </span>
   );
 }
 
 const PRIORITIES = {
-  urgent:  { label: '🔴 Urgent',  color: 'bg-red-100 text-red-700',       border: 'border-l-red-500' },
-  haute:   { label: '🟠 Haute',   color: 'bg-orange-100 text-orange-700', border: 'border-l-orange-400' },
-  normale: { label: '🟡 Normale', color: 'bg-yellow-100 text-yellow-700', border: 'border-l-yellow-400' },
-  basse:   { label: '⚪ Basse',   color: 'bg-gray-100 text-gray-500',     border: 'border-l-gray-300' },
+  urgent:  { label: 'Urgent',  Icon: Circle, iconClass: 'text-red-500',    color: 'bg-red-100 text-red-700',       border: 'border-l-red-500' },
+  haute:   { label: 'Haute',   Icon: Circle, iconClass: 'text-orange-500', color: 'bg-orange-100 text-orange-700', border: 'border-l-orange-400' },
+  normale: { label: 'Normale', Icon: Circle, iconClass: 'text-yellow-500', color: 'bg-yellow-100 text-yellow-700', border: 'border-l-yellow-400' },
+  basse:   { label: 'Basse',   Icon: Circle, iconClass: 'text-gray-400',   color: 'bg-gray-100 text-gray-500',     border: 'border-l-gray-300' },
 };
 
 const STATUSES = {
@@ -166,8 +167,8 @@ function TicketCard({ ticket, selected, onClick, users, canDelete, onDelete }) {
 
       {/* Ligne 2 : catégorie + priorité + niveau */}
       <div className="flex items-center gap-1 mt-2 flex-wrap">
-        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
-        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${prio.color}`}>{prio.label}</span>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${cat.color}`}><cat.Icon size={12} className="inline shrink-0 mr-0.5" />{cat.label}</span>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${prio.color}`}><prio.Icon size={9} className={`inline fill-current shrink-0 mr-0.5 ${prio.iconClass}`} />{prio.label}</span>
         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">L{ticket.level || 1}</span>
       </div>
 
@@ -1091,8 +1092,8 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
         <div className="flex flex-wrap items-center gap-1.5">
           <InterventionBadge type={ticket.interventionType} />
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${status.color}`}>{status.label}</span>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${prio.color}`}>{prio.label}</span>
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cat.color}`}><cat.Icon size={12} className="inline shrink-0 mr-0.5" />{cat.label}</span>
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${prio.color}`}><prio.Icon size={9} className={`inline fill-current shrink-0 mr-0.5 ${prio.iconClass}`} />{prio.label}</span>
           <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Niveau {ticket.level || 1}</span>
         </div>
 
@@ -1624,8 +1625,8 @@ function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, o
 
       {/* Badges */}
       <div className="flex flex-wrap gap-1 mb-2.5">
-        <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
-        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${prio.color}`}>{prio.label}</span>
+        <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${cat.color}`}><cat.Icon size={12} className="inline shrink-0 mr-0.5" />{cat.label}</span>
+        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${prio.color}`}><prio.Icon size={9} className={`inline fill-current shrink-0 mr-0.5 ${prio.iconClass}`} />{prio.label}</span>
         {ticket.level > 1 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">L{ticket.level}</span>}
       </div>
 
