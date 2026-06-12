@@ -114,20 +114,36 @@ export default function ArticleResult() {
     setSeoDescription('');
   }, [agent.currentArticleId]);
 
+  // Génération SEO — utilisée par l'auto-génération ET le bouton manuel.
+  // Réessaie une fois en cas d'échec ou de réponse vide, puis signale l'erreur
+  // (sans ce retour visible, un échec laissait les champs vides sans explication).
+  const runSeoGeneration = useCallback(async () => {
+    if (!agent.updatedContent) return;
+    setSeoGenerating(true);
+    const title = wpMcpData?.wpTitle || extractH1FromHtml(agent.originalContent) || '';
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const { seoTitle: t, seoDescription: d } = await generateSeoMeta(agent.updatedContent, title);
+        if (t || d) {
+          if (t) setSeoTitle(t);
+          if (d) setSeoDescription(d);
+          return;
+        }
+      }
+      toast.error('Génération SEO vide — réessayez avec le bouton Régénérer.');
+    } catch {
+      toast.error('Génération SEO impossible — réessayez avec le bouton Régénérer.');
+    } finally {
+      setSeoGenerating(false);
+    }
+  }, [agent.updatedContent, agent.originalContent, wpMcpData?.wpTitle]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-génération SEO dès que la MAJ est prête (une seule fois par analyse)
   useEffect(() => {
     if (!agent.updatedContent || seoGeneratedRef.current) return;
     seoGeneratedRef.current = true;
-    setSeoGenerating(true);
-    const title = wpMcpData?.wpTitle || extractH1FromHtml(agent.originalContent) || '';
-    generateSeoMeta(agent.updatedContent, title)
-      .then(({ seoTitle: t, seoDescription: d }) => {
-        if (t) setSeoTitle(t);
-        if (d) setSeoDescription(d);
-      })
-      .catch(() => {})
-      .finally(() => setSeoGenerating(false));
-  }, [agent.updatedContent]); // eslint-disable-line react-hooks/exhaustive-deps
+    runSeoGeneration();
+  }, [agent.updatedContent, runSeoGeneration]);
 
   // ── Catégories WordPress ──────────────────────────────────────────────────────
   const [wpCategories, setWpCategories]       = useState([]);
@@ -667,7 +683,6 @@ export default function ArticleResult() {
     if (span) {
       const a = document.createElement('a');
       a.href  = url;
-      a.title = anchor;
       a.innerHTML = span.innerHTML;
       span.parentNode.replaceChild(a, span);
       contentRef.current = articleRef.current.innerHTML;
@@ -680,7 +695,7 @@ export default function ArticleResult() {
     const html    = articleRef.current.innerHTML;
     const escaped = anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex   = new RegExp(`(?<!<[^>]*)${escaped}(?![^<]*>)`, 'i');
-    const newHtml = html.replace(regex, match => `<a href="${url}" title="${anchor}">${match}</a>`);
+    const newHtml = html.replace(regex, match => `<a href="${url}">${match}</a>`);
     if (newHtml !== html) {
       articleRef.current.innerHTML = newHtml;
       contentRef.current = newHtml;
@@ -702,14 +717,15 @@ export default function ArticleResult() {
 
     let injected = 0;
 
-    // Candidats d'ancrage : l'ancre complète, puis des variantes de plus en plus
-    // courtes (on retire le dernier mot) jusqu'à 2 mots. Permet de surligner même
-    // quand l'ancre exacte choisie par l'IA n'existe pas mot-pour-mot dans l'article.
+    // Candidats d'ancrage : l'ancre complète, puis des variantes raccourcies en
+    // retirant le dernier mot — mais jamais en dessous de 3 mots (ou la longueur
+    // de l'ancre si elle est plus courte). Évite de surligner un fragment trop
+    // générique qui pointerait vers le mauvais endroit (ex. "isolation des").
     const anchorCandidates = (anchor) => {
       const words = (anchor || '').trim().split(/\s+/).filter(Boolean);
-      if (words.length <= 1) return words;
+      if (words.length <= 3) return [words.join(' ')].filter(Boolean);
       const out = [];
-      for (let len = words.length; len >= 2; len--) out.push(words.slice(0, len).join(' '));
+      for (let len = words.length; len >= 3; len--) out.push(words.slice(0, len).join(' '));
       return out;
     };
 
@@ -744,6 +760,9 @@ export default function ArticleResult() {
           const span = document.createElement('span');
           span.setAttribute('data-il-idx', String(i));
           span.setAttribute('data-il-url', link.url);
+          // title vide : neutralise l'info-bulle système héritée d'un <mark> parent
+          // (sinon le survol du lien orange affiche la raison de la modif, ex. "Skill X — …")
+          span.setAttribute('title', '');
           span.className = 'il-highlight';
           anchorNode.parentNode.insertBefore(span, anchorNode);
           span.appendChild(anchorNode);
@@ -1609,7 +1628,15 @@ export default function ArticleResult() {
                           <Sparkles size={9} /> Généré
                         </span>
                       )}
-                      <span className="ml-auto text-[10px] text-gray-400">Yoast SEO &amp; SEOPress</span>
+                      <button
+                        onClick={runSeoGeneration}
+                        disabled={seoGenerating}
+                        title="Générer les balises SEO avec l'IA"
+                        className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-40"
+                      >
+                        <Sparkles size={10} /> {seoTitle || seoDescription ? 'Régénérer' : 'Générer'}
+                      </button>
+                      <span className="text-[10px] text-gray-400">Yoast SEO &amp; SEOPress</span>
                     </div>
 
                     {/* Meta Title */}

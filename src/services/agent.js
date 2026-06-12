@@ -953,11 +953,19 @@ ${articlePreviewText}
 Articles disponibles sur le même site :
 ${postsList}
 
-Suggère ${ilExact ? `exactement ${ilMax}` : `AU MOINS ${ilMin} et jusqu'à ${ilMax}`} lien(s) interne(s) pertinent(s). ${ilExact ? '' : `Le minimum de ${ilMin} liens est IMPÉRATIF tant qu'il reste des articles pertinents dans la liste ci-dessus — ne descends en dessous que si la liste compte moins de ${ilMin} articles réellement liés.`} Pour chaque lien :
-- "anchor" : une expression COURTE (2-5 mots) et EXACTEMENT présente mot-pour-mot dans l'article, riche en mots-clés. Choisis une expression simple et certaine d'exister, pas une longue phrase.
+Suggère ${ilExact ? `exactement ${ilMax}` : `${ilMin} à ${ilMax}`} lien(s) interne(s).
+${ilExact ? '' : `Tu DOIS proposer ${ilMin} liens : choisis les ${ilMin} articles les PLUS proches thématiquement parmi la liste ci-dessus.`}
+
+RÈGLE DE PERTINENCE ABSOLUE — l'ancre et l'article lié doivent porter sur le MÊME sujet précis :
+- Ne relie JAMAIS deux sujets différents. Exemple interdit : une ancre "isolation des fenêtres" reliée à un article sur "l'isolation des murs" — ce sont deux sujets distincts.
+- Avant de retenir un lien, vérifie que le titre de l'article cible traite bien du sujet exact de l'ancre. Si aucun article ne correspond vraiment à une ancre, choisis une autre ancre dont le sujet a, lui, un article correspondant.
+- Mieux vaut une ancre un peu plus générale qui correspond à un article que deux sujets précis mal appariés.
+
+Pour chaque lien :
+- "anchor" : une expression COURTE (2-5 mots) présente EXACTEMENT mot-pour-mot dans l'article, riche en mots-clés, et dont le SUJET correspond à l'article lié. Choisis une expression simple et certaine d'exister, pas une longue phrase.
 - "url" : l'URL de l'article lié
 - "title" : le titre de l'article lié
-- "reason" : pourquoi ce lien est pertinent (1 phrase)
+- "reason" : en quoi l'article lié approfondit précisément le sujet de l'ancre (1 phrase)
 
 Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reason":"..."}]}`,
             }],
