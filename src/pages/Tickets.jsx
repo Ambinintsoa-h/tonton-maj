@@ -32,10 +32,32 @@ const CATEGORIES = {
 
 // Type d'intervention — indique QUI traite le ticket (axe distinct des catégories).
 // SKILLS = pris en charge par les managers ; TECHNIQUE = équipe technique.
+// `strong` : style solide très visible mis en avant sur chaque ticket.
 const INTERVENTION_TYPES = {
-  technique: { label: '🔧 Technique', color: 'bg-slate-100 text-slate-700' },
-  skills:    { label: '🧩 Skills',    color: 'bg-indigo-100 text-indigo-700' },
+  technique: {
+    label: '🔧 Technique', icon: '🔧', name: 'Technique',
+    color: 'bg-slate-100 text-slate-700',
+    strong: 'bg-slate-700 text-white', ring: 'ring-slate-300',
+  },
+  skills: {
+    label: '🧩 Skills', icon: '🧩', name: 'Skills',
+    color: 'bg-indigo-100 text-indigo-700',
+    strong: 'bg-indigo-600 text-white', ring: 'ring-indigo-300',
+  },
 };
+
+// Badge "type d'intervention" mis fortement en avant, réutilisé sur chaque ticket.
+function InterventionBadge({ type, size = 'md' }) {
+  const it = INTERVENTION_TYPES[type] || INTERVENTION_TYPES.technique;
+  const dims = size === 'sm'
+    ? 'text-[10px] px-2 py-0.5 gap-1'
+    : 'text-xs px-2.5 py-1 gap-1.5';
+  return (
+    <span className={`inline-flex items-center font-extrabold uppercase tracking-wider rounded-lg shadow-sm ring-1 ${it.ring} ${it.strong} ${dims}`}>
+      <span aria-hidden>{it.icon}</span>{it.name}
+    </span>
+  );
+}
 
 const PRIORITIES = {
   urgent:  { label: '🔴 Urgent',  color: 'bg-red-100 text-red-700',       border: 'border-l-red-500' },
@@ -98,7 +120,6 @@ function TicketCard({ ticket, selected, onClick, users, canDelete, onDelete }) {
   const prio    = PRIORITIES[ticket.priority] || PRIORITIES.normale;
   const status  = STATUSES[ticket.status]     || STATUSES.open;
   const cat     = CATEGORIES[ticket.category] || CATEGORIES.other;
-  const itype   = INTERVENTION_TYPES[ticket.interventionType] || INTERVENTION_TYPES.technique;
   const unread  = ticketHasUnread(ticket);
   const assignee = users?.find(u => u.id === ticket.assigneeId || u.uid === ticket.assigneeId);
 
@@ -138,9 +159,13 @@ function TicketCard({ ticket, selected, onClick, users, canDelete, onDelete }) {
         </span>
       </div>
 
-      {/* Ligne 2 : type d'intervention + catégorie + priorité + niveau */}
+      {/* Type d'intervention — mis fortement en avant */}
+      <div className="mt-2">
+        <InterventionBadge type={ticket.interventionType} />
+      </div>
+
+      {/* Ligne 2 : catégorie + priorité + niveau */}
       <div className="flex items-center gap-1 mt-2 flex-wrap">
-        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${itype.color}`}>{itype.label}</span>
         <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
         <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${prio.color}`}>{prio.label}</span>
         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">L{ticket.level || 1}</span>
@@ -1036,7 +1061,6 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
   const prio = PRIORITIES[ticket.priority] || PRIORITIES.normale;
   const status = STATUSES[ticket.status] || STATUSES.open;
   const cat = CATEGORIES[ticket.category] || CATEGORIES.other;
-  const itype = INTERVENTION_TYPES[ticket.interventionType] || INTERVENTION_TYPES.technique;
   const linkedArticle = ticket.linkedArticleId ? history.find(a => a.id === ticket.linkedArticleId) : null;
 
   return (
@@ -1064,9 +1088,9 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
         </div>
 
         {/* Badges */}
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <InterventionBadge type={ticket.interventionType} />
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${status.color}`}>{status.label}</span>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${itype.color}`}>{itype.label}</span>
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${prio.color}`}>{prio.label}</span>
           <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Niveau {ticket.level || 1}</span>
@@ -1553,7 +1577,6 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
 function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, onDragEnd, selected, canDelete, onDelete }) {
   const prio     = PRIORITIES[ticket.priority] || PRIORITIES.normale;
   const cat      = CATEGORIES[ticket.category] || CATEGORIES.other;
-  const itype    = INTERVENTION_TYPES[ticket.interventionType] || INTERVENTION_TYPES.technique;
   const unread   = ticketHasUnread(ticket);
   const assignee = users?.find(u => u.id === ticket.assigneeId || u.uid === ticket.assigneeId);
 
@@ -1588,6 +1611,11 @@ function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, o
         </button>
       )}
 
+      {/* Type d'intervention — mis fortement en avant en tête de carte */}
+      <div className="mb-2 pr-3">
+        <InterventionBadge type={ticket.interventionType} size="sm" />
+      </div>
+
       {/* Titre + unread */}
       <div className="flex items-start gap-1.5 mb-2 pr-3">
         {unread && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1 animate-pulse" title="Nouveaux commentaires" />}
@@ -1596,7 +1624,6 @@ function KanbanCard({ ticket, onOpen, users, isStaff, isDragging, onDragStart, o
 
       {/* Badges */}
       <div className="flex flex-wrap gap-1 mb-2.5">
-        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${itype.color}`}>{itype.label}</span>
         <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${cat.color}`}>{cat.label}</span>
         <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${prio.color}`}>{prio.label}</span>
         {ticket.level > 1 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">L{ticket.level}</span>}
@@ -1737,7 +1764,7 @@ export default function Tickets() {
   const [filterPriority, setFilterPriority] = useState('all');
   const [activeTab, setActiveTab] = useState('actifs');
   const [sortBy, setSortBy] = useState('date_desc');
-  const [viewMode, setViewMode] = useState('list'); // 'list' | 'kanban'
+  const [viewMode, setViewMode] = useState('kanban'); // 'list' | 'kanban'
 
   const currentUser = { uid: auth.uid, username: auth.username, role: auth.role };
 
