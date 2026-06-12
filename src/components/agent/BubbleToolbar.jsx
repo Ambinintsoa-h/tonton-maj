@@ -178,7 +178,7 @@ const Swatch = ({ color, label, onClick }) => (
       outline: color === 'transparent' ? '1px dashed rgba(255,255,255,0.4)' : 'none',
     }}
   >
-    {color === 'transparent' && <span className="text-white/50 text-[8px]">✕</span>}
+    {color === 'transparent' && <X size={8} className="text-white/50" />}
   </button>
 );
 
@@ -316,7 +316,7 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted }
     const html = yt
       // L'iframe YouTube absorbe tous les événements souris → overlay transparent posé dessus
       // pour que les clics atteignent le document et déclenchent le bouton supprimer.
-      ? `<div data-media-type="video" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1em 0;max-width:100%;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/${yt[1]}" frameborder="0" allowfullscreen loading="lazy" title="Vidéo YouTube"></iframe><div data-media-overlay style="position:absolute;inset:0;cursor:pointer;z-index:1;" title="Cliquer pour sélectionner — supprimer via le bouton 🗑"></div></div><br>`
+      ? `<div data-media-type="video" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1em 0;max-width:100%;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/${yt[1]}" frameborder="0" allowfullscreen loading="lazy" title="Vidéo YouTube"></iframe><div data-media-overlay style="position:absolute;inset:0;cursor:pointer;z-index:1;" title="Cliquer pour sélectionner — supprimer via le bouton corbeille"></div></div><br>`
       : `<video src="${inputVal.trim()}" controls data-media-type="video" style="max-width:100%;display:block;margin:1em auto;"></video><br>`;
     insertAtSaved('insertHTML', html);
   }, [inputVal, insertAtSaved]);

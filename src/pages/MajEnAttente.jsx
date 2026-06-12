@@ -10,6 +10,7 @@ import {
   ExternalLink, Plus, X, RefreshCw, ChevronDown, ChevronUp,
   FileSpreadsheet, Link2, Sparkles, Filter, Loader, UserCircle2,
   Globe, PencilLine, ListChecks, PlayCircle, ShieldCheck, Tag,
+  ClipboardList, AlertTriangle, Search, Lightbulb, Info,
 } from 'lucide-react';
 import {
   addPendingItems, addPendingItem, removePendingItem,
@@ -172,7 +173,7 @@ function UploadZone({ onParsed }) {
         }
 
         onParsed(items);
-        toast.success(`${items.length} article(s) importé(s)`, { icon: '📋' });
+        toast.success(`${items.length} article(s) importé(s)`, { icon: <ClipboardList size={18} /> });
       } catch (err) {
         toast.error('Erreur de lecture du fichier : ' + err.message);
       }
@@ -450,7 +451,7 @@ function ImportPanel({ open, onClose, onParsed }) {
 
               {/* Liens utiles */}
               <div className="rounded-2xl bg-blue-50 border border-blue-100 p-4">
-                <p className="text-xs font-semibold text-blue-700 mb-2">💡 Astuce Google Sheets</p>
+                <p className="text-xs font-semibold text-blue-700 mb-2"><Lightbulb size={14} className="inline text-blue-600 shrink-0" /> Astuce Google Sheets</p>
                 <p className="text-xs text-blue-600">Exportez votre feuille via <strong>Fichier → Télécharger → .xlsx</strong> puis importez-le ici.</p>
               </div>
             </div>
@@ -764,7 +765,7 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onVi
           <div className="px-5 py-2 bg-blue-50/40 border-b border-blue-100/50">
             {/* Badge agent */}
             <div className="flex items-center gap-1 mb-1">
-              <span className="text-xs leading-none">{agent.emoji}</span>
+              <agent.Icon size={12} className="shrink-0" />
               <span className="text-[10px] font-semibold text-gray-500">{agent.name}</span>
               <span className="text-[10px] text-gray-300">·</span>
               <span className="text-[10px] text-gray-400 italic">{agent.pseudo}</span>
@@ -1007,7 +1008,7 @@ export default function MajEnAttente() {
     setEnriching(prev => {
       const errors = prev?.errors || 0;
       if (errors > 0) {
-        toast(`Enrichissement terminé (${errors} URL${errors > 1 ? 's' : ''} inaccessible${errors > 1 ? 's' : ''})`, { icon: '⚠️' });
+        toast(`Enrichissement terminé (${errors} URL${errors > 1 ? 's' : ''} inaccessible${errors > 1 ? 's' : ''})`, { icon: <AlertTriangle size={18} className="text-amber-500" /> });
       } else {
         toast.success('Titres récupérés automatiquement !');
       }
@@ -1047,7 +1048,7 @@ export default function MajEnAttente() {
               const r = resp.data.result;
               articleHtml    = r.content;
               articleContent = r.content;
-              step(`WordPress MCP ✓ — article lu directement (ID ${r.post_id})`);
+              step(`WordPress MCP OK — article lu directement (ID ${r.post_id})`);
               wpFetched = true;
               // Données WP pour le single-item flow (retournées dans result)
               item._wpData = {
@@ -1162,7 +1163,7 @@ export default function MajEnAttente() {
 
       const applied = allUpdatesWithStatus.filter(u => u.applied).length;
       const total   = allUpdatesWithStatus.length;
-      toast.success(`MAJ prête — ${applied}/${total} modif. appliquées`, { icon: '🔍' });
+      toast.success(`MAJ prête — ${applied}/${total} modif. appliquées`, { icon: <Search size={18} /> });
 
       return {
         originalContent: articleHtml,
@@ -1192,7 +1193,7 @@ export default function MajEnAttente() {
       return;
     }
     if (runStates.size >= CONCURRENCY) {
-      toast(`Limite de ${CONCURRENCY} MAJ simultanées — attendez qu'un article se termine`, { icon: 'ℹ️' });
+      toast(`Limite de ${CONCURRENCY} MAJ simultanées — attendez qu'un article se termine`, { icon: <Info size={18} className="text-blue-500" /> });
       return;
     }
 

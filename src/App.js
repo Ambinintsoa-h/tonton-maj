@@ -38,6 +38,7 @@ import {
 import tracker from './services/activityTracker';
 import { setNotifications } from './store/slices/notificationsSlice';
 import toast from 'react-hot-toast';
+import { Bell } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Intercepteurs axios — niveau module, s'appliquent à toutes les requêtes
@@ -99,7 +100,7 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
   dispatch(setFirebaseReady(ok));
 
   if (!ok) {
-    console.error('[firebase] ✗ Échec de l\'initialisation');
+    console.error('[firebase] Échec de l\'initialisation');
     return;
   }
 
@@ -350,7 +351,7 @@ function NotificationListener() {
       const unread = notifs.filter(n => !n.read);
       if (unread.length > prevCountRef.current) {
         const newest = unread[0];
-        if (newest) toast(newest.message, { icon: '🔔', duration: 4000 });
+        if (newest) toast(newest.message, { icon: <Bell size={18} />, duration: 4000 });
       }
       prevCountRef.current = unread.length;
     });

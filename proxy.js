@@ -103,9 +103,9 @@ try {
     const sa = JSON.parse(fs.readFileSync(saPath, 'utf8'));
     if (!_admin.apps.length) _admin.initializeApp({ credential: _admin.credential.cert(sa) });
     firebaseAdmin = _admin;
-    console.log('[firebase-admin] ✓ Initialisé');
+    console.log('[firebase-admin] Initialisé');
   } else {
-    console.warn('[firebase-admin] ⚠ data/firebase-service-account.json manquant');
+    console.warn('[firebase-admin] ATTENTION data/firebase-service-account.json manquant');
   }
 } catch (e) { console.error('[firebase-admin] Erreur :', e.message); }
 
@@ -115,11 +115,11 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 // ─── Vérifications de sécurité au démarrage ───────────────────────────────────
 if (IS_PROD) {
   if (JWT_SECRET === 'tonton-dev-secret-change-me-in-production') {
-    console.error('[SECURITY] ✗ JWT_SECRET non configuré — définissez JWT_SECRET dans .env en production');
+    console.error('[SECURITY] JWT_SECRET non configuré — définissez JWT_SECRET dans .env en production');
     process.exit(1);
   }
   if (ADMIN_PASSWORD === 'admin') {
-    console.error('[SECURITY] ✗ ADMIN_PASSWORD par défaut — définissez ADMIN_PASSWORD dans .env en production');
+    console.error('[SECURITY] ADMIN_PASSWORD par défaut — définissez ADMIN_PASSWORD dans .env en production');
     process.exit(1);
   }
 }
@@ -309,7 +309,7 @@ const sendInviteEmail = async ({ toEmail, firstName, username, resetLink }) => {
         </div>
         <!-- Body -->
         <div style="padding:32px 36px">
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111">Bonjour ${firstName} 👋</p>
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111">Bonjour ${firstName}</p>
           <p style="margin:0 0 24px;color:#555;font-size:14px;line-height:1.6">
             Votre compte a été créé sur la plateforme TONTON AI.<br>
             Voici vos identifiants de connexion :
@@ -332,13 +332,13 @@ const sendInviteEmail = async ({ toEmail, firstName, username, resetLink }) => {
             Se connecter →
           </a>
           <p style="margin:24px 0 0;color:#aaa;font-size:12px;line-height:1.6">
-            🔐 Le lien de définition de mot de passe expire dans 24h.
+            Le lien de définition de mot de passe expire dans 24h.
           </p>
         </div>
       </div>
     `,
   });
-  console.log(`[invite] ✓ Email d'invitation envoyé à ${toEmail}`);
+  console.log(`[invite] Email d'invitation envoyé à ${toEmail}`);
 };
 
 // ─── Envoi email notifications tickets ───────────────────────────────────────
@@ -361,7 +361,7 @@ const sendTicketEmail = async (toEmails, subject, textBody, htmlBody) => {
     text: textBody,
     html: htmlBody,
   });
-  console.log(`[ticket-email] ✓ ${subject} → ${recipients.join(', ')}`);
+  console.log(`[ticket-email] ${subject} → ${recipients.join(', ')}`);
 };
 
 // ─── Rate limiter intégré ─────────────────────────────────────────────────────
@@ -404,7 +404,7 @@ const recordLoginFailure = (ip) => {
   r.count++;
   if (r.count >= 5) {
     r.lockedUntil = Date.now() + 15 * 60 * 1000; // 15 min
-    console.warn(`[auth] ⚠ IP ${ip} verrouillée 15 min (${r.count} échecs consécutifs)`);
+    console.warn(`[auth] ATTENTION IP ${ip} verrouillée 15 min (${r.count} échecs consécutifs)`);
   }
   _loginFailures.set(ip, r);
 };
@@ -859,7 +859,7 @@ app.post('/api/settings', requireAuth, requireRole('super_admin'), (req, res) =>
       if (key in incoming) filtered[key] = incoming[key];
     }
     writeServerSettings(filtered);
-    console.log('[settings] ✓ Paramètres équipe sauvegardés');
+    console.log('[settings] Paramètres équipe sauvegardés');
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: 'Erreur lors de la sauvegarde des paramètres' });
@@ -898,11 +898,11 @@ const fetchModelPricing = async () => {
     if (Object.keys(pricing).length > 0) {
       _pricingCache.data      = pricing;
       _pricingCache.fetchedAt = Date.now();
-      console.log('[pricing] ✓ Tarifs LiteLLM —',
+      console.log('[pricing] Tarifs LiteLLM —',
         Object.entries(pricing).map(([k, v]) => `${k}: $${v.input}/$${v.output}`).join(' | '));
     }
   } catch (e) {
-    console.warn('[pricing] ⚠ LiteLLM inaccessible — fallback hardcodé :', e.message);
+    console.warn('[pricing] ATTENTION LiteLLM inaccessible — fallback hardcodé :', e.message);
   }
   return _pricingCache.data;
 };
@@ -1186,9 +1186,9 @@ const _seoSnapshotCheck = async () => {
           'seoTracking.nextSnapshotType':  isLast ? null : 'after_30d',
         };
         await db.collection('articles').doc(docSnap.id).update(updates);
-        console.log(`[seo-cron] ✓ Snapshot ${type} — article ${docSnap.id}`);
+        console.log(`[seo-cron] Snapshot ${type} — article ${docSnap.id}`);
       } catch (e) {
-        console.warn(`[seo-cron] ✗ Article ${docSnap.id} :`, e.message);
+        console.warn(`[seo-cron] Article ${docSnap.id} :`, e.message);
       }
     }
   } catch (e) {
@@ -1204,10 +1204,10 @@ setTimeout(() => {
 
 // ─── Sécurité globale : empêche le proxy de crasher sur exceptions non gérées ─
 process.on('uncaughtException', (err) => {
-  console.error('[proxy] ⚠ Exception non gérée (processus maintenu) :', err.message);
+  console.error('[proxy] ATTENTION Exception non gérée (processus maintenu) :', err.message);
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[proxy] ⚠ Promesse rejetée non gérée :', reason?.message || reason);
+  console.error('[proxy] ATTENTION Promesse rejetée non gérée :', reason?.message || reason);
 });
 
 // ─── Résolution du binaire claude (fallback) ──────────────────────────────────
@@ -1789,7 +1789,7 @@ app.post('/api/transcribe/file', requireAuth, upload.single('audio'), async (req
   try {
     console.log(`[transcribe] ↑ Fichier local : ${req.file.originalname} (${(req.file.size / 1024 / 1024).toFixed(1)} Mo)`);
     const transcript = await transcribeWithGroq(req.file.buffer, req.file.originalname, groqKey, language);
-    console.log(`[transcribe] ✓ ${transcript.length} caractères`);
+    console.log(`[transcribe] ${transcript.length} caractères`);
     res.json({ transcript, chars: transcript.length, mb: (req.file.size / 1024 / 1024).toFixed(1) });
   } catch (e) {
     console.error('[transcribe/file]', e.response?.data || e.message);
@@ -2401,7 +2401,7 @@ app.post('/api/upload-ticket-file', requireAuth, ticketUpload.single('file'), (r
     fs.writeFileSync(path.join(dir, filename), req.file.buffer);
 
     const url = `/api/ticket-attachments/${ticketId}/${filename}`;
-    console.log(`[upload-ticket-file] ✓ ${decodedName} → ${url}`);
+    console.log(`[upload-ticket-file] ${decodedName} → ${url}`);
     res.json({ url, name: decodedName, type: req.file.mimetype, size: req.file.size });
   } catch (e) {
     console.error('[upload-ticket-file]', e.message);
@@ -2798,23 +2798,23 @@ const HOST = IS_PROD ? '0.0.0.0' : '127.0.0.1';
 const server = app.listen(PORT, HOST, () => {
   let authOk = false;
   try { getOAuthToken(); authOk = true; } catch {}
-  console.log(`\n  ✓ Proxy ArticleAI actif → http://localhost:${PORT}`);
+  console.log(`\n  Proxy ArticleAI actif → http://localhost:${PORT}`);
   if (authOk) {
-    console.log(`  Auth : OAuth Claude Desktop (déchiffrement DPAPI) ✓`);
+    console.log(`  Auth : OAuth Claude Desktop (déchiffrement DPAPI)`);
     console.log(`  Aucune configuration supplémentaire requise.\n`);
   } else {
     console.log(`  Auth : fallback CLI → ${CLAUDE_BIN}`);
-    console.log(`\n  ⚠ Si l'agent échoue avec une erreur d'auth :`);
+    console.log(`\n  ATTENTION Si l'agent échoue avec une erreur d'auth :`);
     console.log(`  → Ouvre un terminal et lance : "${CLAUDE_BIN}" login\n`);
   }
 });
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`\n  ✗ Port ${PORT} déjà occupé. Libère le port et relance.\n`);
+    console.error(`\n  Port ${PORT} déjà occupé. Libère le port et relance.\n`);
     process.exit(1);
   } else {
-    console.error('\n  ✗ Erreur serveur proxy :', err.message);
+    console.error('\n  Erreur serveur proxy :', err.message);
     process.exit(1);
   }
 });

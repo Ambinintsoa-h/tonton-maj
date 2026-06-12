@@ -689,7 +689,7 @@ const TeamActivityWidget = ({ delay = 0 }) => {
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 👑 SUPER ADMIN — Vue globale
+// SUPER ADMIN — Vue globale
 // ══════════════════════════════════════════════════════════════════════════════
 function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, dispatch }) {
   const activeItems = pendingItems.filter(i => i.status !== 'done');
@@ -729,7 +729,7 @@ function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, di
         </button>
       </div>
 
-      {/* 💰 Widget coût — en premier, le plus important */}
+      {/* Widget coût — en premier, le plus important */}
       <div className="grid grid-cols-1">
         <CostWidget stats={stats} delay={0} />
       </div>
@@ -819,7 +819,7 @@ function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, di
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 🧑‍💼 MANAGER — Vue équipe
+// MANAGER — Vue équipe
 // ══════════════════════════════════════════════════════════════════════════════
 function DashboardManager({ stats, history, pendingItems, users, navigate }) {
   const activeItems = pendingItems.filter(i => i.status !== 'done');
@@ -919,7 +919,7 @@ function DashboardManager({ stats, history, pendingItems, users, navigate }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ✅ CQ IA — Vue personnelle
+// CQ IA — Vue personnelle
 // ══════════════════════════════════════════════════════════════════════════════
 function DashboardCqIa({ stats, history, pendingItems, navigate, authUid, authUsername }) {
   const isMe = (id) => id === authUid || id === authUsername;
@@ -997,7 +997,7 @@ function DashboardCqIa({ stats, history, pendingItems, navigate, authUid, authUs
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 🔀 Routeur de rôles
+// Routeur de rôles
 // ══════════════════════════════════════════════════════════════════════════════
 export default function Dashboard() {
   const dispatch     = useDispatch();

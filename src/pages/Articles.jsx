@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag } from 'lucide-react';
+import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2 } from 'lucide-react';
 import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks } from '../store/slices/agentSlice';
 import { addToHistory, updateInHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
@@ -92,7 +92,7 @@ export default function Articles() {
               tags:            r.tags       || [],  // IDs des tags actuels
             };
             dispatch(setWpData(prefetchedWpData));
-            dispatch(addStep(`WordPress MCP ✓ — article lu directement (ID ${r.post_id})`));
+            dispatch(addStep(`WordPress MCP OK — article lu directement (ID ${r.post_id})`));
             wpFetched = true;
           }
         }
@@ -397,7 +397,7 @@ export default function Articles() {
                 />
                 <p className="text-[11px] text-gray-400">
                   {targetKeyword.trim()
-                    ? <span className="text-sage-600">✓ L'IA optimisera l'article autour de ce mot-clé (H1/H2, intro, densité sémantique).</span>
+                    ? <span className="text-sage-600"><CheckCircle2 size={13} className="inline text-sage-600 shrink-0" /> L'IA optimisera l'article autour de ce mot-clé (H1/H2, intro, densité sémantique).</span>
                     : 'Requis — TONTON AI l\'utilisera pour orienter toute la MAJ SEO.'}
                 </p>
               </div>

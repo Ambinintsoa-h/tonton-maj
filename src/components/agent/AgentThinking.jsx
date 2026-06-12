@@ -98,8 +98,8 @@ export default function AgentThinking({ steps, progress, status }) {
               transition={{ duration: 0.2 }}
               className="flex items-center gap-2 text-[11px] text-gray-400 px-1"
             >
-              <div className="w-4 h-4 rounded-full bg-gray-100 flex items-center justify-center shrink-0 text-[9px]">
-                {agent.emoji}
+              <div className="w-4 h-4 rounded-full bg-gray-100 flex items-center justify-center shrink-0 text-gray-500">
+                <agent.Icon size={10} className="shrink-0" />
               </div>
               <span className="truncate leading-tight">{step.text}</span>
             </motion.div>
@@ -122,7 +122,7 @@ export default function AgentThinking({ steps, progress, status }) {
             >
               {/* Badge agent */}
               <div className="flex items-center gap-1.5">
-                <span className="text-sm leading-none">{agent.emoji}</span>
+                <agent.Icon size={14} className="shrink-0 text-gray-500" />
                 <span className="text-[10px] font-semibold text-gray-500">
                   {agent.name}
                 </span>

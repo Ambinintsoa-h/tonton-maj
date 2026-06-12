@@ -3,7 +3,7 @@ import { STORAGE_KEYS } from '../constants/storage';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink, Flame, Shield, Zap } from 'lucide-react';
+import { Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink, Flame, Shield, Zap, AlertTriangle } from 'lucide-react';
 import axios from 'axios';
 import { setSettings, setFirebaseReady } from '../store/slices/settingsSlice';
 import { initFirebase, saveSettings } from '../services/firebase';
@@ -516,7 +516,7 @@ export default function Parametres() {
                   const info = credits?.remaining != null ? ` · ${credits.remaining} crédits restants` : '';
                   toast.success(`Haloscan connecté !${info}`);
                 } else {
-                  toast('Réponse inattendue — vérifiez la clé', { icon: '⚠️' });
+                  toast('Réponse inattendue — vérifiez la clé', { icon: <AlertTriangle size={18} className="text-amber-500" /> });
                 }
               } catch (e) {
                 setHaloscanStatus('error');
