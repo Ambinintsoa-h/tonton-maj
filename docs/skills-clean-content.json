@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "note": "Contenu propre conforme a .claude/skills-standard.md. A importer via le menu SKILLS IA (bouton Import). Le socle 'Skills par Tonton AI' n'est pas inclus : il est gere par le code (defaultSkills.js). knowledge vide = les 23 transcriptions sortent du contexte agent (la sauvegarde auto de l'import les conserve).",
+  "skills": [
+    {
+      "name": "TL;DR en tete d'article",
+      "active": true,
+      "content": "**Objectif** — Un TL;DR citable par les moteurs generatifs (GEO), place en tete d'article.\n\n**Regle**\n- Reponds a l'intention de recherche des la premiere phrase.\n- Place l'entite / le mot-cle principal tot.\n- Rends-le auto-suffisant et extractible : aucune reference contextuelle (\"comme vu plus haut\", \"ci-dessous\").\n- 50 a 70 mots, strictement factuel et verifiable.\n\n**Pourquoi** — Un TL;DR extractible et factuel est cite tel quel par les IA, ce qui ramene du trafic vers l'article."
+    },
+    {
+      "name": "Lisibilite & anti-patterns IA",
+      "active": true,
+      "content": "**Objectif** — Un texte fluide, humain, agreable a lire.\n\n**Regle**\n- Reformule les listes de plus de 5 puces en phrases simples (~20 mots), reliees par des connecteurs logiques.\n- Repere et reformule les tournures typiques de l'IA (formulations passe-partout, enchainements mecaniques).\n- Aere le texte : paragraphes courts.\n\n**Pourquoi** — Un contenu naturel est mieux lu par les humains et mieux valorise par les moteurs."
+    },
+    {
+      "name": "Paragraphe \"Dernieres actualites\"",
+      "active": true,
+      "content": "**Objectif** — Clore l'article (avant la FAQ) par les nouveautes recentes du sujet.\n\n**Regle**\n- 1 paragraphe en prose narrative (jamais une liste), 80 a 100 mots.\n- Intitule \"Dernieres actualites — [mois] [annee]\".\n- Chaque fait est source et date.\n- Place juste avant la FAQ (ou en toute fin s'il n'y a pas de FAQ).\n\n**Pourquoi** — Signale aux lecteurs et aux moteurs que l'article est a jour, tout en restant lisible.\n\n**Exemple** — \"Le marche reste actif en ce printemps 2026 : l'acteur X a enrichi son offre en avril, tandis que Y etend son service au-dela de son perimetre initial.\""
+    },
+    {
+      "name": "FAQ en fin d'article",
+      "active": true,
+      "content": "**Objectif** — Repondre aux questions liees a l'intention de recherche, en toute fin d'article.\n\n**Regle**\n- 4 a 6 questions / reponses fondees sur l'intention autour du mot-cle cible.\n- Format : <h2>FAQ — [Sujet]</h2> suivi des blocs question / reponse.\n- C'est la TOUTE DERNIERE section : rien ne figure apres la FAQ.\n\n**Pourquoi** — Les FAQ captent les requetes longue traine et favorisent les extraits enrichis."
+    },
+    {
+      "name": "Tableau comparatif",
+      "active": true,
+      "content": "**Objectif** — Rendre lisible une comparaison chiffree (offres, tarifs, options).\n\n**Regle**\n- Des que l'article compare 3 elements ou plus, genere un tableau HTML clair : elements en colonnes, criteres en lignes (prix, fonctionnalites, limites, usage recommande).\n- Donnees a jour, verifiees via les sources.\n- A inserer avant la section \"quelle solution choisir\" ou en fin de comparatif.\n\n**Pourquoi** — Un tableau synthetise mieux qu'un long paragraphe et gagne en visibilite dans les resultats."
+    }
+  ],
+  "knowledge": []
+}
