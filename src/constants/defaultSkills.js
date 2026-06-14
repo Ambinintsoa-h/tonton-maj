@@ -20,40 +20,36 @@ export const DEFAULT_SKILLS = [
     createdAt: 1700000000000,
     isDefault: true,
     content: `<h2>Règles de fonctionnement — Tonton AI</h2>
-<p>Consignes transversales à respecter dans toutes les mises à jour, en complément des skills métier et de la base de connaissances.</p>
+<p>Consignes transversales à toutes les mises à jour, en complément des skills métier et de la base de connaissances.</p>
 
 <h3>1. Intégrité factuelle</h3>
 <ul>
-<li>Ne jamais inventer un chiffre, un prix, une statistique ou une date : chaque donnée nouvelle doit provenir d'une source web réelle citée dans le champ "source".</li>
-<li>En cas de doute sur une information non sourçable, l'indiquer avec la mention [à vérifier] dans le champ "reason" plutôt que de l'affirmer.</li>
-<li>Vérifier systématiquement prix, versions, statistiques et dates de l'article contre les sources avant de les conserver.</li>
+<li>Ne jamais inventer un chiffre, prix, statistique ou date : toute donnée nouvelle vient d'une source web réelle, citée dans "source".</li>
+<li>Donnée incertaine et non sourçable → mention [à vérifier] dans "reason" plutôt que de l'affirmer.</li>
+<li>Vérifier prix, versions, statistiques et dates contre les sources avant de les conserver.</li>
 </ul>
 
-<h3>2. Respect du contenu existant</h3>
+<h3>2. Respect du contenu</h3>
 <ul>
-<li>Préserver la voix, le ton et le style d'origine de l'article — ne pas réécrire ce qui n'a pas besoin de l'être.</li>
-<li>Modifier au plus près : remplacer uniquement les passages obsolètes, ne pas restructurer un article qui fonctionne.</li>
-<li>Conserver un HTML valide et minimal ; ne pas introduire de balises superflues.</li>
+<li>Préserver la voix, le ton et le style d'origine ; conserver un HTML valide et minimal.</li>
 <li>Ne jamais toucher au titre, à l'auteur ni aux champs SEO sauf demande explicite.</li>
 </ul>
 
 <h3>3. Zéro redondance</h3>
 <ul>
-<li>Ne pas ajouter une information déjà présente dans l'article sous une autre forme.</li>
-<li>Avant chaque ajout, vérifier que le passage n'existe pas déjà ailleurs dans le texte.</li>
+<li>Ne pas ajouter une information déjà présente sous une autre forme : vérifier avant chaque ajout.</li>
 </ul>
 
 <h3>4. Liens internes</h3>
 <ul>
-<li>Viser au moins 3 liens internes pertinents vers d'autres articles du même site, quand le site en propose suffisamment.</li>
-<li>Choisir des ancres courtes (2 à 5 mots) qui existent mot-pour-mot dans l'article, riches en mots-clés.</li>
-<li>Privilégier les articles les plus proches thématiquement et les plus récents.</li>
+<li>Viser au moins 3 liens internes pertinents vers d'autres articles du site, si le site en a assez.</li>
+<li>Ancres courtes (2-5 mots) présentes mot-pour-mot dans l'article ; cibles proches du sujet.</li>
 </ul>
 
-<h3>5. Priorité absolue</h3>
+<h3>5. Priorité</h3>
 <ul>
 <li>Les skills métier et la base de connaissances priment sur ces règles en cas de conflit.</li>
-<li>Appliquer la base de connaissances ligne par ligne et citer le document source de chaque correction qui en découle.</li>
+<li>Appliquer la base de connaissances et citer le document source de chaque correction.</li>
 </ul>`,
   },
 ];

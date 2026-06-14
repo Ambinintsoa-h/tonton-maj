@@ -1271,3 +1271,29 @@ Réponds UNIQUEMENT : {"seoTitle":"...","seoDescription":"..."}`,
     return { seoTitle: '', seoDescription: '' };
   }
 };
+
+/**
+ * Suggère LA catégorie la plus pertinente parmi les catégories existantes du site,
+ * pour un article qui n'en a pas. Utilise Haiku (rapide). Retourne l'id ou null.
+ * Ne crée jamais de catégorie : choisit uniquement dans la liste fournie.
+ */
+export const suggestCategory = async (articleHtml = '', categories = []) => {
+  const list = (categories || []).filter(c => c && c.id != null && c.name);
+  if (!articleHtml || list.length === 0) return null;
+  const articleText = stripHtml(articleHtml).substring(0, 1500);
+  try {
+    const { text } = await callClaude(null, {
+      model: MODELS.FAST,
+      max_tokens: 30,
+      system: 'Tu classes un article dans UNE seule catégorie existante. Réponds UNIQUEMENT avec le JSON {"id": <id>} de la catégorie la plus pertinente de la liste.',
+      messages: [{
+        role: 'user',
+        content: `Catégories disponibles :\n${list.map(c => `- ${c.id} : ${c.name}`).join('\n')}\n\nArticle (extrait) :\n${articleText}\n\nRéponds UNIQUEMENT : {"id": <id de la meilleure catégorie>}`,
+      }],
+    });
+    const { id } = parseJsonResponse(text, {}, '[suggestCategory]');
+    return list.some(c => String(c.id) === String(id)) ? id : null;
+  } catch {
+    return null;
+  }
+};
