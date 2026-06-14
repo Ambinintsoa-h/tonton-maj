@@ -1,32 +1,60 @@
 {
-  "version": 1,
-  "note": "Contenu propre conforme a .claude/skills-standard.md. A importer via le menu SKILLS IA (bouton Import). Le socle 'Skills par Tonton AI' n'est pas inclus : il est gere par le code (defaultSkills.js). knowledge vide = les 23 transcriptions sortent du contexte agent (la sauvegarde auto de l'import les conserve).",
+  "version": 2,
+  "note": "Contenu propre conforme à .claude/skills-standard.md. À importer via le menu SKILLS IA (bouton Import). Le socle 'Skills par Tonton AI' n'est PAS inclus : il est géré par le code (defaultSkills.js). La base de connaissances contient un seul document 'Process MAJ — équipe' DÉSACTIVÉ (active:false) : visible pour l'équipe, jamais injecté dans l'agent.",
   "skills": [
     {
-      "name": "TL;DR en tete d'article",
+      "name": "TL;DR en tête d'article",
       "active": true,
-      "content": "**Objectif** — Un TL;DR citable par les moteurs generatifs (GEO), place en tete d'article.\n\n**Regle**\n- Reponds a l'intention de recherche des la premiere phrase.\n- Place l'entite / le mot-cle principal tot.\n- Rends-le auto-suffisant et extractible : aucune reference contextuelle (\"comme vu plus haut\", \"ci-dessous\").\n- 50 a 70 mots, strictement factuel et verifiable.\n\n**Pourquoi** — Un TL;DR extractible et factuel est cite tel quel par les IA, ce qui ramene du trafic vers l'article."
+      "content": "**Objectif** — Un TL;DR citable par les moteurs génératifs (GEO), placé en tête d'article.\n\n**Règle**\n- Réponds à l'intention de recherche dès la première phrase.\n- Place l'entité / le mot-clé principal tôt.\n- Rends-le auto-suffisant et extractible : aucune référence contextuelle (« comme vu plus haut », « ci-dessous »).\n- 50 à 70 mots, strictement factuel et vérifiable.\n\n**Pourquoi** — Un TL;DR extractible et factuel est cité tel quel par les IA, ce qui ramène du trafic vers l'article."
     },
     {
-      "name": "Lisibilite & anti-patterns IA",
+      "name": "Lisibilité & anti-patterns IA",
       "active": true,
-      "content": "**Objectif** — Un texte fluide, humain, agreable a lire.\n\n**Regle**\n- Reformule les listes de plus de 5 puces en phrases simples (~20 mots), reliees par des connecteurs logiques.\n- Repere et reformule les tournures typiques de l'IA (formulations passe-partout, enchainements mecaniques).\n- Aere le texte : paragraphes courts.\n\n**Pourquoi** — Un contenu naturel est mieux lu par les humains et mieux valorise par les moteurs."
+      "content": "**Objectif** — Un texte fluide, humain, agréable à lire.\n\n**Règle**\n- Reformule les listes de plus de 5 puces en phrases simples (~20 mots), reliées par des connecteurs logiques.\n- Repère et reformule les tournures typiques de l'IA (formulations passe-partout, enchaînements mécaniques).\n- Aère le texte : paragraphes courts.\n\n**Pourquoi** — Un contenu naturel est mieux lu par les humains et mieux valorisé par les moteurs."
     },
     {
-      "name": "Paragraphe \"Dernieres actualites\"",
+      "name": "Modifications chirurgicales",
       "active": true,
-      "content": "**Objectif** — Clore l'article (avant la FAQ) par les nouveautes recentes du sujet.\n\n**Regle**\n- 1 paragraphe en prose narrative (jamais une liste), 80 a 100 mots.\n- Intitule \"Dernieres actualites — [mois] [annee]\".\n- Chaque fait est source et date.\n- Place juste avant la FAQ (ou en toute fin s'il n'y a pas de FAQ).\n\n**Pourquoi** — Signale aux lecteurs et aux moteurs que l'article est a jour, tout en restant lisible.\n\n**Exemple** — \"Le marche reste actif en ce printemps 2026 : l'acteur X a enrichi son offre en avril, tandis que Y etend son service au-dela de son perimetre initial.\""
+      "content": "**Objectif** — Mettre à jour sans que le lecteur sente la couture.\n\n**Règle**\n- Ne modifie QUE les passages obsolètes ; ne touche pas à un paragraphe encore d'actualité.\n- Un paragraphe de remplacement fait **100 mots maximum**.\n- L'insertion doit être fluide : même ton, même registre, enchaînement naturel avec l'avant et l'après.\n- N'écris JAMAIS de renvoi interne (« comme mentionné », « comme vu plus haut », « ci-dessus », « ci-dessous »).\n\n**Pourquoi** — Une MAJ réussie est invisible : l'article reste cohérent, comme s'il avait toujours été à jour."
+    },
+    {
+      "name": "Paragraphe « Dernières actualités »",
+      "active": true,
+      "content": "**Objectif** — Clore l'article (avant la FAQ) par les nouveautés récentes du sujet.\n\n**Règle**\n- 1 paragraphe en prose narrative (jamais une liste), 80 à 100 mots.\n- Intitulé « Dernières actualités — [mois] [année] ».\n- Chaque fait est sourcé et daté.\n- Placé juste avant la FAQ (ou en toute fin s'il n'y a pas de FAQ).\n\n**Pourquoi** — Signale aux lecteurs et aux moteurs que l'article est à jour, tout en restant lisible.\n\n**Exemple** — « Le marché reste actif en ce printemps 2026 : l'acteur X a enrichi son offre en avril, tandis que Y étend son service au-delà de son périmètre initial. »"
     },
     {
       "name": "FAQ en fin d'article",
       "active": true,
-      "content": "**Objectif** — Repondre aux questions liees a l'intention de recherche, en toute fin d'article.\n\n**Regle**\n- 4 a 6 questions / reponses fondees sur l'intention autour du mot-cle cible.\n- Format : <h2>FAQ — [Sujet]</h2> suivi des blocs question / reponse.\n- C'est la TOUTE DERNIERE section : rien ne figure apres la FAQ.\n\n**Pourquoi** — Les FAQ captent les requetes longue traine et favorisent les extraits enrichis."
+      "content": "**Objectif** — Répondre aux questions liées à l'intention de recherche, en toute fin d'article.\n\n**Règle**\n- 4 à 6 questions / réponses fondées sur l'intention autour du mot-clé cible.\n- Format : <h2>FAQ — [Sujet]</h2> suivi des blocs question / réponse.\n- C'est la TOUTE DERNIÈRE section : rien ne figure après la FAQ.\n\n**Pourquoi** — Les FAQ captent les requêtes longue traîne et favorisent les extraits enrichis."
     },
     {
       "name": "Tableau comparatif",
       "active": true,
-      "content": "**Objectif** — Rendre lisible une comparaison chiffree (offres, tarifs, options).\n\n**Regle**\n- Des que l'article compare 3 elements ou plus, genere un tableau HTML clair : elements en colonnes, criteres en lignes (prix, fonctionnalites, limites, usage recommande).\n- Donnees a jour, verifiees via les sources.\n- A inserer avant la section \"quelle solution choisir\" ou en fin de comparatif.\n\n**Pourquoi** — Un tableau synthetise mieux qu'un long paragraphe et gagne en visibilite dans les resultats."
+      "content": "**Objectif** — Rendre lisible une comparaison chiffrée (offres, tarifs, options).\n\n**Règle**\n- Dès que l'article compare 3 éléments ou plus, génère un tableau HTML clair : éléments en colonnes, critères en lignes (prix, fonctionnalités, limites, usage recommandé).\n- Données à jour, vérifiées via les sources.\n- À insérer avant la section « quelle solution choisir » ou en fin de comparatif.\n\n**Pourquoi** — Un tableau synthétise mieux qu'un long paragraphe et gagne en visibilité dans les résultats."
+    },
+    {
+      "name": "Corriger les liens cassés",
+      "active": true,
+      "content": "**Objectif** — Garder des liens fiables et cohérents pour le lecteur.\n\n**Règle**\n- Repère les liens hypertextes morts, redirigés ou incohérents avec le texte d'ancre.\n- Remplace-les par une source réelle et pertinente, ou retire le lien si rien ne convient.\n- L'ancre doit correspondre au sujet réel de la page cible.\n\n**Pourquoi** — Un lien cassé ou trompeur nuit à l'expérience et au référencement."
+    },
+    {
+      "name": "Intégrer une vidéo pertinente",
+      "active": true,
+      "content": "**Objectif** — Enrichir l'article d'une vidéo récente et pertinente quand c'est utile.\n\n**Règle**\n- Choisis une vidéo récente, en rapport direct avec le sujet, d'une source fiable.\n- Intègre-la via l'URL (oEmbed) à un endroit logique du texte.\n- Si la vidéo est en anglais, signale-le brièvement et introduis-la en français pour le contexte.\n\n**Pourquoi** — Une vidéo pertinente augmente le temps de lecture et la richesse perçue de l'article."
+    },
+    {
+      "name": "Infographie HTML",
+      "active": true,
+      "content": "**Objectif** — Synthétiser visuellement un historique, une timeline ou des données comparables.\n\n**Règle**\n- Génère une infographie HTML autonome (CSS inline, aucune dépendance externe).\n- Timeline verticale pour les historiques ; cartes / blocs pour les comparatifs visuels.\n- Uniquement quand le contenu s'y prête vraiment — sinon, s'abstenir.\n\n**Pourquoi** — Un visuel clair retient l'attention et rend l'information mémorisable."
     }
   ],
-  "knowledge": []
+  "knowledge": [
+    {
+      "name": "Process MAJ — équipe (référence, non injecté)",
+      "active": false,
+      "source": "manual",
+      "isHtml": false,
+      "content": "# Process MAJ — checklist équipe\n\n> Document de référence pour le rédacteur. NON injecté dans l'agent (actions manuelles dans WordPress).\n\n## Étapes manuelles à faire dans l'interface\n- **Image à la une** : remplacer par une image cohérente avec le contenu mis à jour.\n- **Captures d'écran** : remplacer les captures obsolètes par des captures à jour.\n- **Publication à J-2** : programmer la publication deux jours avant, pour atteindre le pic de fraîcheur au moment où le volume de recherche monte.\n- **URL / titre déphasés** : ne jamais changer le slug ou le titre soi-même → demander au manager.\n\n## Automatisé par TONTON (rien à faire à la main)\n- **Catégorie** : proposée automatiquement si l'article n'en a pas (à confirmer dans la vue MAJ).\n- **Tag « MAJ par … »** : l'auteur de la mise à jour est enregistré automatiquement à la publication."
+    }
+  ]
 }

@@ -14,7 +14,7 @@ import {
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
 import BubbleToolbar from './BubbleToolbar';
-import { runReviewAgent, generateAltText, generateSeoMeta } from '../../services/agent';
+import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, applyDiff, applyAddition, insertNearClosestParagraph, moveFaqToEnd } from '../../utils/diff';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData } from '../../store/slices/agentSlice';
@@ -92,6 +92,7 @@ export default function ArticleResult() {
   const settings = useSelector(s => s.settings);
   const skills = useSelector(s => s.skills.list);
   const knowledge = useSelector(s => s.knowledge.list);
+  const authUser = useSelector(s => s.auth);
   const firebaseReady   = useSelector(s => s.settings.firebaseReady);
   const wpSites         = useSelector(s => s.wordpress.sites);
   const articlesHistory = useSelector(s => s.articles.history);
@@ -972,6 +973,29 @@ export default function ArticleResult() {
     if (wpMcpData?.categories?.length) setSelectedCategories(wpMcpData.categories);
   }, [wpMcpData?.categories]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto-suggestion de catégorie : uniquement si l'article n'a AUCUNE vraie catégorie
+  // (rien de sélectionné, ou seulement « non classé »). L'agent classe l'article dans
+  // une catégorie EXISTANTE et la pré-sélectionne ; l'utilisateur confirme à la publication.
+  const catSuggestedRef = useRef(false);
+  useEffect(() => {
+    if (catSuggestedRef.current) return;
+    if (!agent.updatedContent || wpCategories.length === 0) return;
+    const onlyUncat = selectedCategories.length > 0 && selectedCategories.every(id => {
+      const c = wpCategories.find(x => String(x.id) === String(id));
+      return c && /non[\s-]?class|uncategor/i.test(c.name || '');
+    });
+    if (selectedCategories.length > 0 && !onlyUncat) return; // a déjà une vraie catégorie
+    catSuggestedRef.current = true;
+    suggestCategory(agent.updatedContent, wpCategories)
+      .then(id => {
+        if (id == null) return;
+        setSelectedCategories([id]);
+        const c = wpCategories.find(x => String(x.id) === String(id));
+        toast(`Catégorie suggérée : ${c?.name || id}`, { icon: <Tag size={16} /> });
+      })
+      .catch(() => {});
+  }, [wpCategories, agent.updatedContent, selectedCategories]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Quand on ouvre le menu WP, chercher si l'article existe déjà sur le site sélectionné.
   // Priorité : données MCP déjà récupérées par l'agent (pas de nouvelle requête WP).
   const handleOpenWP = async (site) => {
@@ -1052,6 +1076,15 @@ export default function ArticleResult() {
       tmp.innerHTML = rawHtml;
       tmp.querySelectorAll('figure[data-featured]').forEach(f => f.remove());
       htmlContent = tmp.innerHTML;
+    }
+
+    // ── Tag auteur (champ caché) ─────────────────────────────────────────────────
+    // Signe la MAJ avec l'auteur courant via un commentaire HTML : invisible pour le
+    // lecteur, présent dans la source, sans nécessiter de meta WordPress enregistrée.
+    const majAuthor = [authUser?.prenom, authUser?.nom].filter(Boolean).join(' ') || authUser?.username || '';
+    if (majAuthor) {
+      const stamp = new Date().toISOString().slice(0, 10);
+      htmlContent = `<!-- MAJ par ${majAuthor} le ${stamp} -->\n${htmlContent}`;
     }
 
     // featured_media est envoyé séparément à l'API WP REST pour mettre à jour

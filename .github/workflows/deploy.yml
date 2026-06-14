@@ -46,16 +46,21 @@ jobs:
 
       - name: Upload files via SCP
         run: |
+          ok=0
           for attempt in 1 2 3; do
             echo "Tentative SCP $attempt/3..."
             scp -F ~/.ssh/config \
               proxy.js package.json package-lock.json \
               n0c:~/maj.stomos.net/ && \
             scp -F ~/.ssh/config -r build \
-              n0c:~/maj.stomos.net/ && break
+              n0c:~/maj.stomos.net/ && { ok=1; break; }
             echo "Échec tentative $attempt, attente 15s..."
             sleep 15
           done
+          if [ "$ok" != "1" ]; then
+            echo "::error::SCP échoué après 3 tentatives — n0c injoignable depuis GitHub Actions."
+            exit 1
+          fi
 
       - name: Install deps + restart sur n0c
         run: |
@@ -69,9 +74,14 @@ jobs:
           touch tmp/restart.txt
           echo "Déploiement terminé"'
 
+          ok=0
           for attempt in 1 2 3; do
             echo "Tentative SSH $attempt/3..."
-            ssh -F ~/.ssh/config n0c bash -s <<< "$REMOTE_CMD" && { echo "SSH OK"; break; }
+            ssh -F ~/.ssh/config n0c bash -s <<< "$REMOTE_CMD" && { echo "SSH OK"; ok=1; break; }
             echo "Échec tentative $attempt, attente 20s..."
             sleep 20
           done
+          if [ "$ok" != "1" ]; then
+            echo "::error::SSH/restart échoué après 3 tentatives — n0c injoignable depuis GitHub Actions."
+            exit 1
+          fi
