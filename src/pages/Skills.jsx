@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { STORAGE_KEYS } from '../constants/storage';
 import axios from 'axios';
 import { useDispatch, useSelector } from 'react-redux';
@@ -12,17 +12,49 @@ import {
   Upload, Zap, Trash2, Edit3, Save, X, Plus, FileText, Eye, PenLine,
   BookOpen, FileSpreadsheet, File, ChevronDown, ChevronUp, Database,
   Globe, Code, FileCode, FileWarning, Loader2, Mic, MonitorPlay,
-  CheckCircle2, AlertTriangle,
+  CheckCircle2, AlertTriangle, Power, Download, FileJson, Gauge,
+  AlertCircle, ShieldCheck, Lock,
 } from 'lucide-react';
-import { addSkill, updateSkill, removeSkill } from '../store/slices/skillsSlice';
-import { addKnowledge, updateKnowledge, removeKnowledge } from '../store/slices/knowledgeSlice';
+import { addSkill, updateSkill, removeSkill, setSkills } from '../store/slices/skillsSlice';
+import { addKnowledge, updateKnowledge, removeKnowledge, setKnowledge } from '../store/slices/knowledgeSlice';
 import { saveSkill, deleteSkill, saveKnowledge, deleteKnowledge } from '../services/firebase';
 import { renderMarkdown, markdownToPlain } from '../utils/markdown';
+import { lintEntry, isActive, contextBudget, budgetLevel, BUDGET } from '../utils/skillsLint';
 
 /* ─── Persistence localStorage ───────────────────────────────────────────────── */
 const persist = (key, value) => {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
 };
+
+/* ─── Template d'un nouveau skill (cf. standard §3) ──────────────────────────── */
+const SKILL_TEMPLATE = `## [Nom court]
+
+**Objectif** — en une phrase, le résultat visé.
+
+**Règle** — quoi faire concrètement (impératif, points courts).
+
+**Pourquoi** — la raison (un modèle qui comprend le but généralise mieux).
+
+**Exemple** — un avant / après court si utile.`;
+
+/* ─── Badge de lint (anti-patterns du standard) ──────────────────────────────── */
+function LintBadge({ entry, kind }) {
+  const issues = lintEntry(entry, kind);
+  if (!issues.length) return null;
+  const hasError = issues.some(i => i.level === 'error');
+  const Icon = hasError ? AlertCircle : AlertTriangle;
+  const cls = hasError
+    ? 'bg-red-50 text-red-600 border-red-200'
+    : 'bg-amber-50 text-amber-700 border-amber-200';
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md border ${cls}`}
+      title={issues.map(i => `• ${i.message}`).join('\n')}
+    >
+      <Icon size={10} /> {issues.length} {hasError ? 'à corriger' : (issues.length > 1 ? 'alertes' : 'alerte')}
+    </span>
+  );
+}
 
 /* ─── Métadonnées des types de fichiers ──────────────────────────────────────── */
 const FILE_TYPES = {
@@ -266,8 +298,8 @@ function SkillEditor({ skill, onSave, onCancel }) {
   const [viewMode, setViewMode]     = useState('edit');
 
   // Convertit le markdown en HTML si besoin (skills importés depuis .md)
-  // La vue lecture utilise renderMarkdown — on fait pareil ici pour cohérence
-  const initialHtml = renderMarkdown(skill.content || '');
+  // Nouveau skill (sans contenu) → on pré-remplit avec le template du standard.
+  const initialHtml = renderMarkdown(skill.content || SKILL_TEMPLATE);
   const [htmlContent, setHtmlContent] = useState(initialHtml);
 
   const editor = useEditor({
@@ -277,6 +309,7 @@ function SkillEditor({ skill, onSave, onCancel }) {
   });
 
   const charCount = editor?.getText()?.length || 0;
+  const issues = lintEntry({ name, content: htmlContent }, 'skill');
 
   const handleSave = () => {
     if (!name.trim())      { toast.error('Nom du skill requis'); return; }
@@ -354,10 +387,24 @@ function SkillEditor({ skill, onSave, onCancel }) {
 
           <div className="flex items-center justify-between">
             <p className="text-xs text-gray-400">Injecté dans le prompt système de l'agent à chaque analyse.</p>
-            <span className={`text-xs tabular-nums ${charCount > 5000 ? 'text-amber-500 font-medium' : 'text-gray-400'}`}>
-              {charCount.toLocaleString()} car.
+            <span className={`text-xs tabular-nums ${charCount > BUDGET.skill ? 'text-amber-500 font-medium' : 'text-gray-400'}`}>
+              {charCount.toLocaleString()} / {BUDGET.skill.toLocaleString()} car.
             </span>
           </div>
+
+          {/* Lint en direct — anti-patterns du standard */}
+          {issues.length > 0 && (
+            <div className="space-y-1.5 rounded-xl border border-amber-100 bg-amber-50/60 p-3">
+              {issues.map((i, idx) => (
+                <div key={idx} className="flex items-start gap-2 text-[11px] leading-relaxed">
+                  {i.level === 'error'
+                    ? <AlertCircle size={12} className="text-red-500 shrink-0 mt-0.5" />
+                    : <AlertTriangle size={12} className="text-amber-500 shrink-0 mt-0.5" />}
+                  <span className={i.level === 'error' ? 'text-red-600' : 'text-amber-700'}>{i.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center justify-between pt-1 border-t border-gray-100">
@@ -489,41 +536,64 @@ function KnowledgeEditor({ item, onSave, onCancel }) {
 }
 
 /* ─── Carte d'un skill ───────────────────────────────────────────────────────── */
-function SkillCard({ skill, onEdit, onDelete }) {
+function SkillCard({ skill, onEdit, onDelete, onToggleActive }) {
   const [expanded, setExpanded] = useState(false);
 
   const html      = renderMarkdown(skill.content || '');
   const plainText = markdownToPlain(skill.content || '');
   const isLong    = plainText.length > 350;
+  const active    = isActive(skill);
+  const isDefault = !!skill.isDefault;
+  const over      = plainText.length > BUDGET.skill;
 
   return (
     <motion.div layout
       initial={{ opacity: 0, scale: 0.97 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.97 }}
-      className="glass-card overflow-hidden group"
+      className={`glass-card overflow-hidden group transition-opacity ${active ? '' : 'opacity-55'}`}
     >
       <div className="flex items-start justify-between px-5 pt-5 pb-4">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 bg-black rounded-xl flex items-center justify-center flex-shrink-0">
+          <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${active ? 'bg-black' : 'bg-gray-300'}`}>
             <Zap size={15} className="text-white" />
           </div>
           <div className="min-w-0">
-            <h3 className="font-semibold text-gray-900 text-sm truncate">{skill.name}</h3>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h3 className="font-semibold text-gray-900 text-sm truncate">{skill.name}</h3>
+              {isDefault && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 border border-indigo-100">
+                  <Lock size={9} /> Socle
+                </span>
+              )}
+              {!active && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-500 border border-gray-200">Inactif</span>
+              )}
+              <LintBadge entry={skill} kind="skill" />
+            </div>
             <p className="text-[11px] text-gray-400 mt-0.5">
               {new Date(skill.createdAt || Date.now()).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
-              {' · '}{plainText.length.toLocaleString()} car.
+              {' · '}<span className={over ? 'text-amber-500 font-medium' : ''}>{plainText.length.toLocaleString()} / {BUDGET.skill.toLocaleString()} car.</span>
             </p>
           </div>
         </div>
-        <div className="flex gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button onClick={() => onEdit(skill)} className="btn-ghost !px-1.5 !py-1.5" title="Modifier">
-            <Edit3 size={14} />
-          </button>
-          <button onClick={() => onDelete(skill.id)} className="btn-ghost !px-1.5 !py-1.5 hover:!text-red-500">
-            <Trash2 size={14} />
-          </button>
-        </div>
+        {isDefault ? (
+          <span className="text-[10px] text-gray-400 flex items-center gap-1 flex-shrink-0" title="Géré par le code (defaultSkills.js)">
+            <ShieldCheck size={12} /> géré par le code
+          </span>
+        ) : (
+          <div className="flex gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button onClick={() => onToggleActive(skill)} className="btn-ghost !px-1.5 !py-1.5" title={active ? 'Désactiver (ne plus injecter)' : 'Activer'}>
+              <Power size={14} className={active ? 'text-emerald-500' : 'text-gray-400'} />
+            </button>
+            <button onClick={() => onEdit(skill)} className="btn-ghost !px-1.5 !py-1.5" title="Modifier">
+              <Edit3 size={14} />
+            </button>
+            <button onClick={() => onDelete(skill.id)} className="btn-ghost !px-1.5 !py-1.5 hover:!text-red-500">
+              <Trash2 size={14} />
+            </button>
+          </div>
+        )}
       </div>
 
       <div className={`px-5 pb-4 relative ${!expanded && isLong ? 'md-content-fade' : ''}`}>
@@ -541,7 +611,7 @@ function SkillCard({ skill, onEdit, onDelete }) {
 }
 
 /* ─── Carte d'un document de connaissance ────────────────────────────────────── */
-function KnowledgeCard({ item, onEdit, onDelete }) {
+function KnowledgeCard({ item, onEdit, onDelete, onToggleActive }) {
   const [expanded, setExpanded] = useState(false);
 
   const ext  = item.source === 'transcript' ? 'transcript'
@@ -555,13 +625,14 @@ function KnowledgeCard({ item, onEdit, onDelete }) {
   const charCount  = plainText.length;
   const hasContent = !!item.content;
   const isLong     = charCount > 400;
+  const active     = isActive(item);
 
   return (
     <motion.div layout
       initial={{ opacity: 0, scale: 0.97 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.97 }}
-      className="glass-card overflow-hidden group"
+      className={`glass-card overflow-hidden group transition-opacity ${active ? '' : 'opacity-55'}`}
     >
       {/* En-tête */}
       <div className="flex items-start justify-between px-5 pt-5 pb-3">
@@ -576,7 +647,7 @@ function KnowledgeCard({ item, onEdit, onDelete }) {
                 {meta.label}
               </span>
               {hasContent && (
-                <span className="text-[11px] text-gray-400 tabular-nums">
+                <span className={`text-[11px] tabular-nums ${charCount > BUDGET.bdc ? 'text-amber-500 font-medium' : 'text-gray-400'}`}>
                   {charCount.toLocaleString()} car.
                 </span>
               )}
@@ -585,10 +656,17 @@ function KnowledgeCard({ item, onEdit, onDelete }) {
                   {(item.size / 1024).toFixed(1)} Ko
                 </span>
               )}
+              {!active && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-500 border border-gray-200">Inactif</span>
+              )}
+              <LintBadge entry={item} kind="bdc" />
             </div>
           </div>
         </div>
         <div className="flex gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={() => onToggleActive(item)} className="btn-ghost !px-1.5 !py-1.5" title={active ? 'Désactiver (ne plus injecter)' : 'Activer'}>
+            <Power size={14} className={active ? 'text-emerald-500' : 'text-gray-400'} />
+          </button>
           {item.source === 'manual' && (
             <button onClick={() => onEdit(item)} className="btn-ghost !px-1.5 !py-1.5" title="Modifier">
               <Edit3 size={14} />
@@ -942,6 +1020,8 @@ export default function Skills() {
   const [editingKnowledge, setEditingKnowledge]  = useState(null);
   const [showNewKnowledge, setShowNewKnowledge]  = useState(false);
   const [importing,        setImporting]         = useState(false); // état de chargement import
+  const [showPreview,      setShowPreview]       = useState(false); // modale aperçu du prompt injecté
+  const jsonInputRef = useRef(null);                                // input caché import JSON
 
   useEffect(() => { persist(STORAGE_KEYS.knowledge, knowledge); }, [knowledge]);
   useEffect(() => { persist(STORAGE_KEYS.skills,    skills);    }, [skills]);
@@ -1103,6 +1183,106 @@ export default function Skills() {
     toast.success(`Transcription "${name}" ajoutée !`);
   };
 
+  /* ── Activer / désactiver une entrée (contrôle ce qui est injecté) ── */
+  const handleToggleSkill = async (skill) => {
+    const next = { ...skill, active: skill.active === false };
+    if (firebaseReady) { try { await saveSkill(next); } catch {} }
+    dispatch(updateSkill(next));
+  };
+  const handleToggleKnowledge = async (item) => {
+    const next = { ...item, active: item.active === false };
+    if (firebaseReady) { try { await saveKnowledge(next); } catch {} }
+    dispatch(updateKnowledge(next));
+  };
+
+  /* ── Export JSON (sauvegarde / transfert) ── */
+  const handleExport = () => {
+    const data = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      skills: skills.filter(s => !s.isDefault),
+      knowledge,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tonton-skills-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Export téléchargé');
+  };
+
+  /* ── Import JSON (remplace tout, socle conservé, sauvegarde auto avant) ── */
+  const applyImport = async (data) => {
+    setImporting(true);
+    try {
+      handleExport(); // sauvegarde de secours de l'état actuel
+      if (firebaseReady) {
+        for (const s of skills) { if (!s.isDefault) { try { await deleteSkill(s.id); } catch {} } }
+        for (const k of knowledge) { try { await deleteKnowledge(k.id); } catch {} }
+      }
+      const savedSkills = [];
+      for (const s of (data.skills || [])) {
+        const entry = { name: s.name || 'Sans nom', content: s.content || '', active: s.active !== false, createdAt: s.createdAt || Date.now() };
+        let id = s.id;
+        if (firebaseReady) { try { id = await saveSkill(entry); } catch { id = id || Date.now().toString(); } }
+        else id = id || Date.now().toString();
+        savedSkills.push({ ...entry, id });
+      }
+      const savedKnowledge = [];
+      for (const k of (data.knowledge || [])) {
+        const entry = { name: k.name || 'Sans nom', content: k.content || '', source: k.source || 'manual', isHtml: !!k.isHtml, active: k.active !== false, size: (k.content || '').length, createdAt: k.createdAt || Date.now() };
+        let id = k.id;
+        if (firebaseReady) { try { id = await saveKnowledge(entry); } catch { id = id || Date.now().toString(); } }
+        else id = id || Date.now().toString();
+        savedKnowledge.push({ ...entry, id });
+      }
+      dispatch(setSkills(savedSkills));       // le slice re-fusionne le socle
+      dispatch(setKnowledge(savedKnowledge));
+      toast.success(`Import terminé — ${savedSkills.length} skills, ${savedKnowledge.length} BDC`);
+    } catch (e) {
+      toast.error('Import échoué : ' + e.message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleImportFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    let data;
+    try { data = JSON.parse(await file.text()); }
+    catch { toast.error('Fichier JSON invalide'); return; }
+    if (!data || (!Array.isArray(data.skills) && !Array.isArray(data.knowledge))) {
+      toast.error('Format attendu : { "skills": [], "knowledge": [] }'); return;
+    }
+    const nS = (data.skills || []).length, nK = (data.knowledge || []).length;
+    if (!window.confirm(`Importer ${nS} skill(s) et ${nK} document(s) ?\n\nCela REMPLACE tout le contenu actuel (le socle « Skills par Tonton AI » est conservé). Une sauvegarde JSON de l'existant sera téléchargée d'abord.`)) return;
+    await applyImport(data);
+  };
+
+  /* ── Budget de contexte + aperçu du prompt injecté ── */
+  const skillBudget = contextBudget(skills, 'skill');
+  const bdcBudget   = contextBudget(knowledge, 'bdc');
+  const totalInjected = skillBudget.total + bdcBudget.total;
+  const skillState  = budgetLevel(skillBudget.total);
+  const buildPreview = () => {
+    const aSkills = skills.filter(isActive).filter(s => markdownToPlain(s.content).trim());
+    const aBdc    = knowledge.filter(isActive).filter(k => markdownToPlain(k.content).trim());
+    let out = '';
+    if (aSkills.length) {
+      out += `## SKILLS ACTIFS — RÈGLES D'ÉCRITURE OBLIGATOIRES\n\n`;
+      aSkills.forEach((s, i) => { out += `### SKILL ${i + 1} — ${s.name}\n${markdownToPlain(s.content)}\n\n`; });
+    }
+    if (aBdc.length) {
+      out += `## BASE DE CONNAISSANCES — ${aBdc.length} document(s)\n\n`;
+      aBdc.forEach((k, i) => { out += `### DOCUMENT ${i + 1} — ${k.name}\n${markdownToPlain(k.content)}\n\n`; });
+    }
+    return out.trim() || 'Aucune entrée active — rien ne sera injecté dans le prompt.';
+  };
+
   /* ── Formats supportés pour l'affichage ── */
   const SUPPORTED_EXTS = [
     { ext: 'txt',  label: '.txt',  color: 'bg-gray-100 text-gray-600'    },
@@ -1120,6 +1300,52 @@ export default function Skills() {
   /* ── Rendu ── */
   return (
     <div className="space-y-10 animate-fade-in">
+
+      <input ref={jsonInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
+
+      {/* ══════════════════ BARRE BUDGET + OUTILS ══════════════════ */}
+      <div className="glass-card px-5 py-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${skillState === 'ok' ? 'bg-emerald-500' : skillState === 'warn' ? 'bg-amber-500' : 'bg-red-500'}`}>
+            <Gauge size={16} className="text-white" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-gray-900">Contexte injecté à chaque MAJ</p>
+            <p className="text-[11px] text-gray-400">
+              {skillBudget.activeCount} skill(s) actif(s) · {bdcBudget.activeCount} BDC active(s)
+              {skillBudget.perEntryOver > 0 && ` · ${skillBudget.perEntryOver} skill(s) hors budget`}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="hidden sm:block w-40">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-gray-400">Skills</span>
+              <span className={`text-[10px] font-semibold tabular-nums ${skillState === 'ok' ? 'text-emerald-600' : skillState === 'warn' ? 'text-amber-500' : 'text-red-500'}`}>
+                {skillBudget.total.toLocaleString()} / {BUDGET.skillsTotal.toLocaleString()}
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${skillState === 'ok' ? 'bg-emerald-500' : skillState === 'warn' ? 'bg-amber-500' : 'bg-red-500'}`}
+                style={{ width: `${Math.min(100, (skillBudget.total / BUDGET.skillsTotal) * 100)}%` }}
+              />
+            </div>
+            <p className="text-[10px] text-gray-400 mt-1 tabular-nums">Total injecté : {totalInjected.toLocaleString()} car.</p>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button onClick={() => setShowPreview(true)} className="btn-ghost text-sm flex items-center gap-1.5" title="Voir ce que TONTON reçoit réellement">
+              <Eye size={14} /> <span className="hidden md:inline">Aperçu prompt</span>
+            </button>
+            <button onClick={handleExport} className="btn-ghost text-sm flex items-center gap-1.5" title="Télécharger un JSON de sauvegarde">
+              <Download size={14} /> <span className="hidden md:inline">Export</span>
+            </button>
+            <button onClick={() => jsonInputRef.current?.click()} disabled={importing} className="btn-ghost text-sm flex items-center gap-1.5 disabled:opacity-50" title="Importer un JSON (remplace tout, socle conservé)">
+              <FileJson size={14} /> <span className="hidden md:inline">Import</span>
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* ══════════════════ SECTION SKILLS ══════════════════ */}
       <section className="space-y-5">
@@ -1177,6 +1403,7 @@ export default function Skills() {
                   skill={skill}
                   onEdit={(s) => { setEditingSkill(s); setShowNewSkill(false); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
                   onDelete={handleDeleteSkill}
+                  onToggleActive={handleToggleSkill}
                 />
               ))}
             </AnimatePresence>
@@ -1285,6 +1512,7 @@ export default function Skills() {
                   item={item}
                   onEdit={(k) => { setEditingKnowledge(k); setShowNewKnowledge(false); }}
                   onDelete={handleDeleteKnowledge}
+                  onToggleActive={handleToggleKnowledge}
                 />
               ))}
             </AnimatePresence>
@@ -1300,6 +1528,41 @@ export default function Skills() {
           </motion.div>
         )}
       </section>
+
+      {/* ══════════════════ MODALE — APERÇU DU PROMPT INJECTÉ ══════════════════ */}
+      <AnimatePresence>
+        {showPreview && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setShowPreview(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.97, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.97, opacity: 0 }}
+              className="glass-card max-w-3xl w-full max-h-[85vh] flex flex-col overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 bg-black rounded-lg flex items-center justify-center">
+                    <Eye size={13} className="text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-gray-900 text-sm">Aperçu du prompt injecté</h3>
+                    <p className="text-[11px] text-gray-400">
+                      Ce que TONTON reçoit réellement · {totalInjected.toLocaleString()} caractères
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setShowPreview(false)} className="btn-ghost !px-1.5 !py-1.5"><X size={16} /></button>
+              </div>
+              <pre className="p-5 text-[11px] leading-relaxed text-gray-700 whitespace-pre-wrap overflow-y-auto font-mono">
+                {buildPreview()}
+              </pre>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
