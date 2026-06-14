@@ -5,6 +5,10 @@ import { scrapeUrl } from './scraper';
 const LOCAL_PROXY    = '/api/claude';
 const WP_TOOL_PROXY  = '/api/wp-tool';
 
+// Une entrée Skill/BDC est active sauf si explicitement désactivée dans le menu
+// SKILLS IA (champ `active: false`). Rétro-compat : champ absent = active.
+const isActiveEntry = (e) => e?.active !== false;
+
 // ── Définitions des outils MCP WordPress ─────────────────────────────────────
 export const WP_MCP_TOOLS = [
   {
@@ -284,8 +288,8 @@ Réponds UNIQUEMENT avec le JSON : {"results":[{"i":0,"valid":true},{"i":1,"vali
  * Silencieux en cas d'erreur — ne bloque jamais.
  */
 const checkSkillsCompliance = async (articleContent, updates, skills, knowledge) => {
-  const activeSkills = skills.filter(s => s.content);
-  const activeDocs   = knowledge.filter(k => k.content);
+  const activeSkills = skills.filter(s => s.content && isActiveEntry(s));
+  const activeDocs   = knowledge.filter(k => k.content && isActiveEntry(k));
   if (!activeSkills.length && !activeDocs.length) return [];
 
   const articleText = stripHtml(articleContent).substring(0, 3000);
@@ -415,7 +419,7 @@ const makeTokenTracker = () => {
  */
 const extractIlCount = (skills) => {
   const RE = /liens[_\s-]*internes\s*:\s*(\d+)/i;
-  for (const s of skills) {
+  for (const s of skills.filter(isActiveEntry)) {
     const text = s.content ? (s.content.trimStart().startsWith('<') ? stripHtml(s.content) : s.content) : '';
     const m = text.match(RE);
     if (m) {
@@ -428,7 +432,7 @@ const extractIlCount = (skills) => {
 
 /** Construit le bloc Skills pour le system prompt. */
 const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON style, ta méthode et tes contraintes rédactionnelles.\nTu DOIS les respecter intégralement dans TOUTES tes modifications.') => {
-  const active = skills.filter(s => s.content);
+  const active = skills.filter(s => s.content && isActiveEntry(s));
   if (!active.length) return '';
   return `\n\n## ═══ SKILLS ACTIFS — RÈGLES D'ÉCRITURE OBLIGATOIRES ═══\n${intro}\n\n` +
     active.map((s, i) => {
@@ -439,7 +443,7 @@ const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON sty
 
 /** Construit le bloc Base de connaissances pour le system prompt. */
 const buildKnowledgeBlock = (knowledge, intro = '', label = 'CHECKLIST OBLIGATOIRE') => {
-  const active = knowledge.filter(k => k.content);
+  const active = knowledge.filter(k => k.content && isActiveEntry(k));
   if (!active.length) return '';
   const defaultIntro = `ATTENTION - PROTOCOLE STRICT : Tu DOIS lire chacun des ${active.length} documents ci-dessous,\nligne par ligne, et vérifier si l'article le respecte ou en a besoin.\nPour chaque élément applicable : ajoute une entrée dans "updates" avec\nreason = "Base de connaissances n°X — [Nom du document]".`;
   return `\n\n## ═══ BASE DE CONNAISSANCES — ${label} (${active.length} documents) ═══\n${intro || defaultIntro}\n\n` +
@@ -790,17 +794,17 @@ ${content.substring(0, 5000)}`,
     : '';
 
   // Résumé de la base de connaissances pour rappel dans le user message
-  const activeKnowlCount = knowledge.filter(k => k.content).length;
+  const activeKnowlCount = knowledge.filter(k => k.content && isActiveEntry(k)).length;
   const knowlReminder = activeKnowlCount > 0
     ? `\n## RAPPEL — BASE DE CONNAISSANCES (${activeKnowlCount} documents dans le system prompt)\n` +
       `Tu as ${activeKnowlCount} document(s) dans ta base de connaissances. ` +
       `AVANT d'analyser les sources web, parcours-les un par un et vérifie si chacun s'applique à cet article.\n` +
-      knowledge.filter(k => k.content).map((k, i) =>
+      knowledge.filter(k => k.content && isActiveEntry(k)).map((k, i) =>
         `- Document ${i + 1} : ${k.name}`
       ).join('\n') + '\n'
     : '';
 
-  const activeSkillsList = skills.filter(s => s.content);
+  const activeSkillsList = skills.filter(s => s.content && isActiveEntry(s));
   const skillsReminder = activeSkillsList.length > 0
     ? `\n## RAPPEL — SKILLS ACTIFS (${activeSkillsList.length} règles obligatoires dans le system prompt)\n` +
       `Chaque modification DOIT respecter ces ${activeSkillsList.length} skill(s) :\n` +
@@ -857,7 +861,7 @@ ${content}
   );
 
   // ── Étape 4 : Conformité skills + base de connaissances ──────────────────────
-  if (activeSkillsList.length > 0 || knowledge.filter(k => k.content).length > 0) {
+  if (activeSkillsList.length > 0 || knowledge.filter(k => k.content && isActiveEntry(k)).length > 0) {
     onStep('Vérification de conformité skills et base de connaissances...');
     onProgress(90);
     try {
@@ -1001,7 +1005,7 @@ const buildReviewSystemPrompt = (skills, knowledge = []) => {
     skills,
     'Vérifie que l\'article (après passe 1) respecte chacune de ces instructions.'
   );
-  const active = knowledge.filter(k => k.content);
+  const active = knowledge.filter(k => k.content && isActiveEntry(k));
   const knowledgeBlock = buildKnowledgeBlock(
     knowledge,
     active.length > 0
