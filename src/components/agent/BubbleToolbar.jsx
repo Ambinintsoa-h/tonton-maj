@@ -19,11 +19,21 @@ import {
   Link, Unlink2,
   Image, Film, Code2,
   Check, X, Trash2,
-  CaseSensitive,
+  CaseSensitive, Weight,
 } from 'lucide-react';
 
 // Polices web-safe de repli si le site n'expose aucune police détectable
 const FALLBACK_FONTS = ['Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Verdana', 'Courier New'];
+
+// Graisses de police proposées (font-weight)
+const FONT_WEIGHTS = [
+  { label: 'Léger',       value: '300' },
+  { label: 'Normal',      value: '400' },
+  { label: 'Moyen',       value: '500' },
+  { label: 'Semi-gras',   value: '600' },
+  { label: 'Gras',        value: '700' },
+  { label: 'Extra-gras',  value: '800' },
+];
 
 // ── Palettes couleurs ─────────────────────────────────────────────────────────
 const TEXT_COLORS = [
@@ -357,6 +367,29 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
     setPanel(null);
   }, [popRange, articleEl, contentRef]);
 
+  // Applique une graisse (font-weight) à la sélection en l'enveloppant dans un
+  // <span style="font-weight:…"> (aucune commande execCommand pour la graisse arbitraire).
+  const applyFontWeight = useCallback((weight) => {
+    popRange();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed || !articleEl) { setPanel(null); return; }
+    const range = sel.getRangeAt(0);
+    if (!articleEl.contains(range.commonAncestorContainer)) { setPanel(null); return; }
+    const span = document.createElement('span');
+    span.style.fontWeight = weight;
+    try {
+      span.appendChild(range.extractContents());
+      range.insertNode(span);
+      // Re-sélectionner le contenu stylé
+      sel.removeAllRanges();
+      const r = document.createRange();
+      r.selectNodeContents(span);
+      sel.addRange(r);
+    } catch { /* sélection multi-blocs non enveloppable — ignorée */ }
+    if (contentRef) contentRef.current = articleEl.innerHTML;
+    setPanel(null);
+  }, [popRange, articleEl, contentRef]);
+
   const closePanel = useCallback(() => { setPanel(null); setInputVal(''); }, []);
 
   const openPanel = useCallback((name) => {
@@ -613,6 +646,9 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
         <Btn onClick={() => openPanel('font')} title="Police du texte" active={panel === 'font'}>
           <CaseSensitive size={15} />
         </Btn>
+        <Btn onClick={() => openPanel('weight')} title="Graisse du texte" active={panel === 'weight'}>
+          <Weight size={13} />
+        </Btn>
 
         <Sep />
 
@@ -675,6 +711,22 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
               onClick={() => { popRange(); format('foreColor', c.value); }}
             />
           ))}
+          {/* Sélecteur de couleur libre (roue) */}
+          <label
+            title="Couleur personnalisée"
+            className="relative w-5 h-5 rounded-full overflow-hidden cursor-pointer flex-shrink-0 border-2 border-transparent hover:border-white/60 transition-all"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <span
+              className="absolute inset-0 rounded-full"
+              style={{ background: 'conic-gradient(red, orange, yellow, lime, cyan, blue, magenta, red)' }}
+            />
+            <input
+              type="color"
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              onInput={(e) => { popRange(); format('foreColor', e.target.value); }}
+            />
+          </label>
         </div>
       )}
       {panel === 'highlight' && (
@@ -712,6 +764,26 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
               title={f}
             >
               {f}
+            </button>
+          ))}
+        </div>
+      )}
+      {panel === 'weight' && (
+        <div className="flex flex-col bg-gray-900 border border-gray-700 rounded-xl py-1.5 mt-1.5 shadow-2xl min-w-[160px]">
+          <div className="px-3 py-1 text-[10px] text-white/40 font-medium tracking-wide uppercase">
+            Graisse du texte
+          </div>
+          {FONT_WEIGHTS.map((w) => (
+            <button
+              key={w.value}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); applyFontWeight(w.value); }}
+              className="flex items-center justify-between px-3 py-1.5 text-sm text-gray-100 hover:bg-white/10 transition-colors"
+              style={{ fontWeight: w.value }}
+              title={`${w.label} (${w.value})`}
+            >
+              <span>{w.label}</span>
+              <span className="text-[10px] text-white/40">{w.value}</span>
             </button>
           ))}
         </div>
