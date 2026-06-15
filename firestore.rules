@@ -117,6 +117,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── article_drafts : brouillon d'autosave d'une MAJ — privé à chaque membre ─
+    // Doc id = uid du membre. Lecture/écriture uniquement sur son propre brouillon.
+    match /article_drafts/{userId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    }
+
     // ── Refus par défaut (toute collection non listée ci-dessus) ─────────────
     match /{document=**} {
       allow read, write: if false;
