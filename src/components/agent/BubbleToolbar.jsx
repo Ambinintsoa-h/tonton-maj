@@ -19,11 +19,15 @@ import {
   Link, Unlink2,
   Image, Film, Code2,
   Check, X, Trash2,
-  CaseSensitive, Weight,
+  CaseSensitive, Weight, ALargeSmall,
 } from 'lucide-react';
 
 // Polices web-safe de repli si le site n'expose aucune police détectable
 const FALLBACK_FONTS = ['Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Verdana', 'Courier New'];
+
+// Tailles proposées (px) — du réglage fin du corps de texte (15/16/17) aux titres.
+// La taille réelle du texte sélectionné est détectée et mise en évidence.
+const FONT_SIZES = [13, 14, 15, 16, 17, 18, 20, 24, 28, 32];
 
 // Graisses de police proposées (font-weight)
 const FONT_WEIGHTS = [
@@ -225,13 +229,14 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
 
       // Style calculé du texte sélectionné (police + couleurs) — via l'élément
       // au point d'ancrage de la sélection, s'il appartient bien à l'article.
-      let fontFamily = '', color = '', bg = '';
+      let fontFamily = '', fontSize = 0, color = '', bg = '';
       const sel = window.getSelection();
       const node = sel?.anchorNode;
       const el = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
       if (el && articleEl && articleEl.contains(el)) {
         const cs = window.getComputedStyle(el);
         fontFamily = (cs.fontFamily || '').split(',')[0].replace(/["']/g, '').trim();
+        fontSize = Math.round(parseFloat(cs.fontSize) || 0);
         color = cs.color || '';
         const b = cs.backgroundColor || '';
         bg = (b && b !== 'rgba(0, 0, 0, 0)' && b !== 'transparent') ? b : '';
@@ -245,7 +250,7 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
         ul:        document.queryCommandState('insertUnorderedList'),
         ol:        document.queryCommandState('insertOrderedList'),
         block,  // 'h1'..'h6', 'p', 'blockquote', 'div', ''
-        fontFamily, color, bg,
+        fontFamily, fontSize, color, bg,
       });
     } catch { setActive({}); }
   }, [articleEl]);
@@ -423,6 +428,53 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
       r.selectNodeContents(span);
       sel.addRange(r);
     } catch { /* sélection multi-blocs non enveloppable — ignorée */ }
+    if (contentRef) contentRef.current = articleEl.innerHTML;
+    setPanel(null);
+  }, [popRange, articleEl, contentRef]);
+
+  // Applique une taille (font-size) à la sélection en l'enveloppant dans un
+  // <span style="font-size:…px"> — aucune commande execCommand ne pose une taille en px.
+  const applyFontSize = useCallback((px) => {
+    popRange();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed || !articleEl) { setPanel(null); return; }
+    const range = sel.getRangeAt(0);
+    if (!articleEl.contains(range.commonAncestorContainer)) { setPanel(null); return; }
+    const span = document.createElement('span');
+    span.style.fontSize = `${px}px`;
+    try {
+      span.appendChild(range.extractContents());
+      range.insertNode(span);
+      // Re-sélectionner le contenu redimensionné
+      sel.removeAllRanges();
+      const r = document.createRange();
+      r.selectNodeContents(span);
+      sel.addRange(r);
+    } catch { /* sélection multi-blocs non enveloppable — ignorée */ }
+    if (contentRef) contentRef.current = articleEl.innerHTML;
+    setPanel(null);
+  }, [popRange, articleEl, contentRef]);
+
+  /**
+   * Retire la taille (revient à la taille par défaut) : supprime la propriété
+   * font-size des styles inline des éléments intersectant la sélection.
+   */
+  const clearFontSize = useCallback(() => {
+    popRange();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !articleEl) return;
+    const range = sel.getRangeAt(0);
+    const root  = range.commonAncestorContainer;
+    const scope = root.nodeType === 1 ? root : root.parentElement;
+    if (!scope) return;
+    [scope, ...scope.querySelectorAll('*')].forEach((el) => {
+      if (!el.style) return;
+      try { if (!range.intersectsNode(el)) return; } catch { return; }
+      if (el.style.fontSize) {
+        el.style.removeProperty('font-size');
+        if (!el.getAttribute('style')?.trim()) el.removeAttribute('style');
+      }
+    });
     if (contentRef) contentRef.current = articleEl.innerHTML;
     setPanel(null);
   }, [popRange, articleEl, contentRef]);
@@ -707,6 +759,19 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
         <Btn onClick={() => openPanel('weight')} title="Graisse du texte" active={panel === 'weight'}>
           <Weight size={16} />
         </Btn>
+        {/* Taille — affiche la taille courante (px) à côté de l'icône A/a */}
+        <button
+          type="button"
+          title="Taille du texte"
+          onMouseDown={(e) => { e.preventDefault(); openPanel('size'); }}
+          className={[
+            'flex items-center gap-1 h-9 px-2 rounded-lg text-sm font-medium transition-all duration-100',
+            panel === 'size' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-200 hover:bg-white/15 hover:text-white',
+          ].join(' ')}
+        >
+          <ALargeSmall size={16} className="flex-shrink-0" />
+          {active.fontSize ? <span className="text-[12px] tabular-nums">{active.fontSize}</span> : null}
+        </button>
 
         <Sep />
 
@@ -812,18 +877,58 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
           >
             Police par défaut
           </button>
-          {fontList.map((f) => (
-            <button
-              key={f}
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); applyFont(f); }}
-              className="text-left px-3 py-1.5 text-sm text-gray-100 hover:bg-white/10 transition-colors truncate"
-              style={{ fontFamily: f }}
-              title={f}
-            >
-              {f}
-            </button>
-          ))}
+          {fontList.map((f) => {
+            const isActive = active.fontFamily && f.toLowerCase() === active.fontFamily.toLowerCase();
+            return (
+              <button
+                key={f}
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); applyFont(f); }}
+                className={[
+                  'flex items-center justify-between gap-2 px-3 py-1.5 text-sm transition-colors',
+                  isActive ? 'bg-white/15 text-white' : 'text-gray-100 hover:bg-white/10',
+                ].join(' ')}
+                style={{ fontFamily: f }}
+                title={f}
+              >
+                <span className="truncate">{f}</span>
+                {isActive && <Check size={13} className="flex-shrink-0 text-emerald-400" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {panel === 'size' && (
+        <div className="flex flex-col bg-gray-900 border border-gray-700 rounded-xl py-1.5 mt-1.5 shadow-2xl max-h-64 overflow-y-auto min-w-[160px]">
+          <div className="px-3 py-1 text-[10px] text-white/40 font-medium tracking-wide uppercase">
+            Taille du texte{active.fontSize ? ` — actuelle ${active.fontSize} px` : ''}
+          </div>
+          <button
+            type="button"
+            onMouseDown={(e) => { e.preventDefault(); clearFontSize(); }}
+            className="text-left px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 transition-colors"
+          >
+            Taille par défaut
+          </button>
+          {FONT_SIZES.map((s) => {
+            const isActive = active.fontSize === s;
+            return (
+              <button
+                key={s}
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); applyFontSize(s); }}
+                className={[
+                  'flex items-center gap-2 px-3 py-1.5 transition-colors',
+                  isActive ? 'bg-white/15 text-white' : 'text-gray-100 hover:bg-white/10',
+                ].join(' ')}
+                title={`${s} px`}
+              >
+                <span className="w-6 text-center leading-none" style={{ fontSize: Math.min(s, 20) }}>A</span>
+                <span className="flex-1 text-left text-[12px] tabular-nums">{s} px</span>
+                {isActive && <Check size={13} className="flex-shrink-0 text-emerald-400" />}
+              </button>
+            );
+          })}
         </div>
       )}
       {panel === 'weight' && (
