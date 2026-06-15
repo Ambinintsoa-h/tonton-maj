@@ -222,6 +222,21 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
   const computeActive = useCallback(() => {
     try {
       const block = (document.queryCommandValue('formatBlock') || '').toLowerCase();
+
+      // Style calculé du texte sélectionné (police + couleurs) — via l'élément
+      // au point d'ancrage de la sélection, s'il appartient bien à l'article.
+      let fontFamily = '', color = '', bg = '';
+      const sel = window.getSelection();
+      const node = sel?.anchorNode;
+      const el = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+      if (el && articleEl && articleEl.contains(el)) {
+        const cs = window.getComputedStyle(el);
+        fontFamily = (cs.fontFamily || '').split(',')[0].replace(/["']/g, '').trim();
+        color = cs.color || '';
+        const b = cs.backgroundColor || '';
+        bg = (b && b !== 'rgba(0, 0, 0, 0)' && b !== 'transparent') ? b : '';
+      }
+
       setActive({
         bold:      document.queryCommandState('bold'),
         italic:    document.queryCommandState('italic'),
@@ -230,9 +245,10 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
         ul:        document.queryCommandState('insertUnorderedList'),
         ol:        document.queryCommandState('insertOrderedList'),
         block,  // 'h1'..'h6', 'p', 'blockquote', 'div', ''
+        fontFamily, color, bg,
       });
     } catch { setActive({}); }
-  }, []);
+  }, [articleEl]);
 
   // ── Positionnement ────────────────────────────────────────────────────────
 
@@ -660,14 +676,34 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
 
         {/* Couleurs */}
         <Btn onClick={() => openPanel('color')}     title="Couleur du texte" active={panel === 'color'}>
-          <Palette size={16} />
+          <span className="relative flex items-center justify-center">
+            <Palette size={16} />
+            {active.color && (
+              <span className="absolute -bottom-1.5 left-0 right-0 h-1 rounded-full" style={{ background: active.color }} />
+            )}
+          </span>
         </Btn>
         <Btn onClick={() => openPanel('highlight')} title="Surligner"        active={panel === 'highlight'}>
-          <Highlighter size={16} />
+          <span className="relative flex items-center justify-center">
+            <Highlighter size={16} />
+            {active.bg && (
+              <span className="absolute -bottom-1.5 left-0 right-0 h-1 rounded-full" style={{ background: active.bg }} />
+            )}
+          </span>
         </Btn>
-        <Btn onClick={() => openPanel('font')} title="Police du texte" active={panel === 'font'}>
-          <CaseSensitive size={15} />
-        </Btn>
+        {/* Police — affiche le nom de la police active à côté de l'icône Aa */}
+        <button
+          type="button"
+          title="Police du texte"
+          onMouseDown={(e) => { e.preventDefault(); openPanel('font'); }}
+          className={[
+            'flex items-center gap-1 h-9 px-2 rounded-lg text-sm font-medium transition-all duration-100 max-w-[130px]',
+            panel === 'font' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-200 hover:bg-white/15 hover:text-white',
+          ].join(' ')}
+        >
+          <CaseSensitive size={16} className="flex-shrink-0" />
+          <span className="truncate text-[12px]">{active.fontFamily || 'Police'}</span>
+        </button>
         <Btn onClick={() => openPanel('weight')} title="Graisse du texte" active={panel === 'weight'}>
           <Weight size={16} />
         </Btn>
