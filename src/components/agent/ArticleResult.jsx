@@ -798,8 +798,21 @@ export default function ArticleResult() {
   // Cherche l'ancre dans le texte de l'article et la remplace par un <a href>.
   // Wrap seulement la première occurrence non déjà liée.
   const [appliedLinks, setAppliedLinks] = useState(new Set());
-  const [linkHover, setLinkHover]       = useState(null); // { idx, url, anchor, rect }
+  const [linkHover, setLinkHover]       = useState(null); // { idx, url, anchor, rect } — lien interne PROPOSÉ
+  const [anchorHover, setAnchorHover]   = useState(null); // { url, rect } — vraie ancre <a href> survolée
   const leaveTimerRef  = useRef(null);
+
+  // Survol d'une vraie ancre <a href> (lien externe existant, interne existant ou
+  // déjà appliqué) → tooltip affichant l'URL complète. Lecture seule (pas de clic).
+  const showAnchorTooltip = useCallback((e) => {
+    const a = e.target.closest('a[href]');
+    if (a && e.currentTarget.contains(a)) {
+      clearTimeout(leaveTimerRef.current);
+      setAnchorHover({ url: a.getAttribute('href') || '', rect: a.getBoundingClientRect() });
+    } else {
+      setAnchorHover(null);
+    }
+  }, []);
 
   // ── Appliquer un lien interne (depuis le span surligné ou fallback regex) ──
   const applyInternalLink = useCallback((anchor, url, linkIdx) => {
@@ -1932,16 +1945,22 @@ export default function ArticleResult() {
                         onInput={handleInput}
                         onPaste={handlePaste}
                         onMouseOver={(e) => {
-                          const el = e.target.closest('[data-il-idx]');
-                          if (!el) return;
-                          const idx = parseInt(el.getAttribute('data-il-idx'), 10);
-                          if (appliedLinks.has(idx)) return;
-                          clearTimeout(leaveTimerRef.current);
-                          const rect = el.getBoundingClientRect();
-                          setLinkHover({ idx, url: el.getAttribute('data-il-url') || '', anchor: el.textContent, rect });
+                          // 1) Lien interne PROPOSÉ (span non encore appliqué) → popup "Appliquer"
+                          const il = e.target.closest('[data-il-idx]');
+                          if (il) {
+                            const idx = parseInt(il.getAttribute('data-il-idx'), 10);
+                            if (!appliedLinks.has(idx)) {
+                              clearTimeout(leaveTimerRef.current);
+                              setLinkHover({ idx, url: il.getAttribute('data-il-url') || '', anchor: il.textContent, rect: il.getBoundingClientRect() });
+                              setAnchorHover(null);
+                              return;
+                            }
+                          }
+                          // 2) Vraie ancre <a href> → tooltip URL complète
+                          showAnchorTooltip(e);
                         }}
                         onMouseLeave={() => {
-                          leaveTimerRef.current = setTimeout(() => setLinkHover(null), 220);
+                          leaveTimerRef.current = setTimeout(() => { setLinkHover(null); setAnchorHover(null); }, 220);
                         }}
                         contentEditable
                         suppressContentEditableWarning
@@ -1952,6 +1971,8 @@ export default function ArticleResult() {
                     <motion.div key="final"
                       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                       className="p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[480px] max-h-[78vh] overflow-y-auto"
+                      onMouseOver={showAnchorTooltip}
+                      onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setAnchorHover(null), 220); }}
                     >
                       <div
                         className="md-content"
@@ -2316,12 +2337,39 @@ export default function ArticleResult() {
             <Link2 size={11} />
             Appliquer le lien
           </motion.button>
-          {/* Tooltip : destination du lien */}
-          {internalLinks[linkHover.idx]?.title && (
-            <p className="mt-1 px-2 py-1 bg-white border border-gray-200 rounded-lg text-[10px] text-gray-500 shadow max-w-[260px] truncate">
-              → {internalLinks[linkHover.idx].title}
-            </p>
+          {/* Destination : URL complète + titre de la page cible */}
+          {(linkHover.url || internalLinks[linkHover.idx]?.title) && (
+            <div className="mt-1 px-2 py-1 bg-white border border-gray-200 rounded-lg shadow max-w-[420px] space-y-0.5">
+              {linkHover.url && (
+                <p className="text-[10px] text-gray-600 break-all flex items-start gap-1">
+                  <Link2 size={9} className="flex-shrink-0 mt-0.5 text-sage-500" />
+                  <span>{linkHover.url}</span>
+                </p>
+              )}
+              {internalLinks[linkHover.idx]?.title && (
+                <p className="text-[10px] text-gray-400 truncate">→ {internalLinks[linkHover.idx].title}</p>
+              )}
+            </div>
           )}
+        </div>,
+        document.body
+      )}
+
+      {/* ── Tooltip URL au survol d'une vraie ancre (lien existant/appliqué) ──── */}
+      {anchorHover && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            top:  anchorHover.rect.bottom + 6,
+            left: Math.max(8, Math.min(anchorHover.rect.left, window.innerWidth - 440)),
+            zIndex: 400,
+            pointerEvents: 'none',
+          }}
+        >
+          <div className="flex items-start gap-1.5 max-w-[420px] px-2.5 py-1.5 rounded-lg bg-gray-900 text-white shadow-lg text-[11px] leading-snug">
+            <Link2 size={11} className="flex-shrink-0 mt-0.5 text-sage-300" />
+            <span className="break-all">{anchorHover.url}</span>
+          </div>
         </div>,
         document.body
       )}
