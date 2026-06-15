@@ -94,7 +94,7 @@ const Btn = ({ onClick, title, active = false, children }) => (
     title={title}
     onMouseDown={(e) => { e.preventDefault(); onClick(); }}
     className={[
-      'flex items-center justify-center w-7 h-7 rounded-lg text-xs font-medium transition-all duration-100',
+      'flex items-center justify-center w-9 h-9 rounded-lg text-sm font-medium transition-all duration-100',
       active
         ? 'bg-white text-gray-900 shadow-sm'
         : 'text-gray-200 hover:bg-white/15 hover:text-white',
@@ -209,11 +209,30 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
   const [mediaEl, setMediaEl]   = useState(null);
   // Setter seul exposé : incrémenter force un re-render → mediaRect recalculé après scroll
   const [, setScrollTick]       = useState(0);
+  // Styles actifs de la sélection → surbrillance des boutons (gras, italique, titre…)
+  const [active, setActive]     = useState({});
   const toolbarRef              = useRef(null);
   const savedRangeRef           = useRef(null);
   // Vrai quand la toolbar a été ouverte par clic droit (pas par sélection).
   // Empêche le handler selectionchange de cacher la toolbar immédiatement.
   const rightClickRef           = useRef(false);
+
+  // ── État actif de la sélection (surbrillance des boutons) ───────────────────
+  // Détection native fiable : queryCommandState (gras/italique/…) + formatBlock (titre).
+  const computeActive = useCallback(() => {
+    try {
+      const block = (document.queryCommandValue('formatBlock') || '').toLowerCase();
+      setActive({
+        bold:      document.queryCommandState('bold'),
+        italic:    document.queryCommandState('italic'),
+        underline: document.queryCommandState('underline'),
+        strike:    document.queryCommandState('strikeThrough'),
+        ul:        document.queryCommandState('insertUnorderedList'),
+        ol:        document.queryCommandState('insertOrderedList'),
+        block,  // 'h1'..'h6', 'p', 'blockquote', 'div', ''
+      });
+    } catch { setActive({}); }
+  }, []);
 
   // ── Positionnement ────────────────────────────────────────────────────────
 
@@ -221,7 +240,8 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
     setPos(computeToolbarPos(clientX, clientY));
     setVisible(true);
     setPanel(null);
-  }, []);
+    computeActive();
+  }, [computeActive]);
 
   const computePos = useCallback(() => {
     const sel = window.getSelection();
@@ -274,7 +294,8 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
     document.execCommand(cmd, false, value);
     if (contentRef) contentRef.current = articleEl?.innerHTML || '';
     if (articleEl) articleEl.scrollTop = scrollTop;
-  }, [articleEl, contentRef]);
+    computeActive(); // rafraîchir la surbrillance après un toggle
+  }, [articleEl, contentRef, computeActive]);
 
   /**
    * Insertions après un sous-panel (image, vidéo, HTML, couleur).
@@ -460,6 +481,7 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
         if (ok) {
           setVisible(true);
           setPanel(null);
+          computeActive();
         } else {
           // Garder visible si un sous-panel est ouvert (l'input a le focus → sélection perdue)
           setPanel((p) => { if (!p) setVisible(false); return p; });
@@ -471,7 +493,7 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
       document.removeEventListener('selectionchange', onSelectionChange);
       if (rafId) cancelAnimationFrame(rafId);
     };
-  }, [articleEl, computePos]);
+  }, [articleEl, computePos, computeActive]);
 
   // contextmenu : affiche la toolbar au point de clic droit (sans sélection requise)
   useEffect(() => {
@@ -571,7 +593,7 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
         boxShadow:      '0 2px 8px rgba(0,0,0,0.4)',
       }}
     >
-      <Trash2 size={13} />
+      <Trash2 size={16} />
     </button>,
     document.body,
   ) : null;
@@ -614,67 +636,67 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
         <div style={arrowStyle} />
 
         {/* Style texte */}
-        <Btn onClick={() => format('bold')}          title="Gras (Ctrl+B)">      <Bold size={13} /></Btn>
-        <Btn onClick={() => format('italic')}        title="Italique (Ctrl+I)">  <Italic size={13} /></Btn>
-        <Btn onClick={() => format('underline')}     title="Souligné (Ctrl+U)"> <Underline size={13} /></Btn>
-        <Btn onClick={() => format('strikeThrough')} title="Barré">             <Strikethrough size={13} /></Btn>
+        <Btn onClick={() => format('bold')}          title="Gras (Ctrl+B)"      active={active.bold}>      <Bold size={16} /></Btn>
+        <Btn onClick={() => format('italic')}        title="Italique (Ctrl+I)"  active={active.italic}>  <Italic size={16} /></Btn>
+        <Btn onClick={() => format('underline')}     title="Souligné (Ctrl+U)" active={active.underline}> <Underline size={16} /></Btn>
+        <Btn onClick={() => format('strikeThrough')} title="Barré"             active={active.strike}>             <Strikethrough size={16} /></Btn>
 
         <Sep />
 
         {/* Structure */}
-        <Btn onClick={() => format('formatBlock', 'h1')} title="Titre H1"><Heading1 size={13} /></Btn>
-        <Btn onClick={() => format('formatBlock', 'h2')} title="Titre H2"><Heading2 size={13} /></Btn>
-        <Btn onClick={() => format('formatBlock', 'h3')} title="Titre H3"><Heading3 size={13} /></Btn>
-        <Btn onClick={() => format('formatBlock', 'h4')} title="Titre H4"><Heading4 size={13} /></Btn>
-        <Btn onClick={() => format('formatBlock', 'p')}  title="Paragraphe normal"><Type size={13} /></Btn>
+        <Btn onClick={() => format('formatBlock', 'h1')} title="Titre H1" active={active.block === 'h1'}><Heading1 size={16} /></Btn>
+        <Btn onClick={() => format('formatBlock', 'h2')} title="Titre H2" active={active.block === 'h2'}><Heading2 size={16} /></Btn>
+        <Btn onClick={() => format('formatBlock', 'h3')} title="Titre H3" active={active.block === 'h3'}><Heading3 size={16} /></Btn>
+        <Btn onClick={() => format('formatBlock', 'h4')} title="Titre H4" active={active.block === 'h4'}><Heading4 size={16} /></Btn>
+        <Btn onClick={() => format('formatBlock', 'p')}  title="Paragraphe normal" active={active.block === 'p' || active.block === 'div'}><Type size={16} /></Btn>
 
         <Sep />
 
         {/* Listes */}
-        <Btn onClick={() => format('insertUnorderedList')} title="Liste à puces">   <List size={13} /></Btn>
-        <Btn onClick={() => format('insertOrderedList')}   title="Liste numérotée"> <ListOrdered size={13} /></Btn>
+        <Btn onClick={() => format('insertUnorderedList')} title="Liste à puces"   active={active.ul}>   <List size={16} /></Btn>
+        <Btn onClick={() => format('insertOrderedList')}   title="Liste numérotée" active={active.ol}> <ListOrdered size={16} /></Btn>
 
         <Sep />
 
         {/* Couleurs */}
         <Btn onClick={() => openPanel('color')}     title="Couleur du texte" active={panel === 'color'}>
-          <Palette size={13} />
+          <Palette size={16} />
         </Btn>
         <Btn onClick={() => openPanel('highlight')} title="Surligner"        active={panel === 'highlight'}>
-          <Highlighter size={13} />
+          <Highlighter size={16} />
         </Btn>
         <Btn onClick={() => openPanel('font')} title="Police du texte" active={panel === 'font'}>
           <CaseSensitive size={15} />
         </Btn>
         <Btn onClick={() => openPanel('weight')} title="Graisse du texte" active={panel === 'weight'}>
-          <Weight size={13} />
+          <Weight size={16} />
         </Btn>
 
         <Sep />
 
         {/* Lien */}
         <Btn onClick={() => openPanel('link')} title="Insérer un lien" active={panel === 'link'}>
-          <Link size={13} />
+          <Link size={16} />
         </Btn>
         <Btn onClick={() => format('unlink')} title="Supprimer le lien">
-          <Unlink2 size={13} className="text-red-300" />
+          <Unlink2 size={16} className="text-red-300" />
         </Btn>
 
         <Sep />
 
         {/* Médias */}
         <Btn onClick={() => openPanel('image')} title="Insérer une image (URL)" active={panel === 'image'}>
-          <Image size={13} />
+          <Image size={16} />
         </Btn>
         <Btn onClick={() => openPanel('video')} title="Insérer une vidéo YouTube" active={panel === 'video'}>
-          <Film size={13} />
+          <Film size={16} />
         </Btn>
 
         <Sep />
 
         {/* HTML brut */}
         <Btn onClick={() => openPanel('html')} title="Insérer du HTML (tableau, infographie…)" active={panel === 'html'}>
-          <Code2 size={13} />
+          <Code2 size={16} />
         </Btn>
       </div>
 
