@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -11,6 +11,7 @@ import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
+import { loadDraftLocal, loadDraftRemote, clearDraft } from '../services/articleDraft';
 import tracker from '../services/activityTracker';
 import AgentThinking from '../components/agent/AgentThinking';
 import ArticleResult from '../components/agent/ArticleResult';
@@ -37,6 +38,52 @@ export default function Articles() {
   const [targetKeyword, setTargetKeyword] = useState('');
   const [seoKeywords, setSeoKeywords] = useState([]);
   const [seoKwInput, setSeoKwInput] = useState('');
+
+  // ── Restauration de l'autosave au montage (façon Google Docs) ───────────────
+  // Reprend automatiquement la MAJ en cours après rechargement / navigation /
+  // changement d'appareil, sans rien demander à l'utilisateur.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    const uid = authUid || authUsername || null;
+
+    const applyDraft = (d, full) => {
+      if (!d || !d.html) return;
+      if (full) {
+        dispatch(setOriginalContent(d.originalContent || ''));
+        dispatch(setDiff(d.diff || []));
+        dispatch(setSources(d.sources || []));
+        dispatch(setAnalysis(d.analysis || ''));
+        dispatch(setWpData(d.wpData || null));
+        dispatch(setInternalLinks(d.internalLinks || []));
+        dispatch(setCurrentArticleId(d.currentArticleId || null));
+        if (d.tokenUsage) dispatch(setTokenUsage(d.tokenUsage));
+      }
+      dispatch(setUpdatedContent(d.html));
+      dispatch(setStatus('done'));
+    };
+
+    // 1. Restauration locale instantanée
+    const local = loadDraftLocal(uid);
+    if (agent.status === 'idle' && local?.html) {
+      applyDraft(local, true);
+    } else if (agent.status === 'done' && local?.html
+        && local.currentArticleId === agent.currentArticleId
+        && local.html !== agent.updatedContent) {
+      // Retour SPA : récupérer les éditions manuelles (contentRef) non reflétées dans Redux
+      applyDraft(local, false);
+    }
+
+    // 2. Réconciliation distante (cache vidé / autre appareil) — si plus récent
+    loadDraftRemote(uid).then((remote) => {
+      if (remote?.html && agent.status === 'idle'
+          && (remote.savedAt || 0) > (local?.savedAt || 0)) {
+        applyDraft(remote, true);
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const canRun = (settings.aiConfigured || settings.useLocalProxy || settings.anthropicKey)
     && (tab === TAB_URL ? url.trim() : text.trim())
     && targetKeyword.trim();
@@ -47,6 +94,8 @@ export default function Articles() {
       return;
     }
 
+    // Nouvelle MAJ → on abandonne tout brouillon précédent
+    clearDraft(authUid || authUsername || null);
     dispatch(resetAgent());
     dispatch(setStatus('running'));
 
@@ -291,6 +340,7 @@ export default function Articles() {
   };
 
   const handleReset = () => {
+    clearDraft(authUid || authUsername || null);
     dispatch(resetAgent());
     setUrl('');
     setText('');

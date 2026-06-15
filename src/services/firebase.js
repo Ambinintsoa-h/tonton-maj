@@ -202,6 +202,23 @@ export const deleteWordPressSite = async (id) => {
   await deleteDoc(doc(db, 'wordpress_sites', id));
 };
 
+// ── Brouillon d'autosave de MAJ (1 doc par utilisateur) ─────────────────────
+// Sauvegarde en ligne du travail en cours pour reprise apres rechargement /
+// navigation / changement d'appareil. Echec silencieux (localStorage = filet).
+export const saveArticleDraftRemote = async (userId, draft) => {
+  if (!db || !userId || !draft) return;
+  await setDoc(doc(db, 'article_drafts', userId), draft);
+};
+export const getArticleDraftRemote = async (userId) => {
+  if (!db || !userId) return null;
+  const snap = await getDoc(doc(db, 'article_drafts', userId));
+  return snap.exists() ? snap.data() : null;
+};
+export const deleteArticleDraftRemote = async (userId) => {
+  if (!db || !userId) return;
+  await deleteDoc(doc(db, 'article_drafts', userId));
+};
+
 // Persiste les polices détectées d'un site (champ `fonts` uniquement).
 // Survit au vidage du cache / localStorage : rechargé au boot via getWordPressSites.
 // Mise à jour ciblée (updateDoc d'un seul champ) → ne réécrit pas le reste du doc.

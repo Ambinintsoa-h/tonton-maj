@@ -22,6 +22,7 @@ import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice'
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
 import { saveArticle } from '../../services/firebase';
+import { saveDraft, flushDraftRemote, clearDraft } from '../../services/articleDraft';
 import { renderMarkdown } from '../../utils/markdown';
 import { useNavigate } from 'react-router-dom';
 
@@ -97,6 +98,9 @@ export default function ArticleResult() {
   const wpSites         = useSelector(s => s.wordpress.sites);
   const articlesHistory = useSelector(s => s.articles.history);
   const pendingItems    = useSelector(s => s.pending.list);
+  const authUid         = useSelector(s => s.auth.uid);
+  const authUsername    = useSelector(s => s.auth.username);
+  const draftUserId     = authUid || authUsername || null;  // clé du brouillon autosave
   const wpMcpData       = agent.wpData || null;  // données MCP WordPress (post ID, featured_media…)
 
   // Mode validation CQ : l'item pending avec cet ID est en statut 'a_valider'
@@ -443,10 +447,55 @@ export default function ArticleResult() {
     }
   }, [lockMedia]);
 
+  // ── Autosave (façon Google Docs) ───────────────────────────────────────────
+  // Construit le brouillon à partir du HTML édité en direct (contentRef) + état agent.
+  // Un ref évite les closures périmées dans les handlers stables.
+  const draftDataRef = useRef({ userId: null, build: null });
+  draftDataRef.current = {
+    userId: draftUserId,
+    build: () => ({
+      html:            contentRef.current || agent.updatedContent || '',
+      originalContent: agent.originalContent || '',
+      diff:            agent.diff || [],
+      sources:         agent.sources || [],
+      analysis:        agent.analysis || '',
+      wpData:          agent.wpData || null,
+      internalLinks:   agent.internalLinks || [],
+      currentArticleId: agent.currentArticleId || null,
+      tokenUsage:      agent.tokenUsage || null,
+    }),
+  };
+
+  const autosaveTimer = useRef(null);
+  const triggerAutosave = useCallback(() => {
+    clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(() => {
+      const { userId, build } = draftDataRef.current;
+      if (build) saveDraft(userId, build());
+    }, 1200);
+  }, []);
+
   // Frappe clavier : mise à jour du ref uniquement, SANS setState → pas de re-render
   const handleInput = useCallback((e) => {
     contentRef.current = e.currentTarget.innerHTML;
-  }, []);
+    triggerAutosave();
+  }, [triggerAutosave]);
+
+  // Autosave sur changements d'état non clavier (image à la une, diff, liens, sources)
+  useEffect(() => {
+    if (!hasContent) return;
+    triggerAutosave();
+  }, [agent.wpData, agent.diff, agent.sources, agent.internalLinks, featuredImgUrl, hasContent, triggerAutosave]);
+
+  // Flush au démontage (navigation vers Tickets, etc.) → ne rien perdre
+  useEffect(() => {
+    return () => {
+      clearTimeout(autosaveTimer.current);
+      const { userId, build } = draftDataRef.current;
+      const d = build ? build() : null;
+      if (d && d.html) { saveDraft(userId, d); flushDraftRemote(userId, d); }
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Collage dans la vue diff : on retire tout style copié d'un autre site et on
   // ne garde que la structure + le style par défaut (cf. sanitizePastedHtml).
@@ -1128,16 +1177,20 @@ export default function ArticleResult() {
 
     if (!result.success) {
       toast.error(`Erreur WordPress : ${result.error}`, { duration: 8000 });
-    } else if (agent.currentArticleId) {
-      // ── Auto-archivage dans Historique après publication réussie ────────────
-      dispatch(updateInHistory({
-        id:             agent.currentArticleId,
-        updatedContent: getFinalHtml(),
-        updates:        agent.diff    || [],
-        sources:        agent.sources || [],
-        publishedAt:    new Date().toISOString(),
-        publishedUrl:   result.link   || articleUrl || '',
-      }));
+    } else {
+      // MAJ publiée → le brouillon d'autosave n'a plus lieu d'être
+      clearDraft(draftUserId);
+      if (agent.currentArticleId) {
+        // ── Auto-archivage dans Historique après publication réussie ────────────
+        dispatch(updateInHistory({
+          id:             agent.currentArticleId,
+          updatedContent: getFinalHtml(),
+          updates:        agent.diff    || [],
+          sources:        agent.sources || [],
+          publishedAt:    new Date().toISOString(),
+          publishedUrl:   result.link   || articleUrl || '',
+        }));
+      }
     }
 
     setPublishing(false);
