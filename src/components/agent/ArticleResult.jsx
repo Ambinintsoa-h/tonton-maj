@@ -127,6 +127,24 @@ export default function ArticleResult() {
     } catch { return []; }
   }, [wpMcpData, articleUrl, wpSites]);
 
+  // Site WordPress connecté correspondant à l'article : via les données MCP, sinon
+  // par correspondance d'URL (couvre la réouverture depuis l'historique). Sert à
+  // savoir si on peut téléverser une image à la une dans la médiathèque WP.
+  const resolvedSite = useMemo(() => {
+    if (wpMcpData?.siteId) {
+      const s = wpSites.find(x => x.id === wpMcpData.siteId);
+      if (s) return s;
+    }
+    if (!articleUrl) return null;
+    try {
+      const h = new URL(articleUrl).hostname.replace(/^www\./, '');
+      return wpSites.find(s => {
+        try { return new URL(s.url).hostname.replace(/^www\./, '') === h; }
+        catch { return false; }
+      }) || null;
+    } catch { return null; }
+  }, [wpMcpData, articleUrl, wpSites]);
+
   const [activeTab, setActiveTab] = useState(TAB_APRES);
   const [showExport, setShowExport] = useState(false);
   const [showWP, setShowWP] = useState(false);
@@ -394,18 +412,18 @@ export default function ArticleResult() {
     if (!url) return;
 
     // ── Upload médiathèque WP — REQUIS pour que l'image à la une soit publiée ──
-    const matchingSite = wpMcpData?.siteId ? wpSites.find(s => s.id === wpMcpData.siteId) : null;
+    const matchingSite = resolvedSite;
     if (matchingSite) {
       setUploadingImg(true);
       try {
         const resp = await axios.post('/api/wp-tool', {
           toolName: 'wp_upload_media',
-          toolInput: { site_id: wpMcpData.siteId, image_url: url, alt_text: '' },
+          toolInput: { site_id: matchingSite.id, image_url: url, alt_text: '' },
           wpSites: [matchingSite],
         }, { timeout: 60000 });
         if (resp.data.success && resp.data.result?.media_id) {
           // Mettre à jour le featured_media_id dans Redux pour la publication
-          dispatch(setWpData({ ...wpMcpData, featuredMediaId: resp.data.result.media_id, featuredMediaUrl: url }));
+          dispatch(setWpData({ ...(wpMcpData || {}), siteId: matchingSite.id, siteName: matchingSite.name, featuredMediaId: resp.data.result.media_id, featuredMediaUrl: url }));
           toast.success(`Image uploadée dans la médiathèque WP (ID ${resp.data.result.media_id})`);
         } else {
           // Échec d'upload → l'image à la une ne sera PAS publiée. On n'update PAS la
@@ -454,7 +472,7 @@ export default function ArticleResult() {
         if (img) { img.alt = altText; contentRef.current = articleRef.current.innerHTML; }
       }).catch(() => {});
     }
-  }, [newImgInput, wpMcpData, wpSites, dispatch, settings.anthropicKey]);
+  }, [newImgInput, wpMcpData, resolvedSite, dispatch, settings.anthropicKey]);
 
   // Upload fichier local → médiathèque WP → met à jour featured_media
   const handleFileUpload = useCallback(async (e) => {
@@ -462,7 +480,7 @@ export default function ArticleResult() {
     if (!file) return;
     e.target.value = ''; // reset input pour permettre re-sélection du même fichier
 
-    const matchingSite = wpSites.find(s => s.id === wpMcpData?.siteId);
+    const matchingSite = resolvedSite;
     if (!matchingSite) {
       toast.error('Aucun site WordPress connecté pour cet article');
       return;
@@ -481,7 +499,7 @@ export default function ArticleResult() {
 
       if (resp.data.success && resp.data.media_id) {
         const newUrl = resp.data.url || '';
-        dispatch(setWpData({ ...wpMcpData, featuredMediaId: resp.data.media_id, featuredMediaUrl: newUrl }));
+        dispatch(setWpData({ ...(wpMcpData || {}), siteId: matchingSite.id, siteName: matchingSite.name, featuredMediaId: resp.data.media_id, featuredMediaUrl: newUrl }));
         // Mise à jour preview
         if (articleRef.current) {
           const fig = articleRef.current.querySelector('figure[data-featured]');
@@ -506,7 +524,7 @@ export default function ArticleResult() {
       toast.error('Erreur upload : ' + (err.response?.data?.error || err.message));
     }
     setUploadingImg(false);
-  }, [wpMcpData, wpSites, dispatch, settings.anthropicKey]);
+  }, [wpMcpData, resolvedSite, dispatch, settings.anthropicKey]);
 
   // Sync DOM quand une nouvelle analyse arrive — pas de re-render sur les frappes
   useEffect(() => {
@@ -1852,7 +1870,7 @@ export default function ArticleResult() {
                         >
                           <Link2 size={11} /> Lien
                         </button>
-                        {wpMcpData?.siteId && (
+                        {resolvedSite && (
                           <button
                             onClick={() => fileImgInputRef.current?.click()}
                             disabled={uploadingImg}
