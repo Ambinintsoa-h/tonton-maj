@@ -20,7 +20,7 @@ import {
   resetAgent, setStatus, addStep, setProgress,
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
-  setWpData,
+  setWpData, setAudit,
 } from '../store/slices/agentSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
 import { cacheSiteFonts } from '../store/slices/wordpressSlice';
@@ -1168,6 +1168,7 @@ export default function MajEnAttente() {
           analysis:        result.analysis || '',
           seoTracking:     capturedSeoTracking,   // transféré vers articleData à la validation
           wpData:          item._wpData || result.wpData || null,  // post cible (postId) — pour rebinder à la réouverture
+          audit:           result.audit || '',     // rapport d'audit complet — onglet AUDIT
         },
       }));
 
@@ -1183,6 +1184,7 @@ export default function MajEnAttente() {
         analysis:        result.analysis || '',
         parseFailed:     result.parseFailed === true,
         wpData:          item._wpData || result.wpData || null,
+        audit:           result.audit || '',
       };
 
     } catch (e) {
@@ -1230,6 +1232,7 @@ export default function MajEnAttente() {
     dispatch(setAnalysis(data.analysis || ''));
     dispatch(setParseFailed(data.parseFailed === true));
     if (data.wpData) dispatch(setWpData(data.wpData));
+    dispatch(setAudit(data.audit || ''));
     dispatch(setCurrentArticleId(item.id));
     dispatch(setStatus('done'));
     navigate('/');
@@ -1251,6 +1254,7 @@ export default function MajEnAttente() {
     // Rebinder la cible WordPress sur CET article (null si non mémorisé) — évite
     // de publier sur le post d'un article ouvert précédemment (mauvaise cible).
     dispatch(setWpData(r.wpData || null));
+    dispatch(setAudit(r.audit || ''));
     dispatch(setCurrentArticleId(item.id)); // marque cet item comme "en cours de review"
     dispatch(setStatus('done'));
     navigate('/');

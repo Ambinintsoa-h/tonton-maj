@@ -26,6 +26,7 @@ import { saveDraft, flushDraftRemote, clearDraft, onDraftStatus } from '../../se
 import { renderMarkdown } from '../../utils/markdown';
 import { useNavigate } from 'react-router-dom';
 
+const TAB_AUDIT = 'audit';
 const TAB_AVANT = 'avant';
 const TAB_APRES = 'apres';
 
@@ -105,6 +106,9 @@ export default function ArticleResult() {
 
   // Mode validation CQ : l'item pending avec cet ID est en statut 'a_valider'
   const cqItem = pendingItems.find(i => i.id === agent.currentArticleId && i.status === 'a_valider') || null;
+
+  // Rapport d'audit (mode cerveau) — depuis le state agent ou la review rouverte
+  const auditReport = agent.audit || cqItem?.majResult?.audit || '';
 
   // URL de l'article courant (pour retrouver le post WP à mettre à jour)
   const currentArticle = articlesHistory.find(a => a.id === agent.currentArticleId);
@@ -573,6 +577,7 @@ export default function ArticleResult() {
       analysis:        agent.analysis || '',
       wpData:          agent.wpData || null,
       internalLinks:   agent.internalLinks || [],
+      audit:           agent.audit || '',
       currentArticleId: agent.currentArticleId || null,
       tokenUsage:      agent.tokenUsage || null,
     }),
@@ -1608,6 +1613,7 @@ export default function ArticleResult() {
         <div className="flex items-center justify-between border-b border-gray-100 px-6">
           <div className="flex">
             {[
+              ...(auditReport ? [{ id: TAB_AUDIT, label: 'Audit' }] : []),
               { id: TAB_AVANT, label: 'Avant' },
               { id: TAB_APRES, label: 'Après — MAJ proposées' },
             ].map(t => (
@@ -1841,6 +1847,25 @@ export default function ArticleResult() {
 
         {/* Contenu des tabs */}
         <AnimatePresence mode="wait">
+
+          {activeTab === TAB_AUDIT && (
+            <motion.div key="audit"
+              initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}
+              className="p-6"
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <ClipboardCheck size={15} className="text-violet-500" />
+                <p className="text-sm font-semibold text-gray-800">Audit du skill — rapport complet</p>
+                <span className="text-[10px] text-gray-400">les corrections appliquées dans « Après » en sont déduites</span>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-6 min-h-[420px] max-h-[78vh] overflow-y-auto shadow-sm">
+                <div
+                  className="md-content text-sm"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(auditReport) }}
+                />
+              </div>
+            </motion.div>
+          )}
 
           {activeTab === TAB_AVANT && (
             <motion.div key="avant"
