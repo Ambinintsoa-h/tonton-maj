@@ -393,13 +393,15 @@ export default function ArticleResult() {
   // 1. Depuis figure[data-featured] dans le HTML de l'article
   // 2. Fallback : depuis wpData.featuredMediaUrl retourné par le MCP
   useEffect(() => {
-    let url = '';
-    if (agent.updatedContent) {
+    // Priorité à l'image à la une choisie/uploadée (wpData.featuredMediaUrl = URL
+    // réelle dans la médiathèque WP). Sinon, fallback sur l'image du contenu.
+    // (Évite que l'URL d'origine — ex. lien Discord — réécrase l'URL WP après upload.)
+    let url = wpMcpData?.featuredMediaUrl || '';
+    if (!url && agent.updatedContent) {
       const tmp = document.createElement('div');
       tmp.innerHTML = agent.updatedContent;
       url = tmp.querySelector('figure[data-featured] img')?.getAttribute('src') || '';
     }
-    if (!url && wpMcpData?.featuredMediaUrl) url = wpMcpData.featuredMediaUrl;
     setFeaturedImgUrl(url);
   }, [agent.updatedContent, wpMcpData]);
 
@@ -410,6 +412,10 @@ export default function ArticleResult() {
   const handleReplaceFeaturedImage = useCallback(async () => {
     const url = newImgInput.trim();
     if (!url) return;
+
+    // URL effectivement affichée/stockée : devient l'URL de la médiathèque WP après upload
+    // (et non l'URL d'entrée, ex. lien Discord temporaire).
+    let displayUrl = url;
 
     // ── Upload médiathèque WP — REQUIS pour que l'image à la une soit publiée ──
     const matchingSite = resolvedSite;
@@ -422,8 +428,10 @@ export default function ArticleResult() {
           wpSites: [matchingSite],
         }, { timeout: 60000 });
         if (resp.data.success && resp.data.result?.media_id) {
+          // L'URL WP (source_url médiathèque) remplace l'URL d'entrée
+          displayUrl = resp.data.result.url || url;
           // Mettre à jour le featured_media_id dans Redux pour la publication
-          dispatch(setWpData({ ...(wpMcpData || {}), siteId: matchingSite.id, siteName: matchingSite.name, featuredMediaId: resp.data.result.media_id, featuredMediaUrl: url }));
+          dispatch(setWpData({ ...(wpMcpData || {}), siteId: matchingSite.id, siteName: matchingSite.name, featuredMediaId: resp.data.result.media_id, featuredMediaUrl: displayUrl }));
           toast.success(`Image uploadée dans la médiathèque WP (ID ${resp.data.result.media_id})`);
         } else {
           // Échec d'upload → l'image à la une ne sera PAS publiée. On n'update PAS la
@@ -456,17 +464,17 @@ export default function ArticleResult() {
       const fig = articleRef.current.querySelector('figure[data-featured]');
       if (fig) {
         const img = fig.querySelector('img');
-        if (img) img.src = url;
+        if (img) img.src = displayUrl;
       }
       contentRef.current = articleRef.current.innerHTML;
     }
-    setFeaturedImgUrl(url);
+    setFeaturedImgUrl(displayUrl);
     setShowImgReplace(false);
     setNewImgInput('');
 
     // Génération automatique du texte ALT via Claude Vision
     if (settings.anthropicKey) {
-      generateAltText(url, settings.anthropicKey).then(altText => {
+      generateAltText(displayUrl, settings.anthropicKey).then(altText => {
         if (!altText || !articleRef.current) return;
         const img = articleRef.current.querySelector('figure[data-featured] img');
         if (img) { img.alt = altText; contentRef.current = articleRef.current.innerHTML; }
@@ -1269,11 +1277,15 @@ export default function ArticleResult() {
       // « Publier sur le site » → publish · « Publier dans brouillons » → draft (retire
       // l'article du site public jusqu'à republication). Jamais de changement d'auteur ;
       // titre seulement si édité manuellement.
-      // featured_media (issu de wpMcpData) ne doit accompagner QUE le post auquel wpMcpData
-      // se rapporte — sinon on changerait l'image à la une du mauvais article.
+      // featured_media n'accompagne la publication QUE si la cible est bien l'article
+      // en cours d'édition (URL de l'article == post cible). On se base sur articleUrl
+      // (source de vérité, déjà vérifiée plus haut) et NON sur wpMcpData.postLink, qui
+      // peut être absent après un upload/réouverture — ce qui faisait silencieusement
+      // sauter la mise à jour de l'image à la une.
       const featuredMatchesTarget =
         !!wpMcpData?.featuredMediaId &&
-        slugOfUrl(wpMcpData?.postLink) === slugOfUrl(postToUse?.link);
+        !!articleUrl &&
+        slugOfUrl(articleUrl) === slugOfUrl(postToUse?.link);
 
       const postData = { content: htmlContent, status: wantDraft ? 'draft' : 'publish' };
       if (titleDirty && editedTitle) postData.title = editedTitle;
@@ -1860,6 +1872,13 @@ export default function ArticleResult() {
                     <span className="text-[11px] font-medium text-gray-500 shrink-0">Image à la une</span>
                     {!showImgReplace ? (
                       <>
+                        {featuredImgUrl && (
+                          <img
+                            src={featuredImgUrl}
+                            alt="Aperçu image à la une"
+                            className="shrink-0 w-9 h-9 rounded-lg object-cover border border-gray-200 bg-gray-50"
+                          />
+                        )}
                         <span className="flex-1 text-gray-400 truncate font-mono text-[10px]">
                           {featuredImgUrl || <em className="not-italic text-gray-300">Aucune image définie</em>}
                         </span>
