@@ -173,7 +173,7 @@ export default function ArticleResult() {
   }, []);
 
   // ── Sections repliables (repliées par défaut) — focus sur la vue diff ───────
-  const [showMissed, setShowMissed]   = useState(false);  // Suggestions à appliquer
+  const [showMissed, setShowMissed]   = useState(true);   // Suggestions à appliquer — déplié par défaut (action mise en évidence)
   const [showDetails, setShowDetails] = useState(false);  // Détail des modifications
   const [showSources, setShowSources] = useState(false);  // Sources vérifiées
   // Titre éditable de l'article
@@ -2196,25 +2196,27 @@ export default function ArticleResult() {
                 <motion.div
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="rounded-xl border border-amber-200 bg-amber-50 overflow-hidden"
+                  className="rounded-xl border-2 border-indigo-200 bg-indigo-50/60 overflow-hidden shadow-sm ring-1 ring-indigo-100"
                 >
                   <button
                     type="button"
                     onClick={() => setShowMissed(v => !v)}
-                    className={`w-full flex items-center gap-2 px-4 py-2.5 bg-amber-100/70 ${showMissed ? 'border-b border-amber-200' : ''}`}
+                    className={`w-full flex items-center gap-2.5 px-4 py-3 bg-indigo-100/80 hover:bg-indigo-100 transition-colors ${showMissed ? 'border-b border-indigo-200' : ''}`}
                   >
-                    <AlertTriangle size={13} className="text-amber-600 flex-shrink-0" />
-                    <p className="text-[11px] font-semibold text-amber-700 flex-1 text-left">
-                      {missedUpdates.length} suggestion{missedUpdates.length > 1 ? 's' : ''} à appliquer
-                      <span className="font-normal ml-1">— cliquez sur Ajouter pour insérer directement dans l'article</span>
+                    <span className="flex items-center justify-center w-5 h-5 rounded-md bg-indigo-600 text-white flex-shrink-0">
+                      <Plus size={12} />
+                    </span>
+                    <p className="text-xs font-semibold text-indigo-800 flex-1 text-left">
+                      {missedUpdates.length} suggestion{missedUpdates.length > 1 ? 's' : ''} à ajouter en 1 clic
+                      <span className="font-normal text-indigo-500 ml-1">— l'agent l'insère au bon endroit dans l'article</span>
                     </p>
-                    {showMissed ? <ChevronUp size={14} className="text-amber-600 flex-shrink-0" /> : <ChevronDown size={14} className="text-amber-600 flex-shrink-0" />}
+                    {showMissed ? <ChevronUp size={15} className="text-indigo-600 flex-shrink-0" /> : <ChevronDown size={15} className="text-indigo-600 flex-shrink-0" />}
                   </button>
                   {showMissed && (
-                  <div className="divide-y divide-amber-100">
+                  <div className="divide-y divide-indigo-100">
                     {missedUpdates.map((u, i) => (
                       <div key={i} className="px-4 py-3 flex items-start gap-3">
-                        <span className="flex-shrink-0 w-5 h-5 rounded-md bg-amber-200 text-amber-800 flex items-center justify-center text-[10px] font-bold mt-0.5">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-md bg-indigo-200 text-indigo-800 flex items-center justify-center text-[10px] font-bold mt-0.5">
                           {i + 1}
                         </span>
                         <div className="flex-1 min-w-0 space-y-1">
@@ -2230,11 +2232,15 @@ export default function ArticleResult() {
                         <button
                           onClick={() => applyMissed(u, i)}
                           title="Insérer la correction dans l'article"
-                          className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-white border border-blue-200 text-blue-700 hover:bg-blue-50 transition-colors"
+                          className={`flex-shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
+                            addedIdx === i
+                              ? 'bg-green-100 text-green-700 border border-green-200'
+                              : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm'
+                          }`}
                         >
                           {addedIdx === i
-                            ? <><CheckCircle2 size={11} className="text-green-500" /> Ajouté</>
-                            : <><Plus size={11} /> Ajouter</>
+                            ? <><CheckCircle2 size={12} /> Ajouté</>
+                            : <><Plus size={12} /> Ajouter</>
                           }
                         </button>
                       </div>
