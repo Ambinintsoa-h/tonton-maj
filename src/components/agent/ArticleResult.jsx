@@ -1182,25 +1182,10 @@ export default function ArticleResult() {
     }
   };
 
-  // Publication directe quand le site est déjà connu via MCP (pas de dropdown)
-  const handlePublishDirect = () => {
-    if (!wpMcpData?.siteId) return;
-    const site = wpSites.find(s => s.id === wpMcpData.siteId);
-    if (!site) { toast.error('Site WordPress introuvable'); return; }
-    const post = {
-      id:       wpMcpData.postId,
-      title:    { rendered: currentArticle?.title || articleUrl },
-      slug:     '',
-      postType: wpMcpData.postType || 'posts',
-      link:     wpMcpData.postLink || '',
-      _fromMcp: true,
-    };
-    handlePublish(site, 'update', post);
-  };
-
-  // foundPost (optionnel) : permet la publication directe depuis handlePublishDirect
-  // sans passer par le state wpFoundPost (qui nécessiterait un cycle de rendu)
-  const handlePublish = async (site, mode = 'draft', foundPost = null) => {
+  // foundPost (optionnel) : permet de cibler un post sans passer par le state wpFoundPost.
+  // mode : 'update' → publier sur le site (statut publish) · 'updateDraft' → publier dans
+  // brouillons (repasse l'article EXISTANT en brouillon, retiré du site public).
+  const handlePublish = async (site, mode = 'update', foundPost = null) => {
     setPublishing(true);
     const rawHtml = exportAsHtml(getFinalHtml());
 
@@ -1228,68 +1213,60 @@ export default function ArticleResult() {
       htmlContent = `<!-- MAJ par ${majAuthor} le ${stamp} -->\n${htmlContent}`;
     }
 
-    // foundPost prioritaire sur le state (publication directe MCP)
+    // foundPost prioritaire sur le state
     let postToUse = foundPost || wpFoundPost;
+    const wantDraft = (mode === 'updateDraft'); // « Publier dans brouillons » → statut draft
     let result;
 
-    if (mode === 'update' && postToUse) {
-      // ── Garde-fou anti mauvaise cible (correctif publication sur le mauvais post) ──
-      // Le post mémorisé peut être périmé (ex. review rouverte sans rebinder la cible),
-      // ce qui écraserait un AUTRE article du même site. On n'accepte la cible que si
-      // son slug correspond à l'URL de l'article affiché ; sinon on retrouve le bon
-      // post par son slug (findPostByUrl = source de vérité). À défaut d'URL fiable,
-      // on annule plutôt que d'écraser au hasard.
+    // ── Garde-fou anti mauvaise cible (correctif publication sur le mauvais post) ──
+    // La cible mémorisée peut être périmée (ex. review rouverte sans rebinder la cible),
+    // ce qui écraserait un AUTRE article du même site. On ne garde la cible que si son
+    // slug correspond à l'URL de l'article affiché ; sinon on retrouve le bon post par
+    // son slug (findPostByUrl = source de vérité). Si rien ne correspond → pas de cible.
+    {
       const articleSlug = slugOfUrl(articleUrl);
       const targetSlug  = slugOfUrl(postToUse?.link) || (postToUse?.slug || '').toLowerCase();
-      if (!articleSlug || articleSlug !== targetSlug) {
-        if (!articleUrl) {
-          toast.error("Aucune URL fiable pour cet article — mise à jour annulée par sécurité. Créez plutôt un brouillon.", { duration: 8000 });
-          setPublishing(false);
-          return;
-        }
-        const found = await findPostByUrl(site, articleUrl);
-        if (!found.success) {
-          toast.error(`Impossible d'identifier l'article WordPress à mettre à jour (${found.error || 'introuvable'}) — publication annulée par sécurité.`, { duration: 8000 });
-          setPublishing(false);
-          return;
-        }
-        postToUse = found.post;
+      if (!postToUse || !articleSlug || articleSlug !== targetSlug) {
+        const found = articleUrl ? await findPostByUrl(site, articleUrl) : { success: false };
+        postToUse = found.success ? found.post : null;
       }
+    }
 
-      // featured_media (issu de wpMcpData) ne doit accompagner QUE le post auquel
-      // wpMcpData se rapporte — sinon on changerait l'image à la une du mauvais article.
+    if (postToUse) {
+      // ── Mise à jour de l'article EXISTANT — statut selon le choix ──
+      // « Publier sur le site » → publish · « Publier dans brouillons » → draft (retire
+      // l'article du site public jusqu'à republication). Jamais de changement d'auteur ;
+      // titre seulement si édité manuellement.
+      // featured_media (issu de wpMcpData) ne doit accompagner QUE le post auquel wpMcpData
+      // se rapporte — sinon on changerait l'image à la une du mauvais article.
       const featuredMatchesTarget =
         !!wpMcpData?.featuredMediaId &&
         slugOfUrl(wpMcpData?.postLink) === slugOfUrl(postToUse?.link);
 
-      // Mise à jour d'un article existant :
-      // • Ne jamais changer l'auteur (non inclus dans le body)
-      // • Ne jamais changer le titre sauf si l'utilisateur l'a édité manuellement
-      const postData = { content: htmlContent, status: 'publish' };
+      const postData = { content: htmlContent, status: wantDraft ? 'draft' : 'publish' };
       if (titleDirty && editedTitle) postData.title = editedTitle;
       if (featuredMatchesTarget) postData.featured_media = wpMcpData.featuredMediaId;
-      // Catégories
       if (selectedCategories.length > 0) postData.categories = selectedCategories;
-      // SEO Meta — envoyé si au moins un champ est renseigné
       if (seoTitle || seoDescription) postData.seoMeta = { seoTitle, seoDescription };
-      result = await updatePost(
-        site,
-        postToUse.id,
-        postData,
-        postToUse.postType || 'posts'
-      );
+
+      result = await updatePost(site, postToUse.id, postData, postToUse.postType || 'posts');
+      const postLabel = postToUse.title?.rendered || postToUse.slug || 'article';
       if (result.success) {
-        toast.success(
-          `Article mis à jour sur ${site.name} ! Si la page semble inchangée, videz le cache WordPress/CDN.`,
-          { duration: 6000 }
-        );
-        if (result.link) window.open(result.link, '_blank');
+        if (wantDraft) {
+          toast.success(`« ${postLabel} » repassé en brouillon sur ${site.name} — retiré du site public jusqu'à republication.`, { duration: 7000 });
+        } else {
+          toast.success(`Article mis à jour sur ${site.name} ! Si la page semble inchangée, videz le cache WordPress/CDN.`, { duration: 6000 });
+          if (result.link) window.open(result.link, '_blank');
+        }
       }
     } else {
-      // Création d'un nouveau brouillon — le titre vient de l'édition manuelle ou du H1 de l'article
+      // Aucun article existant identifiable sur ce site (contenu collé sans URL, ou slug
+      // introuvable) → on ne publie/écrase RIEN au hasard : nouveau brouillon de secours.
       const draftTitle = editedTitle || currentArticle?.title || 'Article';
       result = await publishToWordPress(site, { title: draftTitle, content: htmlContent, status: 'draft' });
-      if (result.success) toast.success(`Brouillon créé sur ${site.name} !`);
+      if (result.success) {
+        toast(`Article introuvable sur ${site.name} — nouveau brouillon créé à la place.`, { icon: <AlertTriangle size={16} className="text-amber-500" />, duration: 7000 });
+      }
     }
 
     if (!result.success) {
@@ -1644,17 +1621,22 @@ export default function ArticleResult() {
 
             {wpSites.length > 0 && (
               <div className="relative">
-                {/* Si MCP connu → publication directe (pas de dropdown) */}
-                {/* Sinon → dropdown de sélection du site */}
+                {/* « Publier » ouvre toujours le menu pour proposer les 2 choix
+                    (sur le site / dans brouillons). Si le site est connu via MCP,
+                    on le pré-sélectionne pour afficher les 2 choix immédiatement. */}
                 <button
                   onClick={() => {
-                    if (wpMcpData?.siteId && wpMcpData?.postId) {
-                      handlePublishDirect();
+                    setShowExport(false);
+                    if (showWP) { setShowWP(null); return; }
+                    const mcpSite = (wpMcpData?.siteId && wpMcpData?.postId)
+                      ? wpSites.find(s => s.id === wpMcpData.siteId)
+                      : null;
+                    if (mcpSite) {
+                      handleOpenWP(mcpSite); // ouvre le menu + sélectionne le site MCP
                     } else {
-                      setShowWP(showWP ? null : '__menu__');
+                      setShowWP('__menu__');
                       setWpFoundPost(null);
                       setWpNotFoundReason('');
-                      setShowExport(false);
                     }
                   }}
                   disabled={publishing}
@@ -1662,8 +1644,7 @@ export default function ArticleResult() {
                 >
                   {publishing ? <Loader size={13} className="animate-spin" /> : <Globe size={13} />}
                   Publier
-                  {/* Chevron uniquement si sélection manuelle nécessaire */}
-                  {!(wpMcpData?.siteId && wpMcpData?.postId) && <ChevronDown size={12} />}
+                  <ChevronDown size={12} />
                 </button>
                 <AnimatePresence>
                   {showWP && (
@@ -1756,30 +1737,30 @@ export default function ArticleResult() {
                                 )}
                               </div>
 
-                              {/* ── Mettre à jour l'article existant ──────── */}
-                              {wpFoundPost && (
-                                <button
-                                  onClick={() => handlePublish(site, 'update')}
-                                  disabled={publishing}
-                                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-green-700 bg-green-50 hover:bg-green-100 rounded-lg transition-colors disabled:opacity-50"
-                                >
-                                  <CheckCircle2 size={13} />
-                                  <span className="flex-1 text-left truncate">
-                                    Mettre à jour « {wpFoundPost.title?.rendered || wpFoundPost.slug} »
-                                  </span>
-                                  {wpFoundPost._fromMcp && (
-                                    <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full shrink-0">MCP</span>
-                                  )}
-                                </button>
-                              )}
-                              {/* ── Créer un nouveau brouillon ────────────── */}
+                              {/* ── Choix 1 : Publier sur le site (en ligne) ── */}
                               <button
-                                onClick={() => handlePublish(site, 'draft')}
+                                onClick={() => handlePublish(site, 'update')}
                                 disabled={publishing}
-                                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-600 hover:bg-black/5 rounded-lg transition-colors disabled:opacity-50"
+                                title="Met à jour l'article et le publie sur le site (en ligne)"
+                                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-green-700 bg-green-50 hover:bg-green-100 rounded-lg transition-colors disabled:opacity-50"
                               >
-                                <ExternalLink size={13} />
-                                Créer un nouveau brouillon
+                                <Globe size={13} />
+                                <span className="flex-1 text-left truncate">
+                                  Publier sur le site{wpFoundPost ? ` « ${wpFoundPost.title?.rendered || wpFoundPost.slug} »` : ''}
+                                </span>
+                                {wpFoundPost?._fromMcp && (
+                                  <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full shrink-0">MCP</span>
+                                )}
+                              </button>
+                              {/* ── Choix 2 : Publier dans brouillons (hors ligne) ── */}
+                              <button
+                                onClick={() => handlePublish(site, 'updateDraft')}
+                                disabled={publishing}
+                                title="Repasse l'article en brouillon (retiré du site public jusqu'à republication)"
+                                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+                              >
+                                <FileText size={13} className="text-gray-500" />
+                                <span className="flex-1 text-left truncate">Publier dans brouillons</span>
                               </button>
                               {!wpFoundPost && !wpSearching && wpNotFoundReason && showWP === site.id && (
                                 <p className="px-3 py-1.5 text-[11px] text-amber-600 leading-snug">
