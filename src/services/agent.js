@@ -441,6 +441,41 @@ const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON sty
     }).join('\n\n');
 };
 
+/**
+ * Skills au format Claude (SKILL.md) actifs → pilotent l'agent en « mode cerveau ».
+ * Ils portent { description, body, resources[] } (pas de `content`).
+ */
+const getBrainSkills = (skills = []) =>
+  (skills || []).filter(s => s?.format === 'skillmd' && s.body && isActiveEntry(s));
+
+/**
+ * Bloc « cerveau » : un skill SKILL.md (méthode complète) pilote l'agent.
+ * On injecte son corps + ses ressources, puis un PONT qui force la sortie au format
+ * JSON d'updates du pipeline (hybride : audit → corrections concrètes).
+ */
+const buildBrainBlock = (brainSkills) => {
+  const bodies = brainSkills.map(s => `### ${s.name}\n${s.body}`).join('\n\n───\n\n');
+  const resources = brainSkills.flatMap(s => Array.isArray(s.resources) ? s.resources : []);
+  const resBlock = resources.length
+    ? `\n\n## ═══ RESSOURCES DU SKILL (gabarits / références — à appliquer quand le skill le demande) ═══\n` +
+      resources.map(r => `### ${r.name}\n${r.content || ''}`).join('\n\n───\n\n')
+    : '';
+  return `\n\n## ═══ SKILL PRINCIPAL — MÉTHODE & EXPERTISE (à appliquer intégralement) ═══
+Ce skill définit ton rôle, ta méthode d'analyse et tes critères. Applique-le à la lettre.
+
+${bodies}${resBlock}
+
+## ═══ PONT MÉTHODE → SORTIE PIPELINE (IMPÉRATIF — prioritaire sur tout « format de sortie » décrit par le skill) ═══
+Utilise la méthode ci-dessus pour DÉCIDER quoi améliorer dans l'article, mais ta réponse
+reste STRICTEMENT le JSON d'updates défini plus bas — jamais un rapport texte.
+Traduis les conclusions de l'audit en modifications concrètes :
+- Données obsolètes, prix/chiffres/dates erronés, manque de fraîcheur → updates (remplacement du segment EXACT).
+- Éléments à ajouter (TL;DR, FAQ, paragraphe d'actualité, tableau comparatif) → updates "type":"addition".
+- Tableau comparatif pertinent → une addition contenant le bloc HTML du gabarit de la ressource.
+- Scores, audit EEAT, recommandations stratégiques, manquements → à résumer dans le champ "analysis" (PAS dans le contenu de l'article).
+N'insère JAMAIS dans l'article les titres de rapport (« Score global », « Tableau d'audit AIO », « Audit EEAT »…).`;
+};
+
 /** Construit le bloc Base de connaissances pour le system prompt. */
 const buildKnowledgeBlock = (knowledge, intro = '', label = 'CHECKLIST OBLIGATOIRE') => {
   const active = knowledge.filter(k => k.content && isActiveEntry(k));
@@ -493,7 +528,10 @@ const scrapeSource = async (url) => {
 const buildSystemPrompt = (skills, knowledge = []) => {
   const { fr, year, prevYear, cutoffIso } = getDateContext();
 
-  const skillsBlock   = buildSkillsBlock(skills);
+  // Mode cerveau : si un skill SKILL.md est actif, il pilote l'agent et le socle + skills
+  // legacy ne sont PAS injectés (le skill principal porte déjà rôle/méthode/critères).
+  const brainSkills   = getBrainSkills(skills);
+  const skillsBlock   = brainSkills.length ? buildBrainBlock(brainSkills) : buildSkillsBlock(skills);
   const knowledgeBlock = buildKnowledgeBlock(knowledge);
 
   return `Tu es un expert SEO/GEO (Search Engine Optimization & Generative Engine Optimization) spécialisé dans la mise à jour d'articles de blog, dossiers comparatifs et actualités.
@@ -807,12 +845,18 @@ ${content.substring(0, 5000)}`,
       ).join('\n') + '\n'
     : '';
 
-  const activeSkillsList = skills.filter(s => s.content && isActiveEntry(s));
-  const skillsReminder = activeSkillsList.length > 0
-    ? `\n## RAPPEL — SKILLS ACTIFS (${activeSkillsList.length} règles obligatoires dans le system prompt)\n` +
-      `Chaque modification DOIT respecter ces ${activeSkillsList.length} skill(s) :\n` +
-      activeSkillsList.map((s, i) => `- Skill ${i + 1} : **${s.name}**`).join('\n') + '\n'
-    : '';
+  // Mode cerveau : un skill SKILL.md actif pilote l'agent → on ne rappelle/contrôle que lui
+  // (le socle + skills legacy sont court-circuités dans le system prompt).
+  const brainSkills        = getBrainSkills(skills);
+  const brainMode          = brainSkills.length > 0;
+  const legacyActiveSkills = brainMode ? [] : skills.filter(s => s.content && isActiveEntry(s));
+  const skillsReminder = brainMode
+    ? `\n## RAPPEL — SKILL PRINCIPAL\nApplique INTÉGRALEMENT la méthode du skill « ${brainSkills.map(s => s.name).join(', ')} » (décrit dans le system prompt), puis produis le JSON d'updates demandé — jamais un rapport texte.\n`
+    : (legacyActiveSkills.length > 0
+        ? `\n## RAPPEL — SKILLS ACTIFS (${legacyActiveSkills.length} règles obligatoires dans le system prompt)\n` +
+          `Chaque modification DOIT respecter ces ${legacyActiveSkills.length} skill(s) :\n` +
+          legacyActiveSkills.map((s, i) => `- Skill ${i + 1} : **${s.name}**`).join('\n') + '\n'
+        : '');
 
   const kwBlock = targetKeyword
     ? `## MOT-CLÉ CIBLE\n**"${targetKeyword}"** — Priorise ce mot-clé dans toutes tes modifications : H1/H2, introduction, densité sémantique naturelle, balises title/meta si présentes.\n\n`
@@ -864,12 +908,14 @@ ${content}
   );
 
   // ── Étape 4 : Conformité skills + base de connaissances ──────────────────────
-  if (activeSkillsList.length > 0 || knowledge.filter(k => k.content && isActiveEntry(k)).length > 0) {
+  if (legacyActiveSkills.length > 0 || knowledge.filter(k => k.content && isActiveEntry(k)).length > 0) {
     onStep('Vérification de conformité skills et base de connaissances...');
     onProgress(90);
     try {
+      // En mode cerveau, le contrôle de conformité legacy ne porte que sur la base de
+      // connaissances (le skill SKILL.md n'a pas de `content` — sa conformité fine = lot 6).
       const complianceUpdates = await checkSkillsCompliance(
-        content, result.updates || [], skills, knowledge
+        content, result.updates || [], brainMode ? [] : skills, knowledge
       );
       if (complianceUpdates.length > 0) {
         result.updates = [...(result.updates || []), ...complianceUpdates];
@@ -1004,10 +1050,11 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
 const buildReviewSystemPrompt = (skills, knowledge = []) => {
   const { fr, year, prevYear } = getDateContext();
 
-  const skillsBlock = buildSkillsBlock(
-    skills,
-    'Vérifie que l\'article (après passe 1) respecte chacune de ces instructions.'
-  );
+  // Mode cerveau : le skill SKILL.md pilote aussi la passe 2 (sinon socle/legacy).
+  const brainSkills = getBrainSkills(skills);
+  const skillsBlock = brainSkills.length
+    ? buildBrainBlock(brainSkills)
+    : buildSkillsBlock(skills, 'Vérifie que l\'article (après passe 1) respecte chacune de ces instructions.');
   const active = knowledge.filter(k => k.content && isActiveEntry(k));
   const knowledgeBlock = buildKnowledgeBlock(
     knowledge,
