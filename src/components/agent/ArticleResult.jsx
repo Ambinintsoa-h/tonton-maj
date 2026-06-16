@@ -267,6 +267,14 @@ export default function ArticleResult() {
     // 2. Supprimer tous les blocs <del> (texte supprimé) via le DOM
     tmp.querySelectorAll('del').forEach(el => el.remove());
 
+    // 2b. Filet : retirer toute SUPPRESSION résiduelle qui n'est plus un <del> —
+    //     élément portant .deleted-content, balises <s>/<strike>, ou tout élément dont
+    //     le style inline barre le texte (line-through). Ces résidus apparaissent quand
+    //     Chrome « inline » le style d'un <del> lors d'une édition manuelle dans le
+    //     contentEditable. Règle de base : le barré (supprimé) ne doit jamais rester
+    //     dans la vue finale ni dans l'article publié.
+    tmp.querySelectorAll('.deleted-content, s, strike, [style*="line-through"]').forEach(el => el.remove());
+
     // 3. Débaliser les <mark> et <ins class="added-content"> : conserver le contenu
     tmp.querySelectorAll('mark').forEach(el => {
       const frag = document.createDocumentFragment();
@@ -279,12 +287,34 @@ export default function ArticleResult() {
       if (el.parentNode) el.parentNode.replaceChild(frag, el);
     });
 
+    // 3b. Neutraliser les COULEURS de diff recopiées en style inline par Chrome
+    //     (vert « modifié », rouge « supprimé », bleu « ajouté » + variantes hover).
+    //     On retire le fond, la couleur de texte et la taille propres au marqueur,
+    //     sans toucher au reste du style → plus de surlignage résiduel publié.
+    const DIFF_BG = [
+      'rgb(187,247,208)', 'rgb(134,239,172)',  // vert updated + hover (#bbf7d0 / #86efac)
+      'rgb(254,226,226)', 'rgb(254,202,202)',  // rouge deleted + hover (#fee2e2 / #fecaca)
+      'rgb(219,234,254)', 'rgb(191,219,254)',  // bleu added + hover   (#dbeafe / #bfdbfe)
+    ];
+    tmp.querySelectorAll('[style]').forEach(el => {
+      const bg = (el.style.backgroundColor || '').replace(/\s/g, '').toLowerCase();
+      if (bg && DIFF_BG.includes(bg)) {
+        el.style.removeProperty('background-color');
+        el.style.removeProperty('background');
+        el.style.removeProperty('color');      // couleur de texte du marqueur (vert/rouge foncé)
+        el.style.removeProperty('font-size');  // taille 0.8125rem propre au marqueur
+        if (!el.getAttribute('style')?.trim()) el.removeAttribute('style');
+      }
+    });
+
     // 4. Filet de sécurité regex — capture les <del>/<mark>/<ins> résiduels que le DOM
     //    n'aurait pas rattrapés (ex: balises cassées par une édition dans contentEditable,
     //    HTML encodé différemment, attributs inattendus…)
     let html = tmp.innerHTML;
     // Supprimer tout <del …>…</del> résiduel (contenu texte simple, pas de <del> imbriqués)
     html = html.replace(/<del\b[^>]*>[\s\S]*?<\/del>/gi, '');
+    // Idem pour <s>/<strike> résiduels (texte barré = supprimé → jamais publié)
+    html = html.replace(/<(s|strike)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
     // Débaliser tout <mark …>…</mark> résiduel (garder le contenu interne)
     // Boucle pour gérer les marks éventuellement imbriqués (ex: édition manuelle)
     let prev = '';
