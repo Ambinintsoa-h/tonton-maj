@@ -595,7 +595,7 @@ export const runAgent = async ({
   onReplace,
   onProgress,
 }) => {
-  const { iso, fr, year, prevYear, month, cutoffIso } = getDateContext();
+  const { iso, fr, year, prevYear, cutoffIso } = getDateContext();
 
   onStep('Analyse de l\'article en cours...');
   onProgress(8);
@@ -644,39 +644,37 @@ export const runAgent = async ({
   }
 
   // ── Étape 1 : Identifier les requêtes de recherche ────────────────────────────
+  // searchLocale : marché ciblé par les recherches (langue + pays). Défaut FR
+  // (app francophone) ; l'agent peut basculer en US/EN pour les sujets internationaux.
   let queries = [];
+  let searchLocale = { lang: 'fr', country: 'fr' };
   try {
     const { text: step1Text, usage: u1 } = await callClaude(null, {
-      system: `Tu es un assistant expert SEO qui génère des requêtes de recherche Google ciblées pour trouver des informations récentes.`,
+      system: `Tu es un assistant expert SEO qui génère des requêtes de recherche ciblées, ADAPTÉES AU MARCHÉ de l'article (langue, pays, devise).`,
       max_tokens: 800,
       model: selectModel('query_extraction'),
       messages: [{
         role: 'user',
-        content: `Nous sommes le ${fr}. Génère entre 4 et 7 requêtes de recherche Google en ANGLAIS (autant que nécessaire selon la complexité du sujet) pour trouver les informations les plus récentes (${prevYear}-${year}) permettant de vérifier et mettre à jour les données de cet article.
+        content: `Nous sommes le ${fr}. Génère entre 4 et 7 requêtes (selon la complexité) pour vérifier et mettre à jour les données récentes (${prevYear}-${year}) de cet article.
+
+ÉTAPE A — Détecter le MARCHÉ de l'article :
+- Sujet LOCAL (rénovation, travaux, services, immobilier, droit, santé, démarches, prix dans une devise nationale comme l'euro…) → marché = pays de l'article (le plus souvent la FRANCE). Recherche DANS LA LANGUE de l'article, vers des SOURCES LOCALES, avec la DEVISE de l'article (€).
+- Sujet INTERNATIONAL (jeux vidéo, logiciels/tech mondiaux, science, actualité mondiale) → sources anglophones/US pertinentes et logiques.
+
+ÉTAPE B — Générer les requêtes en conséquence :
+- LOCAL (FR) → requêtes EN FRANÇAIS, cibler sources officielles et médias FR, sites en .fr, et des prix en EUROS. NE JAMAIS chercher des prix en USD ni des sources US pour un sujet franco-français.
+  Ex : "[sujet] prix moyen au m² ${year} France", "[produit] tarif ${year} site:.fr", "[sujet] guide ${year} France"
+- INTERNATIONAL → requêtes en anglais vers officiels/médias internationaux (TechCrunch, The Verge, Reuters, Bloomberg, pages de tarification officielles, rapports).
 
 Chaque requête DOIT :
 - Contenir l'année ${prevYear} ou ${year} pour cibler du contenu récent
 - Cibler un fait précis : prix, version, statistique, annonce officielle, rapport
-- Être orientée vers des SOURCES FIABLES : pages officielles des entreprises, grands médias US (TechCrunch, The Verge, Forbes, Reuters, Bloomberg, Wired, Ars Technica), communiqués de presse, rapports d'analystes
+- NE PAS mener à YouTube, Reddit, Quora ou réseaux sociaux
 
-SOURCES CIBLES PRIORITAIRES (inclure dans les requêtes quand pertinent) :
-- Newsrooms officiels : "site:newsroom.microsoft.com", "site:blog.google.com", "site:newsroom.zoom.us", etc.
-- Médias tech US : techcrunch.com, theverge.com, wired.com, arstechnica.com, venturebeat.com, forbes.com, reuters.com, bloomberg.com
-- Pages de tarification officielles : "[produit] pricing site:[domaine officiel]"
-- Rapports officiels : "[entreprise] annual report ${year}", "[sujet] market report ${year}"
+Génère UNIQUEMENT le nombre de requêtes réellement utiles (pas besoin d'en forcer 7 si 4 suffisent).
 
-Types de requêtes à générer :
-- "[produit] pricing ${year} official" → page tarifs officielle
-- "[produit] price increase ${prevYear} ${year} techcrunch OR reuters OR bloomberg"
-- "[logiciel] new features ${month} ${year} OR release notes ${year}"
-- "[entreprise] news announcement ${year} OR press release ${year}"
-- "[sujet] statistics report ${prevYear} ${year} site:*.com -site:youtube.com -site:reddit.com"
-- "[domaine] market share ${year} analyst report"
-
-IMPORTANT : NE PAS générer de requêtes qui mèneraient à YouTube, Reddit, Quora ou réseaux sociaux.
-Génère UNIQUEMENT le nombre de requêtes réellement utiles pour ce sujet (pas besoin d'en forcer 7 si 4 suffisent).
-
-Réponds UNIQUEMENT avec un JSON : {"queries": ["...", "..."]}
+Réponds UNIQUEMENT avec un JSON :
+{"lang": "fr|en (langue des requêtes)", "country": "fr|us|… (code pays 2 lettres du marché)", "queries": ["...", "..."]}
 
 Article (extrait) :
 ${content.substring(0, 5000)}`,
@@ -684,7 +682,10 @@ ${content.substring(0, 5000)}`,
     });
     trackCall(u1);
 
-    queries = (parseJsonResponse(step1Text, {}, '[agent] Query extraction failed:').queries) || [];
+    const parsed = parseJsonResponse(step1Text, {}, '[agent] Query extraction failed:');
+    queries = parsed.queries || [];
+    const code = (v) => (typeof v === 'string' && /^[a-z]{2}$/i.test(v.trim())) ? v.trim().toLowerCase() : null;
+    searchLocale = { lang: code(parsed.lang) || 'fr', country: code(parsed.country) || 'fr' };
   } catch (e) {
     console.warn('[agent] Query extraction failed:', e.message);
   }
@@ -707,13 +708,15 @@ ${content.substring(0, 5000)}`,
   const scrapedSources = [];
 
   // Brave/Tavily/SearXNG sélectionnés automatiquement côté serveur selon les clés configurées
-  onStep(`Recherche web sur ${queries.length} requête${queries.length > 1 ? 's' : ''}...`);
+  const marketLabel = searchLocale.country === 'fr' ? 'marché FR (€)' : `marché ${searchLocale.country.toUpperCase()}`;
+  onStep(`Recherche web sur ${queries.length} requête${queries.length > 1 ? 's' : ''} — ${marketLabel}...`);
   onProgress(28);
 
   // Recherche parallèle — limité à 5 requêtes simultanées pour réduire
   // le nombre de connexions réseau en vol et les AbortError de timeout
+  // searchLocale oriente Brave/SearXNG vers le bon pays/langue (sources locales).
   const allSearches = await Promise.allSettled(
-    queries.slice(0, 5).map(q => searchWeb(q))
+    queries.slice(0, 5).map(q => searchWeb(q, searchLocale))
   );
   for (const r of allSearches) {
     if (r.status === 'fulfilled') searchResults.push(...r.value);
@@ -1087,9 +1090,10 @@ export const runReviewAgent = async ({
 
   // ── Étape 1 : Requêtes complémentaires ──────────────────────────────────────
   let queries = [];
+  let searchLocale = { lang: 'fr', country: 'fr' };
   try {
     const { text: step1Text, usage: u1 } = await callClaude(null, {
-      system: `Tu es un expert SEO générant des requêtes de recherche complémentaires pour enrichir un article déjà partiellement mis à jour.`,
+      system: `Tu es un expert SEO générant des requêtes de recherche complémentaires, ADAPTÉES AU MARCHÉ de l'article (langue, pays, devise), pour enrichir un article déjà partiellement mis à jour.`,
       max_tokens: 600,
       model: selectModel('query_extraction'),
       messages: [{
@@ -1099,18 +1103,26 @@ export const runReviewAgent = async ({
 Première passe — ce qui a été modifié :
 ${alreadyDone}
 
-Génère entre 3 et 6 requêtes Google en ANGLAIS pour trouver des informations COMPLÉMENTAIRES non couvertes.
-Cible des aspects différents : autres produits cités, tendances marché ${prevYear}-${year}, données manquantes.
+Détecte le MARCHÉ de l'article :
+- Sujet LOCAL (travaux, services, immobilier, prix en euros…) → requêtes EN FRANÇAIS, sources LOCALES (officiels/médias FR, sites .fr), devise = € (jamais d'USD ni de sources US pour un sujet franco-français).
+- Sujet INTERNATIONAL (jeux vidéo, tech mondiale, science…) → requêtes en anglais, sources internationales/US.
+
+Génère entre 3 et 6 requêtes pour trouver des informations COMPLÉMENTAIRES non couvertes.
+Cible des aspects différents : autres produits/options cités, tendances marché ${prevYear}-${year}, données manquantes.
 Génère uniquement les requêtes réellement utiles (pas besoin de forcer 6 si 3 suffisent).
 
-Réponds UNIQUEMENT : {"queries": ["...", "..."]}
+Réponds UNIQUEMENT :
+{"lang": "fr|en", "country": "fr|us|… (code pays 2 lettres)", "queries": ["...", "..."]}
 
 Article (extrait) :
 ${content.substring(0, 3000)}`,
       }],
     });
     trackCall(u1);
-    queries = (parseJsonResponse(step1Text, {}, '[review] Query extraction failed:').queries) || [];
+    const parsed = parseJsonResponse(step1Text, {}, '[review] Query extraction failed:');
+    queries = parsed.queries || [];
+    const code = (v) => (typeof v === 'string' && /^[a-z]{2}$/i.test(v.trim())) ? v.trim().toLowerCase() : null;
+    searchLocale = { lang: code(parsed.lang) || 'fr', country: code(parsed.country) || 'fr' };
   } catch (e) {
     console.warn('[review] Query extraction failed:', e.message);
   }
@@ -1124,7 +1136,7 @@ ${content.substring(0, 3000)}`,
 
   if (queries.length > 0) {
     const allSearches = await Promise.allSettled(
-      queries.map(q => searchWeb(q))
+      queries.map(q => searchWeb(q, searchLocale))
     );
     for (const r of allSearches) {
       if (r.status === 'fulfilled') searchResults.push(...r.value);

@@ -27,6 +27,7 @@ export const DEFAULT_SKILLS = [
 <li>Ne jamais inventer un chiffre, prix, statistique ou date : toute donnée nouvelle vient d'une source web réelle, citée dans "source".</li>
 <li>Donnée incertaine et non sourçable → mention [à vérifier] dans "reason" plutôt que de l'affirmer.</li>
 <li>Vérifier prix, versions, statistiques et dates contre les sources avant de les conserver.</li>
+<li>Devise et marché : garder la devise de l'article (€ pour un article France). Ne jamais introduire un prix en USD dans un article francophone — convertir, ou utiliser une source du même marché. Privilégier des sources du pays visé par l'article.</li>
 </ul>
 
 <h3>2. Respect du contenu</h3>

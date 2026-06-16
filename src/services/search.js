@@ -1,12 +1,17 @@
 import axios from 'axios';
 
 // ─── Brave Search (via proxy /api/brave) ──────────────────────────────────────
-const searchBrave = async (query) => {
+// locale = { lang, country } — marché de l'article (FR par défaut, app francophone).
+const searchBrave = async (query, locale = {}) => {
   let results = [];
   for (const freshness of ['pm', 'py']) {
     try {
       const resp = await axios.get('/api/brave', {
-        params: { q: query, freshness },
+        params: {
+          q: query, freshness,
+          country:     locale.country || 'fr',
+          search_lang: locale.lang    || 'fr',
+        },
         timeout: 12000,
       });
       results = (resp.data?.web?.results || []).map(r => ({
@@ -39,11 +44,11 @@ const searchTavily = async (query) => {
 // ─── SearXNG (via proxy /api/searxng — instances tierces côté serveur) ────────
 let _searxngDisabled = false;
 
-const searchSearXNG = async (query) => {
+const searchSearXNG = async (query, locale = {}) => {
   if (_searxngDisabled) return [];
   try {
     const resp = await axios.get('/api/searxng', {
-      params: { q: query, time_range: 'month', language: 'en' },
+      params: { q: query, time_range: 'month', language: locale.lang || 'fr' },
       timeout: 14000,
     });
     const results = (resp.data?.results || []).slice(0, 8).map(r => ({
@@ -99,10 +104,10 @@ const dedupeByUrl = (items) => {
 // Tavily apporte le contenu complet (jusqu'à 3000 chars/source) indispensable
 // pour que Claude génère de vraies mises à jour plutôt que des reformulations.
 // SearXNG et Jina restent en fallback si les deux premiers échouent.
-export const searchWeb = async (query) => {
+export const searchWeb = async (query, locale = {}) => {
   // 1. Brave + Tavily en parallèle
   const [braveRes, tavilyRes] = await Promise.allSettled([
-    searchBrave(query),
+    searchBrave(query, locale),
     searchTavily(query),
   ]);
 
@@ -114,7 +119,7 @@ export const searchWeb = async (query) => {
   if (merged.length) return dedupeByUrl(merged).filter(r => !isExcluded(r.url));
 
   // 2. SearXNG (si Brave et Tavily ont tous les deux échoué)
-  const searxng = await searchSearXNG(query);
+  const searxng = await searchSearXNG(query, locale);
   if (searxng.length) return searxng.filter(r => !isExcluded(r.url));
 
   // 3. Jina (dernier recours)
