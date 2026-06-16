@@ -586,8 +586,30 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
       ? (mediaEl.closest('[data-media-type], [data-media="iframe-wrapper"]') ?? mediaEl)
       : mediaEl;
     const next = toRemove.nextSibling;
-    if (next?.nodeName === 'BR') next.remove();
-    toRemove.remove();
+
+    // Suppression via une sélection + execCommand('delete') plutôt que .remove() :
+    // l'opération entre dans la pile d'annulation native → Ctrl+Z restaure le média
+    // (Ctrl+Y le re-supprime). On englobe le <br> de fin pour tout annuler d'un coup.
+    try {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.setStartBefore(toRemove);
+      if (next?.nodeName === 'BR') range.setEndAfter(next);
+      else range.setEndAfter(toRemove);
+      const scrollTop = articleEl.scrollTop;
+      articleEl.focus({ preventScroll: true });
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand('delete');
+      articleEl.scrollTop = scrollTop;
+    } catch { /* repli ci-dessous */ }
+
+    // Repli : si le média est toujours là (navigateur récalcitrant), retrait DOM direct
+    if (articleEl.contains(toRemove)) {
+      if (next?.nodeName === 'BR') next.remove();
+      toRemove.remove();
+    }
+
     contentRef.current = articleEl.innerHTML;
     setMediaEl(null);
   }, [mediaEl, articleEl, contentRef]);
