@@ -25,6 +25,11 @@ claude-path.json
 # Cache
 .cache/
 
+# Backups Firestore (générés par le workflow, publiés en artifacts — jamais committés)
+backup/
+# Clé de service Firebase éventuellement écrite localement
+firebase-service-account*.json
+
 # Anciennes copies locales
 proddddd/
 
