@@ -880,11 +880,21 @@ ${content.substring(0, 5000)}`,
       const auditResBlock = auditResources.length
         ? `\n\n## RESSOURCES DU SKILL\n` + auditResources.map(r => `### ${r.name}\n${r.content || ''}`).join('\n\n───\n\n')
         : '';
-      const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, actions prioritaires, éléments prêts à coller, questions PAA, audit EEAT, tableau comparatif si pertinent, manquements, recommandations stratégiques). Sois profond, critique et factuel : signale les incohérences sémantiques et normatives. Ne produis QUE le rapport markdown, rien d'autre.\n\n${auditBodies}${auditResBlock}`;
+      const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, actions prioritaires, éléments prêts à coller, questions PAA, audit EEAT, tableau comparatif si pertinent, manquements, recommandations stratégiques).
+
+## ORDRE D'ANALYSE IMPÉRATIF (avant tout le reste)
+1. **COHÉRENCE DU SUJET D'ABORD.** Vérifie que l'article traite UN concept clairement défini, sans confusion entre notions voisines (ex. ne pas confondre un élément porteur de bâtiment avec une structure d'aménagement extérieur). Si l'article amalgame des concepts différents ou décrit des matériaux/techniques hors-sujet, c'est le DÉFAUT N°1 : signale-le en tête du résumé exécutif et pénalise fortement la citabilité et le score global.
+2. **PRÉCISION NORMATIVE & ENTITÉS.** Exige les normes applicables (DTU, NF, RE2020, Code de l'urbanisme/PLU…), les bonnes UNITÉS (ex. pente en % et non en degrés si la norme l'exige), et la présence des entités expertes du domaine (signale celles qui manquent).
+3. Ensuite seulement : fraîcheur, fact-checking des chiffres/prix avec des sources réelles et datées.
+
+## EXHAUSTIVITÉ
+Produis TOUTES les sections du format, sans en omettre ni les tronquer — y compris le tableau comparatif AVEC sa version HTML prête à copier-coller (bloc ③ de la ressource). N'inclus PAS de composant React ni d'artifact séparé (l'aperçu passe par la vue avant/après native). Ne produis QUE le rapport markdown, rien d'autre.
+
+${auditBodies}${auditResBlock}`;
       const auditUser = `## ARTICLE À AUDITER\n${content}\n\n${scrapedContext ? `## CONTENU DES SOURCES RÉCENTES (${prevYear}-${year})\n${scrapedContext}\n\n` : ''}${sourcesSnippets ? `## RÉSULTATS DE RECHERCHE WEB\n${sourcesSnippets}\n\n` : ''}Produis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
       const { text: auditText, usage: uA } = await callClaudeWithProgress(
         null,
-        { system: auditSystem, max_tokens: 8000, model: model3, messages: [{ role: 'user', content: auditUser }] },
+        { system: auditSystem, max_tokens: 16000, model: model3, messages: [{ role: 'user', content: auditUser }] },
         onStep,
         onReplace,
         'Audit en cours'
