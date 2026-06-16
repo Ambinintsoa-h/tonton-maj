@@ -136,6 +136,22 @@ export default function ArticleResult() {
   const [wpNotFoundReason, setWpNotFoundReason] = useState(''); // raison si non trouvé
   const [hasContent, setHasContent] = useState(false);
   const [diffMode, setDiffMode] = useState(true);
+
+  // ── Hauteur redimensionnable de la zone de travail (vue diff) ───────────────
+  // Défaut ≥ 80vh, ajustable à la souris (poignée resize), mémorisée en localStorage.
+  const DIFF_H_KEY = 'tonton_diff_height';
+  const [diffHeight, setDiffHeight] = useState(() => {
+    try { return localStorage.getItem(DIFF_H_KEY) || '80vh'; } catch { return '80vh'; }
+  });
+  const persistDiffHeight = useCallback((e) => {
+    const h = e.currentTarget?.style?.height;
+    if (h) { setDiffHeight(h); try { localStorage.setItem(DIFF_H_KEY, h); } catch {} }
+  }, []);
+
+  // ── Sections repliables (repliées par défaut) — focus sur la vue diff ───────
+  const [showMissed, setShowMissed]   = useState(false);  // Suggestions à appliquer
+  const [showDetails, setShowDetails] = useState(false);  // Détail des modifications
+  const [showSources, setShowSources] = useState(false);  // Sources vérifiées
   // Titre éditable de l'article
   const [editedTitle, setEditedTitle] = useState('');
   // titleDirty = true uniquement si l'utilisateur a tapé dans le champ
@@ -1941,7 +1957,9 @@ export default function ArticleResult() {
                       {/* Contenu diff */}
                       <div
                         ref={setArticleRef}
-                        className="article-diff-content md-content text-sm leading-loose p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[480px] max-h-[78vh] overflow-y-auto focus:outline-none focus:ring-2 focus:ring-black/10"
+                        className="article-diff-content md-content text-sm leading-loose p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px] max-h-[95vh] overflow-y-auto resize-y focus:outline-none focus:ring-2 focus:ring-black/10"
+                        style={{ height: diffHeight }}
+                        onMouseUp={persistDiffHeight}
                         onInput={handleInput}
                         onPaste={handlePaste}
                         onMouseOver={(e) => {
@@ -1970,7 +1988,9 @@ export default function ArticleResult() {
                     /* ── Vue finale : article propre, sans marquages ── */
                     <motion.div key="final"
                       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                      className="p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[480px] max-h-[78vh] overflow-y-auto"
+                      className="p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px] max-h-[95vh] overflow-y-auto resize-y"
+                      style={{ height: diffHeight }}
+                      onMouseUp={persistDiffHeight}
                       onMouseOver={showAnchorTooltip}
                       onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setAnchorHover(null), 220); }}
                     >
@@ -1995,13 +2015,19 @@ export default function ArticleResult() {
                   animate={{ opacity: 1, y: 0 }}
                   className="rounded-xl border border-amber-200 bg-amber-50 overflow-hidden"
                 >
-                  <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-100/70 border-b border-amber-200">
+                  <button
+                    type="button"
+                    onClick={() => setShowMissed(v => !v)}
+                    className={`w-full flex items-center gap-2 px-4 py-2.5 bg-amber-100/70 ${showMissed ? 'border-b border-amber-200' : ''}`}
+                  >
                     <AlertTriangle size={13} className="text-amber-600 flex-shrink-0" />
-                    <p className="text-[11px] font-semibold text-amber-700 flex-1">
+                    <p className="text-[11px] font-semibold text-amber-700 flex-1 text-left">
                       {missedUpdates.length} suggestion{missedUpdates.length > 1 ? 's' : ''} à appliquer
                       <span className="font-normal ml-1">— cliquez sur Ajouter pour insérer directement dans l'article</span>
                     </p>
-                  </div>
+                    {showMissed ? <ChevronUp size={14} className="text-amber-600 flex-shrink-0" /> : <ChevronDown size={14} className="text-amber-600 flex-shrink-0" />}
+                  </button>
+                  {showMissed && (
                   <div className="divide-y divide-amber-100">
                     {missedUpdates.map((u, i) => (
                       <div key={i} className="px-4 py-3 flex items-start gap-3">
@@ -2031,6 +2057,7 @@ export default function ArticleResult() {
                       </div>
                     ))}
                   </div>
+                  )}
                 </motion.div>
               )}
 
@@ -2071,10 +2098,14 @@ export default function ArticleResult() {
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
           className="glass-card p-5 space-y-3"
         >
-          <div className="flex items-center justify-between flex-wrap gap-2">
+          <div
+            className="flex items-center justify-between flex-wrap gap-2 cursor-pointer"
+            onClick={() => setShowDetails(v => !v)}
+          >
             <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
               <RefreshCw size={14} className="text-sage-500" />
               Détail des modifications ({updates.length})
+              {showDetails ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
             </h3>
             <div className="flex items-center gap-3 text-[11px]">
               {appliedUpdates.length > 0 && (
@@ -2091,6 +2122,7 @@ export default function ArticleResult() {
               )}
             </div>
           </div>
+          {showDetails && (<>
           <div className="space-y-2">
             {updates.map((u, i) => {
               const isApplied = u.applied !== false;
@@ -2187,6 +2219,8 @@ export default function ArticleResult() {
               <AlertTriangle size={12} className="flex-shrink-0" />
               <p>Les suggestions <AlertTriangle size={12} className="inline text-amber-500" /> sont visibles dans l'onglet <strong>Après</strong> avec un bouton "Copier" pour les appliquer directement dans l'éditeur.</p>
             </div>
+          )}
+          </>
           )}
         </motion.div>
       )}
@@ -2379,10 +2413,15 @@ export default function ArticleResult() {
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
           className="glass-card p-5 space-y-3"
         >
-          <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+          <h3
+            className="text-sm font-semibold text-gray-800 flex items-center gap-2 cursor-pointer"
+            onClick={() => setShowSources(v => !v)}
+          >
             <Globe size={14} className="text-gray-400" />
             Sources vérifiées ({sources.length})
+            {showSources ? <ChevronUp size={14} className="text-gray-400 ml-auto" /> : <ChevronDown size={14} className="text-gray-400 ml-auto" />}
           </h3>
+          {showSources && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {sources.slice(0, 8).map((source, i) => (
               <div key={i} className="flex items-start gap-2.5 bg-gray-50 rounded-xl px-3 py-2.5">
@@ -2408,6 +2447,7 @@ export default function ArticleResult() {
               </div>
             ))}
           </div>
+          )}
         </motion.div>
       )}
     </div>
