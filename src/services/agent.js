@@ -525,13 +525,22 @@ const scrapeSource = async (url) => {
 };
 
 // ── Prompt système ────────────────────────────────────────────────────────────
-const buildSystemPrompt = (skills, knowledge = []) => {
+const buildSystemPrompt = (skills, knowledge = [], auditReport = '') => {
   const { fr, year, prevYear, cutoffIso } = getDateContext();
 
   // Mode cerveau : si un skill SKILL.md est actif, il pilote l'agent et le socle + skills
   // legacy ne sont PAS injectés (le skill principal porte déjà rôle/méthode/critères).
-  const brainSkills   = getBrainSkills(skills);
-  const skillsBlock   = brainSkills.length ? buildBrainBlock(brainSkills) : buildSkillsBlock(skills);
+  // Si un audit a déjà été réalisé (passe d'audit), on ne réinjecte PAS le corps du skill
+  // (l'audit le résume) : on demande seulement de transformer l'audit en corrections.
+  const brainSkills = getBrainSkills(skills);
+  let skillsBlock;
+  if (brainSkills.length && auditReport) {
+    skillsBlock = `\n\n## ═══ MODE CORRECTION — un audit complet a été réalisé ═══\nUn audit détaillé de l'article t'est fourni dans le message utilisateur. Ton rôle ici : transformer ses conclusions ACTIONNABLES en corrections concrètes, au format JSON d'updates défini plus bas. Corrige les données fausses/obsolètes (updates) et ajoute les éléments recommandés — TL;DR, FAQ, tableau comparatif, paragraphe d'actualité — via "type":"addition". N'insère JAMAIS le rapport d'audit (scores, tableaux d'audit, EEAT…) dans le contenu de l'article ; ces éléments + les recommandations vont dans le champ "analysis".`;
+  } else if (brainSkills.length) {
+    skillsBlock = buildBrainBlock(brainSkills);
+  } else {
+    skillsBlock = buildSkillsBlock(skills);
+  }
   const knowledgeBlock = buildKnowledgeBlock(knowledge);
 
   return `Tu es un expert SEO/GEO (Search Engine Optimization & Generative Engine Optimization) spécialisé dans la mise à jour d'articles de blog, dossiers comparatifs et actualités.
@@ -858,12 +867,43 @@ ${content.substring(0, 5000)}`,
           legacyActiveSkills.map((s, i) => `- Skill ${i + 1} : **${s.name}**`).join('\n') + '\n'
         : '');
 
+  // ── Passe d'audit (mode cerveau) ──────────────────────────────────────────────
+  // Le skill produit d'abord son RAPPORT COMPLET (façon Gemini), en profondeur, sans
+  // contrainte de diff. Ce rapport alimente l'onglet AUDIT et sert de base aux corrections.
+  let auditReport = '';
+  if (brainMode) {
+    onStep('Audit approfondi de l\'article (méthode du skill)...');
+    onProgress(68);
+    try {
+      const auditBodies = brainSkills.map(s => `### ${s.name}\n${s.body}`).join('\n\n───\n\n');
+      const auditResources = brainSkills.flatMap(s => Array.isArray(s.resources) ? s.resources : []);
+      const auditResBlock = auditResources.length
+        ? `\n\n## RESSOURCES DU SKILL\n` + auditResources.map(r => `### ${r.name}\n${r.content || ''}`).join('\n\n───\n\n')
+        : '';
+      const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, actions prioritaires, éléments prêts à coller, questions PAA, audit EEAT, tableau comparatif si pertinent, manquements, recommandations stratégiques). Sois profond, critique et factuel : signale les incohérences sémantiques et normatives. Ne produis QUE le rapport markdown, rien d'autre.\n\n${auditBodies}${auditResBlock}`;
+      const auditUser = `## ARTICLE À AUDITER\n${content}\n\n${scrapedContext ? `## CONTENU DES SOURCES RÉCENTES (${prevYear}-${year})\n${scrapedContext}\n\n` : ''}${sourcesSnippets ? `## RÉSULTATS DE RECHERCHE WEB\n${sourcesSnippets}\n\n` : ''}Produis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
+      const { text: auditText, usage: uA } = await callClaudeWithProgress(
+        null,
+        { system: auditSystem, max_tokens: 8000, model: model3, messages: [{ role: 'user', content: auditUser }] },
+        onStep,
+        onReplace,
+        'Audit en cours'
+      );
+      trackCall(uA);
+      auditReport = (auditText || '').trim();
+    } catch (e) { console.warn('[audit]', e.message); }
+  }
+
   const kwBlock = targetKeyword
     ? `## MOT-CLÉ CIBLE\n**"${targetKeyword}"** — Priorise ce mot-clé dans toutes tes modifications : H1/H2, introduction, densité sémantique naturelle, balises title/meta si présentes.\n\n`
     : '';
 
+  const auditBlock = auditReport
+    ? `## AUDIT DÉJÀ RÉALISÉ — base de tes corrections\nTransforme les conclusions ACTIONNABLES de cet audit en updates/additions concrètes (corrige les données fausses/obsolètes, ajoute TL;DR/FAQ/tableau recommandés). Ne recopie PAS le rapport dans l'article ; scores/EEAT/recommandations → champ "analysis".\n\n${auditReport}\n\n---\n\n`
+    : '';
+
   const userMessage = `Nous sommes le ${fr} (${iso}).
-${kwBlock}${skillsReminder}${knowlReminder}
+${kwBlock}${skillsReminder}${knowlReminder}${auditBlock}
 ## ÉTAPES DE TRAVAIL OBLIGATOIRES
 
 **ÉTAPE 1 — Relire les Skills et la base de connaissances**
@@ -890,7 +930,7 @@ ${content}
   // Génération avec compteur de tokens simulé (feedback visuel temps réel)
   const { text: finalText, usage: u3 } = await callClaudeWithProgress(
     null,
-    { system: buildSystemPrompt(skills, knowledge), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
+    { system: buildSystemPrompt(skills, knowledge, auditReport), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
     onStep,
     onReplace,
     `Génération en cours (${modelLabel})`
@@ -1043,6 +1083,7 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
     // Données WordPress MCP (null si l'URL ne correspond à aucun site configuré)
     wpData,
     internalLinks,
+    audit: auditReport,   // rapport d'audit complet (mode cerveau) → onglet AUDIT
   };
 };
 

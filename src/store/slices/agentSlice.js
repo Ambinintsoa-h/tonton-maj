@@ -18,6 +18,7 @@ const agentSlice = createSlice({
     parseFailed: false,  // true si Claude a répondu mais le JSON n'a pas pu être parsé
     wpData: null,  // { siteId, siteName, postId, postType, featuredMediaId, featuredMediaUrl, postLink }
     internalLinks: [],  // [{ anchor, url, title, reason }] — suggestions de liens internes
+    audit: '',  // rapport d'audit complet (markdown) produit par le skill SKILL.md — onglet AUDIT
     draftStatus: 'idle',   // idle | saving | saved | local — état de l'autosave (indicateur header)
     draftSavedAt: null,    // timestamp du dernier enregistrement réussi
   },
@@ -38,6 +39,7 @@ const agentSlice = createSlice({
       state.parseFailed = false;
       state.wpData = null;
       state.internalLinks = [];
+      state.audit = '';
       state.draftStatus = 'idle';
       state.draftSavedAt = null;
     },
@@ -68,6 +70,7 @@ const agentSlice = createSlice({
     setParseFailed: (state, action) => { state.parseFailed = action.payload; },
     setWpData: (state, action) => { state.wpData = action.payload; },
     setInternalLinks: (state, action) => { state.internalLinks = action.payload; },
+    setAudit: (state, action) => { state.audit = action.payload || ''; },
     setDraftStatus: (state, action) => {
       // payload : { status, savedAt? }
       state.draftStatus = action.payload?.status ?? 'idle';
@@ -80,6 +83,6 @@ export const {
   resetAgent, setStatus, addStep, replaceLastStep, setProgress,
   setOriginalContent, setUpdatedContent, setDiff, setSources,
   setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
-  setWpData, setInternalLinks, setDraftStatus,
+  setWpData, setInternalLinks, setAudit, setDraftStatus,
 } = agentSlice.actions;
 export default agentSlice.reducer;
