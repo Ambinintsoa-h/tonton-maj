@@ -1,0 +1,59 @@
+name: Backup Firestore
+
+# Sauvegarde quotidienne de la base Firestore, publiée en artifact GitHub
+# (rétention 5 jours). Parle à Firebase (Google) → non concerné par le blocage N0C.
+#
+# Activation : ajouter le secret GitHub `FIREBASE_SERVICE_ACCOUNT` = contenu JSON
+# d'une clé de compte de service (Console Firebase → Paramètres du projet →
+# Comptes de service → Générer une nouvelle clé privée).
+# Tant que le secret est absent, le job se termine en succès sans rien sauvegarder.
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # tous les jours à 02:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Vérifier le secret
+        id: guard
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::warning::Secret FIREBASE_SERVICE_ACCOUNT absent — backup ignoré. Ajoutez-le pour activer la sauvegarde."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Installer firebase-admin
+        if: steps.guard.outputs.enabled == 'true'
+        run: npm install --no-save firebase-admin@^12
+
+      - name: Exporter Firestore → JSON
+        if: steps.guard.outputs.enabled == 'true'
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          export BACKUP_STAMP=$(date -u +%Y-%m-%d)
+          node scripts/backup-firestore.js
+
+      - name: Publier l'artifact (rétention 5 jours)
+        if: steps.guard.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: firestore-backup-${{ github.run_id }}
+          path: backup/*.json
+          retention-days: 5
+          if-no-files-found: error
