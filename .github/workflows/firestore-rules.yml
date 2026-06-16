@@ -1,0 +1,46 @@
+name: Deploy Firestore rules
+
+# Déploie les règles Firestore (firestore.rules) vers le projet Firebase.
+# IMPORTANT : ce job parle à Firebase (Google), PAS à N0C → il n'est pas concerné
+# par le pare-feu qui bloque le déploiement du site. Il est donc fiable.
+#
+# Activation : ajouter un secret GitHub `FIREBASE_TOKEN`
+#   - généré par :  firebase login:ci   (par une personne ayant accès au projet)
+#   - (alternative moderne : un compte de service + GOOGLE_APPLICATION_CREDENTIALS)
+# Tant que le secret est absent, le job se termine en succès sans rien déployer.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firestore.rules'
+      - 'firebase.json'
+      - '.firebaserc'
+      - '.github/workflows/firestore-rules.yml'
+  workflow_dispatch: {}
+
+jobs:
+  deploy-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Deploy Firestore rules
+        env:
+          # firebase-tools lit automatiquement FIREBASE_TOKEN depuis l'environnement.
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          if [ -z "$FIREBASE_TOKEN" ]; then
+            echo "::warning::Secret FIREBASE_TOKEN absent — déploiement des règles Firestore ignoré."
+            echo "Pour l'activer : faire 'firebase login:ci' (compte ayant accès au projet tonton-ai-c8196)"
+            echo "puis ajouter le token dans Settings → Secrets and variables → Actions → FIREBASE_TOKEN."
+            exit 0
+          fi
+          npm install -g firebase-tools
+          firebase deploy --only firestore:rules --project tonton-ai-c8196 --non-interactive
