@@ -10,6 +10,20 @@ export const exportAsText = (content) => {
   return div.textContent || div.innerText || '';
 };
 
+// Retire la taille de police PARASITE (0.8125rem) issue de WordPress / copier-coller.
+// Un texte sans font-size inline adopte la taille uniforme du thème (en ligne) et de
+// l'éditeur (TONTON) → plus de différences. On ne touche PAS aux tailles en px réglées
+// intentionnellement via la barre d'outils (font-size: 16px, 18px…).
+export const stripParasiticFontSize = (root) => {
+  if (!root) return;
+  root.querySelectorAll('[style*="font-size"]').forEach((el) => {
+    if (el.style && el.style.fontSize === '0.8125rem') {
+      el.style.removeProperty('font-size');
+      if (!el.getAttribute('style')?.trim()) el.removeAttribute('style');
+    }
+  });
+};
+
 export const exportAsHtml = (content) => {
   const div = document.createElement('div');
   div.innerHTML = content;
@@ -60,6 +74,10 @@ export const exportAsHtml = (content) => {
       if (video && wrapper.parentNode) wrapper.parentNode.replaceChild(video, wrapper);
     }
   });
+
+  // Uniformiser la typo : retirer les tailles de police parasites (0.8125rem)
+  // → WordPress applique la taille du thème à tout le contenu.
+  stripParasiticFontSize(div);
 
   // Filet de sécurité regex — élimine tout résidu <del>/<mark>/<ins> non capturé par le DOM
   let html = div.innerHTML;

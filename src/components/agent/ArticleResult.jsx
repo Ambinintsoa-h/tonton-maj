@@ -11,7 +11,7 @@ import {
   Clipboard, ClipboardCheck, Sparkles, Loader, ShieldCheck,
   Plus, Link2, X, Tag, Search, Image,
 } from 'lucide-react';
-import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard } from '../../utils/export';
+import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripParasiticFontSize } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
 import BubbleToolbar from './BubbleToolbar';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
@@ -336,6 +336,10 @@ export default function ArticleResult() {
   // ou un backspace dans l'éditeur ne supprime accidentellement une image/vidéo.
   const lockMedia = useCallback((el) => {
     if (!el) return;
+    // WYSIWYG : retirer les tailles de police parasites (0.8125rem) pour que l'éditeur
+    // reflète le rendu publié (taille uniforme du thème). Les tailles px volontaires
+    // (barre d'outils) sont conservées.
+    stripParasiticFontSize(el);
     el.querySelectorAll('img, [data-media="iframe-wrapper"], iframe, video').forEach(m => {
       m.contentEditable = 'false';
     });
