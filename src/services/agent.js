@@ -874,13 +874,13 @@ ${content.substring(0, 5000)}`,
   if (brainMode) {
     onStep('Audit approfondi de l\'article (méthode du skill)...');
     onProgress(68);
-    try {
-      const auditBodies = brainSkills.map(s => `### ${s.name}\n${s.body}`).join('\n\n───\n\n');
-      const auditResources = brainSkills.flatMap(s => Array.isArray(s.resources) ? s.resources : []);
-      const auditResBlock = auditResources.length
-        ? `\n\n## RESSOURCES DU SKILL\n` + auditResources.map(r => `### ${r.name}\n${r.content || ''}`).join('\n\n───\n\n')
-        : '';
-      const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, actions prioritaires, éléments prêts à coller, questions PAA, audit EEAT, tableau comparatif si pertinent, manquements, recommandations stratégiques).
+
+    const auditBodies = brainSkills.map(s => `### ${s.name}\n${s.body}`).join('\n\n───\n\n');
+    const auditResources = brainSkills.flatMap(s => Array.isArray(s.resources) ? s.resources : []);
+    const auditResBlock = auditResources.length
+      ? `\n\n## RESSOURCES DU SKILL\n` + auditResources.map(r => `### ${r.name}\n${r.content || ''}`).join('\n\n───\n\n')
+      : '';
+    const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, actions prioritaires, éléments prêts à coller, questions PAA, audit EEAT, tableau comparatif si pertinent, manquements, recommandations stratégiques).
 
 ## ORDRE D'ANALYSE IMPÉRATIF (avant tout le reste)
 1. **COHÉRENCE DU SUJET D'ABORD.** Vérifie que l'article traite UN concept clairement défini, sans confusion entre notions voisines (ex. ne pas confondre un élément porteur de bâtiment avec une structure d'aménagement extérieur). Si l'article amalgame des concepts différents ou décrit des matériaux/techniques hors-sujet, c'est le DÉFAUT N°1 : signale-le en tête du résumé exécutif et pénalise fortement la citabilité et le score global.
@@ -891,19 +891,31 @@ ${content.substring(0, 5000)}`,
 Produis TOUTES les sections du format, sans en omettre ni les tronquer — y compris le tableau comparatif AVEC sa version HTML prête à copier-coller (bloc ③ de la ressource). N'inclus PAS de composant React ni d'artifact séparé (l'aperçu passe par la vue avant/après native). Ne produis QUE le rapport markdown, rien d'autre.
 
 ${auditBodies}${auditResBlock}`;
-      const auditUser = `## ARTICLE À AUDITER\n${content}\n\n${scrapedContext ? `## CONTENU DES SOURCES RÉCENTES (${prevYear}-${year})\n${scrapedContext}\n\n` : ''}${sourcesSnippets ? `## RÉSULTATS DE RECHERCHE WEB\n${sourcesSnippets}\n\n` : ''}Produis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
-      const { text: auditText, usage: uA } = await callClaudeWithProgress(
-        null,
-        { system: auditSystem, max_tokens: 16000, model: model3, messages: [{ role: 'user', content: auditUser }] },
-        onStep,
-        onReplace,
-        'Audit en cours'
-      );
-      trackCall(uA);
-      auditReport = (auditText || '').trim();
-    } catch (e) {
-      console.warn('[audit]', e.message);
-      onStep(`⚠️ Audit indisponible (${e.message}) — MAJ poursuivie sans rapport`);
+    const auditUser = `## ARTICLE À AUDITER\n${content}\n\n${scrapedContext ? `## CONTENU DES SOURCES RÉCENTES (${prevYear}-${year})\n${scrapedContext}\n\n` : ''}${sourcesSnippets ? `## RÉSULTATS DE RECHERCHE WEB\n${sourcesSnippets}\n\n` : ''}Produis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
+
+    // L'appel d'audit (grosse génération) peut échouer sur une erreur transitoire
+    // d'Anthropic (529 « overloaded », 5xx) ou un timeout. On RÉESSAIE jusqu'à 3 fois
+    // avec backoff — l'audit étant la base de toute la MAJ (priorité n°1).
+    for (let attempt = 1; attempt <= 3 && !auditReport; attempt++) {
+      try {
+        const { text: auditText, usage: uA } = await callClaudeWithProgress(
+          null,
+          { system: auditSystem, max_tokens: 12000, model: model3, messages: [{ role: 'user', content: auditUser }] },
+          onStep,
+          onReplace,
+          attempt === 1 ? 'Audit en cours' : `Audit en cours — nouvel essai (${attempt}/3)`
+        );
+        trackCall(uA);
+        auditReport = (auditText || '').trim();
+      } catch (e) {
+        console.warn(`[audit] essai ${attempt}/3:`, e.message);
+        if (attempt < 3) {
+          onStep(`Audit — erreur transitoire, nouvel essai (${attempt}/3)…`);
+          await new Promise(r => setTimeout(r, 1500 * attempt));
+        } else {
+          onStep(`⚠️ Audit indisponible après 3 essais (${e.message})`);
+        }
+      }
     }
   }
 
@@ -959,6 +971,14 @@ ${content}
     { analysis: '', updates: [], sources: [], _parseFailed: true },
     '[agent] JSON parse failed — réponse brute:'
   );
+
+  // Mode cerveau mais audit échoué → ne PAS faire passer la MAJ pour normale :
+  // on signale clairement (non-silencieux) que les corrections ont été produites
+  // sans rapport d'audit, et on invite à relancer (l'audit est la base — priorité n°1).
+  if (brainMode && !auditReport) {
+    result._auditFailed = true;
+    result.analysis = `⚠️ AUDIT INDISPONIBLE — le rapport d'audit complet n'a pas pu être généré (erreur API après 3 essais). Les corrections ci-dessous sont issues de la méthode du skill mais SANS rapport d'audit détaillé. Relance la MAJ pour obtenir l'audit complet.\n\n${result.analysis || ''}`;
+  }
 
   // ── Étape 4 : Conformité skills + base de connaissances ──────────────────────
   if (legacyActiveSkills.length > 0 || knowledge.filter(k => k.content && isActiveEntry(k)).length > 0) {
