@@ -352,6 +352,19 @@ export default function ArticleResult() {
       overlay.style.cssText = 'position:absolute;inset:0;cursor:pointer;z-index:1;';
       wrap.appendChild(overlay);
     });
+    // Image à la une : la <figure data-featured> a line-height:0 (pour coller l'image).
+    // 1) La rendre non-éditable → empêche le navigateur d'y fusionner du texte lors
+    //    d'une suppression de média voisin (sinon les lignes se chevauchent).
+    // 2) Réparer : sortir tout contenu non-image qui aurait déjà fusionné dans la figure.
+    el.querySelectorAll('figure[data-featured]').forEach(fig => {
+      fig.contentEditable = 'false';
+      const img = fig.querySelector('img');
+      const strays = Array.from(fig.childNodes).filter(
+        n => n !== img && !(n.nodeType === 1 && n.tagName === 'IMG')
+      );
+      let ref = fig;
+      strays.forEach(n => { fig.parentNode.insertBefore(n, ref.nextSibling); ref = n; });
+    });
   }, []);
 
   // Extrait l'URL de l'image à la une :
