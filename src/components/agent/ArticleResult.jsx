@@ -1024,6 +1024,13 @@ export default function ArticleResult() {
   // Normalise le hostname : supprime www. et met en minuscules pour comparaison robuste
   const normalizeHost = (h) => h.replace(/^www\./, '').toLowerCase();
 
+  // Dernier segment de chemin d'une URL = slug WordPress (minuscules).
+  // Sert à garantir que la cible d'une publication correspond bien à l'article affiché.
+  const slugOfUrl = (u) => {
+    try { return (new URL(u).pathname.replace(/\/$/, '').split('/').filter(Boolean).pop() || '').toLowerCase(); }
+    catch { return ''; }
+  };
+
   // Charge toutes les catégories + tags du site WP (auto-triggered par MCP ou sélection manuelle)
   const catLoadedSiteRef = useRef(null);
   const loadWpCategories = useCallback(async (site) => {
@@ -1165,21 +1172,46 @@ export default function ArticleResult() {
       htmlContent = `<!-- MAJ par ${majAuthor} le ${stamp} -->\n${htmlContent}`;
     }
 
-    // featured_media est envoyé séparément à l'API WP REST pour mettre à jour
-    // l'image à la une réelle (≠ contenu) — tant qu'un ID est disponible via MCP.
-    const hasFeaturedMedia = !!wpMcpData?.featuredMediaId;
-
     // foundPost prioritaire sur le state (publication directe MCP)
-    const postToUse = foundPost || wpFoundPost;
+    let postToUse = foundPost || wpFoundPost;
     let result;
 
     if (mode === 'update' && postToUse) {
+      // ── Garde-fou anti mauvaise cible (correctif publication sur le mauvais post) ──
+      // Le post mémorisé peut être périmé (ex. review rouverte sans rebinder la cible),
+      // ce qui écraserait un AUTRE article du même site. On n'accepte la cible que si
+      // son slug correspond à l'URL de l'article affiché ; sinon on retrouve le bon
+      // post par son slug (findPostByUrl = source de vérité). À défaut d'URL fiable,
+      // on annule plutôt que d'écraser au hasard.
+      const articleSlug = slugOfUrl(articleUrl);
+      const targetSlug  = slugOfUrl(postToUse?.link) || (postToUse?.slug || '').toLowerCase();
+      if (!articleSlug || articleSlug !== targetSlug) {
+        if (!articleUrl) {
+          toast.error("Aucune URL fiable pour cet article — mise à jour annulée par sécurité. Créez plutôt un brouillon.", { duration: 8000 });
+          setPublishing(false);
+          return;
+        }
+        const found = await findPostByUrl(site, articleUrl);
+        if (!found.success) {
+          toast.error(`Impossible d'identifier l'article WordPress à mettre à jour (${found.error || 'introuvable'}) — publication annulée par sécurité.`, { duration: 8000 });
+          setPublishing(false);
+          return;
+        }
+        postToUse = found.post;
+      }
+
+      // featured_media (issu de wpMcpData) ne doit accompagner QUE le post auquel
+      // wpMcpData se rapporte — sinon on changerait l'image à la une du mauvais article.
+      const featuredMatchesTarget =
+        !!wpMcpData?.featuredMediaId &&
+        slugOfUrl(wpMcpData?.postLink) === slugOfUrl(postToUse?.link);
+
       // Mise à jour d'un article existant :
       // • Ne jamais changer l'auteur (non inclus dans le body)
       // • Ne jamais changer le titre sauf si l'utilisateur l'a édité manuellement
       const postData = { content: htmlContent, status: 'publish' };
       if (titleDirty && editedTitle) postData.title = editedTitle;
-      if (hasFeaturedMedia) postData.featured_media = wpMcpData.featuredMediaId;
+      if (featuredMatchesTarget) postData.featured_media = wpMcpData.featuredMediaId;
       // Catégories
       if (selectedCategories.length > 0) postData.categories = selectedCategories;
       // SEO Meta — envoyé si au moins un champ est renseigné

@@ -1167,6 +1167,7 @@ export default function MajEnAttente() {
           sources:         result.sources || [],
           analysis:        result.analysis || '',
           seoTracking:     capturedSeoTracking,   // transféré vers articleData à la validation
+          wpData:          item._wpData || result.wpData || null,  // post cible (postId) — pour rebinder à la réouverture
         },
       }));
 
@@ -1247,6 +1248,9 @@ export default function MajEnAttente() {
     dispatch(setDiff(r.updates   || []));
     dispatch(setSources(r.sources || []));
     dispatch(setAnalysis(r.analysis || ''));
+    // Rebinder la cible WordPress sur CET article (null si non mémorisé) — évite
+    // de publier sur le post d'un article ouvert précédemment (mauvaise cible).
+    dispatch(setWpData(r.wpData || null));
     dispatch(setCurrentArticleId(item.id)); // marque cet item comme "en cours de review"
     dispatch(setStatus('done'));
     navigate('/');
