@@ -918,12 +918,15 @@ app.get('/api/model-pricing', requireAuth, async (req, res) => {
 
 // ─── Proxy Brave Search (clé lue depuis settings.json — jamais exposée au navigateur) ──
 app.get('/api/brave', requireAuth, async (req, res) => {
-  const { q, freshness } = req.query;
+  const { q, freshness, country, search_lang } = req.query;
   if (!q) return res.status(400).json({ error: 'Paramètre q requis' });
   const braveKey = readServerSettings().braveKey;
   if (!braveKey) return res.status(503).json({ error: 'Clé Brave Search non configurée' });
   try {
-    const params = { q, count: 8, country: 'us', search_lang: 'en' };
+    // Locale pilotée par le client (marché de l'article) — défaut FR (app francophone).
+    // Sanitisée : code pays/langue alpha 2-5 lettres, sinon repli.
+    const code = (v, fb) => (typeof v === 'string' && /^[a-zA-Z]{2,5}$/.test(v)) ? v.toLowerCase() : fb;
+    const params = { q, count: 8, country: code(country, 'fr'), search_lang: code(search_lang, 'fr') };
     if (freshness) params.freshness = freshness;
     const resp = await axios.get('https://api.search.brave.com/res/v1/web/search', {
       headers: { 'Accept': 'application/json', 'X-Subscription-Token': braveKey },
@@ -966,7 +969,7 @@ app.post('/api/tavily', requireAuth, async (req, res) => {
 // ─── Proxy SearXNG (instances tierces — requêtes passent par le serveur, pas le navigateur) ─
 const SEARXNG_INSTANCES = ['https://searx.be', 'https://search.mdosch.de', 'https://searx.fmac.xyz'];
 app.get('/api/searxng', requireAuth, async (req, res) => {
-  const { q, time_range = 'month', language = 'en' } = req.query;
+  const { q, time_range = 'month', language = 'fr' } = req.query;
   if (!q) return res.status(400).json({ error: 'Paramètre q requis' });
   for (const instance of SEARXNG_INSTANCES) {
     try {
