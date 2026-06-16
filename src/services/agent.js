@@ -901,7 +901,10 @@ ${auditBodies}${auditResBlock}`;
       );
       trackCall(uA);
       auditReport = (auditText || '').trim();
-    } catch (e) { console.warn('[audit]', e.message); }
+    } catch (e) {
+      console.warn('[audit]', e.message);
+      onStep(`⚠️ Audit indisponible (${e.message}) — MAJ poursuivie sans rapport`);
+    }
   }
 
   const kwBlock = targetKeyword

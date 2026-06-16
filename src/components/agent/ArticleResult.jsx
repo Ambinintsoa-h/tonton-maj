@@ -109,6 +109,8 @@ export default function ArticleResult() {
 
   // Rapport d'audit (mode cerveau) — depuis le state agent ou la review rouverte
   const auditReport = agent.audit || cqItem?.majResult?.audit || '';
+  // Vrai si un skill SKILL.md est actif → l'onglet Audit est attendu (affiché même vide).
+  const hasBrainSkill = (skills || []).some(s => s?.format === 'skillmd' && s.active !== false && s.body);
 
   // URL de l'article courant (pour retrouver le post WP à mettre à jour)
   const currentArticle = articlesHistory.find(a => a.id === agent.currentArticleId);
@@ -1141,6 +1143,17 @@ export default function ArticleResult() {
   // Normalise le hostname : supprime www. et met en minuscules pour comparaison robuste
   const normalizeHost = (h) => h.replace(/^www\./, '').toLowerCase();
 
+  // Site WP de l'article (un seul) : via MCP, sinon par correspondance d'hôte avec l'URL.
+  // Le menu Publier ne propose QUE ce site (l'article n'appartient qu'à lui).
+  const articleSiteId = wpMcpData?.siteId || (() => {
+    try {
+      const h = normalizeHost(new URL(articleUrl).hostname);
+      return wpSites.find(s => { try { return normalizeHost(new URL(s.url).hostname) === h; } catch { return false; } })?.id || null;
+    } catch { return null; }
+  })();
+  const articleSite  = articleSiteId ? wpSites.find(s => s.id === articleSiteId) : null;
+  const publishSites = articleSite ? [articleSite] : wpSites;
+
   // Dernier segment de chemin d'une URL = slug WordPress (minuscules).
   // Sert à garantir que la cible d'une publication correspond bien à l'article affiché.
   const slugOfUrl = (u) => {
@@ -1613,7 +1626,7 @@ export default function ArticleResult() {
         <div className="flex items-center justify-between border-b border-gray-100 px-6">
           <div className="flex">
             {[
-              ...(auditReport ? [{ id: TAB_AUDIT, label: 'Audit' }] : []),
+              ...((auditReport || hasBrainSkill) ? [{ id: TAB_AUDIT, label: 'Audit' }] : []),
               { id: TAB_AVANT, label: 'Avant' },
               { id: TAB_APRES, label: 'Après — MAJ proposées' },
             ].map(t => (
@@ -1694,11 +1707,9 @@ export default function ArticleResult() {
                   onClick={() => {
                     setShowExport(false);
                     if (showWP) { setShowWP(null); return; }
-                    const mcpSite = (wpMcpData?.siteId && wpMcpData?.postId)
-                      ? wpSites.find(s => s.id === wpMcpData.siteId)
-                      : null;
-                    if (mcpSite) {
-                      handleOpenWP(mcpSite); // ouvre le menu + sélectionne le site MCP
+                    // Le site de l'article est connu → on l'ouvre directement (2 choix).
+                    if (articleSite) {
+                      handleOpenWP(articleSite);
                     } else {
                       setShowWP('__menu__');
                       setWpFoundPost(null);
@@ -1720,7 +1731,7 @@ export default function ArticleResult() {
                       exit={{ opacity: 0, y: 8, scale: 0.95 }}
                       className="absolute right-0 top-full mt-1 glass-card p-2 z-50 w-80"
                     >
-                      {wpSites.map(site => (
+                      {publishSites.map(site => (
                         <div key={site.id} className="mb-1 last:mb-0">
                           {/* Nom du site */}
                           <button
@@ -1859,10 +1870,21 @@ export default function ArticleResult() {
                 <span className="text-[10px] text-gray-400">les corrections appliquées dans « Après » en sont déduites</span>
               </div>
               <div className="bg-white border border-gray-200 rounded-xl p-6 min-h-[420px] max-h-[78vh] overflow-y-auto shadow-sm">
-                <div
-                  className="md-content text-sm"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(auditReport) }}
-                />
+                {auditReport ? (
+                  <div
+                    className="md-content text-sm"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(auditReport) }}
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center text-center py-16 text-gray-400">
+                    <ClipboardCheck size={28} className="mb-3 opacity-30" />
+                    <p className="text-sm font-medium text-gray-500">Aucun rapport d'audit pour cette MAJ</p>
+                    <p className="text-xs mt-1 max-w-sm">
+                      Le rapport est généré pendant une analyse quand un skill SKILL.md est actif.
+                      Relancez une MAJ sur cet article pour produire l'audit complet.
+                    </p>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
