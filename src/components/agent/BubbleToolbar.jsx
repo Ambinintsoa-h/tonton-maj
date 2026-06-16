@@ -580,9 +580,10 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
 
   const deleteMedia = useCallback(() => {
     if (!mediaEl || !articleEl) return;
-    // Pour un overlay, remonter au wrapper [data-media-type]
+    // Pour un overlay, remonter au conteneur média : vidéo insérée ([data-media-type])
+    // OU iframe scrapée de l'article ([data-media="iframe-wrapper"]).
     const toRemove = 'mediaOverlay' in (mediaEl.dataset ?? {})
-      ? (mediaEl.closest('[data-media-type]') ?? mediaEl)
+      ? (mediaEl.closest('[data-media-type], [data-media="iframe-wrapper"]') ?? mediaEl)
       : mediaEl;
     const next = toRemove.nextSibling;
     if (next?.nodeName === 'BR') next.remove();
@@ -597,6 +598,9 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
       const t = e.target;
       if (t.tagName === 'IMG' || t.tagName === 'VIDEO') { setMediaEl(t); return; }
       if ('mediaOverlay' in (t.dataset ?? {}))           { setMediaEl(t); return; }
+      // Clic sur une iframe scrapée (ou son wrapper) → sélectionner le wrapper
+      const wrap = t.closest?.('[data-media="iframe-wrapper"]');
+      if (wrap) { setMediaEl(wrap); return; }
       setMediaEl(null);
     };
     articleEl.addEventListener('click', onArticleClick);

@@ -339,6 +339,19 @@ export default function ArticleResult() {
     el.querySelectorAll('img, [data-media="iframe-wrapper"], iframe, video').forEach(m => {
       m.contentEditable = 'false';
     });
+    // Les iframes (vidéos de l'article scrapé) absorbent les clics souris → sans
+    // calque, impossible de les sélectionner pour les supprimer. On pose un overlay
+    // transparent au-dessus (comme pour les vidéos YouTube insérées via la barre),
+    // ce qui rend la vidéo cliquable → bouton corbeille. Idempotent (1 seul overlay).
+    el.querySelectorAll('[data-media="iframe-wrapper"]').forEach(wrap => {
+      if (wrap.querySelector(':scope > [data-media-overlay]')) return;
+      const overlay = document.createElement('div');
+      overlay.setAttribute('data-media-overlay', '');
+      overlay.setAttribute('contenteditable', 'false');
+      overlay.setAttribute('title', 'Cliquer pour sélectionner — supprimer via le bouton corbeille');
+      overlay.style.cssText = 'position:absolute;inset:0;cursor:pointer;z-index:1;';
+      wrap.appendChild(overlay);
+    });
   }, []);
 
   // Extrait l'URL de l'image à la une :
