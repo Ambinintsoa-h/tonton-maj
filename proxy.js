@@ -2213,6 +2213,23 @@ const extractSiteFonts = async (pageUrl) => {
   }
 };
 
+// Détection du type d'image par signature binaire (magic bytes) — fiable même
+// quand le serveur source renvoie un content-type générique (ex. Pixabay →
+// "octet-stream"). Retourne { mime, ext } ou null si ce n'est pas une image connue.
+const detectImageType = (buf) => {
+  if (!buf || buf.length < 12) return null;
+  // PNG
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return { mime: 'image/png', ext: 'png' };
+  // JPEG
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return { mime: 'image/jpeg', ext: 'jpg' };
+  // GIF
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return { mime: 'image/gif', ext: 'gif' };
+  // WebP : "RIFF"...."WEBP"
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return { mime: 'image/webp', ext: 'webp' };
+  return null;
+};
+
 // ─── MCP WordPress : exécution d'outils ──────────────────────────────────────
 // Appelé soit directement (/api/wp-tool) soit depuis la boucle /api/claude-tools.
 // wpSites : liste des sites configurés dans l'app, avec credentials complets.
@@ -2303,12 +2320,30 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
       const site = getSite(site_id);
       await assertSafeUrl(image_url, 'URL image');
 
-      const imgResp = await axios.get(image_url, {
-        responseType: 'arraybuffer', timeout: 30000,
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-      });
-      const contentType = imgResp.headers['content-type'] || 'image/jpeg';
-      const ext = contentType.split('/')[1]?.split(';')[0] || 'jpg';
+      let imgResp;
+      try {
+        imgResp = await axios.get(image_url, {
+          responseType: 'arraybuffer', timeout: 30000, maxRedirects: 3,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/*,*/*;q=0.8',
+          },
+          validateStatus: (s) => s >= 200 && s < 300,
+        });
+      } catch (e) {
+        const st = e.response?.status;
+        throw new Error(`Impossible de télécharger l'image${st ? ` (HTTP ${st})` : ''}. Les liens temporaires (Discord, etc.) ne fonctionnent pas côté serveur — téléversez le fichier ou utilisez une URL d'image directe (Unsplash, Pexels, Pixabay…).`);
+      }
+
+      // Validation par signature binaire (ne se fie pas au content-type : Pixabay
+      // renvoie "octet-stream" tout en étant une vraie image). Rejette HTML/erreurs.
+      const buf = Buffer.from(imgResp.data);
+      const detected = detectImageType(buf);
+      if (!detected) {
+        throw new Error("L'URL ne renvoie pas une image valide (lien temporaire/expiré, page web, ou format non supporté : png/jpg/gif/webp attendus). Téléversez le fichier ou utilisez une URL d'image directe.");
+      }
+      const contentType = detected.mime;
+      const ext = detected.ext;
       const fname = `featured-${Date.now()}.${ext}`;
 
       const auth = Buffer.from(`${site.username}:${site.password}`).toString('base64');

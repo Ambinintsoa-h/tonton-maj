@@ -393,33 +393,44 @@ export default function ArticleResult() {
     const url = newImgInput.trim();
     if (!url) return;
 
-    // ── Upload MCP si site WP connecté ───────────────────────────────────────
-    if (wpMcpData?.siteId) {
+    // ── Upload médiathèque WP — REQUIS pour que l'image à la une soit publiée ──
+    const matchingSite = wpMcpData?.siteId ? wpSites.find(s => s.id === wpMcpData.siteId) : null;
+    if (matchingSite) {
       setUploadingImg(true);
       try {
-        const matchingSite = wpSites.find(s => s.id === wpMcpData.siteId);
-        if (matchingSite) {
-          const resp = await axios.post('/api/wp-tool', {
-            toolName: 'wp_upload_media',
-            toolInput: { site_id: wpMcpData.siteId, image_url: url, alt_text: '' },
-            wpSites: [matchingSite],
-          }, { timeout: 60000 });
-          if (resp.data.success && resp.data.result?.media_id) {
-            // Mettre à jour le featured_media_id dans Redux pour la publication
-            dispatch(setWpData({ ...wpMcpData, featuredMediaId: resp.data.result.media_id, featuredMediaUrl: url }));
-            toast.success(`Image uploadée dans la médiathèque WP (ID ${resp.data.result.media_id})`);
-          } else {
-            toast.error('Upload échoué : ' + (resp.data.error || 'erreur inconnue'));
-            setUploadingImg(false);
-            return;
-          }
+        const resp = await axios.post('/api/wp-tool', {
+          toolName: 'wp_upload_media',
+          toolInput: { site_id: wpMcpData.siteId, image_url: url, alt_text: '' },
+          wpSites: [matchingSite],
+        }, { timeout: 60000 });
+        if (resp.data.success && resp.data.result?.media_id) {
+          // Mettre à jour le featured_media_id dans Redux pour la publication
+          dispatch(setWpData({ ...wpMcpData, featuredMediaId: resp.data.result.media_id, featuredMediaUrl: url }));
+          toast.success(`Image uploadée dans la médiathèque WP (ID ${resp.data.result.media_id})`);
+        } else {
+          // Échec d'upload → l'image à la une ne sera PAS publiée. On n'update PAS la
+          // preview pour ne pas laisser croire que c'est bon.
+          toast.error(
+            'Image à la une NON enregistrée : ' + (resp.data.error
+              || "l'URL n'est pas une image téléchargeable. Téléversez le fichier, ou utilisez une URL d'image directe (Unsplash, Pexels, Pixabay…). Les liens Discord ne fonctionnent pas."),
+            { duration: 9000 }
+          );
+          setUploadingImg(false);
+          return;
         }
       } catch (e) {
-        toast.error('Upload MCP échoué : ' + e.message);
+        toast.error('Image à la une NON enregistrée : ' + (e.response?.data?.error || e.message), { duration: 9000 });
         setUploadingImg(false);
         return;
       }
       setUploadingImg(false);
+    } else {
+      // Pas de site WordPress connecté → impossible de déposer en médiathèque →
+      // l'image n'apparaîtra QUE dans l'aperçu et ne sera PAS publiée comme image à la une.
+      toast(
+        "Aucun site WordPress connecté : l'image ne sera visible que dans l'aperçu et NE sera PAS publiée comme image à la une.",
+        { icon: '⚠️', duration: 8000 }
+      );
     }
 
     // ── Mise à jour de la preview dans le diff ────────────────────────────────
@@ -434,7 +445,6 @@ export default function ArticleResult() {
     setFeaturedImgUrl(url);
     setShowImgReplace(false);
     setNewImgInput('');
-    if (!wpMcpData?.siteId) toast.success('Image à la une mise à jour dans la preview');
 
     // Génération automatique du texte ALT via Claude Vision
     if (settings.anthropicKey) {
