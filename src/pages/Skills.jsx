@@ -8,6 +8,8 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
+import JSZip from 'jszip';
+import { parseSkillMd, isSkillMdFile, baseName } from '../utils/skillMd';
 import {
   Upload, Zap, Trash2, Edit3, Save, X, Plus, FileText, Eye, PenLine,
   BookOpen, FileSpreadsheet, File, ChevronDown, ChevronUp, Database,
@@ -610,6 +612,97 @@ function SkillCard({ skill, onEdit, onDelete, onToggleActive }) {
   );
 }
 
+/* ─── Carte d'un skill au format Claude (SKILL.md) ───────────────────────────── */
+function SkillMdCard({ skill, onDelete, onToggleActive }) {
+  const [expanded, setExpanded] = useState(false);
+  const active     = isActive(skill);
+  const descLen    = (skill.description || '').length;
+  const bodyLen    = (skill.body || '').length;
+  const resources  = skill.resources || [];
+  const bodyHtml   = renderMarkdown(skill.body || '');
+
+  return (
+    <motion.div layout
+      initial={{ opacity: 0, scale: 0.97 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.97 }}
+      className={`glass-card overflow-hidden group transition-opacity ${active ? '' : 'opacity-55'}`}
+    >
+      <div className="flex items-start justify-between px-5 pt-5 pb-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${active ? 'bg-black' : 'bg-gray-300'}`}>
+            <FileCode size={15} className="text-white" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h3 className="font-semibold text-gray-900 text-sm truncate">{skill.name}</h3>
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-violet-50 text-violet-600 border border-violet-100">
+                <FileCode size={9} /> SKILL.md
+              </span>
+              {resources.length > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-gray-50 text-gray-500 border border-gray-200">
+                  <FileText size={9} /> {resources.length} ressource{resources.length > 1 ? 's' : ''}
+                </span>
+              )}
+              {!active && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-500 border border-gray-200">Inactif</span>
+              )}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-0.5">
+              {new Date(skill.createdAt || Date.now()).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
+              {' · '}description {descLen.toLocaleString()} car. (toujours chargée) · corps {bodyLen.toLocaleString()} car. (à la demande)
+            </p>
+          </div>
+        </div>
+        <div className="flex gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={() => onToggleActive(skill)} className="btn-ghost !px-1.5 !py-1.5" title={active ? 'Désactiver' : 'Activer'}>
+            <Power size={14} className={active ? 'text-emerald-500' : 'text-gray-400'} />
+          </button>
+          <button onClick={() => onDelete(skill.id)} className="btn-ghost !px-1.5 !py-1.5 hover:!text-red-500" title="Supprimer">
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </div>
+
+      {/* description = le déclencheur (toujours chargé) */}
+      {skill.description && (
+        <div className="px-5 pb-3">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Description (déclencheur)</p>
+          <p className="text-xs text-gray-600 leading-relaxed">{skill.description}</p>
+        </div>
+      )}
+
+      {expanded && (
+        <div className="px-5 pb-4 space-y-3 border-t border-gray-100 pt-3">
+          <div>
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Corps du skill</p>
+            <div className="md-content text-sm" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+          </div>
+          {resources.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Ressources (chargées à la demande)</p>
+              <ul className="space-y-1">
+                {resources.map((r, i) => (
+                  <li key={i} className="flex items-center gap-2 text-xs text-gray-600">
+                    <FileText size={11} className="text-gray-400 flex-shrink-0" />
+                    <span className="truncate">{r.name}</span>
+                    <span className="text-[10px] text-gray-400">{(r.content || '').length.toLocaleString()} car.</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      <button onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-center gap-1 py-2.5 text-[11px] text-gray-400 hover:text-gray-700 hover:bg-gray-50 transition-colors border-t border-gray-100">
+        {expanded ? <><ChevronUp size={12} /> Réduire</> : <><ChevronDown size={12} /> Voir le corps & ressources</>}
+      </button>
+    </motion.div>
+  );
+}
+
 /* ─── Carte d'un document de connaissance ────────────────────────────────────── */
 function KnowledgeCard({ item, onEdit, onDelete, onToggleActive }) {
   const [expanded, setExpanded] = useState(false);
@@ -1041,20 +1134,91 @@ export default function Skills() {
   };
 
   /* ── Import .md → skill ── */
-  const onDropSkill = useCallback(async (files) => {
-    for (const file of files) {
-      if (!file.name.endsWith('.md')) { toast.error(`${file.name} — fichier .md requis`); continue; }
-      const content = await file.text();
-      const skill   = { name: file.name.replace('.md', ''), content, createdAt: Date.now() };
-      if (firebaseReady) {
-        try { const id = await saveSkill(skill); dispatch(addSkill({ ...skill, id })); }
-        catch { dispatch(addSkill({ ...skill, id: Date.now().toString() })); }
-      } else {
-        dispatch(addSkill({ ...skill, id: Date.now().toString() }));
-      }
-      toast.success(`Skill "${skill.name}" importé !`);
+  // Enregistre un skill legacy { name, content } (import .md sans frontmatter).
+  const saveLegacySkill = useCallback(async (skill) => {
+    if (firebaseReady) {
+      try { const id = await saveSkill(skill); dispatch(addSkill({ ...skill, id })); }
+      catch { dispatch(addSkill({ ...skill, id: Date.now().toString() })); }
+    } else {
+      dispatch(addSkill({ ...skill, id: Date.now().toString() }));
     }
   }, [dispatch, firebaseReady]);
+
+  // Enregistre un skill au format Claude { name, description, body, resources[] }.
+  // Pas de champ `content` → l'injection actuelle de l'agent l'ignore (sera branché au Lot B).
+  const saveSkillMdEntry = useCallback(async ({ name, description, body, resources }) => {
+    const entry = {
+      name:        name || 'Skill sans nom',
+      description: description || '',
+      body:        body || '',
+      resources:   resources || [],   // [{ name, content }] chargées à la demande
+      format:      'skillmd',
+      active:      true,
+      createdAt:   Date.now(),
+    };
+    if (firebaseReady) {
+      try { const id = await saveSkill(entry); dispatch(addSkill({ ...entry, id })); }
+      catch { dispatch(addSkill({ ...entry, id: Date.now().toString() })); }
+    } else {
+      dispatch(addSkill({ ...entry, id: Date.now().toString() }));
+    }
+    return entry;
+  }, [dispatch, firebaseReady]);
+
+  const hasFrontmatter = (txt = '') => /^﻿?---\s*\n/.test(txt);
+
+  // Import skills : fichier(s) .md (dont SKILL.md + ressources) OU archive .zip.
+  const onDropSkill = useCallback(async (files) => {
+    const arr    = Array.from(files);
+    const zips   = arr.filter(f => /\.zip$/i.test(f.name));
+    const mds    = arr.filter(f => /\.(md|markdown)$/i.test(f.name));
+    arr.filter(f => !zips.includes(f) && !mds.includes(f))
+       .forEach(f => toast.error(`${f.name} — fichier .md ou .zip requis`));
+
+    // 1) Chaque .zip = un skill complet (SKILL.md + ressources)
+    for (const file of zips) {
+      try {
+        const zip = await JSZip.loadAsync(file);
+        const entries = [];
+        for (const path of Object.keys(zip.files)) {
+          const zf = zip.files[path];
+          if (zf.dir || !/\.(md|markdown|txt)$/i.test(path)) continue;
+          entries.push({ path, content: await zf.async('string') });
+        }
+        const main = entries.find(e => isSkillMdFile(e.path))
+                  || entries.find(e => hasFrontmatter(e.content));
+        if (!main) { toast.error(`${file.name} — aucun SKILL.md trouvé dans l'archive`); continue; }
+        const { name, description, body } = parseSkillMd(main.content);
+        const resources = entries.filter(e => e !== main).map(e => ({ name: baseName(e.path), content: e.content }));
+        const saved = await saveSkillMdEntry({ name: name || file.name.replace(/\.zip$/i, ''), description, body, resources });
+        toast.success(`Skill « ${saved.name} » importé — ${resources.length} ressource(s).`);
+      } catch (e) {
+        toast.error(`Archive "${file.name}" illisible : ${e.message}`);
+      }
+    }
+
+    // 2) Lot de .md : si l'un est un SKILL.md (nom ou frontmatter), les autres .md
+    //    deviennent ses RESSOURCES. Sinon → import legacy (un skill par fichier).
+    if (mds.length) {
+      try {
+        const texts = await Promise.all(mds.map(async f => ({ name: f.name, content: await f.text() })));
+        const main  = texts.find(t => isSkillMdFile(t.name)) || texts.find(t => hasFrontmatter(t.content));
+        if (main) {
+          const { name, description, body } = parseSkillMd(main.content);
+          const resources = texts.filter(t => t !== main).map(t => ({ name: baseName(t.name), content: t.content }));
+          const saved = await saveSkillMdEntry({ name: name || main.name.replace(/\.(md|markdown)$/i, ''), description, body, resources });
+          toast.success(`Skill « ${saved.name} » importé (format SKILL.md)${resources.length ? ` — ${resources.length} ressource(s)` : ''}.`);
+        } else {
+          for (const t of texts) {
+            await saveLegacySkill({ name: t.name.replace(/\.(md|markdown)$/i, ''), content: t.content, createdAt: Date.now() });
+            toast.success(`Skill "${t.name.replace(/\.(md|markdown)$/i, '')}" importé !`);
+          }
+        }
+      } catch (e) {
+        toast.error(`Import .md échoué : ${e.message}`);
+      }
+    }
+  }, [saveLegacySkill, saveSkillMdEntry]);
 
   /* ── Import fichiers → knowledge base ── */
   const onDropKnowledge = useCallback(async (acceptedFiles) => {
@@ -1096,7 +1260,12 @@ export default function Skills() {
   /* ── Dropzones ── */
   const { getRootProps: getSkillProps, getInputProps: getSkillInputProps, isDragActive: isSkillDrag } = useDropzone({
     onDrop: onDropSkill,
-    accept: { 'text/markdown': ['.md'], 'text/plain': ['.md'] },
+    accept: {
+      'text/markdown':   ['.md', '.markdown'],
+      'text/plain':      ['.md'],
+      'application/zip':  ['.zip'],
+      'application/x-zip-compressed': ['.zip'],
+    },
     multiple: true,
   });
 
@@ -1211,6 +1380,34 @@ export default function Skills() {
     a.click();
     URL.revokeObjectURL(url);
     toast.success('Export téléchargé');
+  };
+
+  /* ── Vider le menu (skills non-socle + BDC) — sauvegarde auto avant ── */
+  const handleClearMenu = async () => {
+    const nonDefault = skills.filter(s => !s.isDefault);
+    if (!nonDefault.length && !knowledge.length) {
+      toast('Le menu est déjà vide (hors socle).', { icon: <AlertTriangle size={16} className="text-amber-500" /> });
+      return;
+    }
+    if (!window.confirm(
+      `Vider le menu Skills IA ?\n\nSupprime ${nonDefault.length} skill(s) et ${knowledge.length} document(s). `
+      + `Le socle « Skills par Tonton AI » est conservé. Une sauvegarde JSON de l'existant est téléchargée d'abord.`
+    )) return;
+    handleExport(); // sauvegarde de secours
+    setImporting(true);
+    try {
+      if (firebaseReady) {
+        for (const s of nonDefault) { try { await deleteSkill(s.id); } catch {} }
+        for (const k of knowledge)  { try { await deleteKnowledge(k.id); } catch {} }
+      }
+      dispatch(setSkills([]));     // le slice re-fusionne le socle
+      dispatch(setKnowledge([]));
+      toast.success('Menu vidé (socle conservé).');
+    } catch (e) {
+      toast.error('Échec : ' + e.message);
+    } finally {
+      setImporting(false);
+    }
   };
 
   /* ── Import JSON (remplace tout, socle conservé, sauvegarde auto avant) ── */
@@ -1343,6 +1540,9 @@ export default function Skills() {
             <button onClick={() => jsonInputRef.current?.click()} disabled={importing} className="btn-ghost text-sm flex items-center gap-1.5 disabled:opacity-50" title="Importer un JSON (remplace tout, socle conservé)">
               <FileJson size={14} /> <span className="hidden md:inline">Import</span>
             </button>
+            <button onClick={handleClearMenu} disabled={importing} className="btn-ghost text-sm flex items-center gap-1.5 text-red-500 hover:text-red-600 disabled:opacity-50" title="Vider le menu (skills non-socle + BDC) — sauvegarde auto avant">
+              <Trash2 size={14} /> <span className="hidden md:inline">Vider</span>
+            </button>
           </div>
         </div>
       </div>
@@ -1376,9 +1576,11 @@ export default function Skills() {
             </div>
             <div>
               <p className="text-sm font-medium text-gray-700">
-                {isSkillDrag ? 'Déposez ici' : 'Importez un skill depuis un fichier .md'}
+                {isSkillDrag ? 'Déposez ici' : 'Importez un skill : SKILL.md, .md, ou .zip'}
               </p>
-              <p className="text-xs text-gray-400 mt-1">ou cliquez pour sélectionner un fichier Markdown</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Format Claude (SKILL.md + ressources) ou simple .md — fichiers multiples et .zip acceptés
+              </p>
             </div>
           </motion.div>
         </motion.div>
@@ -1398,13 +1600,22 @@ export default function Skills() {
           <motion.div layout className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <AnimatePresence>
               {skills.map(skill => (
-                <SkillCard
-                  key={skill.id}
-                  skill={skill}
-                  onEdit={(s) => { setEditingSkill(s); setShowNewSkill(false); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                  onDelete={handleDeleteSkill}
-                  onToggleActive={handleToggleSkill}
-                />
+                skill.format === 'skillmd' ? (
+                  <SkillMdCard
+                    key={skill.id}
+                    skill={skill}
+                    onDelete={handleDeleteSkill}
+                    onToggleActive={handleToggleSkill}
+                  />
+                ) : (
+                  <SkillCard
+                    key={skill.id}
+                    skill={skill}
+                    onEdit={(s) => { setEditingSkill(s); setShowNewSkill(false); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                    onDelete={handleDeleteSkill}
+                    onToggleActive={handleToggleSkill}
+                  />
+                )
               ))}
             </AnimatePresence>
           </motion.div>
