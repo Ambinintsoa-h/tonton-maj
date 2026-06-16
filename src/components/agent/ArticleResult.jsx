@@ -17,12 +17,12 @@ import BubbleToolbar from './BubbleToolbar';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, applyDiff, applyAddition, insertNearClosestParagraph, moveFaqToEnd } from '../../utils/diff';
-import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData } from '../../store/slices/agentSlice';
+import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
 import { saveArticle } from '../../services/firebase';
-import { saveDraft, flushDraftRemote, clearDraft } from '../../services/articleDraft';
+import { saveDraft, flushDraftRemote, clearDraft, onDraftStatus } from '../../services/articleDraft';
 import { renderMarkdown } from '../../utils/markdown';
 import { useNavigate } from 'react-router-dom';
 
@@ -578,19 +578,35 @@ export default function ArticleResult() {
     }),
   };
 
+  // Abonnement au statut d'enregistrement → reflété dans le header (Enregistrement…/Enregistré)
+  useEffect(() => {
+    onDraftStatus((status, at) => dispatch(setDraftStatus({ status, savedAt: at || undefined })));
+    return () => onDraftStatus(null);
+  }, [dispatch]);
+
+  // Planification de l'autosave : enregistre après une PAUSE de frappe (1 s d'inactivité),
+  // OU immédiatement après une rafale (≥ 30 frappes) pour les saisies continues sans pause.
+  // → évite de saturer le serveur (le throttle Firestore est géré dans articleDraft).
   const autosaveTimer = useRef(null);
-  const triggerAutosave = useCallback(() => {
+  const keystrokesRef = useRef(0);
+  const AUTOSAVE_IDLE_MS = 1000;
+  const AUTOSAVE_BURST = 30;
+  const doSave = useCallback(() => {
     clearTimeout(autosaveTimer.current);
-    autosaveTimer.current = setTimeout(() => {
-      const { userId, build } = draftDataRef.current;
-      if (build) saveDraft(userId, build());
-    }, 1200);
+    keystrokesRef.current = 0;
+    const { userId, build } = draftDataRef.current;
+    if (build) saveDraft(userId, build());
   }, []);
+  const triggerAutosave = useCallback((isKeystroke = false) => {
+    if (isKeystroke && ++keystrokesRef.current >= AUTOSAVE_BURST) { doSave(); return; }
+    clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(doSave, AUTOSAVE_IDLE_MS);
+  }, [doSave]);
 
   // Frappe clavier : mise à jour du ref uniquement, SANS setState → pas de re-render
   const handleInput = useCallback((e) => {
     contentRef.current = e.currentTarget.innerHTML;
-    triggerAutosave();
+    triggerAutosave(true);
   }, [triggerAutosave]);
 
   // Autosave sur changements d'état non clavier (image à la une, diff, liens, sources)
