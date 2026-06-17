@@ -59,21 +59,62 @@ export const unwrapProseFences = (md = '') =>
     return body;                          // sinon (prose, ```text, ```markdown…) → on déballe (texte normal)
   });
 
+// ── Aperçu « code | rendu » des blocs HTML ────────────────────────────────────
+// Enrobe chaque bloc de code HTML (tableaux, snippets à coller…) d'un sélecteur
+// permettant de basculer entre le CODE (coloré) et son RENDU réel. Opère sur la
+// sortie de marked (avant sanitize). L'interactivité est branchée côté React par
+// délégation de clic (voir ArticleResult). Les blocs sans rendu visible
+// (ex. JSON-LD <script>) restent en code seul.
+const RENDERABLE = /<(table|div|ul|ol|p|section|article|h[1-6]|figure|img|a|blockquote|span|strong|em)\b/i;
+const unescapeHtml = (s = '') => s
+  .replace(/<\/?span[^>]*>/g, '')   // retire les <span> de coloration hljs
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"')
+  .replace(/&#0?39;/g, "'")
+  .replace(/&#x27;/gi, "'")
+  .replace(/&amp;/g, '&');          // & en dernier (évite la double-conversion)
+
+export const enhanceCodePreviews = (html = '') =>
+  html.replace(
+    /<pre><code class="[^"]*\blanguage-(?:html|xml)\b[^"]*">([\s\S]*?)<\/code><\/pre>/g,
+    (full, inner) => {
+      const rendered = unescapeHtml(inner);
+      if (!RENDERABLE.test(rendered)) return full; // pas de rendu visible → code seul
+      return (
+        '<div class="code-preview" data-cp-block>' +
+          '<div class="code-preview-bar">' +
+            '<button type="button" data-cp="code" class="cp-active">code</button>' +
+            '<button type="button" data-cp="render">rendu</button>' +
+          '</div>' +
+          '<div class="cp-pane cp-pane-code">' + full + '</div>' +
+          '<div class="cp-pane cp-pane-render" hidden>' + rendered + '</div>' +
+        '</div>'
+      );
+    }
+  );
+
 /**
  * Convertit du Markdown (ou du texte brut) en HTML prêt à être injecté
  * via dangerouslySetInnerHTML. Retourne une chaîne HTML.
  *
+ * @param {string} text   Markdown (ou HTML déjà formé).
+ * @param {object} [opts]
+ * @param {boolean} [opts.codePreview]  Ajoute le sélecteur « code | rendu » sur les blocs HTML.
+ *
  * Si le texte ressemble déjà à du HTML (commence par "<"), il est retourné tel quel.
  * Si le texte est vide, retourne "".
  */
-export const renderMarkdown = (text = '') => {
+export const renderMarkdown = (text = '', { codePreview = false } = {}) => {
   if (!text) return '';
   const trimmed = text.trimStart();
   // Déjà du HTML (TipTap, import HTML…) → sanitize uniquement, pas de conversion Markdown
   if (trimmed.startsWith('<')) return DOMPurify.sanitize(text);
   try {
     // hljs ajoute des <span class="hljs-…"> → conserver class/span au sanitize
-    return DOMPurify.sanitize(marked.parse(text));
+    let html = marked.parse(text);
+    if (codePreview) html = enhanceCodePreviews(html);
+    return DOMPurify.sanitize(html);
   } catch {
     // Fallback sécurisé : texte brut avec sauts de ligne
     return DOMPurify.sanitize(`<p>${text.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>`);
