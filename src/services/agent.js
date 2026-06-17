@@ -614,6 +614,16 @@ Tu DOIS toujours produire un résumé de l'article, sous forme d'**addition** pl
 EXCEPTION à la règle des sources : ce résumé synthétise le CONTENU DÉJÀ PRÉSENT dans l'article (il n'invente aucune info nouvelle) → il ne nécessite PAS de source web.
 **NE METS JAMAIS ce résumé dans le champ "analysis".** Il est destiné au LECTEUR → il va DANS l'article (addition). Le champ "analysis" = synthèse INTERNE (audit/scores/skills), JAMAIS publiée.
 
+### FAQ — FORMAT ACCORDÉON OBLIGATOIRE (HTML natif, SANS couleur ni style)
+Si tu ajoutes une FAQ (élément prêt à coller), produis-la comme UNE SEULE addition, en accordéon natif HTML :
+- \`"type": "addition"\`
+- \`"anchor"\` : copie EXACTE d'une phrase située vers la FIN de l'article (la FAQ se place en fin)
+- \`"updated"\` : un titre \`<h2>FAQ</h2>\` suivi d'UN \`<details>\` par question. Chaque question = le \`<summary>\`, la réponse (50-60 mots) dans un \`<p>\` :
+  \`<h2>FAQ</h2><details><summary>Question 1 ?</summary><p>Réponse courte.</p></details><details><summary>Question 2 ?</summary><p>Réponse courte.</p></details>\`
+- N'utilise NI couleur, NI emoji, NI classe CSS, NI style inline, NI \`<ul>\`/\`<li>\` : uniquement \`<details>\`/\`<summary>\`/\`<p>\` bruts (l'apparence est gérée par le thème et l'éditeur).
+- \`"original"\` : \`""\`
+- \`"reason"\` : \`"FAQ"\`
+
 {
   "analysis": "Synthèse INTERNE (NON publiée) : état de l'article + skills appliqués + base de connaissances + impact SEO — JAMAIS le résumé lecteur",
   "updates": [
