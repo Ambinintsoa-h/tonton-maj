@@ -17,7 +17,7 @@ import BubbleToolbar from './BubbleToolbar';
 import TableToolbar from './TableToolbar';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
-import { applyAllDiffs, applyDiff, applyAddition, insertNearClosestParagraph, moveFaqToEnd } from '../../utils/diff';
+import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, moveFaqToEnd } from '../../utils/diff';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
@@ -296,6 +296,10 @@ export default function ArticleResult() {
     const tmp = document.createElement('div');
     tmp.innerHTML = contentRef.current || '';
 
+    // 1b. Réparer une structure cassée par un déplacement/collage (#2) avant
+    //     d'extraire le HTML final → la vue finale et la publication restent valides.
+    repairStructureEl(tmp);
+
     // 2. Supprimer tous les blocs <del> (texte supprimé) via le DOM
     tmp.querySelectorAll('del').forEach(el => el.remove());
 
@@ -372,6 +376,9 @@ export default function ArticleResult() {
     // reflète le rendu publié (taille uniforme du thème). Les tailles px volontaires
     // (barre d'outils) sont conservées.
     stripParasiticFontSize(el);
+    // Réparer une structure cassée par un déplacement/collage (#2) : blocs sortis
+    // d'un <p>, marqueurs de diff vides, <p> vidés. Préserve l'identité des nœuds.
+    repairStructureEl(el);
     // Le texte AJOUTÉ (vert, mark.updated-content) ne doit jamais être barré : on sort
     // tout <mark> hors d'un <del> ancêtre (auto-réparation des diffs déjà rendus).
     let liftGuard = 0;
@@ -988,6 +995,62 @@ export default function ArticleResult() {
     }
   }, []);
 
+  // ── #3 Accepter / Rejeter un changement de diff (par segment, au survol) ──────
+  // segHover = { node, rect } où node est le <del>/<mark>/<ins> survolé.
+  const [segHover, setSegHover] = useState(null);
+
+  // Débaliser un nœud : remplace l'élément par son contenu (conserve le texte).
+  const unwrapNode = (n) => {
+    const frag = document.createDocumentFragment();
+    while (n.firstChild) frag.appendChild(n.firstChild);
+    if (n.parentNode) n.parentNode.replaceChild(frag, n);
+  };
+
+  // Retrouve la paire <del>…</del><mark>…</mark> (insérée adjacente par applyDiff),
+  // ou un <ins> seul (addition).
+  const resolveDiffPair = (node) => {
+    if (!node) return {};
+    if (node.tagName === 'INS') return { ins: node };
+    if (node.tagName === 'DEL') {
+      const mk = node.nextElementSibling;
+      return { del: node, mark: mk && mk.tagName === 'MARK' ? mk : null };
+    }
+    if (node.tagName === 'MARK') {
+      const dl = node.previousElementSibling;
+      return { del: dl && dl.tagName === 'DEL' ? dl : null, mark: node };
+    }
+    return {};
+  };
+
+  const afterSegEdit = useCallback(() => {
+    if (articleRef.current) {
+      lockMedia(articleRef.current);
+      contentRef.current = articleRef.current.innerHTML;
+      triggerAutosave();
+    }
+    setSegHover(null);
+  }, [lockMedia, triggerAutosave]);
+
+  // ✓ Accepter : la modification est ENTÉRINÉE → on retire le barré (del), on
+  //   débalise le surligné vert (mark) et le bloc ajouté (ins) → texte propre.
+  const acceptSegment = useCallback((node) => {
+    const { del, mark, ins } = resolveDiffPair(node);
+    if (ins) unwrapNode(ins);
+    if (del) del.remove();
+    if (mark) unwrapNode(mark);
+    afterSegEdit();
+  }, [afterSegEdit]);
+
+  // ✗ Rejeter : on REVIENT à l'original → on restaure le texte barré (débalise del),
+  //   on supprime le surligné vert (mark) et le bloc ajouté (ins).
+  const rejectSegment = useCallback((node) => {
+    const { del, mark, ins } = resolveDiffPair(node);
+    if (ins) ins.remove();
+    if (del) unwrapNode(del);
+    if (mark) mark.remove();
+    afterSegEdit();
+  }, [afterSegEdit]);
+
   // ── Appliquer un lien interne (depuis le span surligné ou fallback regex) ──
   const applyInternalLink = useCallback((anchor, url, linkIdx) => {
     if (!articleRef.current) return;
@@ -1131,6 +1194,15 @@ export default function ArticleResult() {
     // Stratégie 2 : insertion par ancre (applyAddition)
     if (!matched && update.anchor) {
       const r = applyAddition(currentHtml, update.anchor, update.updated);
+      if (r.matched) { newHtml = r.html; matched = true; }
+    }
+
+    // Stratégie 2.5 : remplacement FLOU — barre le passage le plus proche (#1).
+    // Pour un remplacement (pas une addition) dont l'original n'a pas été localisé :
+    // on barre le bloc le plus ressemblant au lieu de seulement insérer le nouveau
+    // texte (sinon l'ancien resterait non barré → suppression manuelle).
+    if (!matched && update.type !== 'addition' && update.original) {
+      const r = applyReplacementFuzzy(currentHtml, update.original, update.updated, update.reason);
       if (r.matched) { newHtml = r.html; matched = true; }
     }
 
@@ -2195,11 +2267,26 @@ export default function ArticleResult() {
                               return;
                             }
                           }
-                          // 2) Vraie ancre <a href> → tooltip URL complète
+                          // 2) Segment de diff (del/mark/ins) → mini-boutons ✓/✗ (#3)
+                          const seg = e.target.closest('del.deleted-content, mark.updated-content, ins.added-content');
+                          if (seg && e.currentTarget.contains(seg)) {
+                            clearTimeout(leaveTimerRef.current);
+                            setSegHover({ node: seg, rect: seg.getBoundingClientRect() });
+                            setLinkHover(null); setAnchorHover(null);
+                            return;
+                          }
+                          // 3) Vraie ancre <a href> → tooltip URL complète
                           showAnchorTooltip(e);
                         }}
                         onMouseLeave={() => {
-                          leaveTimerRef.current = setTimeout(() => { setLinkHover(null); setAnchorHover(null); }, 220);
+                          leaveTimerRef.current = setTimeout(() => { setLinkHover(null); setAnchorHover(null); setSegHover(null); }, 220);
+                        }}
+                        onBlur={() => {
+                          // Fin d'édition (déplacement/collage terminé) → réparer la structure (#2)
+                          if (articleRef.current) {
+                            repairStructureEl(articleRef.current);
+                            contentRef.current = articleRef.current.innerHTML;
+                          }
                         }}
                         contentEditable
                         suppressContentEditableWarning
@@ -2575,6 +2662,40 @@ export default function ArticleResult() {
       )}
 
       {/* ── Bouton flottant "Appliquer" au survol d'un surlignage ─────────── */}
+      {/* #3 Mini-boutons ✓/✗ au survol d'un segment de diff (accepter / rejeter) */}
+      {segHover && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            top:  Math.max(6, segHover.rect.top - 34),
+            left: segHover.rect.left,
+            zIndex: 401,
+          }}
+          onMouseEnter={() => clearTimeout(leaveTimerRef.current)}
+          onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setSegHover(null), 220); }}
+          className="flex items-center gap-1 bg-gray-900 rounded-lg px-1.5 py-1 shadow-[0_6px_24px_rgba(0,0,0,0.4)]"
+        >
+          <button
+            type="button"
+            title="Accepter la modification"
+            onMouseDown={(e) => { e.preventDefault(); acceptSegment(segHover.node); }}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-green-300 hover:bg-green-500/20 hover:text-green-200 transition-colors"
+          >
+            <CheckCircle2 size={13} /> Accepter
+          </button>
+          <div className="w-px h-4 bg-white/15" />
+          <button
+            type="button"
+            title="Rejeter (revenir à l'original)"
+            onMouseDown={(e) => { e.preventDefault(); rejectSegment(segHover.node); }}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-red-300 hover:bg-red-500/20 hover:text-red-200 transition-colors"
+          >
+            <X size={13} /> Rejeter
+          </button>
+        </div>,
+        document.body,
+      )}
+
       {linkHover && createPortal(
         <div
           style={{

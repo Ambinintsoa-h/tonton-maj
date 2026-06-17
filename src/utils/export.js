@@ -1,3 +1,5 @@
+import { repairStructureEl } from './diff';
+
 export const exportAsText = (content) => {
   const div = document.createElement('div');
   div.innerHTML = content;
@@ -27,6 +29,10 @@ export const stripParasiticFontSize = (root) => {
 export const exportAsHtml = (content) => {
   const div = document.createElement('div');
   div.innerHTML = content;
+
+  // Réparer une structure cassée par un déplacement/collage (#2) : blocs sortis
+  // d'un <p>, marqueurs de diff vides, <p> vidés → HTML publié toujours valide.
+  repairStructureEl(div);
 
   // Remove deleted content entirely
   div.querySelectorAll('.deleted-content, del').forEach(el => el.remove());

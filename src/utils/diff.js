@@ -383,6 +383,95 @@ export const insertNearClosestParagraph = (html, referenceText, newContent) => {
 };
 
 /**
+ * Remplacement FLOU (#1) — quand applyDiff échoue à localiser `original`
+ * (segment déplacé, reformulé, ou fragmenté par des balises), on barre tout de
+ * même le passage le plus PROCHE : on repère le bloc au plus fort recouvrement
+ * lexical avec `original`, puis on tente d'y appliquer le diff exact ; à défaut
+ * on barre l'ensemble du bloc et on insère le remplacement juste après.
+ * Déclenché UNIQUEMENT sur action manuelle (bouton « localiser/appliquer »).
+ * @returns {{ html: string, matched: boolean }}
+ */
+export const applyReplacementFuzzy = (html, original, updated, reason) => {
+  if (!original || typeof document === 'undefined') return { html, matched: false };
+  const div = document.createElement('div');
+  div.innerHTML = html;
+
+  const blocks = Array.from(div.querySelectorAll('p, li, td, h1, h2, h3, h4, h5, h6, blockquote'));
+  if (!blocks.length) return { html, matched: false };
+
+  const refWords = new Set(
+    normalizeText(original.replace(/<[^>]+>/g, ' ')).toLowerCase().split(/\s+/).filter(w => w.length > 3)
+  );
+  if (!refWords.size) return { html, matched: false };
+
+  let best = null;
+  let bestScore = 0;
+  for (const b of blocks) {
+    // Ne pas re-marquer un bloc déjà porteur d'un diff (évite les imbrications)
+    if (b.querySelector('del, mark, ins')) continue;
+    const bw = (b.textContent || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    if (!bw.length) continue;
+    const overlap = bw.filter(w => refWords.has(w)).length;
+    const score = overlap / refWords.size;
+    if (score > bestScore) { bestScore = score; best = b; }
+  }
+  // Seuil de prudence : au moins ~40 % des mots significatifs présents dans le bloc
+  if (!best || bestScore < 0.4) return { html, matched: false };
+
+  const safeReason = (reason || '').replace(/"/g, "'");
+  // 1) tenter le diff exact à l'intérieur du bloc (barre le segment précis)
+  const scoped = applyDiff(best.innerHTML, original, updated, reason);
+  if (scoped.matched) {
+    best.innerHTML = scoped.html;
+  } else {
+    // 2) repli : barrer tout le contenu du bloc + insérer le remplacement
+    best.innerHTML =
+      `<del class="deleted-content">${best.innerHTML}</del>` +
+      `<mark class="updated-content" title="${safeReason}">${updated}</mark>`;
+  }
+  return { html: liftMarksOutOfDel(div.innerHTML), matched: true };
+};
+
+/**
+ * Répare une structure HTML cassée par un DÉPLACEMENT / COLLAGE dans le
+ * contentEditable (#2) : sort les blocs illégalement imbriqués dans un <p>
+ * (table, listes, titres…), retire les <del>/<mark>/<ins> devenus vides et les
+ * <p> vidés par le déplacement. Opère IN PLACE sur l'élément fourni (préserve
+ * l'identité des nœuds → curseur conservé). Idempotent.
+ */
+export const repairStructureEl = (el) => {
+  if (!el) return;
+  const BLOCK = 'table, ul, ol, h1, h2, h3, h4, h5, h6, blockquote, figure, pre, hr';
+  // 1) Sortir tout bloc enfant direct d'un <p> juste après celui-ci (ordre conservé)
+  el.querySelectorAll('p').forEach((p) => {
+    let ref = p;
+    Array.from(p.children).forEach((child) => {
+      if (child.matches && child.matches(BLOCK) && p.parentNode) {
+        p.parentNode.insertBefore(child, ref.nextSibling);
+        ref = child;
+      }
+    });
+  });
+  // 2) Retirer les marqueurs de diff vides (résidus d'édition manuelle / déplacement)
+  el.querySelectorAll('del, mark, ins').forEach((n) => {
+    if (!n.textContent.trim() && !n.querySelector('img, table, iframe, video')) n.remove();
+  });
+  // 3) Supprimer les <p> devenus totalement vides après un déplacement
+  el.querySelectorAll('p').forEach((p) => {
+    if (!p.textContent.trim() && !p.querySelector('img, br, table, iframe, video')) p.remove();
+  });
+};
+
+/** Variante string de repairStructureEl (#2) — pour l'export / la vue finale. */
+export const repairStructure = (html) => {
+  if (!html || typeof document === 'undefined') return html;
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  repairStructureEl(div);
+  return div.innerHTML;
+};
+
+/**
  * Détecte la section FAQ dans le HTML et la déplace à la fin.
  * Supporte : class/id contenant "faq", headings contenant "faq" / "questions fréquentes".
  * Retourne le HTML réorganisé, ou l'original si aucune FAQ n'est trouvée / déjà en fin.
