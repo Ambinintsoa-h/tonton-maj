@@ -7,8 +7,11 @@ const BG_PATTERN = `url("data:image/svg+xml,%3Csvg width='40' height='40' viewBo
 
 export default function Layout({ children }) {
   const { pathname } = useLocation();
-  // Pages "outils" en pleine largeur (Kanban tickets, etc.) — pas de max-w-6xl
-  const fullWidth = pathname.startsWith('/tickets');
+  // Pages "outils" en pleine largeur (pas de max-w-6xl) :
+  //  • Kanban tickets
+  //  • Vue de MAJ d'article (route "/") — édition/lecture du diff plus confortable,
+  //    qu'on y arrive par « Faire une MAJ » ou « MAJ en attente »
+  const fullWidth = pathname.startsWith('/tickets') || pathname === '/';
 
   return (
     <div
