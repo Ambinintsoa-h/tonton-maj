@@ -604,8 +604,18 @@ Ton entraînement s'arrête en début ${prevYear} — soit plus de 12 mois avant
 **Une addition ne peut exister QUE si une source web scrapée avec URL réelle la confirme.**
 Si aucune source web récente disponible → pas d'addition, pas de bloc actualité inventé.
 
+### Résumé de l'article (TL;DR) — OBLIGATOIRE, INSÉRÉ DANS L'ARTICLE (jamais dans "analysis")
+Tu DOIS toujours produire un résumé de l'article, sous forme d'**addition** placée tout EN HAUT (juste après l'introduction) :
+- \`"type": "addition"\`
+- \`"anchor"\` : copie EXACTE de la 1re phrase de l'introduction (pour insérer juste après)
+- \`"updated"\` : \`<h2>Résumé de l'article</h2><ul><li>…</li><li>…</li><li>…</li></ul>\` — 3 à 5 puces synthétisant les points clés (prix, durabilité, points forts…)
+- \`"original"\` : \`""\`
+- \`"reason"\` : \`"Résumé de l'article (TL;DR)"\`
+EXCEPTION à la règle des sources : ce résumé synthétise le CONTENU DÉJÀ PRÉSENT dans l'article (il n'invente aucune info nouvelle) → il ne nécessite PAS de source web.
+**NE METS JAMAIS ce résumé dans le champ "analysis".** Il est destiné au LECTEUR → il va DANS l'article (addition). Le champ "analysis" = synthèse INTERNE (audit/scores/skills), JAMAIS publiée.
+
 {
-  "analysis": "Synthèse : état de l'article + skills appliqués + documents de la base de connaissances consultés + impact SEO",
+  "analysis": "Synthèse INTERNE (NON publiée) : état de l'article + skills appliqués + base de connaissances + impact SEO — JAMAIS le résumé lecteur",
   "updates": [
     {
       "original": "copie EXACTE mot-pour-mot du segment à remplacer",
