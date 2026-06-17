@@ -40,6 +40,25 @@ marked.setOptions({
   gfm: true,      // GitHub Flavored Markdown (tables, strikethrough…)
 });
 
+// ── Déballage des faux blocs de code ──────────────────────────────────────────
+// La passe d'audit encadre parfois par erreur du TEXTE (TL;DR, recommandations…)
+// dans des ``` ``` → affiché sur fond noir comme du code. On « déballe » ces blocs
+// "prose" pour qu'ils s'affichent en markdown normal (gras, listes…), tout en
+// gardant les VRAIS blocs de code (HTML/schema.org, JSON-LD) sur fond sombre.
+const CODE_LANGS = /^(html|xml|js|javascript|jsx|ts|tsx|css|json|jsonld|bash|sh|php|python|py|sql|yaml|yml)$/i;
+const looksLikeCode = (s = '') =>
+  /<\/?[a-z!][\s\S]*?>/i.test(s) ||                       // balises HTML / <!--
+  /[{};]\s*$/m.test(s) ||                                 // accolade / point-virgule en fin de ligne
+  /=>|\bfunction\b|\bconst\b|\bimport\b|@context|schema\.org/.test(s);
+
+export const unwrapProseFences = (md = '') =>
+  md.replace(/```([^\n`]*)\r?\n([\s\S]*?)```/g, (full, lang, body) => {
+    const l = (lang || '').trim();
+    if (CODE_LANGS.test(l)) return full;  // langage de code explicite (```html…) → vrai code, on garde
+    if (looksLikeCode(body)) return full; // pas de langage de code mais ça ressemble à du code → on garde
+    return body;                          // sinon (prose, ```text, ```markdown…) → on déballe (texte normal)
+  });
+
 /**
  * Convertit du Markdown (ou du texte brut) en HTML prêt à être injecté
  * via dangerouslySetInnerHTML. Retourne une chaîne HTML.
