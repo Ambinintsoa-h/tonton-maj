@@ -354,6 +354,14 @@ export default function ArticleResult() {
     // reflète le rendu publié (taille uniforme du thème). Les tailles px volontaires
     // (barre d'outils) sont conservées.
     stripParasiticFontSize(el);
+    // Le texte AJOUTÉ (vert, mark.updated-content) ne doit jamais être barré : on sort
+    // tout <mark> hors d'un <del> ancêtre (auto-réparation des diffs déjà rendus).
+    let liftGuard = 0;
+    let nestedMarks = el.querySelectorAll('del mark, del .updated-content');
+    while (nestedMarks.length && liftGuard++ < 300) {
+      nestedMarks.forEach(m => { const d = m.closest('del'); if (d?.parentNode) d.parentNode.insertBefore(m, d.nextSibling); });
+      nestedMarks = el.querySelectorAll('del mark, del .updated-content');
+    }
     el.querySelectorAll('img, [data-media="iframe-wrapper"], iframe, video').forEach(m => {
       m.contentEditable = 'false';
     });
