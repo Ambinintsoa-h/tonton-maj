@@ -246,8 +246,11 @@ body {
   font-size: 0.8125rem;   /* 13px */
   line-height: 1.75;
   color: #374151;         /* gray-700 */
+  /* Ne JAMAIS couper un mot normal au milieu : overflow-wrap ne casse que les
+     mots trop longs (URLs) ; word-break:normal interdit la coupure arbitraire
+     (word-break:break-word coupait « entre » en « ent »+« re »). */
   overflow-wrap: break-word;
-  word-break: break-word;
+  word-break: normal;
 }
 
 /* ── Titres ── hiérarchie visuelle marquée (vue diff + vue finale) */
