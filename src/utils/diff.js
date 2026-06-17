@@ -311,6 +311,33 @@ const isTldrAddition = (u) => {
 };
 
 /**
+ * Insère un bloc après le n-ième titre H2 de l'article (1-based).
+ * Utilisé pour placer un tableau comparatif dans le 2e H2 (sinon le dernier dispo).
+ * Fallbacks : si moins de n H2 → dernier H2 ; aucun H2 → après le 1er </p> ; sinon fin.
+ * @returns {{ html: string, matched: boolean }}
+ */
+export const insertAfterNthH2 = (html, updated, n = 2) => {
+  if (!updated) return { html, matched: false };
+  const block = `<ins class="added-content">${updated}</ins>`;
+  const rx = /<\/h2>/gi;
+  const ends = [];
+  let m;
+  while ((m = rx.exec(html)) !== null) ends.push(m.index + m[0].length);
+
+  if (!ends.length) {
+    const p = /<\/p>/i.exec(html);
+    if (p) { const pos = p.index + p[0].length; return { html: html.slice(0, pos) + block + html.slice(pos), matched: true }; }
+    return { html: html + block, matched: true };
+  }
+  // n-ième H2 si disponible, sinon le dernier
+  const pos = ends[Math.min(n, ends.length) - 1];
+  return { html: html.slice(0, pos) + block + html.slice(pos), matched: true };
+};
+
+/** Détecte une addition contenant un tableau (placement forcé : 2e H2). */
+const isTableAddition = (u) => u.type === 'addition' && /<table[\s>]/i.test(u.updated || '');
+
+/**
  * Insère `newContent` après le bloc le plus proche de `referenceText` par chevauchement lexical.
  * Fallback utilisé quand applyDiff et applyAddition échouent tous les deux.
  * @returns {{ html: string, matched: boolean }}
@@ -444,6 +471,12 @@ export const applyAllDiffs = (html, updates, passNumber = 1) => {
       // Le résumé (TL;DR) est TOUJOURS placé après l'intro, sans dépendre de l'anchor.
       if (isTldrAddition(update)) {
         const { html: nh } = insertAfterIntro(updatedHtml, update.updated);
+        updatedHtml = nh;
+        return { ...update, applied: true, pass: passNumber };
+      }
+      // Tableau comparatif → placement forcé dans le 2e H2 (sinon dernier dispo).
+      if (isTableAddition(update)) {
+        const { html: nh } = insertAfterNthH2(updatedHtml, update.updated, 2);
         updatedHtml = nh;
         return { ...update, applied: true, pass: passNumber };
       }

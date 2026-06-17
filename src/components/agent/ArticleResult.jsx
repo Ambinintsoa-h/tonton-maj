@@ -362,6 +362,29 @@ export default function ArticleResult() {
       nestedMarks.forEach(m => { const d = m.closest('del'); if (d?.parentNode) d.parentNode.insertBefore(m, d.nextSibling); });
       nestedMarks = el.querySelectorAll('del mark, del .updated-content');
     }
+    // Robustesse tableaux : l'IA / le scraping produisent parfois des <span>/<font>
+    // mal placés DANS la structure du tableau (directement sous table/thead/tbody/tr,
+    // ou enveloppant des tr/td/th) → casse l'affichage. On les déballe (contenu préservé),
+    // et on retire les <br>/<p> vides directement enfants de la structure.
+    const STRUCT_PARENTS = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR']);
+    let tblGuard = 0;
+    let strayWrap = el.querySelectorAll('table span, table font');
+    while (strayWrap.length && tblGuard++ < 200) {
+      let didUnwrap = false;
+      strayWrap.forEach((sp) => {
+        const invalidPos  = STRUCT_PARENTS.has(sp.parentElement?.tagName);
+        const wrapsStruct = !!sp.querySelector('tr, td, th, thead, tbody, tfoot');
+        if (invalidPos || wrapsStruct) {
+          while (sp.firstChild) sp.parentNode.insertBefore(sp.firstChild, sp);
+          sp.remove();
+          didUnwrap = true;
+        }
+      });
+      if (!didUnwrap) break;
+      strayWrap = el.querySelectorAll('table span, table font');
+    }
+    el.querySelectorAll('table > br, thead > br, tbody > br, tfoot > br, tr > br').forEach(n => n.remove());
+
     el.querySelectorAll('img, [data-media="iframe-wrapper"], iframe, video').forEach(m => {
       m.contentEditable = 'false';
     });

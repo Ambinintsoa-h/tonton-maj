@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import {
   ArrowUpToLine, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine,
   Trash2, AlignLeft, AlignCenter, AlignRight, Heading, Table2, X,
+  ChevronsRight, ChevronsDown, Scissors,
 } from 'lucide-react';
 
 const Btn = ({ onClick, title, danger = false, children }) => (
@@ -143,6 +144,41 @@ export default function TableToolbar({ articleEl, contentRef }) {
     setCell(null); sync();
   };
 
+  // ── Fusion / scission (tables simples : sans grille colspan/rowspan complexe) ──
+  const mergeContent = (target, donor) => {
+    const d = (donor.innerHTML || '').trim();
+    if (d && d !== '<br>') {
+      const t = (target.innerHTML || '').replace(/<br>\s*$/i, '').trim();
+      target.innerHTML = t ? `${t} ${d}` : d;
+    }
+  };
+  const mergeRight = () => {
+    const c = ctx(); if (!c) return;
+    const cells = Array.from(c.tr.children);
+    const next = cells[cells.indexOf(cell) + 1];
+    if (!next) return;
+    const span = (parseInt(cell.getAttribute('colspan') || '1', 10)) + (parseInt(next.getAttribute('colspan') || '1', 10));
+    cell.setAttribute('colspan', String(span));
+    mergeContent(cell, next);
+    next.remove(); sync();
+  };
+  const mergeDown = () => {
+    const c = ctx(); if (!c) return;
+    const nextRow = c.tr.nextElementSibling;
+    const below = nextRow && nextRow.children[c.idx];
+    if (!below) return;
+    const span = (parseInt(cell.getAttribute('rowspan') || '1', 10)) + (parseInt(below.getAttribute('rowspan') || '1', 10));
+    cell.setAttribute('rowspan', String(span));
+    mergeContent(cell, below);
+    below.remove(); sync();
+  };
+  const splitCell = () => {
+    if (!cell) return;
+    cell.removeAttribute('colspan');
+    cell.removeAttribute('rowspan');
+    sync();
+  };
+
   if (!cell) return null;
 
   return createPortal(
@@ -170,6 +206,11 @@ export default function TableToolbar({ articleEl, contentRef }) {
       <Btn onClick={() => alignCol('left')}   title="Aligner à gauche"><AlignLeft size={14} /></Btn>
       <Btn onClick={() => alignCol('center')} title="Centrer"><AlignCenter size={14} /></Btn>
       <Btn onClick={() => alignCol('right')}  title="Aligner à droite"><AlignRight size={14} /></Btn>
+      <Sep />
+      {/* Fusion / scission */}
+      <Btn onClick={mergeRight} title="Fusionner avec la cellule de droite"><ChevronsRight size={14} /></Btn>
+      <Btn onClick={mergeDown}  title="Fusionner avec la cellule du dessous"><ChevronsDown size={14} /></Btn>
+      <Btn onClick={splitCell}  title="Scinder (annuler la fusion)"><Scissors size={13} /></Btn>
       <Sep />
       {/* En-tête + suppression tableau */}
       <Btn onClick={toggleHeader} title="Basculer ligne d'en-tête"><Heading size={14} /></Btn>
