@@ -254,6 +254,36 @@ export const applyAddition = (html, anchor, updated) => {
 };
 
 /**
+ * Insère un bloc TOUJOURS juste après l'introduction de l'article :
+ *  1. avant le premier <h2> (= après les paragraphes d'intro), sinon
+ *  2. après le premier </p>, sinon
+ *  3. après la figure de l'image à la une, sinon
+ *  4. au tout début.
+ * Utilisé pour le résumé (TL;DR) dont la position ne doit pas dépendre de l'anchor.
+ * @returns {{ html: string, matched: boolean }}
+ */
+export const insertAfterIntro = (html, updated) => {
+  if (!updated) return { html, matched: false };
+  const block = `<ins class="added-content">${updated}</ins>`;
+  const h2 = /<h2\b/i.exec(html);
+  if (h2) return { html: html.slice(0, h2.index) + block + html.slice(h2.index), matched: true };
+  const p = /<\/p>/i.exec(html);
+  if (p) { const pos = p.index + p[0].length; return { html: html.slice(0, pos) + block + html.slice(pos), matched: true }; }
+  const fig = /<\/figure>/i.exec(html);
+  if (fig) { const pos = fig.index + fig[0].length; return { html: html.slice(0, pos) + block + html.slice(pos), matched: true }; }
+  return { html: block + html, matched: true };
+};
+
+/** Détecte une addition « Résumé de l'article » / TL;DR (placement forcé après l'intro). */
+const isTldrAddition = (u) => {
+  if (u.type !== 'addition') return false;
+  const r = (u.reason || '').toLowerCase();
+  const up = (u.updated || '').toLowerCase();
+  return /tl\s*;?\s*dr|r[ée]sum[ée] de l'article/.test(r)
+      || /r[ée]sum[ée] de l'article/.test(up);
+};
+
+/**
  * Insère `newContent` après le bloc le plus proche de `referenceText` par chevauchement lexical.
  * Fallback utilisé quand applyDiff et applyAddition échouent tous les deux.
  * @returns {{ html: string, matched: boolean }}
@@ -384,6 +414,12 @@ export const applyAllDiffs = (html, updates, passNumber = 1) => {
     // Nouveau paragraphe (enrichissement actualités)
     if (update.type === 'addition') {
       if (!update.updated) return { ...update, applied: false, pass: passNumber };
+      // Le résumé (TL;DR) est TOUJOURS placé après l'intro, sans dépendre de l'anchor.
+      if (isTldrAddition(update)) {
+        const { html: nh } = insertAfterIntro(updatedHtml, update.updated);
+        updatedHtml = nh;
+        return { ...update, applied: true, pass: passNumber };
+      }
       const { html: newHtml, matched } = applyAddition(updatedHtml, update.anchor || '', update.updated);
       if (matched) {
         updatedHtml = newHtml;
