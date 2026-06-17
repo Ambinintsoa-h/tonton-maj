@@ -306,7 +306,11 @@ body {
   color: #4b5563;
   border-top: 1px solid #f3f4f6;
   vertical-align: top;
+  min-width: 70px;
   max-width: 280px;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .md-content tbody tr:nth-child(even) { background: #fafafa; }
 .md-content tbody tr:hover { background: #f0f9ff; transition: background 0.12s; }
