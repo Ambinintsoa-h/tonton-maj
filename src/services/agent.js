@@ -885,7 +885,10 @@ ${content.substring(0, 5000)}`,
 ## ORDRE D'ANALYSE IMPÉRATIF (avant tout le reste)
 1. **COHÉRENCE DU SUJET D'ABORD.** Vérifie que l'article traite UN concept clairement défini, sans confusion entre notions voisines (ex. ne pas confondre un élément porteur de bâtiment avec une structure d'aménagement extérieur). Si l'article amalgame des concepts différents ou décrit des matériaux/techniques hors-sujet, c'est le DÉFAUT N°1 : signale-le en tête du résumé exécutif et pénalise fortement la citabilité et le score global.
 2. **PRÉCISION NORMATIVE & ENTITÉS.** Exige les normes applicables (DTU, NF, RE2020, Code de l'urbanisme/PLU…), les bonnes UNITÉS (ex. pente en % et non en degrés si la norme l'exige), et la présence des entités expertes du domaine (signale celles qui manquent).
-3. Ensuite seulement : fraîcheur, fact-checking des chiffres/prix avec des sources réelles et datées.
+3. **PRÉCISION DES SEUILS, PLAFONDS ET CONDITIONS (anti-généralisation).** Pour toute donnée réglementaire (montant d'aide, plafond, seuil technique, éligibilité), donne la valeur EXACTE **par cas/par barème AVEC ses conditions** — jamais un chiffre rond généreux ni un « jusqu'à X » sans condition. Exemples du domaine : éco-PTZ = 7 000 € (parois vitrées seules) / **15 000 € (une action seule, dont isolation de toiture)** / 25 000 € (2 travaux) / 30 000 € (3+) / 50 000 € (rénovation globale uniquement) — donc « jusqu'à 50 000 € » est FAUX pour une action isolée. Pente DTU 43.1 = 0 à 5 %, **minimum 1 % (inaccessible) / 1,5 % (accessible)** — pas « 2 % ». MaPrimeRénov' 2026 = distinguer **Parcours par geste** et **Parcours Accompagné** (rénovation d'ampleur, gain ≥ 2 classes DPE, **Mon Accompagnateur Rénov' obligatoire**). Signale tout chiffre de l'article qui gomme ces conditions.
+4. Ensuite seulement : fraîcheur, fact-checking des chiffres/prix avec des sources réelles et datées.
+
+Pour les FAQ que tu PRODUIS (éléments prêts à coller), garde des réponses COURTES (50-60 mots) et autosuffisantes pour l'extraction par les IA.
 
 ## EXHAUSTIVITÉ
 Produis TOUTES les sections du format, sans en omettre ni les tronquer — y compris le tableau comparatif AVEC sa version HTML prête à copier-coller (bloc ③ de la ressource). N'inclus PAS de composant React ni d'artifact séparé (l'aperçu passe par la vue avant/après native). Ne produis QUE le rapport markdown, rien d'autre.
