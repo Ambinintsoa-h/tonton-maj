@@ -1858,10 +1858,10 @@ export default function ArticleResult() {
                 <p className="text-sm font-semibold text-gray-800">Audit du skill — rapport complet</p>
                 <span className="text-[10px] text-gray-400">les corrections appliquées dans « Après » en sont déduites</span>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-6 min-h-[420px] max-h-[78vh] overflow-y-auto shadow-sm">
+              <div className="bg-white border border-gray-200 rounded-xl p-6 min-h-[420px] shadow-sm">
                 {auditReport ? (
                   <div
-                    className="md-content text-sm"
+                    className="md-content text-sm leading-relaxed break-words [&_h1]:!text-xl [&_h1]:!mt-4 [&_h2]:!text-lg [&_h2]:!mt-5 [&_h3]:!text-base [&_h3]:!mt-3 [&_h4]:!text-sm [&_p]:!text-[13px] [&_li]:!text-[13px] [&_a]:break-all [&_pre]:!max-w-full [&_pre]:!overflow-x-auto [&_pre]:!text-[12px] [&_table]:!block [&_table]:!max-w-full [&_table]:!overflow-x-auto"
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(auditReport) }}
                   />
                 ) : (
