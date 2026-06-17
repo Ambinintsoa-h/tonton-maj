@@ -313,6 +313,54 @@ body {
 .md-content td:empty { color: #d1d5db; }
 .md-content td:empty::after { content: '—'; }
 
+/* ── FAQ en accordéon (<details>/<summary>) ───────────────────────────────────
+   Rendu NEUTRE (pas de couleur) pour uniformiser TONTON et WordPress. WordPress
+   affiche le même <details> natif côté thème ; ici on reproduit l'apparence.   */
+.md-content details,
+.article-diff-content details {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  margin: 0.5em 0;
+  background: #fff;
+  overflow: hidden;
+}
+.md-content summary,
+.article-diff-content summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.7em 2.2em 0.7em 1em;
+  font-weight: 600;
+  color: #1f2937;
+  position: relative;
+  user-select: none;
+}
+.md-content summary::-webkit-details-marker,
+.article-diff-content summary::-webkit-details-marker { display: none; }
+/* Chevron neutre (gris) qui pivote à l'ouverture */
+.md-content summary::after,
+.article-diff-content summary::after {
+  content: '';
+  position: absolute;
+  right: 1em;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #9ca3af;
+  border-bottom: 2px solid #9ca3af;
+  transform: translateY(-65%) rotate(45deg);
+  transition: transform 0.18s ease;
+}
+.md-content details[open] summary::after,
+.article-diff-content details[open] summary::after {
+  transform: translateY(-35%) rotate(225deg);
+}
+.md-content details[open] summary,
+.article-diff-content details[open] summary { border-bottom: 1px solid #f3f4f6; }
+.md-content details > *:not(summary),
+.article-diff-content details > *:not(summary) { padding: 0.2em 1em; }
+.md-content details > *:not(summary):last-child,
+.article-diff-content details > *:not(summary):last-child { padding-bottom: 0.8em; }
+
 /* ── Code inline ── */
 .md-content code {
   background: #f1f5f9;

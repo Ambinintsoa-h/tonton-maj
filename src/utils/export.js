@@ -75,6 +75,14 @@ export const exportAsHtml = (content) => {
     }
   });
 
+  // FAQ en accordéon : conserver les <details>/<summary> natifs (acceptés par
+  // WordPress ≥ 5.9) mais retirer toute classe/couleur/style inline → apparence
+  // NEUTRE, gérée par le thème. Uniformise le rendu TONTON ↔ WordPress.
+  div.querySelectorAll('details, summary').forEach((el) => {
+    el.removeAttribute('class');
+    el.removeAttribute('style');
+  });
+
   // Uniformiser la typo : retirer les tailles de police parasites (0.8125rem)
   // → WordPress applique la taille du thème à tout le contenu.
   stripParasiticFontSize(div);
