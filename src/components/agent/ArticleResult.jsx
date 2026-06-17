@@ -14,6 +14,7 @@ import {
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripParasiticFontSize } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
 import BubbleToolbar from './BubbleToolbar';
+import TableToolbar from './TableToolbar';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, applyDiff, applyAddition, insertNearClosestParagraph, moveFaqToEnd } from '../../utils/diff';
@@ -2264,6 +2265,8 @@ export default function ArticleResult() {
             } : undefined}
           />
         )}
+        {/* Barre contextuelle d'édition de tableaux (vue diff) */}
+        {diffMode && <TableToolbar articleEl={articleEl} contentRef={contentRef} />}
       </div>
 
       {/* ── Détail des modifications ── */}
