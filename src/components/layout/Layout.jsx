@@ -27,10 +27,13 @@ export default function Layout({ children }) {
       }}
     >
       <Sidebar />
-      <div className="flex-1 flex flex-col min-h-0">
+      {/* min-w-0 : indispensable pour qu'un contenu large (tableaux/code de l'audit)
+          reste confiné et NE pousse PAS la mise en page (sinon scroll horizontal +
+          sidebar déformée en mode pleine largeur). */}
+      <div className="flex-1 flex flex-col min-h-0 min-w-0">
         <Header />
-        <main className="flex-1 overflow-auto min-h-0">
-          <div className={fullWidth ? 'p-4 sm:p-6 h-full' : 'p-8 max-w-6xl mx-auto'}>
+        <main className="flex-1 overflow-auto min-h-0 min-w-0">
+          <div className={fullWidth ? 'p-4 sm:p-6 h-full min-w-0 overflow-x-hidden' : 'p-8 max-w-6xl mx-auto'}>
             {children}
           </div>
         </main>
