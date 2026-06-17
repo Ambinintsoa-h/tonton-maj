@@ -49,6 +49,19 @@ export const exportAsHtml = (content) => {
   // ne doivent jamais être publiés dans WordPress
   div.querySelectorAll('[data-media-overlay]').forEach(el => el.remove());
 
+  // Espacement des titres : retirer toute marge inline sur h1-h6 → c'est le THÈME
+  // WordPress qui gère l'espacement des titres une fois publié (pas TONTON).
+  div.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((h) => {
+    if (!h.style) return;
+    h.style.removeProperty('margin');
+    h.style.removeProperty('margin-top');
+    h.style.removeProperty('margin-bottom');
+    h.style.removeProperty('padding');
+    h.style.removeProperty('padding-top');
+    h.style.removeProperty('padding-bottom');
+    if (!h.getAttribute('style')?.trim()) h.removeAttribute('style');
+  });
+
   // Dépublier les surlignages de liens internes non appliqués : remplacer le <span>
   // par son contenu texte brut (le lien n'a pas été validé par l'utilisateur).
   div.querySelectorAll('[data-il-idx]').forEach(span => {
