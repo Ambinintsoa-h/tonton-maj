@@ -161,17 +161,6 @@ export default function ArticleResult() {
   const [hasContent, setHasContent] = useState(false);
   const [diffMode, setDiffMode] = useState(true);
 
-  // ── Hauteur redimensionnable de la zone de travail (vue diff) ───────────────
-  // Défaut ≥ 80vh, ajustable à la souris (poignée resize), mémorisée en localStorage.
-  const DIFF_H_KEY = 'tonton_diff_height';
-  const [diffHeight, setDiffHeight] = useState(() => {
-    try { return localStorage.getItem(DIFF_H_KEY) || '80vh'; } catch { return '80vh'; }
-  });
-  const persistDiffHeight = useCallback((e) => {
-    const h = e.currentTarget?.style?.height;
-    if (h) { setDiffHeight(h); try { localStorage.setItem(DIFF_H_KEY, h); } catch {} }
-  }, []);
-
   // ── Sections repliables (repliées par défaut) — focus sur la vue diff ───────
   const [showMissed, setShowMissed]   = useState(true);   // Suggestions à appliquer — déplié par défaut (action mise en évidence)
   const [showDetails, setShowDetails] = useState(false);  // Détail des modifications
@@ -1549,7 +1538,7 @@ export default function ArticleResult() {
           <div className="flex-1 min-w-0">
             <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Synthèse de l'agent</p>
             <div
-              className="md-content text-gray-700"
+              className="md-content text-gray-700 text-[13px] leading-snug [&_h1]:!text-lg [&_h1]:!my-2 [&_h1]:!border-0 [&_h1]:!pb-0 [&_h2]:!text-base [&_h2]:!my-2 [&_h2]:!border-0 [&_h2]:!pb-0 [&_h3]:!text-sm [&_h3]:!my-1.5 [&_h4]:!text-sm [&_h4]:!my-1 [&_p]:!text-[13px] [&_p]:!my-1 [&_p]:!leading-snug [&_li]:!text-[13px] [&_li]:!my-0.5 [&_ul]:!my-1 [&_ol]:!my-1"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(agent.analysis) }}
             />
           </div>
@@ -1894,7 +1883,7 @@ export default function ArticleResult() {
               initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}
               className="p-6"
             >
-              <div className="bg-gray-50 rounded-xl p-6 min-h-[420px] max-h-[78vh] overflow-y-auto">
+              <div className="bg-gray-50 rounded-xl p-6 min-h-[420px]">
                 <div
                   className="md-content"
                   dangerouslySetInnerHTML={{ __html: renderMarkdown(agent.originalContent || '—') }}
@@ -2140,9 +2129,7 @@ export default function ArticleResult() {
                       {/* Contenu diff */}
                       <div
                         ref={setArticleRef}
-                        className="article-diff-content md-content text-sm leading-loose p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px] max-h-[95vh] overflow-y-auto resize-y focus:outline-none focus:ring-2 focus:ring-black/10"
-                        style={{ height: diffHeight }}
-                        onMouseUp={persistDiffHeight}
+                        className="article-diff-content md-content text-sm leading-loose p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px] focus:outline-none focus:ring-2 focus:ring-black/10"
                         onInput={handleInput}
                         onPaste={handlePaste}
                         onMouseOver={(e) => {
@@ -2171,9 +2158,7 @@ export default function ArticleResult() {
                     /* ── Vue finale : article propre, sans marquages ── */
                     <motion.div key="final"
                       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                      className="p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px] max-h-[95vh] overflow-y-auto resize-y"
-                      style={{ height: diffHeight }}
-                      onMouseUp={persistDiffHeight}
+                      className="p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px]"
                       onMouseOver={showAnchorTooltip}
                       onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setAnchorHover(null), 220); }}
                     >
