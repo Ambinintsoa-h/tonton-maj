@@ -24,7 +24,7 @@ import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
 import { saveArticle } from '../../services/firebase';
 import { saveDraft, flushDraftRemote, clearDraft, onDraftStatus } from '../../services/articleDraft';
-import { renderMarkdown, emojiToIcons } from '../../utils/markdown';
+import { renderMarkdown, emojiToIcons, unwrapProseFences } from '../../utils/markdown';
 import { useNavigate } from 'react-router-dom';
 
 const TAB_AUDIT = 'audit';
@@ -1862,8 +1862,8 @@ export default function ArticleResult() {
               <div className="bg-white border border-gray-200 rounded-xl p-6 min-h-[420px] shadow-sm">
                 {auditReport ? (
                   <div
-                    className="md-content text-sm leading-relaxed break-words [&_h1]:!text-xl [&_h1]:!mt-4 [&_h2]:!text-lg [&_h2]:!mt-5 [&_h3]:!text-base [&_h3]:!mt-3 [&_h4]:!text-sm [&_p]:!text-[13px] [&_li]:!text-[13px] [&_a]:break-all [&_pre]:!max-w-full [&_pre]:!overflow-x-auto [&_pre]:!text-[12px] [&_table]:!w-full [&_td]:!align-top"
-                    dangerouslySetInnerHTML={{ __html: emojiToIcons(renderMarkdown(auditReport)) }}
+                    className="md-content text-sm leading-relaxed break-words [&_h1]:!text-xl [&_h1]:!mt-4 [&_h2]:!text-lg [&_h2]:!mt-5 [&_h3]:!text-base [&_h3]:!mt-3 [&_h4]:!text-sm [&_p]:!text-[13px] [&_li]:!text-[13px] [&_a]:break-all [&_pre]:!max-w-full [&_pre]:!overflow-x-auto [&_pre]:!text-[12px] [&_table]:!table [&_table]:!w-full [&_table]:!max-w-none [&_td]:!align-top [&_td]:!max-w-none [&_th]:!whitespace-normal"
+                    dangerouslySetInnerHTML={{ __html: emojiToIcons(renderMarkdown(unwrapProseFences(auditReport))) }}
                   />
                 ) : (
                   <div className="flex flex-col items-center justify-center text-center py-16 text-gray-400">
