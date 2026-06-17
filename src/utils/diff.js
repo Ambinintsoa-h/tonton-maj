@@ -210,6 +210,33 @@ export const cleanResiduals = (html) => {
 };
 
 /**
+ * Garantit que le texte AJOUTÉ (vert, <mark class="updated-content">) n'est JAMAIS barré.
+ *
+ * Les stratégies de diff à « gap » peuvent capturer un <mark> déjà inséré et
+ * l'envelopper dans un nouveau <del> → le texte vert se retrouve descendant d'un
+ * <del> et hérite du line-through (impossible à retirer via text-decoration sur le
+ * mark). On sort donc chaque <mark> hors de tout <del> ancêtre (placé juste après).
+ * Idempotent, robuste aux imbrications multiples.
+ */
+export const liftMarksOutOfDel = (html) => {
+  if (!html || (html.indexOf('<del') === -1 && html.indexOf('<mark') === -1)) return html;
+  let div;
+  try { div = document.createElement('div'); div.innerHTML = html; }
+  catch { return html; }
+
+  let safety = 0;
+  let nested = div.querySelectorAll('del mark, del .updated-content');
+  while (nested.length && safety++ < 300) {
+    nested.forEach((mark) => {
+      const del = mark.closest('del');
+      if (del && del.parentNode) del.parentNode.insertBefore(mark, del.nextSibling);
+    });
+    nested = div.querySelectorAll('del mark, del .updated-content');
+  }
+  return div.innerHTML;
+};
+
+/**
  * Insère `updated` après le bloc contenant `anchor`.
  * Utilisé pour les updates de type "addition" (nouveaux paragraphes).
  * @returns {{ html: string, matched: boolean }}
@@ -439,5 +466,6 @@ export const applyAllDiffs = (html, updates, passNumber = 1) => {
     return { ...update, applied: false, pass: passNumber };
   });
   updatedHtml = cleanResiduals(updatedHtml);
+  updatedHtml = liftMarksOutOfDel(updatedHtml); // le texte ajouté (vert) ne doit jamais être barré
   return { html: updatedHtml, updates: withStatus };
 };
