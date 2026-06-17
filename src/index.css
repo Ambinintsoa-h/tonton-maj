@@ -353,6 +353,49 @@ body {
   background: transparent;
 }
 
+/* ── Sélecteur « code | rendu » (audit) ── */
+.code-preview {
+  margin: 0.75em 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.code-preview-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 6px 8px;
+  background: #1e293b;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+.code-preview-bar button {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 12px;
+  border-radius: 6px;
+  color: #94a3b8;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.code-preview-bar button:hover { color: #e2e8f0; }
+.code-preview-bar button.cp-active { background: #2563eb; color: #fff; }
+.code-preview .cp-pane[hidden] { display: none !important; }
+.code-preview .cp-pane-code pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.code-preview .cp-pane-render {
+  padding: 16px;
+  background: #fff;
+  overflow-x: auto;
+}
+.code-preview .cp-pane-render > *:first-child { margin-top: 0; }
+.code-preview .cp-pane-render > *:last-child { margin-bottom: 0; }
+
 /* ── Blockquote ── */
 .md-content blockquote {
   border-left: 3px solid #6366f1;

@@ -152,7 +152,8 @@ export default function ArticleResult() {
     } catch { return null; }
   }, [wpMcpData, articleUrl, wpSites]);
 
-  const [activeTab, setActiveTab] = useState(TAB_APRES);
+  // Atterrissage sur l'AUDIT quand il est attendu (priorité produit) ; sinon APRÈS.
+  const [activeTab, setActiveTab] = useState((auditReport || hasBrainSkill) ? TAB_AUDIT : TAB_APRES);
   const [showExport, setShowExport] = useState(false);
   const [showWP, setShowWP] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -161,6 +162,23 @@ export default function ArticleResult() {
   const [wpNotFoundReason, setWpNotFoundReason] = useState(''); // raison si non trouvé
   const [hasContent, setHasContent] = useState(false);
   const [diffMode, setDiffMode] = useState(true);
+
+  // Bascule « code | rendu » des blocs HTML de l'audit (délégation de clic, car le
+  // contenu est injecté via dangerouslySetInnerHTML — voir enhanceCodePreviews).
+  const handleAuditToggle = (e) => {
+    const btn = e.target.closest('[data-cp]');
+    if (!btn) return;
+    const block = btn.closest('[data-cp-block]');
+    if (!block) return;
+    const wantRender = btn.getAttribute('data-cp') === 'render';
+    block.querySelectorAll('[data-cp]').forEach((b) =>
+      b.classList.toggle('cp-active', (b.getAttribute('data-cp') === 'render') === wantRender),
+    );
+    const codePane = block.querySelector('.cp-pane-code');
+    const renderPane = block.querySelector('.cp-pane-render');
+    if (codePane) codePane.hidden = wantRender;
+    if (renderPane) renderPane.hidden = !wantRender;
+  };
 
   // ── Sections repliables (repliées par défaut) — focus sur la vue diff ───────
   const [showMissed, setShowMissed]   = useState(true);   // Suggestions à appliquer — déplié par défaut (action mise en évidence)
@@ -1870,8 +1888,9 @@ export default function ArticleResult() {
               <div className="bg-white border border-gray-200 rounded-xl p-6 min-h-[420px] shadow-sm">
                 {auditReport ? (
                   <div
+                    onClick={handleAuditToggle}
                     className="md-content text-sm leading-relaxed break-words [&_h1]:!text-xl [&_h1]:!mt-4 [&_h2]:!text-lg [&_h2]:!mt-5 [&_h3]:!text-base [&_h3]:!mt-3 [&_h4]:!text-sm [&_p]:!text-[13px] [&_li]:!text-[13px] [&_a]:break-all [&_pre]:!max-w-full [&_pre]:!overflow-x-auto [&_pre]:!text-[12px] [&_table]:!table [&_table]:!w-full [&_table]:!max-w-none [&_td]:!align-top [&_td]:!max-w-none [&_th]:!whitespace-normal"
-                    dangerouslySetInnerHTML={{ __html: emojiToIcons(renderMarkdown(unwrapProseFences(auditReport))) }}
+                    dangerouslySetInnerHTML={{ __html: emojiToIcons(renderMarkdown(unwrapProseFences(auditReport), { codePreview: true })) }}
                   />
                 ) : (
                   <div className="flex flex-col items-center justify-center text-center py-16 text-gray-400">
