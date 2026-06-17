@@ -1862,7 +1862,7 @@ export default function ArticleResult() {
               <div className="bg-white border border-gray-200 rounded-xl p-6 min-h-[420px] shadow-sm">
                 {auditReport ? (
                   <div
-                    className="md-content text-sm leading-relaxed break-words [&_h1]:!text-xl [&_h1]:!mt-4 [&_h2]:!text-lg [&_h2]:!mt-5 [&_h3]:!text-base [&_h3]:!mt-3 [&_h4]:!text-sm [&_p]:!text-[13px] [&_li]:!text-[13px] [&_a]:break-all [&_pre]:!max-w-full [&_pre]:!overflow-x-auto [&_pre]:!text-[12px] [&_table]:!block [&_table]:!max-w-full [&_table]:!overflow-x-auto"
+                    className="md-content text-sm leading-relaxed break-words [&_h1]:!text-xl [&_h1]:!mt-4 [&_h2]:!text-lg [&_h2]:!mt-5 [&_h3]:!text-base [&_h3]:!mt-3 [&_h4]:!text-sm [&_p]:!text-[13px] [&_li]:!text-[13px] [&_a]:break-all [&_pre]:!max-w-full [&_pre]:!overflow-x-auto [&_pre]:!text-[12px] [&_table]:!w-full [&_td]:!align-top"
                     dangerouslySetInnerHTML={{ __html: emojiToIcons(renderMarkdown(auditReport)) }}
                   />
                 ) : (
