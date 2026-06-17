@@ -24,7 +24,7 @@ import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
 import { saveArticle } from '../../services/firebase';
 import { saveDraft, flushDraftRemote, clearDraft, onDraftStatus } from '../../services/articleDraft';
-import { renderMarkdown } from '../../utils/markdown';
+import { renderMarkdown, emojiToIcons } from '../../utils/markdown';
 import { useNavigate } from 'react-router-dom';
 
 const TAB_AUDIT = 'audit';
@@ -1540,7 +1540,7 @@ export default function ArticleResult() {
             <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Synthèse de l'agent</p>
             <div
               className="md-content text-gray-700 text-[13px] leading-snug [&_h1]:!text-lg [&_h1]:!my-2 [&_h1]:!border-0 [&_h1]:!pb-0 [&_h2]:!text-base [&_h2]:!my-2 [&_h2]:!border-0 [&_h2]:!pb-0 [&_h3]:!text-sm [&_h3]:!my-1.5 [&_h4]:!text-sm [&_h4]:!my-1 [&_p]:!text-[13px] [&_p]:!my-1 [&_p]:!leading-snug [&_li]:!text-[13px] [&_li]:!my-0.5 [&_ul]:!my-1 [&_ol]:!my-1"
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(agent.analysis) }}
+              dangerouslySetInnerHTML={{ __html: emojiToIcons(renderMarkdown(agent.analysis)) }}
             />
           </div>
         </motion.div>
@@ -1863,7 +1863,7 @@ export default function ArticleResult() {
                 {auditReport ? (
                   <div
                     className="md-content text-sm leading-relaxed break-words [&_h1]:!text-xl [&_h1]:!mt-4 [&_h2]:!text-lg [&_h2]:!mt-5 [&_h3]:!text-base [&_h3]:!mt-3 [&_h4]:!text-sm [&_p]:!text-[13px] [&_li]:!text-[13px] [&_a]:break-all [&_pre]:!max-w-full [&_pre]:!overflow-x-auto [&_pre]:!text-[12px] [&_table]:!block [&_table]:!max-w-full [&_table]:!overflow-x-auto"
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(auditReport) }}
+                    dangerouslySetInnerHTML={{ __html: emojiToIcons(renderMarkdown(auditReport)) }}
                   />
                 ) : (
                   <div className="flex flex-col items-center justify-center text-center py-16 text-gray-400">

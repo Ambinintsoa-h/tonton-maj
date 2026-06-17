@@ -900,6 +900,10 @@ ${content.substring(0, 5000)}`,
 
 Pour les FAQ que tu PRODUIS (éléments prêts à coller), garde des réponses COURTES (50-60 mots) et autosuffisantes pour l'extraction par les IA.
 
+## FORMAT MARKDOWN
+- Le TL;DR, les actions, les réponses de FAQ et tout texte rédigé : en **markdown normal** (gras/italique/listes) — JAMAIS dans un bloc de code (pas de triple backtick).
+- Réserve les blocs de code UNIQUEMENT au code destiné au copier-coller (HTML de tableau, balisage schema.org/JSON-LD) et précise le langage après les backticks (ex. \`\`\`html).
+
 ## EXHAUSTIVITÉ
 Produis TOUTES les sections du format, sans en omettre ni les tronquer — y compris le tableau comparatif AVEC sa version HTML prête à copier-coller (bloc ③ de la ressource). N'inclus PAS de composant React ni d'artifact séparé (l'aperçu passe par la vue avant/après native). Ne produis QUE le rapport markdown, rien d'autre.
 
