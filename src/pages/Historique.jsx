@@ -15,7 +15,7 @@ import { removeFromHistory } from '../store/slices/articlesSlice';
 import { addPendingItem } from '../store/slices/pendingSlice';
 import {
   setOriginalContent, setUpdatedContent, setDiff,
-  setSources, setAnalysis, setStatus, setCurrentArticleId,
+  setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit,
 } from '../store/slices/agentSlice';
 import { deleteArticle, fetchArticleHtml } from '../services/firebase';
 import { useNavigate } from 'react-router-dom';
@@ -686,6 +686,7 @@ export default function Historique() {
     dispatch(setDiff(article.updates || []));
     dispatch(setSources(article.sources || []));
     dispatch(setAnalysis(article.analysis || ''));
+    dispatch(setAudit(article.audit || ''));   // restaure le rapport d'audit (rétrocompat: anciens docs → '')
     dispatch(setCurrentArticleId(article.id));
     dispatch(setStatus('done'));
     navigate('/');

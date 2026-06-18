@@ -908,6 +908,7 @@ export default function ArticleResult() {
         updates:         agent.diff        || r.updates     || [],
         sources:         agent.sources     || r.sources     || [],
         analysis:        agent.analysis    || r.analysis    || '',
+        audit:           agent.audit       || r.audit       || '',   // persiste le rapport d'audit (onglet AUDIT)
         url:             cqItem.url        || '',
         keyword:         cqItem.keyword    || '',
         priority:        cqItem.priority   || 'normale',
