@@ -978,8 +978,17 @@ export default function MajEnAttente() {
     .map(p => ({ priority: p, items: filtered.filter(i => (i.priority || 'normale') === p) }))
     .filter(g => g.items.length > 0);
 
+  // Un cq_ia ne voit que SES articles assignés (filtre activeItems ci-dessus). On
+  // auto-assigne donc au créateur ses ajouts/imports laissés « Non assigné », sinon
+  // l'item est bien ajouté mais invisible pour lui (bug : toast « ajouté » puis liste vide).
+  // Manager / super_admin : inchangé (ils voient tout, l'item reste dans le pool partagé).
+  const withSelfAssign = (item) => ({
+    ...item,
+    assigneeId: item.assigneeId || (authRole === 'cq_ia' ? (authUid || authUsername) : null),
+  });
+
   const handleParsed = async (newItems) => {
-    dispatch(addPendingItems(newItems));
+    dispatch(addPendingItems(newItems.map(withSelfAssign)));
     setShowImport(false);
 
     // Enrichissement automatique : scraper les URLs dont le titre est absent
@@ -1267,7 +1276,7 @@ export default function MajEnAttente() {
       {/* ── Panels slide ── */}
       <AddManualPanel
         open={showAddManual}
-        onAdd={(item) => dispatch(addPendingItem(item))}
+        onAdd={(item) => dispatch(addPendingItem(withSelfAssign(item)))}
         onClose={() => setShowAddManual(false)}
         teamMembers={teamMembers}
       />
