@@ -2,7 +2,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import { motion } from 'framer-motion';
 import {
-  Zap, Globe, Settings, Clock, ChevronRight, BarChart3, ListTodo, Users, LogOut, Bug,
+  Zap, Globe, Settings, Clock, ChevronRight, BarChart3, ListTodo, Users, LogOut, Bug, MessageSquare,
 } from 'lucide-react';
 import { logout } from '../../store/slices/authSlice';
 
@@ -27,12 +27,13 @@ const NAV_ALL = [
   { to: '/maj-en-attente', label: 'MAJ en attente',  icon: ListTodo, badge: true },
   { to: '/skills',         label: 'Skills IA',       icon: Zap,      roles: ['super_admin', 'manager'] },
   { to: '/wordpress',      label: 'WordPress',        icon: Globe,    roles: ['super_admin', 'manager', 'support'] },
+  { to: '/commentaires',   label: 'Commentaires',     icon: MessageSquare, roles: ['super_admin', 'manager', 'support'], dev: true },
   { to: '/historique',     label: 'Historique',       icon: Clock },
   { to: '/equipe',         label: 'Équipe',            icon: Users,   roles: ['super_admin', 'manager'] },
   { to: '/tickets',        label: 'Tickets',           icon: Bug,      badge: true },
 ];
 
-function NavItem({ to, label, icon: Icon, badge }) {
+function NavItem({ to, label, icon: Icon, badge, dev }) {
   const location = useLocation();
   const active = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to);
   return (
@@ -44,12 +45,17 @@ function NavItem({ to, label, icon: Icon, badge }) {
       >
         <Icon size={16} />
         <span className="flex-1">{label}</span>
-        {badge > 0 && (
+        {dev && (
+          <span className="text-[9px] font-bold uppercase tracking-wide bg-violet-500 text-white rounded-full px-1.5 py-0.5 leading-none">
+            dev
+          </span>
+        )}
+        {!dev && badge > 0 && (
           <span className="text-[10px] font-bold bg-amber-400 text-white rounded-full px-1.5 py-0.5 leading-none min-w-[18px] text-center">
             {badge > 99 ? '99+' : badge}
           </span>
         )}
-        {active && !badge && <ChevronRight size={14} className="opacity-50" />}
+        {active && !badge && !dev && <ChevronRight size={14} className="opacity-50" />}
       </motion.div>
     </NavLink>
   );
