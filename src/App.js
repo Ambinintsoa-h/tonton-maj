@@ -15,6 +15,7 @@ import Layout from './components/layout/Layout';
 import Articles from './pages/Articles';
 import Skills from './pages/Skills';
 import WordPress from './pages/WordPress';
+import Commentaires from './pages/Commentaires';
 import Historique from './pages/Historique';
 import Parametres from './pages/Parametres';
 import Dashboard from './pages/Dashboard';
@@ -386,6 +387,11 @@ function AppRoutes() {
               <Route path="/maj-en-attente" element={<MajEnAttente />} />
               <Route path="/skills"         element={<Skills />}       />
               <Route path="/wordpress"      element={<WordPress />}    />
+              <Route path="/commentaires"   element={
+                <RoleGuard allowedRoles={['super_admin', 'manager', 'support']}>
+                  <Commentaires />
+                </RoleGuard>
+              } />
               <Route path="/historique"     element={<Historique />}   />
               <Route path="/parametres"     element={
                 <RoleGuard allowedRoles={['super_admin']}>
