@@ -243,6 +243,7 @@ export default function Articles() {
         updates: result.updates || [],
         sources: result.sources || [],
         analysis: result.analysis || '',
+        audit: result.audit || '',   // persiste le rapport d'audit (onglet AUDIT) — dispo dès la fin de runAgent
         url: tab === TAB_URL ? url : '',
         createdAt: new Date().toISOString(),
         tokenUsage: result.tokenUsage || null,
