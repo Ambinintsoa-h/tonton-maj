@@ -915,7 +915,10 @@ export default function ArticleResult() {
         assigneeId:      cqItem.assigneeId || null,
         createdAt:       new Date().toISOString(),
         tokenUsage:      agent.tokenUsage  || null,
-        ...(r.seoTracking ? { seoTracking: r.seoTracking } : {}),
+        // seoTracking EXCLU de l'écriture : il est maintenu en base par le cron (snapshots
+        // J+7/J+30). L'inclure ferait un updateDoc qui ÉCRASE tout le champ → snapshots perdus.
+        // On le passe seulement aux dispatch Redux ci-dessous (badge en session) ; la base
+        // reste la source de vérité (relue au rechargement via getArticles).
       };
       try {
         if (firebaseReady) {
@@ -925,14 +928,15 @@ export default function ArticleResult() {
             dispatch(addToHistory({
               ...meta,
               id,
+              ...(r.seoTracking ? { seoTracking: r.seoTracking } : {}),   // badge en session (NON écrit en base ici)
               ...(originalContentUrl ? { originalContentUrl } : { originalContent }),
               ...(updatedContentUrl  ? { updatedContentUrl  } : { updatedContent  }),
             }));
           } catch {
-            dispatch(addToHistory({ ...articleData, id: Date.now().toString() }));
+            dispatch(addToHistory({ ...articleData, id: Date.now().toString(), ...(r.seoTracking ? { seoTracking: r.seoTracking } : {}) }));
           }
         } else {
-          dispatch(addToHistory({ ...articleData, id: Date.now().toString() }));
+          dispatch(addToHistory({ ...articleData, id: Date.now().toString(), ...(r.seoTracking ? { seoTracking: r.seoTracking } : {}) }));
         }
         dispatch(removePendingItem(cqItem.id));
         toast.success('Article validé et archivé dans l\'historique !', { icon: <CheckCircle2 size={18} className="text-green-600" /> });

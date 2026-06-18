@@ -169,14 +169,18 @@ function SeoPanel({ seoTracking, majDate }) {
 
   const keywords   = seoTracking?.keywords   || [];
   const articleUrl = seoTracking?.articleUrl || '';
+  // Date de référence : la date de MAJ, sinon la date du 1er snapshot ("before"), sinon rien.
+  // Évite un panneau éternellement vide quand l'article n'a pas de createdAt (majDate null).
+  const firstSnapAt  = seoTracking?.snapshots?.[0]?.capturedAt;
+  const baselineDate = majDate || (firstSnapAt ? new Date(firstSnapAt).toISOString().slice(0, 10) : null);
 
   useEffect(() => {
-    if (!keywords.length || !articleUrl || !majDate) return;
+    if (!keywords.length || !articleUrl || !baselineDate) return;
     setLoading(true);
     setError(null);
     const today = new Date().toISOString().slice(0, 10);
     Promise.all(keywords.map(keyword =>
-      axios.post('/api/haloscan/evolution', { keyword, articleUrl, firstDate: majDate, secondDate: today })
+      axios.post('/api/haloscan/evolution', { keyword, articleUrl, firstDate: baselineDate, secondDate: today })
         .then(r => ({ keyword, ...r.data }))
         .catch(() => ({ keyword, position_history: [], volume_history: [] }))
     ))
@@ -187,7 +191,8 @@ function SeoPanel({ seoTracking, majDate }) {
       })
       .catch(() => setError('Impossible de charger les données Haloscan'))
       .finally(() => setLoading(false));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // Recharge si l'URL, la date de référence ou la liste de mots-clés changent (hydratation tardive).
+  }, [articleUrl, baselineDate, keywords.join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!keywords.length) return null;
 
@@ -226,7 +231,7 @@ function SeoPanel({ seoTracking, majDate }) {
         <TrendingUp size={13} className="text-emerald-600" />
         <span className="text-xs font-semibold text-emerald-800">Suivi SEO Haloscan</span>
         {loading && <Loader size={11} className="animate-spin text-emerald-500 ml-1" />}
-        {majDate && <span className="ml-auto text-[10px] text-emerald-500">depuis le {majDate}</span>}
+        {baselineDate && <span className="ml-auto text-[10px] text-emerald-500">depuis le {baselineDate}</span>}
       </div>
 
       <div className="p-4 bg-white space-y-4">
