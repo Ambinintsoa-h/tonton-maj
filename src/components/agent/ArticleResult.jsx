@@ -1735,28 +1735,47 @@ export default function ArticleResult() {
 
         {/* Tab bar + actions */}
         <div className="flex items-center justify-between border-b border-gray-100 px-6">
-          <div className="flex">
+          <div className="flex items-center gap-1.5 py-3">
             {[
-              ...((auditReport || hasBrainSkill) ? [{ id: TAB_AUDIT, label: 'Audit' }] : []),
-              { id: TAB_AVANT, label: 'Avant' },
-              { id: TAB_APRES, label: 'Après — MAJ proposées' },
-            ].map(t => (
-              <button
-                key={t.id}
-                onClick={() => setActiveTab(t.id)}
-                className={`relative px-5 py-4 text-sm font-medium transition-colors duration-200 ${
-                  activeTab === t.id ? 'text-gray-900' : 'text-gray-400 hover:text-gray-600'
-                }`}
-              >
-                {t.label}
-                {activeTab === t.id && (
-                  <motion.div
-                    layoutId="tab-indicator"
-                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-black rounded-full"
-                  />
-                )}
-              </button>
-            ))}
+              ...((auditReport || hasBrainSkill) ? [{
+                id: TAB_AUDIT, label: 'Audit', icon: ClipboardCheck,
+                activeText: 'text-violet-700', activeBg: 'bg-violet-50', activeRing: 'ring-violet-200',
+                activeIcon: 'text-violet-600', idleIcon: 'text-violet-400',
+              }] : []),
+              {
+                id: TAB_AVANT, label: 'Avant', icon: FileText,
+                activeText: 'text-slate-800', activeBg: 'bg-slate-100', activeRing: 'ring-slate-200',
+                activeIcon: 'text-slate-600', idleIcon: 'text-slate-400',
+              },
+              {
+                id: TAB_APRES, label: 'Après — MAJ proposées', icon: Sparkles,
+                activeText: 'text-emerald-700', activeBg: 'bg-emerald-50', activeRing: 'ring-emerald-200',
+                activeIcon: 'text-emerald-600', idleIcon: 'text-emerald-500',
+              },
+            ].map(t => {
+              const active = activeTab === t.id;
+              const Icon = t.icon;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setActiveTab(t.id)}
+                  title={`Vue ${t.label}`}
+                  className={`relative flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors duration-200 ${
+                    active ? t.activeText : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {active && (
+                    <motion.div
+                      layoutId="tab-indicator"
+                      transition={{ type: 'spring', stiffness: 500, damping: 40 }}
+                      className={`absolute inset-0 rounded-lg ring-1 ${t.activeBg} ${t.activeRing}`}
+                    />
+                  )}
+                  <Icon size={15} className={`relative z-10 transition-colors ${active ? t.activeIcon : t.idleIcon}`} />
+                  <span className="relative z-10">{t.label}</span>
+                </button>
+              );
+            })}
           </div>
 
           <div className="flex items-center gap-2 py-3">
