@@ -120,12 +120,25 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     ]);
 
     // localStorage = source de vérité pour skills + knowledge.
-    // Firestore ne remplace que si aucun skill PERSONNALISÉ n'existe en local
+    // Firestore ne remplace TOUT que si aucun skill PERSONNALISÉ n'existe en local
     // (le skill par défaut « Skills par Tonton AI » est toujours présent et ne compte pas).
     const localSkills = store.getState().skills.list;
     if (countCustomSkills(localSkills) === 0 && skills.length > 0) {
       dispatch(setSkills(skills));
       localStorage.setItem(STORAGE_KEYS.skills, JSON.stringify(skills));
+    } else {
+      // Garde-fou : les skills CERVEAU (format SKILL.md) sont globaux/partagés. On fusionne
+      // toujours par id ceux qui manquent en local, même si l'utilisateur a déjà des skills
+      // perso — sinon un snapshot localStorage pré-migration prive l'utilisateur (typiquement
+      // un cq_ia, qui n'a pas accès à la page Skills) du cerveau → pas d'audit + MAJ legacy.
+      // N'enlève AUCUN skill local existant.
+      const localIds = new Set(localSkills.map(s => s.id));
+      const missingBrain = skills.filter(s => s.format === 'skillmd' && s.active !== false && !localIds.has(s.id));
+      if (missingBrain.length > 0) {
+        const merged = [...localSkills, ...missingBrain];
+        dispatch(setSkills(merged));
+        localStorage.setItem(STORAGE_KEYS.skills, JSON.stringify(merged));
+      }
     }
     if (articles.length > 0) {
       dispatch(setHistory(articles));
