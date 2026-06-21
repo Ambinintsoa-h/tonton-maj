@@ -710,6 +710,69 @@ export const runAgent = async ({
     }
   }
 
+  // ── Audit (mode cerveau) — AVANT la recherche de sources ──────────────────────
+  // L'audit « style GEMS » porte sur l'ARTICLE SEUL (contenu + méta déjà récupérés
+  // en Phase 0) : cohérence du sujet, normes, seuils/plafonds exacts, complétude
+  // (TL;DR, FAQ, liens internes…). C'est la BASE de la proposition de MAJ. La
+  // confrontation des chiffres aux sources fraîches se fait ensuite, à la rédaction.
+  const brainSkills = getBrainSkills(skills);
+  const brainMode   = brainSkills.length > 0;
+  const model3      = selectModel('update_generation');
+  const modelLabel  = model3.includes('sonnet') ? 'Sonnet' : model3.includes('opus') ? 'Opus' : 'Haiku';
+
+  let auditReport = '';
+  if (brainMode) {
+    onStep('Audit approfondi de l\'article (méthode du skill)...');
+    onProgress(15);
+
+    const auditBodies = brainSkills.map(s => `### ${s.name}\n${s.body}`).join('\n\n───\n\n');
+    const auditResources = brainSkills.flatMap(s => Array.isArray(s.resources) ? s.resources : []);
+    const auditResBlock = auditResources.length
+      ? `\n\n## RESSOURCES DU SKILL\n` + auditResources.map(r => `### ${r.name}\n${r.content || ''}`).join('\n\n───\n\n')
+      : '';
+    const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, actions prioritaires, éléments prêts à coller, questions PAA, audit EEAT, tableau comparatif si pertinent, manquements, recommandations stratégiques).
+
+## ORDRE D'ANALYSE IMPÉRATIF (avant tout le reste)
+1. **COHÉRENCE DU SUJET D'ABORD.** Vérifie que l'article traite UN concept clairement défini, sans confusion entre notions voisines (ex. ne pas confondre un élément porteur de bâtiment avec une structure d'aménagement extérieur). Si l'article amalgame des concepts différents ou décrit des matériaux/techniques hors-sujet, c'est le DÉFAUT N°1 : signale-le en tête du résumé exécutif et pénalise fortement la citabilité et le score global.
+2. **PRÉCISION NORMATIVE & ENTITÉS.** Exige les normes applicables (DTU, NF, RE2020, Code de l'urbanisme/PLU…), les bonnes UNITÉS (ex. pente en % et non en degrés si la norme l'exige), et la présence des entités expertes du domaine (signale celles qui manquent).
+3. **PRÉCISION DES SEUILS, PLAFONDS ET CONDITIONS (anti-généralisation).** Pour toute donnée réglementaire (montant d'aide, plafond, seuil technique, éligibilité), donne la valeur EXACTE **par cas/par barème AVEC ses conditions** — jamais un chiffre rond généreux ni un « jusqu'à X » sans condition. Exemples du domaine : éco-PTZ = 7 000 € (parois vitrées seules) / **15 000 € (une action seule, dont isolation de toiture)** / 25 000 € (2 travaux) / 30 000 € (3+) / 50 000 € (rénovation globale uniquement) — donc « jusqu'à 50 000 € » est FAUX pour une action isolée. Pente DTU 43.1 = 0 à 5 %, **minimum 1 % (inaccessible) / 1,5 % (accessible)** — pas « 2 % ». MaPrimeRénov' 2026 = distinguer **Parcours par geste** et **Parcours Accompagné** (rénovation d'ampleur, gain ≥ 2 classes DPE, **Mon Accompagnateur Rénov' obligatoire**). Signale tout chiffre de l'article qui gomme ces conditions.
+4. Ensuite seulement : repère les chiffres/prix/dates À VÉRIFIER (fraîcheur) et liste-les comme « à confronter aux sources » — la vérification factuelle contre des sources web datées se fait à l'étape de RÉDACTION (les sources ne sont pas encore disponibles ici).
+
+Pour les FAQ que tu PRODUIS (éléments prêts à coller), garde des réponses COURTES (50-60 mots) et autosuffisantes pour l'extraction par les IA.
+
+## FORMAT MARKDOWN
+- Le TL;DR, les actions, les réponses de FAQ et tout texte rédigé : en **markdown normal** (gras/italique/listes) — JAMAIS dans un bloc de code (pas de triple backtick).
+- Réserve les blocs de code UNIQUEMENT au code destiné au copier-coller (HTML de tableau, balisage schema.org/JSON-LD) et précise le langage après les backticks (ex. \`\`\`html).
+
+## EXHAUSTIVITÉ
+Produis TOUTES les sections du format, sans en omettre ni les tronquer — y compris le tableau comparatif AVEC sa version HTML prête à copier-coller (bloc ③ de la ressource). N'inclus PAS de composant React ni d'artifact séparé (l'aperçu passe par la vue avant/après native). Ne produis QUE le rapport markdown, rien d'autre.
+
+${auditBodies}${auditResBlock}`;
+    const auditUser = `## ARTICLE À AUDITER\n${content}\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
+
+    for (let attempt = 1; attempt <= 3 && !auditReport; attempt++) {
+      try {
+        const { text: auditText, usage: uA } = await callClaudeWithProgress(
+          null,
+          { system: auditSystem, max_tokens: 12000, model: model3, messages: [{ role: 'user', content: auditUser }] },
+          onStep,
+          onReplace,
+          attempt === 1 ? 'Audit en cours' : `Audit en cours — nouvel essai (${attempt}/3)`
+        );
+        trackCall(uA);
+        auditReport = (auditText || '').trim();
+      } catch (e) {
+        console.warn(`[audit] essai ${attempt}/3:`, e.message);
+        if (attempt < 3) {
+          onStep(`Audit — erreur transitoire, nouvel essai (${attempt}/3)…`);
+          await new Promise(r => setTimeout(r, 1500 * attempt));
+        } else {
+          onStep(`⚠️ Audit indisponible après 3 essais (${e.message})`);
+        }
+      }
+    }
+  }
+
   // ── Étape 1 : Identifier les requêtes de recherche ────────────────────────────
   // searchLocale : marché ciblé par les recherches (langue + pays). Défaut FR
   // (app francophone) ; l'agent peut basculer en US/EN pour les sujets internationaux.
@@ -845,8 +908,7 @@ ${content.substring(0, 5000)}`,
   onProgress(60);
 
   // ── Étape 3 : Génération des mises à jour (Sonnet streaming) ─────────────────
-  const model3 = selectModel('update_generation');
-  const modelLabel = model3.includes('sonnet') ? 'Sonnet' : model3.includes('opus') ? 'Opus' : 'Haiku';
+  // model3 / modelLabel sont calculés en amont (bloc d'audit, après la Phase 0).
   onStep(`Analyse et rédaction des mises à jour (${modelLabel})...`);
   onProgress(65);
 
@@ -874,10 +936,8 @@ ${content.substring(0, 5000)}`,
       ).join('\n') + '\n'
     : '';
 
-  // Mode cerveau : un skill SKILL.md actif pilote l'agent → on ne rappelle/contrôle que lui
-  // (le socle + skills legacy sont court-circuités dans le system prompt).
-  const brainSkills        = getBrainSkills(skills);
-  const brainMode          = brainSkills.length > 0;
+  // Mode cerveau : brainSkills/brainMode sont calculés en amont (bloc d'audit).
+  // Le socle + skills legacy restent court-circuités dans le system prompt.
   const legacyActiveSkills = brainMode ? [] : skills.filter(s => s.content && isActiveEntry(s));
   const skillsReminder = brainMode
     ? `\n## RAPPEL — SKILL PRINCIPAL\nApplique INTÉGRALEMENT la méthode du skill « ${brainSkills.map(s => s.name).join(', ')} » (décrit dans le system prompt), puis produis le JSON d'updates demandé — jamais un rapport texte.\n`
@@ -887,64 +947,10 @@ ${content.substring(0, 5000)}`,
           legacyActiveSkills.map((s, i) => `- Skill ${i + 1} : **${s.name}**`).join('\n') + '\n'
         : '');
 
-  // ── Passe d'audit (mode cerveau) ──────────────────────────────────────────────
-  // Le skill produit d'abord son RAPPORT COMPLET (façon Gemini), en profondeur, sans
-  // contrainte de diff. Ce rapport alimente l'onglet AUDIT et sert de base aux corrections.
-  let auditReport = '';
-  if (brainMode) {
-    onStep('Audit approfondi de l\'article (méthode du skill)...');
-    onProgress(68);
-
-    const auditBodies = brainSkills.map(s => `### ${s.name}\n${s.body}`).join('\n\n───\n\n');
-    const auditResources = brainSkills.flatMap(s => Array.isArray(s.resources) ? s.resources : []);
-    const auditResBlock = auditResources.length
-      ? `\n\n## RESSOURCES DU SKILL\n` + auditResources.map(r => `### ${r.name}\n${r.content || ''}`).join('\n\n───\n\n')
-      : '';
-    const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, actions prioritaires, éléments prêts à coller, questions PAA, audit EEAT, tableau comparatif si pertinent, manquements, recommandations stratégiques).
-
-## ORDRE D'ANALYSE IMPÉRATIF (avant tout le reste)
-1. **COHÉRENCE DU SUJET D'ABORD.** Vérifie que l'article traite UN concept clairement défini, sans confusion entre notions voisines (ex. ne pas confondre un élément porteur de bâtiment avec une structure d'aménagement extérieur). Si l'article amalgame des concepts différents ou décrit des matériaux/techniques hors-sujet, c'est le DÉFAUT N°1 : signale-le en tête du résumé exécutif et pénalise fortement la citabilité et le score global.
-2. **PRÉCISION NORMATIVE & ENTITÉS.** Exige les normes applicables (DTU, NF, RE2020, Code de l'urbanisme/PLU…), les bonnes UNITÉS (ex. pente en % et non en degrés si la norme l'exige), et la présence des entités expertes du domaine (signale celles qui manquent).
-3. **PRÉCISION DES SEUILS, PLAFONDS ET CONDITIONS (anti-généralisation).** Pour toute donnée réglementaire (montant d'aide, plafond, seuil technique, éligibilité), donne la valeur EXACTE **par cas/par barème AVEC ses conditions** — jamais un chiffre rond généreux ni un « jusqu'à X » sans condition. Exemples du domaine : éco-PTZ = 7 000 € (parois vitrées seules) / **15 000 € (une action seule, dont isolation de toiture)** / 25 000 € (2 travaux) / 30 000 € (3+) / 50 000 € (rénovation globale uniquement) — donc « jusqu'à 50 000 € » est FAUX pour une action isolée. Pente DTU 43.1 = 0 à 5 %, **minimum 1 % (inaccessible) / 1,5 % (accessible)** — pas « 2 % ». MaPrimeRénov' 2026 = distinguer **Parcours par geste** et **Parcours Accompagné** (rénovation d'ampleur, gain ≥ 2 classes DPE, **Mon Accompagnateur Rénov' obligatoire**). Signale tout chiffre de l'article qui gomme ces conditions.
-4. Ensuite seulement : fraîcheur, fact-checking des chiffres/prix avec des sources réelles et datées.
-
-Pour les FAQ que tu PRODUIS (éléments prêts à coller), garde des réponses COURTES (50-60 mots) et autosuffisantes pour l'extraction par les IA.
-
-## FORMAT MARKDOWN
-- Le TL;DR, les actions, les réponses de FAQ et tout texte rédigé : en **markdown normal** (gras/italique/listes) — JAMAIS dans un bloc de code (pas de triple backtick).
-- Réserve les blocs de code UNIQUEMENT au code destiné au copier-coller (HTML de tableau, balisage schema.org/JSON-LD) et précise le langage après les backticks (ex. \`\`\`html).
-
-## EXHAUSTIVITÉ
-Produis TOUTES les sections du format, sans en omettre ni les tronquer — y compris le tableau comparatif AVEC sa version HTML prête à copier-coller (bloc ③ de la ressource). N'inclus PAS de composant React ni d'artifact séparé (l'aperçu passe par la vue avant/après native). Ne produis QUE le rapport markdown, rien d'autre.
-
-${auditBodies}${auditResBlock}`;
-    const auditUser = `## ARTICLE À AUDITER\n${content}\n\n${scrapedContext ? `## CONTENU DES SOURCES RÉCENTES (${prevYear}-${year})\n${scrapedContext}\n\n` : ''}${sourcesSnippets ? `## RÉSULTATS DE RECHERCHE WEB\n${sourcesSnippets}\n\n` : ''}Produis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
-
-    // L'appel d'audit (grosse génération) peut échouer sur une erreur transitoire
-    // d'Anthropic (529 « overloaded », 5xx) ou un timeout. On RÉESSAIE jusqu'à 3 fois
-    // avec backoff — l'audit étant la base de toute la MAJ (priorité n°1).
-    for (let attempt = 1; attempt <= 3 && !auditReport; attempt++) {
-      try {
-        const { text: auditText, usage: uA } = await callClaudeWithProgress(
-          null,
-          { system: auditSystem, max_tokens: 12000, model: model3, messages: [{ role: 'user', content: auditUser }] },
-          onStep,
-          onReplace,
-          attempt === 1 ? 'Audit en cours' : `Audit en cours — nouvel essai (${attempt}/3)`
-        );
-        trackCall(uA);
-        auditReport = (auditText || '').trim();
-      } catch (e) {
-        console.warn(`[audit] essai ${attempt}/3:`, e.message);
-        if (attempt < 3) {
-          onStep(`Audit — erreur transitoire, nouvel essai (${attempt}/3)…`);
-          await new Promise(r => setTimeout(r, 1500 * attempt));
-        } else {
-          onStep(`⚠️ Audit indisponible après 3 essais (${e.message})`);
-        }
-      }
-    }
-  }
+  // ── Audit déjà réalisé en amont (juste après la Phase 0, AVANT la recherche) ──
+  // auditReport est déjà disponible ici : il alimente l'onglet AUDIT et sert de base
+  // aux corrections. La confrontation aux sources fraîches se fait dans cette étape de
+  // rédaction (sources web ci-dessous), pas dans l'audit.
 
   const kwBlock = targetKeyword
     ? `## MOT-CLÉ CIBLE\n**"${targetKeyword}"** — Priorise ce mot-clé dans toutes tes modifications : H1/H2, introduction, densité sémantique naturelle, balises title/meta si présentes.\n\n`
