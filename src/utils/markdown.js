@@ -59,6 +59,15 @@ export const unwrapProseFences = (md = '') =>
     return body;                          // sinon (prose, ```text, ```markdown…) → on déballe (texte normal)
   });
 
+// Retire la section « Version HTML prête à copier-coller » (bloc ③) de l'audit :
+// non obligatoire pour l'instant. Supprime le titre correspondant et tout son contenu
+// jusqu'au prochain titre markdown (ou la fin). Couvre aussi les audits déjà en cache.
+export const stripCopyPasteHtml = (md = '') =>
+  md.replace(
+    /(^|\n)#{1,6}\s*[^\n]*version html[^\n]*copier[ -]coller[\s\S]*?(?=\n#{1,6}\s|$)/gi,
+    '$1',
+  );
+
 // ── Aperçu « code | rendu » des blocs HTML ────────────────────────────────────
 // Enrobe chaque bloc de code HTML (tableaux, snippets à coller…) d'un sélecteur
 // permettant de basculer entre le CODE (coloré) et son RENDU réel. Opère sur la

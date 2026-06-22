@@ -1360,6 +1360,7 @@ const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, rejec
       'Content-Length': Buffer.byteLength(payload),
     },
   }, (res) => {
+    res.setEncoding('utf8');   // décodage UTF-8 correct des chunks (accents é/è/à non coupés)
     let data = '';
     res.on('data', d => { data += d; });
     res.on('end', () => {
@@ -1406,6 +1407,7 @@ const callAnthropicDirect = (token, bodyObj) => new Promise((resolve, reject) =>
       'Content-Length': Buffer.byteLength(payload),
     },
   }, (res) => {
+    res.setEncoding('utf8');   // décodage UTF-8 correct des chunks (accents é/è/à non coupés)
     let data = '';
     res.on('data', d => { data += d; });
     res.on('end', () => {
@@ -1479,7 +1481,8 @@ const callClaude = (prompt) => new Promise((resolve, reject) => {
 
   const bin = CLAUDE_BIN.replace(/'/g, "''");
   const tmpPs = tmp.replace(/'/g, "''");
-  const ps1 = `$p = Get-Content -Raw -Path '${tmpPs}'; & '${bin}' -p $p --output-format text`;
+  // OutputEncoding UTF-8 : PowerShell sort sinon en codepage Windows (850/1252) → accents cassés.
+  const ps1 = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $p = Get-Content -Raw -Path '${tmpPs}'; & '${bin}' -p $p --output-format text`;
 
   const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps1], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -1488,8 +1491,10 @@ const callClaude = (prompt) => new Promise((resolve, reject) => {
   });
 
   let stdout = '', stderr = '';
-  proc.stdout.on('data', d => { stdout += d.toString(); });
-  proc.stderr.on('data', d => { stderr += d.toString(); });
+  proc.stdout.setEncoding('utf8');   // chunks décodés en UTF-8 (accents non coupés entre morceaux)
+  proc.stderr.setEncoding('utf8');
+  proc.stdout.on('data', d => { stdout += d; });
+  proc.stderr.on('data', d => { stderr += d; });
 
   const timer = setTimeout(() => {
     try { proc.kill(); } catch {}
@@ -1663,6 +1668,7 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
       'Content-Length': Buffer.byteLength(payload),
     },
   }, (apiRes) => {
+    apiRes.setEncoding('utf8');   // chunks SSE décodés en UTF-8 (accents non coupés entre morceaux)
     // Erreur HTTP de l'API Anthropic
     if (apiRes.statusCode !== 200) {
       let errData = '';
@@ -1679,7 +1685,7 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
 
     // Lecture du flux SSE Anthropic
     apiRes.on('data', (chunk) => {
-      sseBuffer += chunk.toString();
+      sseBuffer += chunk;
       const lines = sseBuffer.split('\n');
       sseBuffer = lines.pop() || ''; // conserver la ligne incomplète
 
