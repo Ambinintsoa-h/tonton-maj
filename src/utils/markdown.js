@@ -59,14 +59,33 @@ export const unwrapProseFences = (md = '') =>
     return body;                          // sinon (prose, ```text, ```markdown…) → on déballe (texte normal)
   });
 
-// Retire la section « Version HTML prête à copier-coller » (bloc ③) de l'audit :
-// non obligatoire pour l'instant. Supprime le titre correspondant et tout son contenu
-// jusqu'au prochain titre markdown (ou la fin). Couvre aussi les audits déjà en cache.
-export const stripCopyPasteHtml = (md = '') =>
-  md.replace(
-    /(^|\n)#{1,6}\s*[^\n]*version html[^\n]*copier[ -]coller[\s\S]*?(?=\n#{1,6}\s|$)/gi,
-    '$1',
-  );
+// Allège l'audit au rendu en retirant des sections entières (titre + tout le contenu
+// jusqu'au prochain titre de niveau ≤ celui de la section). Ces blocs « prêts à coller »
+// (TL;DR rédigé, FAQ avec réponses, version HTML) ne sont pas utiles dans l'audit : ils
+// figurent déjà dans la vue APRÈS. Gère les sous-titres imbriqués et couvre les audits
+// déjà en cache.
+const AUDIT_STRIP_HEADINGS = [
+  /version\s+html[^\n]*copier[\s-]*coller/i,           // bloc ③ : version HTML à copier
+  /éléments?\s+prêts?\s+à\s+(?:copier[\s-]*)?coller/i,  // TL;DR rédigé + FAQ avec réponses
+];
+export const trimAuditForDisplay = (md = '') => {
+  const lines = md.split('\n');
+  const out = [];
+  let skipLevel = 0; // 0 = on garde ; >0 = on retire jusqu'au prochain titre de niveau ≤ skipLevel
+  for (const line of lines) {
+    const m = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*$/);
+    if (m) {
+      const level = m[1].length;
+      if (skipLevel && level <= skipLevel) skipLevel = 0;          // fin de la section retirée
+      if (!skipLevel && AUDIT_STRIP_HEADINGS.some(re => re.test(m[2]))) {
+        skipLevel = level;                                          // démarre le retrait
+        continue;
+      }
+    }
+    if (!skipLevel) out.push(line);
+  }
+  return out.join('\n');
+};
 
 // ── Aperçu « code | rendu » des blocs HTML ────────────────────────────────────
 // Enrobe chaque bloc de code HTML (tableaux, snippets à coller…) d'un sélecteur
