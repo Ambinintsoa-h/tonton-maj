@@ -614,8 +614,8 @@ Tu DOIS toujours produire un résumé de l'article, sous forme d'**addition** pl
 EXCEPTION à la règle des sources : ce résumé synthétise le CONTENU DÉJÀ PRÉSENT dans l'article (il n'invente aucune info nouvelle) → il ne nécessite PAS de source web.
 **NE METS JAMAIS ce résumé dans le champ "analysis".** Il est destiné au LECTEUR → il va DANS l'article (addition). Le champ "analysis" = synthèse INTERNE (audit/scores/skills), JAMAIS publiée.
 
-### FAQ — FORMAT ACCORDÉON OBLIGATOIRE (HTML natif, SANS couleur ni style)
-Si tu ajoutes une FAQ (élément prêt à coller), produis-la comme UNE SEULE addition, en accordéon natif HTML :
+### FAQ — OBLIGATOIRE, FORMAT ACCORDÉON (HTML natif, SANS couleur ni style)
+Ajoute TOUJOURS une FAQ (3 questions/réponses), idéalement à partir des **questions PAA** de l'audit. Fais-le **MÊME si l'article contient déjà une FAQ** : propose alors de NOUVELLES questions complémentaires (ne duplique pas les questions déjà présentes). Produis-la comme UNE SEULE addition, en accordéon natif HTML :
 - \`"type": "addition"\`
 - \`"anchor"\` : copie EXACTE d'une phrase située vers la FIN de l'article (la FAQ se place en fin)
 - \`"updated"\` : un titre \`<h2>FAQ</h2>\` suivi d'UN \`<details>\` par question. Chaque question = le \`<summary>\`, la réponse (50-60 mots) dans un \`<p>\` :
@@ -730,7 +730,7 @@ export const runAgent = async ({
     const auditResBlock = auditResources.length
       ? `\n\n## RESSOURCES DU SKILL\n` + auditResources.map(r => `### ${r.name}\n${r.content || ''}`).join('\n\n───\n\n')
       : '';
-    const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, actions prioritaires, éléments prêts à coller, questions PAA, audit EEAT, tableau comparatif si pertinent, manquements, recommandations stratégiques).
+    const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, actions prioritaires, questions PAA, audit EEAT, tableau comparatif si pertinent, manquements, recommandations stratégiques).
 
 ## ORDRE D'ANALYSE IMPÉRATIF (avant tout le reste)
 1. **COHÉRENCE DU SUJET D'ABORD.** Vérifie que l'article traite UN concept clairement défini, sans confusion entre notions voisines (ex. ne pas confondre un élément porteur de bâtiment avec une structure d'aménagement extérieur). Si l'article amalgame des concepts différents ou décrit des matériaux/techniques hors-sujet, c'est le DÉFAUT N°1 : signale-le en tête du résumé exécutif et pénalise fortement la citabilité et le score global.
@@ -738,7 +738,7 @@ export const runAgent = async ({
 3. **PRÉCISION DES SEUILS, PLAFONDS ET CONDITIONS (anti-généralisation).** Pour toute donnée réglementaire (montant d'aide, plafond, seuil technique, éligibilité), donne la valeur EXACTE **par cas/par barème AVEC ses conditions** — jamais un chiffre rond généreux ni un « jusqu'à X » sans condition. Exemples du domaine : éco-PTZ = 7 000 € (parois vitrées seules) / **15 000 € (une action seule, dont isolation de toiture)** / 25 000 € (2 travaux) / 30 000 € (3+) / 50 000 € (rénovation globale uniquement) — donc « jusqu'à 50 000 € » est FAUX pour une action isolée. Pente DTU 43.1 = 0 à 5 %, **minimum 1 % (inaccessible) / 1,5 % (accessible)** — pas « 2 % ». MaPrimeRénov' 2026 = distinguer **Parcours par geste** et **Parcours Accompagné** (rénovation d'ampleur, gain ≥ 2 classes DPE, **Mon Accompagnateur Rénov' obligatoire**). Signale tout chiffre de l'article qui gomme ces conditions.
 4. Ensuite seulement : repère les chiffres/prix/dates À VÉRIFIER (fraîcheur) et liste-les comme « à confronter aux sources » — la vérification factuelle contre des sources web datées se fait à l'étape de RÉDACTION (les sources ne sont pas encore disponibles ici).
 
-Pour les FAQ que tu PRODUIS (éléments prêts à coller), garde des réponses COURTES (50-60 mots) et autosuffisantes pour l'extraction par les IA.
+Pour les questions PAA, donne SEULEMENT les questions (pas de réponses rédigées) — le TL;DR et les réponses FAQ sont produits dans la proposition de MAJ (vue APRÈS), pas dans l'audit.
 
 ## FORMAT MARKDOWN
 - Le TL;DR, les actions, les réponses de FAQ et tout texte rédigé : en **markdown normal** (gras/italique/listes) — JAMAIS dans un bloc de code (pas de triple backtick).
@@ -750,6 +750,7 @@ Produis TOUTES les sections du format, sans en omettre ni les tronquer (le table
 ## CONCISION (prioritaire sur le format du skill — 2 parties à raccourcir)
 - **Section « Tableau comparatif prix / performance » — la section ENTIÈRE** : synthétise fortement, garde UNIQUEMENT les éléments très essentiels pour la MAJ. Supprime les redites et le superflu : pas de « version texte lisible » en double du tableau, pas de tableaux A/B multiples, pas de longs paragraphes d'intro (« Applicable / Type A / Type B »). Un seul tableau markdown court (ou 3-5 puces) avec les critères décisifs suffit.
 - **Questions PAA (People Also Ask)** : limite-toi aux **3 questions les plus pertinentes**, pas plus.
+- **Section « Éléments prêts à copier-coller » (TL;DR rédigé + FAQ avec réponses)** : NE PAS la produire dans l'audit. Recommande seulement (ex. liste des 3 questions PAA à ajouter). Le contenu rédigé (TL;DR, FAQ) est produit dans la proposition de MAJ (vue APRÈS), où il figure déjà.
 
 ${auditBodies}${auditResBlock}`;
     const auditUser = `## ARTICLE À AUDITER\n${content}\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
