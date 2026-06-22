@@ -474,6 +474,7 @@ Traduis les conclusions de l'audit en modifications concrètes :
 - Tableau comparatif pertinent → une addition contenant le bloc HTML du gabarit de la ressource.
 - NE supprime PAS un contenu au SEUL motif qu'il est « générique » : juge selon le CONTEXTE. Garde (et enrichis) les conseils génériques PERTINENTS pour le sujet et utiles au lecteur (sur un article produit/service : guide d'achat, comment choisir, entretien, usage, FAQ). Ne corrige/remplace/retire QUE le FAUX, l'OBSOLÈTE, ou le contenu RÉELLEMENT hors-sujet / remplissage qui dilue le sujet. Une recommandation d'audit du type « séparer infos marque et conseils » = RÉORGANISER/clarifier, pas supprimer ce qui est utile.
 - Scores, audit EEAT, recommandations stratégiques, manquements → à résumer dans le champ "analysis" (PAS dans le contenu de l'article).
+- IMPACT RÉEL UNIQUEMENT : n'émets une update QUE si elle change le FOND — corrige une donnée fausse/obsolète, ou ajoute un fait/chiffre/précision NOUVEAUX et utiles au lecteur. N'émets PAS d'update purement cosmétique : reformulation à sens égal, ou simple ajout d'une date/année ou d'une mention de source sur une information dont la valeur ne change pas. Dans le doute « est-ce un vrai apport pour le lecteur ? » → si non, n'émets rien. Mieux vaut 3 updates à fort impact que 10 retouches mineures.
 N'insère JAMAIS dans l'article les titres de rapport (« Score global », « Tableau d'audit AIO », « Audit EEAT »…).`;
 };
 

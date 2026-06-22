@@ -2378,7 +2378,12 @@ export default function ArticleResult() {
                           <p className="text-[11px] text-gray-400 line-through leading-relaxed break-words">{u.original}</p>
                           <div className="flex items-start gap-1.5">
                             <ArrowRight size={11} className="text-green-500 flex-shrink-0 mt-0.5" />
-                            <p className="text-[11px] font-semibold text-green-700 leading-relaxed break-words">{u.updated}</p>
+                            {/* Aperçu RENDU (HTML interprété) — pas de balises brutes. À l'insertion,
+                                applyMissed applique le HTML tel quel dans l'article. */}
+                            <div
+                              className="md-content flex-1 min-w-0 text-[12px] text-gray-800 leading-relaxed break-words [&_h1]:!text-sm [&_h2]:!text-sm [&_h3]:!text-[13px] [&_h1]:!my-1 [&_h2]:!my-1 [&_h3]:!my-1 [&_h4]:!text-[12px] [&_p]:!text-[12px] [&_p]:!my-0.5 [&_ul]:!my-1 [&_ol]:!my-1 [&_li]:!text-[12px] [&_a]:text-indigo-600 [&_a]:break-all [&_table]:!text-[11px] [&_strong]:text-gray-900"
+                              dangerouslySetInnerHTML={{ __html: renderMarkdown(u.updated || '') }}
+                            />
                           </div>
                           {u.reason && (
                             <p className="text-[10px] text-gray-400 italic">{u.reason}</p>
