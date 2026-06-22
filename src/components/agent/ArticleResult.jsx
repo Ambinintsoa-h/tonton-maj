@@ -2008,7 +2008,7 @@ export default function ArticleResult() {
                 {auditReport ? (
                   <div
                     onClick={handleAuditToggle}
-                    className="md-content text-sm leading-relaxed break-words [&_h1]:!text-xl [&_h1]:!mt-4 [&_h2]:!text-lg [&_h2]:!mt-5 [&_h3]:!text-base [&_h3]:!mt-3 [&_h4]:!text-sm [&_p]:!text-[13px] [&_li]:!text-[13px] [&_a]:break-all [&_pre]:!max-w-full [&_pre]:!overflow-x-auto [&_pre]:!text-[12px] [&_table]:!table [&_table]:!w-full [&_table]:!max-w-none [&_td]:!align-top [&_td]:!max-w-none [&_th]:!whitespace-normal"
+                    className="md-content audit-md text-sm leading-relaxed break-words [&_h1]:!text-xl [&_h1]:!mt-4 [&_h2]:!text-lg [&_h2]:!mt-5 [&_h3]:!text-base [&_h3]:!mt-3 [&_h4]:!text-sm [&_p]:!text-[13px] [&_li]:!text-[13px] [&_a]:break-all [&_pre]:!max-w-full [&_pre]:!overflow-x-auto [&_pre]:!text-[12px] [&_table]:!table [&_table]:!w-full [&_table]:!max-w-none [&_td]:!align-top [&_td]:!max-w-none [&_th]:!whitespace-normal"
                     dangerouslySetInnerHTML={{ __html: emojiToIcons(renderMarkdown(trimAuditForDisplay(unwrapProseFences(auditReport)), { codePreview: true })) }}
                   />
                 ) : (

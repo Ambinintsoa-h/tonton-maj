@@ -65,8 +65,9 @@ export const unwrapProseFences = (md = '') =>
 // figurent déjà dans la vue APRÈS. Gère les sous-titres imbriqués et couvre les audits
 // déjà en cache.
 const AUDIT_STRIP_HEADINGS = [
-  /version\s+html[^\n]*copier[\s-]*coller/i,           // bloc ③ : version HTML à copier
+  /version\s+html[^\n]*copier[\s-]*coller/i,            // bloc ③ : version HTML à copier
   /éléments?\s+prêts?\s+à\s+(?:copier[\s-]*)?coller/i,  // TL;DR rédigé + FAQ avec réponses
+  /publication[^\n]*(?:canal|tonton|wordpress|mcp)/i,  // section « Publication » — gérée par l'UI
 ];
 export const trimAuditForDisplay = (md = '') => {
   const lines = md.split('\n');
