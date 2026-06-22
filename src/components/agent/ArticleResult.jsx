@@ -2301,9 +2301,17 @@ export default function ArticleResult() {
                           }
                           // 3) Vraie ancre <a href> → tooltip URL complète
                           showAnchorTooltip(e);
+                          // Hors lien interne / segment de diff : on n'est plus sur l'élément
+                          // → planifier le masquage des mini-boutons ✓/✗ (la souris sur le
+                          // segment OU sur la barre flottante annule ce timer). Évite qu'ils
+                          // restent affichés en glissant la souris sur le texte voisin.
+                          if (segHover || linkHover) {
+                            clearTimeout(leaveTimerRef.current);
+                            leaveTimerRef.current = setTimeout(() => { setSegHover(null); setLinkHover(null); }, 1200);
+                          }
                         }}
                         onMouseLeave={() => {
-                          leaveTimerRef.current = setTimeout(() => { setLinkHover(null); setAnchorHover(null); setSegHover(null); }, 220);
+                          leaveTimerRef.current = setTimeout(() => { setLinkHover(null); setAnchorHover(null); setSegHover(null); }, 1200);
                         }}
                         onBlur={() => {
                           // Fin d'édition (déplacement/collage terminé) → réparer la structure (#2)
