@@ -752,6 +752,7 @@ Produis TOUTES les sections du format, sans en omettre ni les tronquer (le table
 - **Section « Tableau comparatif prix / performance » — la section ENTIÈRE** : synthétise fortement, garde UNIQUEMENT les éléments très essentiels pour la MAJ. Supprime les redites et le superflu : pas de « version texte lisible » en double du tableau, pas de tableaux A/B multiples, pas de longs paragraphes d'intro (« Applicable / Type A / Type B »). Un seul tableau markdown court (ou 3-5 puces) avec les critères décisifs suffit.
 - **Questions PAA (People Also Ask)** : limite-toi aux **3 questions les plus pertinentes**, pas plus.
 - **Section « Éléments prêts à copier-coller » (TL;DR rédigé + FAQ avec réponses)** : NE PAS la produire dans l'audit. Recommande seulement (ex. liste des 3 questions PAA à ajouter). Le contenu rédigé (TL;DR, FAQ) est produit dans la proposition de MAJ (vue APRÈS), où il figure déjà.
+- **Section « Publication » / proposition de canal** (« mettre à jour en live ou enregistrer en brouillon ? »…) : NE PAS la produire. Le choix de publication est géré par l'interface de TONTON AI, pas par le rapport d'audit.
 
 ${auditBodies}${auditResBlock}`;
     const auditUser = `## ARTICLE À AUDITER\n${content}\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
