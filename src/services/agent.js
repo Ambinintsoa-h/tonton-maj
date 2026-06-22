@@ -745,7 +745,7 @@ Pour les FAQ que tu PRODUIS (éléments prêts à coller), garde des réponses C
 - Réserve les blocs de code UNIQUEMENT au code destiné au copier-coller (HTML de tableau, balisage schema.org/JSON-LD) et précise le langage après les backticks (ex. \`\`\`html).
 
 ## EXHAUSTIVITÉ
-Produis TOUTES les sections du format, sans en omettre ni les tronquer — y compris le tableau comparatif AVEC sa version HTML prête à copier-coller (bloc ③ de la ressource). N'inclus PAS de composant React ni d'artifact séparé (l'aperçu passe par la vue avant/après native). Ne produis QUE le rapport markdown, rien d'autre.
+Produis TOUTES les sections du format, sans en omettre ni les tronquer (le tableau comparatif peut rester en tableau markdown classique). NE PRODUIS PAS de « version HTML prête à copier-coller » (bloc ③ de la ressource) — inutile pour l'instant. N'inclus PAS de composant React ni d'artifact séparé (l'aperçu passe par la vue avant/après native). Ne produis QUE le rapport markdown, rien d'autre.
 
 ${auditBodies}${auditResBlock}`;
     const auditUser = `## ARTICLE À AUDITER\n${content}\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
