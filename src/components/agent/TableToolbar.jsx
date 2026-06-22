@@ -32,11 +32,20 @@ const Sep = () => <div className="w-px h-4 bg-white/15 mx-0.5 flex-shrink-0" />;
 export default function TableToolbar({ articleEl, contentRef }) {
   const [cell, setCell] = useState(null);     // td/th courant
   const [pos, setPos]   = useState({ top: 0, left: 0 });
-  const barRef = useRef(null);
+  const barRef  = useRef(null);
+  const hideRef = useRef(null);
 
   const sync = useCallback(() => {
     if (contentRef && articleEl) contentRef.current = articleEl.innerHTML;
   }, [articleEl, contentRef]);
+
+  // Auto-masquage : la barre ne reste que tant qu'on interagit avec le tableau
+  // (curseur/clic/clavier, souris sur une cellule) ou qu'on survole la barre. Sans
+  // interaction, elle disparaît au bout de ~4 s — corrige l'effet « barre qui reste ».
+  const armHide = useCallback(() => {
+    clearTimeout(hideRef.current);
+    hideRef.current = setTimeout(() => setCell(null), 4000);
+  }, []);
 
   // Détection de la cellule sous le curseur
   useEffect(() => {
@@ -56,21 +65,28 @@ export default function TableToolbar({ articleEl, contentRef }) {
           const rect = (table || td).getBoundingClientRect();
           setCell(td);
           setPos({ top: Math.max(8, rect.top - 42), left: rect.left });
+          armHide();
         } else {
           setCell(null);
         }
       });
     };
+    // Souris sur une cellule → réarme le minuteur (la barre reste tant que la souris
+    // est sur le tableau).
+    const onMove = (e) => { if (e.target.closest?.('td, th')) armHide(); };
     document.addEventListener('selectionchange', detect);
     articleEl.addEventListener('click', detect);
     articleEl.addEventListener('keyup', detect);
+    articleEl.addEventListener('mousemove', onMove);
     return () => {
       document.removeEventListener('selectionchange', detect);
       articleEl.removeEventListener('click', detect);
       articleEl.removeEventListener('keyup', detect);
+      articleEl.removeEventListener('mousemove', onMove);
+      clearTimeout(hideRef.current);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [articleEl]);
+  }, [articleEl, armHide]);
 
   // ── Helpers DOM ─────────────────────────────────────────────────────────────
   const ctx = useCallback(() => {
@@ -186,6 +202,8 @@ export default function TableToolbar({ articleEl, contentRef }) {
       ref={barRef}
       style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 9998 }}
       onMouseDown={(e) => e.preventDefault()}
+      onMouseEnter={() => clearTimeout(hideRef.current)}
+      onMouseLeave={armHide}
       className="flex items-center gap-0.5 bg-gray-900 border border-gray-700 rounded-xl px-2 py-1.5 shadow-[0_8px_32px_rgba(0,0,0,0.5)] whitespace-nowrap"
     >
       <span className="flex items-center gap-1 text-[10px] font-semibold text-white/40 pr-1">
