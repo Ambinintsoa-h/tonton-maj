@@ -747,6 +747,10 @@ Pour les FAQ que tu PRODUIS (éléments prêts à coller), garde des réponses C
 ## EXHAUSTIVITÉ
 Produis TOUTES les sections du format, sans en omettre ni les tronquer (le tableau comparatif peut rester en tableau markdown classique). NE PRODUIS PAS de « version HTML prête à copier-coller » (bloc ③ de la ressource) — inutile pour l'instant. N'inclus PAS de composant React ni d'artifact séparé (l'aperçu passe par la vue avant/après native). Ne produis QUE le rapport markdown, rien d'autre.
 
+## CONCISION (prioritaire sur le format du skill — 2 parties à raccourcir)
+- **Section « Tableau comparatif prix / performance » — la section ENTIÈRE** : synthétise fortement, garde UNIQUEMENT les éléments très essentiels pour la MAJ. Supprime les redites et le superflu : pas de « version texte lisible » en double du tableau, pas de tableaux A/B multiples, pas de longs paragraphes d'intro (« Applicable / Type A / Type B »). Un seul tableau markdown court (ou 3-5 puces) avec les critères décisifs suffit.
+- **Questions PAA (People Also Ask)** : limite-toi aux **3 questions les plus pertinentes**, pas plus.
+
 ${auditBodies}${auditResBlock}`;
     const auditUser = `## ARTICLE À AUDITER\n${content}\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
 
