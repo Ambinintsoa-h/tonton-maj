@@ -447,7 +447,11 @@ const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON sty
  * Comptage fiable côté code (le modèle ne compte pas) → chiffres injectés dans l'audit.
  */
 const analyzeLinks = (html = '', articleUrl = '') => {
-  const hrefs = [...String(html).matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi)].map(m => m[1].trim());
+  const src = String(html);
+  const hrefs = [
+    ...[...src.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]),  // HTML <a href>
+    ...[...src.matchAll(/\[[^\]]+\]\(\s*(https?:\/\/[^\s)]+|\/[^\s)]+)/gi)].map(m => m[1]), // markdown [txt](url)
+  ].map(h => h.trim());
   let host = '';
   try { host = articleUrl ? new URL(articleUrl).hostname.replace(/^www\./, '') : ''; } catch { /* url invalide */ }
   let internal = 0, external = 0;
@@ -677,6 +681,7 @@ Ajoute TOUJOURS une FAQ (3 questions/réponses), idéalement à partir des **que
 // ── Agent principal ───────────────────────────────────────────────────────────
 export const runAgent = async ({
   content,
+  contentHtml    = '',    // HTML d'origine (avec les <a href>) — pour l'analyse du maillage (le texte brut perd les liens)
   skills,
   knowledge      = [],
   articleUrl     = '',
@@ -784,7 +789,7 @@ Produis TOUTES les sections du format, sans en omettre ni les tronquer (le table
 - **Section « Publication » / proposition de canal** (« mettre à jour en live ou enregistrer en brouillon ? »…) : NE PAS la produire. Le choix de publication est géré par l'interface de TONTON AI, pas par le rapport d'audit.
 
 ${auditBodies}${auditResBlock}`;
-    const linkStats = analyzeLinks(content, articleUrl);
+    const linkStats = analyzeLinks(contentHtml || content, articleUrl);
     const auditUser = `## ARTICLE À AUDITER\n${content}\n\n## MAILLAGE EXISTANT (compté automatiquement — chiffres fiables, reprends-les tels quels)\n- Liens INTERNES (même site) : ${linkStats.internal}\n- Liens EXTERNES (autres sites) : ${linkStats.external}\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
 
     for (let attempt = 1; attempt <= 3 && !auditReport; attempt++) {
