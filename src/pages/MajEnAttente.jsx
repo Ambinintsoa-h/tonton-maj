@@ -725,14 +725,14 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onVi
             </div>
           ) : null}
 
-          {/* Bouton MAJ — seulement si pending */}
-          {item.status === 'pending' && !running && (
+          {/* Bouton MAJ (pending) / Relancer (après une erreur) */}
+          {(item.status === 'pending' || item.status === 'error') && !running && (
             <button
               onClick={() => onRunMaj(item)}
-              className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 whitespace-nowrap"
+              className={`text-xs px-3 py-1.5 flex items-center gap-1.5 whitespace-nowrap ${item.status === 'error' ? 'btn-secondary !text-red-600 !border-red-200 hover:!bg-red-50' : 'btn-primary'}`}
             >
-              <Sparkles size={11} />
-              MAJ
+              {item.status === 'error' ? <RefreshCw size={11} /> : <Sparkles size={11} />}
+              {item.status === 'error' ? 'Relancer' : 'MAJ'}
             </button>
           )}
 
@@ -871,6 +871,14 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onVi
                       Ouvrir la review
                     </button>
                   </div>
+                </div>
+              )}
+
+              {/* Cause de l'échec (run en erreur) */}
+              {item.status === 'error' && item.errorMsg && (
+                <div className="flex items-start gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                  <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                  <span className="break-words"><span className="font-semibold">Échec : </span>{item.errorMsg}</span>
                 </div>
               )}
 
@@ -1200,7 +1208,7 @@ export default function MajEnAttente() {
       console.error('[maj]', e);
       toast.error('Erreur : ' + e.message);
       dispatch(setError(e.message));
-      dispatch(updatePendingItem({ id: item.id, status: 'error' }));
+      dispatch(updatePendingItem({ id: item.id, status: 'error', errorMsg: e.message }));
       return null;
     } finally {
       updateRunState(item.id, null);
