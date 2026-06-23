@@ -1027,15 +1027,33 @@ ${content}
 - "original" = copie EXACTE mot-pour-mot du texte de l'article
 - Réponds UNIQUEMENT avec le JSON valide, sans markdown ni texte autour`;
 
-  // Génération avec compteur de tokens simulé (feedback visuel temps réel)
-  const { text: finalText, usage: u3 } = await callClaudeWithProgress(
-    null,
-    { system: buildSystemPrompt(skills, knowledge, auditReport), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
-    onStep,
-    onReplace,
-    `Génération en cours (${modelLabel})`
-  );
-  trackCall(u3);
+  // Génération avec compteur de tokens simulé (feedback visuel temps réel).
+  // Retry x3 (comme l'audit) : une erreur transitoire d'Anthropic (529 « overloaded »,
+  // 5xx, timeout) sur cette grosse génération ne doit pas faire échouer toute la MAJ.
+  let finalText = '', u3 = null, genOk = false;
+  for (let attempt = 1; attempt <= 3 && !genOk; attempt++) {
+    try {
+      const r = await callClaudeWithProgress(
+        null,
+        { system: buildSystemPrompt(skills, knowledge, auditReport), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
+        onStep,
+        onReplace,
+        attempt === 1 ? `Génération en cours (${modelLabel})` : `Génération — nouvel essai (${attempt}/3)`
+      );
+      finalText = r.text || '';
+      u3 = r.usage;
+      genOk = true;
+    } catch (e) {
+      console.warn(`[generation] essai ${attempt}/3:`, e.message);
+      if (attempt < 3) {
+        onStep(`Génération — erreur transitoire, nouvel essai (${attempt}/3)…`);
+        await new Promise(r => setTimeout(r, 1500 * attempt));
+      } else {
+        throw e; // après 3 échecs → la MAJ remonte en erreur (avec le message)
+      }
+    }
+  }
+  if (u3) trackCall(u3);
 
   onStep('Finalisation des résultats...');
   onProgress(88);
