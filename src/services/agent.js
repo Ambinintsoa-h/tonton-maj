@@ -442,6 +442,30 @@ const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON sty
 };
 
 /**
+ * Compte les liens de l'article (maillage) : INTERNES (même domaine que l'article,
+ * ou lien relatif) vs EXTERNES (autre domaine). Ignore ancres #, mailto:, tel:.
+ * Comptage fiable côté code (le modèle ne compte pas) → chiffres injectés dans l'audit.
+ */
+const analyzeLinks = (html = '', articleUrl = '') => {
+  const hrefs = [...String(html).matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi)].map(m => m[1].trim());
+  let host = '';
+  try { host = articleUrl ? new URL(articleUrl).hostname.replace(/^www\./, '') : ''; } catch { /* url invalide */ }
+  let internal = 0, external = 0;
+  for (const h of hrefs) {
+    if (!h || /^(#|mailto:|tel:|javascript:)/i.test(h)) continue;
+    if (/^https?:\/\//i.test(h)) {
+      let lh = '';
+      try { lh = new URL(h).hostname.replace(/^www\./, ''); } catch { /* ignore */ }
+      if (host && lh === host) internal++;
+      else if (lh) external++;
+    } else {
+      internal++; // lien relatif (/page, ../x) → interne
+    }
+  }
+  return { internal, external, total: internal + external };
+};
+
+/**
  * Skills au format Claude (SKILL.md) actifs → pilotent l'agent en « mode cerveau ».
  * Ils portent { description, body, resources[] } (pas de `content`).
  */
@@ -732,7 +756,7 @@ export const runAgent = async ({
     const auditResBlock = auditResources.length
       ? `\n\n## RESSOURCES DU SKILL\n` + auditResources.map(r => `### ${r.name}\n${r.content || ''}`).join('\n\n───\n\n')
       : '';
-    const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, recommandations & actions prioritaires [UNE seule section consolidée], questions PAA, audit EEAT, tableau comparatif si pertinent, manquements).
+    const auditSystem = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous. Applique INTÉGRALEMENT sa méthode ET son « format de sortie » : produis le RAPPORT D'AUDIT COMPLET en markdown (scores, rapport de fraîcheur, tableau d'audit AIO, recommandations & actions prioritaires [UNE seule section consolidée], questions PAA, audit EEAT, analyse du maillage (liens internes/externes), tableau comparatif si pertinent, manquements).
 
 ## ORDRE D'ANALYSE IMPÉRATIF (avant tout le reste)
 1. **COHÉRENCE DU SUJET D'ABORD.** Vérifie que l'article traite UN concept clairement défini, sans confusion entre notions voisines (ex. ne pas confondre un élément porteur de bâtiment avec une structure d'aménagement extérieur). Si l'article amalgame des concepts techniquement DISTINCTS ou décrit des matériaux/techniques VRAIMENT hors-sujet, c'est le DÉFAUT N°1 : signale-le en tête du résumé exécutif et pénalise fortement la citabilité et le score global. POUR LES CONTENUS « GÉNÉRIQUES », JUGE selon le CONTEXTE — le fait qu'un passage soit générique ne suffit NI à le condamner NI à le blanchir : un conseil générique PERTINENT pour le sujet et utile à l'intention de recherche (ex. sur un article climatiseur : comment choisir la puissance, entretien, usage, FAQ) est une VALEUR attendue → ne le compte PAS comme une incohérence. En revanche, du générique VRAIMENT hors-sujet, du remplissage qui dilue le sujet ou des digressions sans rapport avec l'intention de CET article = à signaler. Décide au cas par cas selon la pertinence pour CE sujet précis, jamais par une règle aveugle « générique = mauvais ».
@@ -741,6 +765,9 @@ export const runAgent = async ({
 4. Ensuite seulement : repère les chiffres/prix/dates À VÉRIFIER (fraîcheur) et liste-les comme « à confronter aux sources » — la vérification factuelle contre des sources web datées se fait à l'étape de RÉDACTION (les sources ne sont pas encore disponibles ici).
 
 Pour les questions PAA, donne SEULEMENT les questions (pas de réponses rédigées) — le TL;DR et les réponses FAQ sont produits dans la proposition de MAJ (vue APRÈS), pas dans l'audit.
+
+## MAILLAGE (liens) — section dédiée OBLIGATOIRE
+Analyse le maillage existant de l'article : indique le NOMBRE de liens INTERNES (même site) et EXTERNES (autres sites) — utilise les chiffres fournis dans le message utilisateur, ils sont fiables, reprends-les tels quels. Évalue si c'est suffisant pour le sujet et l'intention de recherche. Recommande EXPLICITEMENT d'en ajouter si trop peu : liens INTERNES vers des pages piliers pertinentes (propose les sujets/ancres) et liens EXTERNES vers des sources d'autorité (sites officiels, normes). Précise combien et de quels types.
 
 ## FORMAT MARKDOWN
 - Le TL;DR, les actions, les réponses de FAQ et tout texte rédigé : en **markdown normal** (gras/italique/listes) — JAMAIS dans un bloc de code (pas de triple backtick).
@@ -757,7 +784,8 @@ Produis TOUTES les sections du format, sans en omettre ni les tronquer (le table
 - **Section « Publication » / proposition de canal** (« mettre à jour en live ou enregistrer en brouillon ? »…) : NE PAS la produire. Le choix de publication est géré par l'interface de TONTON AI, pas par le rapport d'audit.
 
 ${auditBodies}${auditResBlock}`;
-    const auditUser = `## ARTICLE À AUDITER\n${content}\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
+    const linkStats = analyzeLinks(content, articleUrl);
+    const auditUser = `## ARTICLE À AUDITER\n${content}\n\n## MAILLAGE EXISTANT (compté automatiquement — chiffres fiables, reprends-les tels quels)\n- Liens INTERNES (même site) : ${linkStats.internal}\n- Liens EXTERNES (autres sites) : ${linkStats.external}\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
 
     for (let attempt = 1; attempt <= 3 && !auditReport; attempt++) {
       try {
