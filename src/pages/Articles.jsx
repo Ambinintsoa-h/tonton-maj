@@ -186,6 +186,7 @@ export default function Articles() {
     try {
       const result = await runAgent({
         content: articleContent,   // texte brut pour Claude
+        contentHtml: articleHtml,  // HTML (avec liens) pour l'analyse du maillage
         skills,
         knowledge,
         articleUrl:      tab === TAB_URL ? url : '',

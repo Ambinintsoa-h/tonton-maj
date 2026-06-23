@@ -1105,6 +1105,7 @@ export default function MajEnAttente() {
       // ── Étape 2 : Agent IA ────────────────────────────────────────────────
       const result = await runAgent({
         content:      articleContent,
+        contentHtml:  articleHtml,   // HTML (avec liens) pour l'analyse du maillage
         skills,
         knowledge,
         articleUrl:   item.url || '',
