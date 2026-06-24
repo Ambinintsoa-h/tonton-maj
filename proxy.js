@@ -2508,6 +2508,110 @@ app.post('/api/wp-tool', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Commentaires WordPress ───────────────────────────────────────────────────
+// Lecture + modération des commentaires via l'API REST WP (Application Passwords).
+// Les statuts non publics (hold/spam/trash) exigent un utilisateur WordPress avec
+// la capacité `moderate_comments`. Accès app réservé à manager/super_admin/support.
+const WP_COMMENT_FILTER_STATUSES = ['hold', 'approve', 'spam', 'trash'];
+const stripHtmlTags = (h = '') => String(h).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+
+// POST /api/wp-comments — liste paginée multi-statuts d'un site.
+// Body : { siteId, wpSites, statuses?: string[], page?, perPage? }
+app.post('/api/wp-comments', requireAuth, requireRole('super_admin', 'manager', 'support'), async (req, res) => {
+  const { siteId, wpSites = [], statuses = ['hold'], page = 1, perPage = 20 } = req.body;
+  const site = wpSites.find(s => s.id === siteId);
+  if (!site || !site.url || !site.username || !site.password) {
+    return res.status(400).json({ error: 'Site introuvable ou identifiants WordPress manquants' });
+  }
+  try {
+    await assertSafeUrl(site.url, 'URL du site WP');
+    const base = site.url.replace(/\/$/, '');
+    const auth = { 'Authorization': `Basic ${Buffer.from(`${site.username}:${site.password}`).toString('base64')}` };
+    const wanted = statuses.filter(s => WP_COMMENT_FILTER_STATUSES.includes(s));
+    const stList = wanted.length ? wanted : ['hold'];
+    const pp = Math.min(Math.max(parseInt(perPage, 10) || 20, 1), 100);
+    const pg = Math.max(parseInt(page, 10) || 1, 1);
+
+    // Une requête par statut (l'API WP ne combine pas plusieurs statuts) → fusion.
+    const perStatus = await Promise.all(stList.map(st =>
+      axios.get(
+        `${base}/wp-json/wp/v2/comments?status=${st}&per_page=${pp}&page=${pg}&orderby=date&order=desc` +
+        `&_fields=id,post,author_name,author_email,author_url,content,date,status,link,parent`,
+        { headers: auth, timeout: 15000 }
+      ).then(r => r.data).catch(() => [])
+    ));
+    const comments = perStatus.flat().filter(c => c && c.id);
+
+    // Résoudre les titres d'articles en un seul appel (include) pour l'affichage.
+    const postIds = [...new Set(comments.map(c => c.post).filter(Boolean))].slice(0, 100);
+    let postsById = {};
+    if (postIds.length) {
+      try {
+        const posts = await axios.get(
+          `${base}/wp-json/wp/v2/posts?include=${postIds.join(',')}&per_page=${postIds.length}&_fields=id,title,link`,
+          { headers: auth, timeout: 15000 }
+        ).then(r => r.data);
+        postsById = Object.fromEntries((posts || []).map(p => [p.id, p]));
+      } catch { /* titres non bloquants */ }
+    }
+
+    const out = comments.map(c => ({
+      id:          c.id,
+      postId:      c.post,
+      postTitle:   stripHtmlTags(postsById[c.post]?.title?.rendered || '') || `Article #${c.post}`,
+      postLink:    postsById[c.post]?.link || '',
+      author:      c.author_name || 'Anonyme',
+      authorEmail: c.author_email || '',
+      authorUrl:   c.author_url || '',
+      contentHtml: c.content?.rendered || '',
+      content:     stripHtmlTags(c.content?.rendered || ''),
+      date:        c.date || '',
+      status:      c.status || '',
+      link:        c.link || '',
+      parent:      c.parent || 0,
+    }));
+
+    res.json({ comments: out });
+  } catch (e) {
+    console.error('[wp-comments]', e.message);
+    res.status(500).json({ error: safeError(e, 'Impossible de récupérer les commentaires') });
+  }
+});
+
+// POST /api/wp-comments/moderate — change le statut d'un commentaire.
+// Body : { siteId, wpSites, commentId, action: 'approve'|'hold'|'spam'|'trash' }
+// 'trash' = DELETE sans force → corbeille WP (récupérable). Jamais de suppression définitive.
+app.post('/api/wp-comments/moderate', requireAuth, requireRole('super_admin', 'manager', 'support'), async (req, res) => {
+  const { siteId, wpSites = [], commentId, action } = req.body;
+  const site = wpSites.find(s => s.id === siteId);
+  if (!site || !site.url || !site.username || !site.password) {
+    return res.status(400).json({ error: 'Site introuvable ou identifiants WordPress manquants' });
+  }
+  if (!commentId || !['approve', 'hold', 'spam', 'trash'].includes(action)) {
+    return res.status(400).json({ error: 'commentId et action (approve/hold/spam/trash) requis' });
+  }
+  try {
+    await assertSafeUrl(site.url, 'URL du site WP');
+    const base = site.url.replace(/\/$/, '');
+    const auth = { 'Authorization': `Basic ${Buffer.from(`${site.username}:${site.password}`).toString('base64')}` };
+
+    let result;
+    if (action === 'trash') {
+      // DELETE sans force=true : déplace en corbeille (récupérable). Jamais de hard delete.
+      result = await axios.delete(`${base}/wp-json/wp/v2/comments/${commentId}`,
+        { headers: auth, timeout: 15000 }).then(r => r.data);
+    } else {
+      result = await axios.post(`${base}/wp-json/wp/v2/comments/${commentId}`, { status: action },
+        { headers: { ...auth, 'Content-Type': 'application/json' }, timeout: 15000 }).then(r => r.data);
+    }
+    const newStatus = result?.status || (action === 'trash' ? 'trash' : action);
+    res.json({ id: commentId, status: newStatus, ok: true });
+  } catch (e) {
+    console.error('[wp-comments/moderate]', e.message);
+    res.status(500).json({ error: safeError(e, 'Action de modération impossible') });
+  }
+});
+
 // ─── Validation des types de fichiers pour les PJ tickets ─────────────────────
 // Blocklist des extensions pouvant servir de vecteur XSS ou d'exécution de code.
 // Vecteurs bloqués : SVG (inline JS), HTML, scripts côté serveur/client, binaires.

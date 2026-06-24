@@ -262,6 +262,26 @@ export const deleteKnowledge = async (id) => {
   await deleteDoc(doc(db, 'knowledge', id));
 };
 
+// ── Commentaires : cache de l'analyse IA (collection comment_ai) ──────────────
+// Un doc par commentaire (id = `${siteId}__${commentId}`) : catégorie, sentiment,
+// priorité, résumé, brouillon de réponse. Évite de relancer l'IA à chaque ouverture
+// de la page. Les commentaires eux-mêmes vivent dans WordPress (lus en direct).
+export const getCommentAi = async (siteId) => {
+  if (!db || !siteId) return [];
+  const q = query(collection(db, 'comment_ai'), where('siteId', '==', siteId));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const saveCommentAi = async (siteId, commentId, data) => {
+  if (!db || !siteId || commentId == null) return;
+  await setDoc(
+    doc(db, 'comment_ai', `${siteId}__${commentId}`),
+    { siteId, commentId, ...data, updatedAt: Date.now() },
+    { merge: true }
+  );
+};
+
 // Settings
 export const getSettings = async () => {
   if (!db) return {};
