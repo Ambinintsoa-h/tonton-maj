@@ -1,105 +1,334 @@
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
+import toast from 'react-hot-toast';
 import {
-  MessageSquare, Construction, Filter, MessageCircle, Sparkles, Bot, ShieldCheck,
+  MessageSquare, Sparkles, Check, Ban, Trash2, RefreshCw, Loader2,
+  ExternalLink, Inbox, ShieldAlert, AlertTriangle,
 } from 'lucide-react';
+import { fetchComments, moderateComment, classifyComments } from '../services/comments';
+import { getCommentAi, saveCommentAi } from '../services/firebase';
 
-// Périmètre prévu du module Commentaires (indépendant du pipeline MAJ).
-// Page placeholder « en cours de dev » — rien n'est encore actif.
-const ROADMAP = [
-  {
-    icon: Filter,
-    accent: 'violet',
-    tag: 'Phase 1',
-    title: 'Gestion & modération',
-    desc: "Centralise les commentaires de tous les sites WordPress. Tri IA automatique (spam, toxique, question, éloge, hors-sujet) et actions en 1 clic : approuver, spam, corbeille. Dashboard volume / sentiment / temps de réponse.",
-  },
-  {
-    icon: MessageCircle,
-    accent: 'emerald',
-    tag: 'Phase 2',
-    title: 'Réponses de marque',
-    desc: "L'IA rédige une réponse aux vrais commentaires, dans le ton du site. Validation humaine obligatoire avant publication (même principe que les 2 choix de publication des MAJ).",
-  },
-  {
-    icon: Bot,
-    accent: 'amber',
-    tag: 'Phase 3',
-    title: 'Génération de commentaires',
-    desc: "Création de nouveaux commentaires from scratch pour amorcer la discussion. Sous contrôle humain, avec garde-fous à cadrer.",
-  },
+// Onglets de statut. `filter` = valeur envoyée à l'API WP (verbe), `match` = valeurs
+// possibles renvoyées par WP dans le champ status (WP renvoie 'approved' mais filtre 'approve').
+const TABS = [
+  { key: 'hold',    label: 'En attente', filter: 'hold',    icon: Inbox },
+  { key: 'approve', label: 'Approuvés',  filter: 'approve',  icon: Check },
+  { key: 'spam',    label: 'Spam',       filter: 'spam',     icon: ShieldAlert },
+  { key: 'trash',   label: 'Corbeille',  filter: 'trash',    icon: Trash2 },
 ];
 
-const ACCENT = {
-  violet:  { bg: 'bg-violet-50',  text: 'text-violet-700',  icon: 'text-violet-600'  },
-  emerald: { bg: 'bg-emerald-50', text: 'text-emerald-700', icon: 'text-emerald-600' },
-  amber:   { bg: 'bg-amber-50',   text: 'text-amber-700',   icon: 'text-amber-600'   },
+const CAT_STYLE = {
+  question:     'bg-blue-50 text-blue-700',
+  'éloge':      'bg-emerald-50 text-emerald-700',
+  critique:     'bg-amber-50 text-amber-700',
+  spam:         'bg-gray-100 text-gray-600',
+  toxique:      'bg-red-50 text-red-700',
+  'hors-sujet': 'bg-violet-50 text-violet-700',
+};
+const SENTIMENT_STYLE = {
+  positif: 'text-emerald-600',
+  neutre:  'text-gray-500',
+  'négatif': 'text-red-600',
+};
+const PRIORITY_STYLE = {
+  haute:   'bg-red-100 text-red-700',
+  moyenne: 'bg-amber-100 text-amber-700',
+  basse:   'bg-gray-100 text-gray-500',
+};
+
+const fmtDate = (d) => {
+  try { return new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }); }
+  catch { return ''; }
 };
 
 export default function Commentaires() {
+  const sites = useSelector(s => s.wordpress.sites) || [];
+
+  const [siteId, setSiteId]     = useState(sites[0]?.id || '');
+  const [tab, setTab]           = useState('hold');
+  const [comments, setComments] = useState([]);
+  const [ai, setAi]             = useState({});      // { [commentId]: { category, sentiment, priority, summary } }
+  const [loading, setLoading]   = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [busyId, setBusyId]     = useState(null);    // commentaire en cours de modération
+  const [error, setError]       = useState('');
+
+  const site = useMemo(() => sites.find(s => s.id === siteId), [sites, siteId]);
+
+  // Charge le cache d'analyse IA Firestore quand le site change (survit au reload).
+  useEffect(() => {
+    if (!siteId) return;
+    let cancelled = false;
+    getCommentAi(siteId).then(rows => {
+      if (cancelled) return;
+      const map = {};
+      for (const r of rows) map[r.commentId] = r;
+      setAi(map);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [siteId]);
+
+  // Charge les commentaires WordPress (site + onglet).
+  const load = useCallback(async () => {
+    if (!site) { setComments([]); return; }
+    setLoading(true); setError('');
+    try {
+      const tabDef = TABS.find(t => t.key === tab);
+      const rows = await fetchComments({ site, statuses: [tabDef.filter], perPage: 50 });
+      setComments(rows);
+    } catch (e) {
+      setError(e.response?.data?.error || e.message || 'Erreur de chargement');
+      setComments([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [site, tab]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Tri IA des commentaires affichés non encore classés → cache Firestore.
+  const analyze = useCallback(async () => {
+    const todo = comments.filter(c => !ai[c.id]);
+    if (!todo.length) { toast('Tous les commentaires affichés sont déjà analysés.'); return; }
+    setAnalyzing(true);
+    try {
+      const map = await classifyComments(todo);
+      if (!Object.keys(map).length) { toast.error('Analyse IA indisponible — réessaie.'); return; }
+      setAi(prev => ({ ...prev, ...map }));
+      // Persiste en parallèle (non bloquant pour l'UI)
+      Promise.all(Object.entries(map).map(([cid, data]) =>
+        saveCommentAi(siteId, cid, data).catch(() => {})
+      ));
+      toast.success(`${Object.keys(map).length} commentaire(s) analysé(s)`);
+    } finally {
+      setAnalyzing(false);
+    }
+  }, [comments, ai, siteId]);
+
+  // Action de modération avec confirmation sur les actions destructives.
+  const act = useCallback(async (comment, action) => {
+    const destructive = action === 'spam' || action === 'trash';
+    if (destructive) {
+      const verb = action === 'spam' ? 'marquer comme spam' : 'mettre à la corbeille';
+      if (!window.confirm(`Confirmer : ${verb} ce commentaire de ${comment.author} ?`)) return;
+    }
+    setBusyId(comment.id);
+    try {
+      await moderateComment({ site, commentId: comment.id, action });
+      setComments(prev => prev.filter(c => c.id !== comment.id)); // disparaît de la vue courante
+      const label = { approve: 'Approuvé', hold: 'Remis en attente', spam: 'Marqué spam', trash: 'Corbeille' }[action];
+      toast.success(label);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Action impossible');
+    } finally {
+      setBusyId(null);
+    }
+  }, [site]);
+
+  // Mini-dashboard : répartition par sentiment / priorité sur le lot affiché et analysé.
+  const stats = useMemo(() => {
+    const s = { total: comments.length, positif: 0, neutre: 0, 'négatif': 0, haute: 0 };
+    for (const c of comments) {
+      const a = ai[c.id];
+      if (!a) continue;
+      if (s[a.sentiment] !== undefined) s[a.sentiment]++;
+      if (a.priority === 'haute') s.haute++;
+    }
+    return s;
+  }, [comments, ai]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35 }}
-      className="max-w-4xl mx-auto"
+      className="max-w-5xl mx-auto"
     >
       {/* En-tête */}
-      <div className="flex items-center gap-3 mb-1">
+      <div className="flex items-center gap-3 mb-5">
         <div className="w-11 h-11 rounded-xl bg-violet-100 flex items-center justify-center flex-shrink-0">
           <MessageSquare size={22} className="text-violet-600" />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-xl font-bold text-gray-900 tracking-tight">Commentaires</h1>
-            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide bg-violet-500 text-white rounded-full px-2 py-0.5">
-              <Construction size={11} /> en cours de dev
+            <span className="text-[10px] font-bold uppercase tracking-wide bg-violet-500 text-white rounded-full px-2 py-0.5">
+              Phase 1 · bêta
             </span>
           </div>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Centraliser et gérer les commentaires de tous vos sites WordPress avec l'IA.
-          </p>
+          <p className="text-sm text-gray-500 mt-0.5">Gestion &amp; modération des commentaires WordPress, assistée par l'IA.</p>
         </div>
       </div>
 
-      {/* Bandeau dev */}
-      <div className="glass-card p-5 mt-5 flex items-start gap-3 border-l-4 border-violet-300">
-        <Sparkles size={18} className="text-violet-500 flex-shrink-0 mt-0.5" />
-        <div>
-          <p className="text-sm font-semibold text-gray-800">Module en construction</p>
-          <p className="text-[13px] text-gray-500 leading-relaxed mt-0.5">
-            Fonctionnalité indépendante des MAJ d'articles. Voici le périmètre prévu — rien n'est encore actif.
-          </p>
-        </div>
+      {/* Barre site + actions */}
+      <div className="glass-card p-4 flex items-center gap-3 flex-wrap">
+        <select
+          value={siteId}
+          onChange={e => setSiteId(e.target.value)}
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200"
+        >
+          {sites.length === 0 && <option value="">Aucun site configuré</option>}
+          {sites.map(s => <option key={s.id} value={s.id}>{s.name || s.url}</option>)}
+        </select>
+
+        <div className="flex-1" />
+
+        <button
+          onClick={load}
+          disabled={loading || !site}
+          className="inline-flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Rafraîchir
+        </button>
+        <button
+          onClick={analyze}
+          disabled={analyzing || loading || comments.length === 0}
+          className="inline-flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+        >
+          {analyzing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Analyser avec l'IA
+        </button>
       </div>
 
-      {/* Roadmap */}
-      <div className="grid gap-3 mt-5">
-        {ROADMAP.map((f) => {
-          const a = ACCENT[f.accent];
-          const Icon = f.icon;
+      {/* Onglets statut */}
+      <div className="flex items-center gap-1 mt-4 border-b border-gray-200">
+        {TABS.map(t => {
+          const Icon = t.icon;
+          const on = tab === t.key;
           return (
-            <div key={f.tag} className="glass-card p-5 flex items-start gap-4">
-              <div className={`w-10 h-10 rounded-lg ${a.bg} flex items-center justify-center flex-shrink-0`}>
-                <Icon size={18} className={a.icon} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1 flex-wrap">
-                  <h3 className="text-[15px] font-semibold text-gray-900">{f.title}</h3>
-                  <span className={`text-[10px] font-bold uppercase tracking-wide ${a.bg} ${a.text} rounded-full px-2 py-0.5`}>
-                    {f.tag}
-                  </span>
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                on ? 'border-violet-600 text-violet-700' : 'border-transparent text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              <Icon size={15} /> {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Mini-dashboard */}
+      {comments.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+          <Stat label="Commentaires" value={stats.total} />
+          <Stat label="Positifs" value={stats.positif} accent="text-emerald-600" />
+          <Stat label="Négatifs" value={stats['négatif']} accent="text-red-600" />
+          <Stat label="Priorité haute" value={stats.haute} accent="text-amber-600" />
+        </div>
+      )}
+
+      {/* Liste */}
+      <div className="mt-4 space-y-3">
+        {loading && (
+          <div className="glass-card p-8 flex items-center justify-center text-gray-400 gap-2">
+            <Loader2 size={18} className="animate-spin" /> Chargement…
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="glass-card p-5 flex items-start gap-3 border-l-4 border-red-300">
+            <AlertTriangle size={18} className="text-red-500 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-gray-700">
+              <p className="font-semibold">Impossible de charger les commentaires</p>
+              <p className="text-gray-500 mt-0.5">{error}</p>
+              <p className="text-[12px] text-gray-400 mt-1">
+                Vérifie que l'utilisateur Application Password du site a la capacité « modérer les commentaires ».
+              </p>
+            </div>
+          </div>
+        )}
+
+        {!loading && !error && comments.length === 0 && (
+          <div className="glass-card p-10 text-center text-gray-400">
+            <Inbox size={28} className="mx-auto mb-2 opacity-60" />
+            Aucun commentaire dans « {TABS.find(t => t.key === tab)?.label} ».
+          </div>
+        )}
+
+        {!loading && comments.map(c => {
+          const a = ai[c.id];
+          const busy = busyId === c.id;
+          return (
+            <div key={c.id} className="glass-card p-4">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-gray-900 text-sm">{c.author}</span>
+                    <span className="text-[12px] text-gray-400">{fmtDate(c.date)}</span>
+                    {a && (
+                      <>
+                        <span className={`text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${CAT_STYLE[a.category] || 'bg-gray-100 text-gray-600'}`}>
+                          {a.category}
+                        </span>
+                        <span className={`text-[11px] font-medium ${SENTIMENT_STYLE[a.sentiment] || 'text-gray-500'}`}>
+                          {a.sentiment}
+                        </span>
+                        <span className={`text-[10px] font-bold rounded px-1.5 py-0.5 ${PRIORITY_STYLE[a.priority] || 'bg-gray-100 text-gray-500'}`}>
+                          {a.priority}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  {c.postTitle && (
+                    <a
+                      href={c.postLink || undefined}
+                      target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[12px] text-gray-400 hover:text-violet-600 mt-0.5"
+                    >
+                      sur « {c.postTitle} » <ExternalLink size={11} />
+                    </a>
+                  )}
                 </div>
-                <p className="text-[13px] text-gray-600 leading-relaxed">{f.desc}</p>
+              </div>
+
+              <p className="text-sm text-gray-700 mt-2 leading-relaxed whitespace-pre-line">{c.content}</p>
+              {a?.summary && <p className="text-[12px] text-gray-400 italic mt-1">IA : {a.summary}</p>}
+
+              <div className="flex items-center gap-2 mt-3">
+                {tab !== 'approve' && (
+                  <ActionBtn onClick={() => act(c, 'approve')} busy={busy} icon={Check}
+                    className="text-emerald-700 border-emerald-200 hover:bg-emerald-50">Approuver</ActionBtn>
+                )}
+                {tab !== 'hold' && tab !== 'spam' && (
+                  <ActionBtn onClick={() => act(c, 'hold')} busy={busy} icon={Inbox}
+                    className="text-gray-600 border-gray-200 hover:bg-gray-50">En attente</ActionBtn>
+                )}
+                {tab !== 'spam' && (
+                  <ActionBtn onClick={() => act(c, 'spam')} busy={busy} icon={Ban}
+                    className="text-gray-600 border-gray-200 hover:bg-gray-50">Spam</ActionBtn>
+                )}
+                {tab !== 'trash' && (
+                  <ActionBtn onClick={() => act(c, 'trash')} busy={busy} icon={Trash2}
+                    className="text-red-600 border-red-200 hover:bg-red-50">Corbeille</ActionBtn>
+                )}
               </div>
             </div>
           );
         })}
       </div>
-
-      {/* Note d'accès */}
-      <p className="text-[11px] text-gray-400 mt-6 flex items-center gap-1.5">
-        <ShieldCheck size={13} /> Visible par Manager, Super Admin et Support pendant le développement.
-      </p>
     </motion.div>
+  );
+}
+
+function Stat({ label, value, accent = 'text-gray-900' }) {
+  return (
+    <div className="glass-card p-3 text-center">
+      <div className={`text-xl font-bold ${accent}`}>{value}</div>
+      <div className="text-[11px] text-gray-500 mt-0.5">{label}</div>
+    </div>
+  );
+}
+
+function ActionBtn({ onClick, busy, icon: Icon, className = '', children }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={busy}
+      className={`inline-flex items-center gap-1.5 text-[13px] px-2.5 py-1.5 rounded-lg border disabled:opacity-50 ${className}`}
+    >
+      {busy ? <Loader2 size={13} className="animate-spin" /> : <Icon size={13} />} {children}
+    </button>
   );
 }
