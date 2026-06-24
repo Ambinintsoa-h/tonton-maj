@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query, onSnapshot, where, limit, increment, arrayUnion } from 'firebase/firestore';
+import { getFirestore, initializeFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query, onSnapshot, where, limit, increment, arrayUnion } from 'firebase/firestore';
 import { getStorage, ref as storageRef, uploadString, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { getAuth, signInWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
 
@@ -12,7 +12,19 @@ export const initFirebase = (config) => {
   try {
     // Réutiliser l'instance existante si déjà initialisée (évite l'erreur HMR/double-init)
     app = getApps().length > 0 ? getApp() : initializeApp(config);
-    db = getFirestore(app);
+    // Transport Firestore : on AUTO-DÉTECTE le long-polling. Le transport WebChannel
+    // (streaming) par défaut est cassé par certains pare-feu d'entreprise, VPN, proxys
+    // et antivirus à scan HTTPS — ce qui empêchait des utilisateurs (ex. cq_ia) de lire
+    // Firestore → pas de skill cerveau → pas d'audit, MAJ legacy. Le long-polling utilise
+    // de simples requêtes HTTPS POST qui passent partout ; l'auto-détection ne l'active
+    // que là où le streaming échoue (transparent ailleurs).
+    try {
+      // initializeFirestore lève si Firestore est déjà démarré pour cette app
+      // (HMR / double-init) → on retombe alors sur l'instance existante.
+      db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+    } catch {
+      db = getFirestore(app);
+    }
     storage = getStorage(app);
     auth = getAuth(app);
     return true;
