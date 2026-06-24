@@ -27,6 +27,37 @@ export const moderateComment = async ({ site, commentId, action }) => {
 };
 
 /**
+ * Rédige un BROUILLON de réponse de marque (Sonnet) — toujours relu/édité par un
+ * humain avant publication. Retourne le texte brut (chaîne vide si échec).
+ */
+export const generateReply = async ({ comment, siteName = '' }) => {
+  try {
+    const { data } = await axios.post(CLAUDE_PROXY, {
+      model: 'claude-sonnet-4-5',
+      max_tokens: 500,
+      system: `Tu rédiges la réponse OFFICIELLE de la marque/du site${siteName ? ` « ${siteName} »` : ''} à un commentaire de lecteur, en français.
+- Ton : professionnel, chaleureux, serviable, concis (2 à 4 phrases).
+- Prends en compte le commentaire et réponds à la question si possible ; reste factuel.
+- N'invente AUCUNE promesse commerciale, prix ni information non vérifiable.
+- Si le commentaire est toxique/insultant : réponse courte, calme, non conflictuelle.
+- Pas de signature, pas de « Cordialement », pas de markdown : uniquement le texte de la réponse.`,
+      messages: [{ role: 'user', content: `Commentaire de ${comment.author} :\n"${comment.content}"\n\nRédige la réponse de la marque.` }],
+    });
+    return (data?.content?.[0]?.text || '').trim();
+  } catch {
+    return '';
+  }
+};
+
+/** Publie une réponse (sous l'utilisateur WP du site), en réponse à un commentaire. */
+export const publishReply = async ({ site, comment, content, status = 'approve' }) => {
+  const { data } = await axios.post('/api/wp-comments/reply', {
+    siteId: site.id, wpSites: [site], postId: comment.postId, parentId: comment.id, content, status,
+  });
+  return data;
+};
+
+/**
  * Classe un lot de commentaires via Haiku (rapide/éco).
  * Retourne une map { [commentId]: { category, sentiment, priority, summary } }.
  * Silencieux en cas d'erreur (renvoie {}) — le tri IA ne doit jamais bloquer l'écran.

@@ -2612,6 +2612,34 @@ app.post('/api/wp-comments/moderate', requireAuth, requireRole('super_admin', 'm
   }
 });
 
+// POST /api/wp-comments/reply — publie une réponse de marque à un commentaire.
+// La réponse est créée sous l'utilisateur Application Password du site (voix de la marque).
+// Toujours déclenchée après validation humaine dans l'UI (brouillon édité puis publié).
+// Body : { siteId, wpSites, postId, parentId, content, status? }
+app.post('/api/wp-comments/reply', requireAuth, requireRole('super_admin', 'manager', 'support'), async (req, res) => {
+  const { siteId, wpSites = [], postId, parentId, content, status = 'approve' } = req.body;
+  const site = wpSites.find(s => s.id === siteId);
+  if (!site || !site.url || !site.username || !site.password) {
+    return res.status(400).json({ error: 'Site introuvable ou identifiants WordPress manquants' });
+  }
+  if (!postId || !content || !String(content).trim()) {
+    return res.status(400).json({ error: 'postId et content requis' });
+  }
+  try {
+    await assertSafeUrl(site.url, 'URL du site WP');
+    const base = site.url.replace(/\/$/, '');
+    const auth = { 'Authorization': `Basic ${Buffer.from(`${site.username}:${site.password}`).toString('base64')}` };
+    const body = { post: postId, content: String(content), status };
+    if (parentId) body.parent = parentId;
+    const result = await axios.post(`${base}/wp-json/wp/v2/comments`, body,
+      { headers: { ...auth, 'Content-Type': 'application/json' }, timeout: 15000 }).then(r => r.data);
+    res.json({ id: result.id, link: result.link, status: result.status, ok: true });
+  } catch (e) {
+    console.error('[wp-comments/reply]', e.message);
+    res.status(500).json({ error: safeError(e, 'Publication de la réponse impossible') });
+  }
+});
+
 // ─── Validation des types de fichiers pour les PJ tickets ─────────────────────
 // Blocklist des extensions pouvant servir de vecteur XSS ou d'exécution de code.
 // Vecteurs bloqués : SVG (inline JS), HTML, scripts côté serveur/client, binaires.

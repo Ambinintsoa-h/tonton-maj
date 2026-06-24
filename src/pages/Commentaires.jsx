@@ -4,9 +4,9 @@ import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
   MessageSquare, Sparkles, Check, Ban, Trash2, RefreshCw, Loader2,
-  ExternalLink, Inbox, ShieldAlert, AlertTriangle,
+  ExternalLink, Inbox, ShieldAlert, AlertTriangle, Reply, Send, X,
 } from 'lucide-react';
-import { fetchComments, moderateComment, classifyComments } from '../services/comments';
+import { fetchComments, moderateComment, classifyComments, generateReply, publishReply } from '../services/comments';
 import { getCommentAi, saveCommentAi } from '../services/firebase';
 
 // Onglets de statut. `filter` = valeur envoyée à l'API WP (verbe), `match` = valeurs
@@ -54,17 +54,28 @@ export default function Commentaires() {
   const [busyId, setBusyId]     = useState(null);    // commentaire en cours de modération
   const [error, setError]       = useState('');
 
+  // Phase 2 — réponses de marque (brouillon IA → édition humaine → publication).
+  const [openReplyId, setOpenReplyId] = useState(null);   // commentaire dont la zone réponse est ouverte
+  const [drafts, setDrafts]           = useState({});     // { [commentId]: texte du brouillon }
+  const [replyGenId, setReplyGenId]   = useState(null);   // génération IA en cours
+  const [publishingId, setPublishingId] = useState(null); // publication en cours
+
   const site = useMemo(() => sites.find(s => s.id === siteId), [sites, siteId]);
 
   // Charge le cache d'analyse IA Firestore quand le site change (survit au reload).
   useEffect(() => {
     if (!siteId) return;
     let cancelled = false;
+    setOpenReplyId(null);
     getCommentAi(siteId).then(rows => {
       if (cancelled) return;
-      const map = {};
-      for (const r of rows) map[r.commentId] = r;
+      const map = {}, savedDrafts = {};
+      for (const r of rows) {
+        map[r.commentId] = r;
+        if (r.draftReply) savedDrafts[r.commentId] = r.draftReply;   // brouillon repris après reload
+      }
       setAi(map);
+      setDrafts(savedDrafts);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [siteId]);
@@ -125,6 +136,53 @@ export default function Commentaires() {
       setBusyId(null);
     }
   }, [site]);
+
+  // Ouvre la zone de réponse et génère un brouillon IA s'il n'en existe pas encore.
+  const openReply = useCallback(async (comment) => {
+    setOpenReplyId(comment.id);
+    if (drafts[comment.id]) return;            // brouillon déjà présent (saisi ou repris du cache)
+    setReplyGenId(comment.id);
+    try {
+      const text = await generateReply({ comment, siteName: site?.name || '' });
+      if (!text) { toast.error('Génération IA indisponible — écris la réponse manuellement.'); return; }
+      setDrafts(prev => ({ ...prev, [comment.id]: text }));
+      saveCommentAi(siteId, comment.id, { draftReply: text }).catch(() => {});
+    } finally {
+      setReplyGenId(null);
+    }
+  }, [drafts, site, siteId]);
+
+  // Régénère un brouillon (écrase le texte courant).
+  const regenerate = useCallback(async (comment) => {
+    setReplyGenId(comment.id);
+    try {
+      const text = await generateReply({ comment, siteName: site?.name || '' });
+      if (!text) { toast.error('Génération IA indisponible.'); return; }
+      setDrafts(prev => ({ ...prev, [comment.id]: text }));
+      saveCommentAi(siteId, comment.id, { draftReply: text }).catch(() => {});
+    } finally {
+      setReplyGenId(null);
+    }
+  }, [site, siteId]);
+
+  // Publie la réponse APRÈS confirmation explicite (publication de contenu public).
+  const publish = useCallback(async (comment) => {
+    const content = (drafts[comment.id] || '').trim();
+    if (!content) { toast.error('Le brouillon est vide.'); return; }
+    if (!window.confirm(`Publier cette réponse publiquement sous « ${comment.postTitle} » ?`)) return;
+    setPublishingId(comment.id);
+    try {
+      await publishReply({ site, comment, content });
+      saveCommentAi(siteId, comment.id, { draftReply: '', repliedAt: Date.now() }).catch(() => {});
+      setOpenReplyId(null);
+      setDrafts(prev => { const n = { ...prev }; delete n[comment.id]; return n; });
+      toast.success('Réponse publiée');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Publication impossible');
+    } finally {
+      setPublishingId(null);
+    }
+  }, [drafts, site, siteId]);
 
   // Mini-dashboard : répartition par sentiment / priorité sur le lot affiché et analysé.
   const stats = useMemo(() => {
@@ -286,7 +344,7 @@ export default function Commentaires() {
               <p className="text-sm text-gray-700 mt-2 leading-relaxed whitespace-pre-line">{c.content}</p>
               {a?.summary && <p className="text-[12px] text-gray-400 italic mt-1">IA : {a.summary}</p>}
 
-              <div className="flex items-center gap-2 mt-3">
+              <div className="flex items-center gap-2 mt-3 flex-wrap">
                 {tab !== 'approve' && (
                   <ActionBtn onClick={() => act(c, 'approve')} busy={busy} icon={Check}
                     className="text-emerald-700 border-emerald-200 hover:bg-emerald-50">Approuver</ActionBtn>
@@ -303,7 +361,49 @@ export default function Commentaires() {
                   <ActionBtn onClick={() => act(c, 'trash')} busy={busy} icon={Trash2}
                     className="text-red-600 border-red-200 hover:bg-red-50">Corbeille</ActionBtn>
                 )}
+                {/* Répondre : seulement sur les commentaires réels (en attente / approuvés) */}
+                {(tab === 'hold' || tab === 'approve') && openReplyId !== c.id && (
+                  <ActionBtn onClick={() => openReply(c)} busy={replyGenId === c.id} icon={Reply}
+                    className="text-violet-700 border-violet-200 hover:bg-violet-50">Répondre (IA)</ActionBtn>
+                )}
               </div>
+
+              {/* Zone de réponse — brouillon IA éditable, publication validée par l'humain */}
+              {openReplyId === c.id && (
+                <div className="mt-3 border-t border-gray-100 pt-3">
+                  {replyGenId === c.id && !drafts[c.id] ? (
+                    <div className="flex items-center gap-2 text-sm text-gray-400 py-3">
+                      <Loader2 size={15} className="animate-spin" /> Rédaction du brouillon…
+                    </div>
+                  ) : (
+                    <>
+                      <textarea
+                        value={drafts[c.id] || ''}
+                        onChange={e => setDrafts(prev => ({ ...prev, [c.id]: e.target.value }))}
+                        rows={4}
+                        placeholder="Réponse de la marque…"
+                        className="w-full text-sm border border-gray-200 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-violet-200 resize-y"
+                      />
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        <button
+                          onClick={() => publish(c)}
+                          disabled={publishingId === c.id || !(drafts[c.id] || '').trim()}
+                          className="inline-flex items-center gap-1.5 text-[13px] px-3 py-1.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                        >
+                          {publishingId === c.id ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />} Publier la réponse
+                        </button>
+                        <ActionBtn onClick={() => regenerate(c)} busy={replyGenId === c.id} icon={Sparkles}
+                          className="text-violet-700 border-violet-200 hover:bg-violet-50">Régénérer</ActionBtn>
+                        <ActionBtn onClick={() => setOpenReplyId(null)} icon={X}
+                          className="text-gray-500 border-gray-200 hover:bg-gray-50">Annuler</ActionBtn>
+                      </div>
+                      <p className="text-[11px] text-gray-400 mt-1.5">
+                        Brouillon généré par l'IA — relis et ajuste avant publication. Rien n'est publié sans ton clic.
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
