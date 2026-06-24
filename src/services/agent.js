@@ -473,8 +473,20 @@ const analyzeLinks = (html = '', articleUrl = '') => {
  * Skills au format Claude (SKILL.md) actifs → pilotent l'agent en « mode cerveau ».
  * Ils portent { description, body, resources[] } (pas de `content`).
  */
-const getBrainSkills = (skills = []) =>
-  (skills || []).filter(s => s?.format === 'skillmd' && s.body && isActiveEntry(s));
+const getBrainSkills = (skills = []) => {
+  const active = (skills || []).filter(s => s?.format === 'skillmd' && s.body && isActiveEntry(s));
+  // Dédoublonnage : une ré-importation de SKILL.md crée un NOUVEAU doc Firestore (addDoc,
+  // pas d'upsert) → plusieurs cerveaux de MÊME nom peuvent coexister et injecteraient deux
+  // versions du skill dans l'audit. On ne garde que le plus RÉCENT par nom.
+  const byName = new Map();
+  for (const s of active) {
+    const key = (s.name || '').trim().toLowerCase();
+    const ts = s.updatedAt || s.createdAt || 0;
+    const prev = byName.get(key);
+    if (!prev || ts >= (prev.updatedAt || prev.createdAt || 0)) byName.set(key, s);
+  }
+  return [...byName.values()];
+};
 
 /**
  * Bloc « cerveau » : un skill SKILL.md (méthode complète) pilote l'agent.
