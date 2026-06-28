@@ -70,6 +70,8 @@ export default function Commentaires() {
   // Site « courant » lisible dans les callbacks asynchrones (anti-race au changement de site).
   const siteIdRef = useRef(siteId);
   useEffect(() => { siteIdRef.current = siteId; }, [siteId]);
+  // Garde : l'analyse+nettoyage auto ne se déclenche qu'UNE fois par chargement.
+  const autoRanRef = useRef(false);
 
   // Charge le cache d'analyse IA + le réglage auto-spam quand le site change.
   useEffect(() => {
@@ -99,6 +101,7 @@ export default function Commentaires() {
   const toggleAutoSpam = useCallback(async (e) => {
     const next = e.target.checked;
     setAutoSpam(next);
+    if (next) autoRanRef.current = false;   // ré-arme le nettoyage auto immédiat
     try { await saveCommentSettings(siteId, { autoSpam: next }); }
     catch { toast.error('Réglage non enregistré — réessaie.'); }
   }, [siteId]);
@@ -107,6 +110,7 @@ export default function Commentaires() {
   const load = useCallback(async () => {
     if (!site) { setComments([]); return; }
     setLoading(true); setError('');
+    autoRanRef.current = false;   // chaque chargement ré-arme le nettoyage auto
     try {
       const tabDef = TABS.find(t => t.key === tab);
       const rows = await fetchComments({ site, statuses: [tabDef.filter], perPage: 50 });
@@ -121,44 +125,80 @@ export default function Commentaires() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Tri IA des commentaires affichés non encore classés → cache Firestore.
-  const analyze = useCallback(async () => {
-    const todo = comments.filter(c => !ai[c.id]);
-    if (!todo.length) { toast('Tous les commentaires affichés sont déjà analysés.'); return; }
-    setAnalyzing(true);
-    try {
-      const map = await classifyComments(todo);
-      if (!Object.keys(map).length) { toast.error('Analyse IA indisponible — réessaie.'); return; }
-      setAi(prev => ({ ...prev, ...map }));
-      // Persiste en parallèle (non bloquant pour l'UI)
-      Promise.all(Object.entries(map).map(([cid, data]) =>
-        saveCommentAi(siteId, cid, data).catch(() => {})
-      ));
-      toast.success(`${Object.keys(map).length} commentaire(s) analysé(s)`);
+  // Passe en spam (sur le site) les commentaires détectés spam + HAUTE confiance.
+  // En cas de doute (confiance < haute), on ne touche à rien. Réversible (dossier
+  // Spam WP). Renvoie le nombre réellement nettoyé.
+  const applyAutoSpam = useCallback(async (list, aiMap) => {
+    if (!site) return 0;
+    const targets = list.filter(c => {
+      const a = aiMap[c.id];
+      return a && a.category === 'spam' && a.confidence === 'haute';
+    });
+    if (!targets.length) return 0;
+    const results = await Promise.allSettled(
+      targets.map(c => moderateComment({ site, commentId: c.id, action: 'spam' }))
+    );
+    const okSet = new Set(targets.filter((_, i) => results[i].status === 'fulfilled').map(c => c.id));
+    if (okSet.size) setComments(prev => prev.filter(c => !okSet.has(c.id)));
+    return okSet.size;
+  }, [site]);
 
-      // Auto-spam : seulement sur la file « En attente » et UNIQUEMENT pour le spam
-      // détecté à HAUTE confiance — en cas de doute, on ne touche à rien. Réversible
-      // (dossier Spam WP). Agit sur les commentaires fraîchement analysés.
-      if (autoSpam && tab === 'hold' && site) {
-        const targets = todo.filter(c => {
-          const a = map[c.id];
-          return a && a.category === 'spam' && a.confidence === 'haute';
-        });
-        if (targets.length) {
-          const results = await Promise.allSettled(
-            targets.map(c => moderateComment({ site, commentId: c.id, action: 'spam' }))
-          );
-          const okSet = new Set(targets.filter((_, i) => results[i].status === 'fulfilled').map(c => c.id));
-          if (okSet.size) {
-            setComments(prev => prev.filter(c => !okSet.has(c.id)));
-            toast.success(`${okSet.size} commentaire(s) passé(s) en spam automatiquement`);
-          }
+  // Tri IA des commentaires non classés, puis nettoyage du spam si auto-spam actif.
+  // `auto` = déclenché automatiquement au chargement (silencieux : pas de toast d'info).
+  const analyze = useCallback(async (auto = false) => {
+    const todo = comments.filter(c => !ai[c.id]);
+    let merged = ai;
+    let analyzedCount = 0;
+    if (todo.length) {
+      setAnalyzing(true);
+      try {
+        const map = await classifyComments(todo);
+        if (Object.keys(map).length) {
+          merged = { ...ai, ...map };
+          analyzedCount = Object.keys(map).length;
+          setAi(merged);
+          // Persiste en parallèle (non bloquant pour l'UI)
+          Promise.all(Object.entries(map).map(([cid, data]) =>
+            saveCommentAi(siteId, cid, data).catch(() => {})
+          ));
+        } else if (!auto) {
+          toast.error('Analyse IA indisponible — réessaie.');
         }
+      } finally {
+        setAnalyzing(false);
       }
-    } finally {
-      setAnalyzing(false);
     }
-  }, [comments, ai, siteId, autoSpam, tab, site]);
+
+    // Nettoyage spam : sur la file « En attente », tout le spam haute-confiance
+    // (fraîchement analysé OU déjà en cache) part en spam → ne reste pas en attente.
+    // Tourne même si la classification a échoué (nettoie au moins le cache).
+    let cleaned = 0;
+    if (autoSpam && tab === 'hold') {
+      cleaned = await applyAutoSpam(comments, merged);
+    }
+
+    if (!auto) {
+      if (analyzedCount) {
+        toast.success(`${analyzedCount} commentaire(s) analysé(s)${cleaned ? ` · ${cleaned} spam nettoyé(s)` : ''}`);
+      } else if (cleaned) {
+        toast.success(`${cleaned} spam nettoyé(s) automatiquement`);
+      } else if (!todo.length) {
+        toast('Tous les commentaires affichés sont déjà analysés.');
+      }
+    } else if (cleaned) {
+      toast.success(`${cleaned} spam nettoyé(s) automatiquement`);
+    }
+  }, [comments, ai, siteId, autoSpam, tab, applyAutoSpam]);
+
+  // Nettoyage DIRECT : si l'auto-spam est activé, on analyse + nettoie le spam dès
+  // le chargement (une seule fois) — le spam ne reste jamais dans « En attente ».
+  useEffect(() => {
+    if (loading || analyzing || autoRanRef.current) return;
+    if (autoSpam && tab === 'hold' && comments.length) {
+      autoRanRef.current = true;
+      analyze(true);
+    }
+  }, [autoSpam, tab, loading, analyzing, comments, analyze]);
 
   // Action de modération avec confirmation sur les actions destructives.
   const act = useCallback(async (comment, action) => {
@@ -321,7 +361,7 @@ export default function Commentaires() {
           <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Rafraîchir
         </button>
         <button
-          onClick={analyze}
+          onClick={() => analyze()}
           disabled={analyzing || loading || comments.length === 0}
           className="inline-flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
         >
