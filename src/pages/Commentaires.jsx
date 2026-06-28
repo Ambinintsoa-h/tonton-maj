@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -6,7 +6,7 @@ import {
   MessageSquare, Sparkles, Check, Ban, Trash2, RefreshCw, Loader2,
   ExternalLink, Inbox, ShieldAlert, AlertTriangle, Reply, Send, X,
 } from 'lucide-react';
-import { fetchComments, moderateComment, classifyComments, generateReply, publishReply } from '../services/comments';
+import { fetchComments, moderateComment, classifyComments, generateReply, publishReply, translateComment } from '../services/comments';
 import { getCommentAi, saveCommentAi, getCommentSettings, saveCommentSettings } from '../services/firebase';
 
 // Onglets de statut. `filter` = valeur envoyée à l'API WP (verbe), `match` = valeurs
@@ -61,22 +61,33 @@ export default function Commentaires() {
   const [replyGenId, setReplyGenId]   = useState(null);   // génération IA en cours
   const [publishingId, setPublishingId] = useState(null); // publication en cours
 
+  // Traduction FR à la demande (commentaires d'autres langues).
+  const [translations, setTranslations] = useState({});   // { [commentId]: texte FR }
+  const [showFr, setShowFr]             = useState({});    // { [commentId]: bool } vue traduite active
+  const [translatingId, setTranslatingId] = useState(null);
+
   const site = useMemo(() => sites.find(s => s.id === siteId), [sites, siteId]);
+  // Site « courant » lisible dans les callbacks asynchrones (anti-race au changement de site).
+  const siteIdRef = useRef(siteId);
+  useEffect(() => { siteIdRef.current = siteId; }, [siteId]);
 
   // Charge le cache d'analyse IA + le réglage auto-spam quand le site change.
   useEffect(() => {
     if (!siteId) return;
     let cancelled = false;
     setOpenReplyId(null);
+    setShowFr({});
     getCommentAi(siteId).then(rows => {
       if (cancelled) return;
-      const map = {}, savedDrafts = {};
+      const map = {}, savedDrafts = {}, savedTranslations = {};
       for (const r of rows) {
         map[r.commentId] = r;
         if (r.draftReply) savedDrafts[r.commentId] = r.draftReply;   // brouillon repris après reload
+        if (r.translationFr) savedTranslations[r.commentId] = r.translationFr;
       }
       setAi(map);
       setDrafts(savedDrafts);
+      setTranslations(savedTranslations);
     }).catch(() => {});
     getCommentSettings(siteId)
       .then(s => { if (!cancelled) setAutoSpam(!!s.autoSpam); })
@@ -215,6 +226,29 @@ export default function Commentaires() {
       setPublishingId(null);
     }
   }, [drafts, site, siteId]);
+
+  // Affiche/masque la traduction FR d'un commentaire (traduit à la 1re demande, puis caché).
+  const toggleTranslate = useCallback(async (comment) => {
+    if (showFr[comment.id]) {                                  // déjà traduit à l'écran → revenir à l'original
+      setShowFr(prev => ({ ...prev, [comment.id]: false }));
+      return;
+    }
+    if (translations[comment.id]) {                            // traduction en cache → afficher
+      setShowFr(prev => ({ ...prev, [comment.id]: true }));
+      return;
+    }
+    setTranslatingId(comment.id);
+    try {
+      const fr = await translateComment({ text: comment.content });
+      if (siteIdRef.current !== siteId) return;   // l'utilisateur a changé de site pendant la traduction
+      if (!fr) { toast.error('Traduction indisponible — réessaie.'); return; }
+      setTranslations(prev => ({ ...prev, [comment.id]: fr }));
+      setShowFr(prev => ({ ...prev, [comment.id]: true }));
+      saveCommentAi(siteId, comment.id, { translationFr: fr }).catch(() => {});
+    } finally {
+      setTranslatingId(null);
+    }
+  }, [showFr, translations, siteId]);
 
   // Mini-dashboard : répartition par sentiment / priorité sur le lot affiché et analysé.
   const stats = useMemo(() => {
@@ -355,6 +389,8 @@ export default function Commentaires() {
         {!loading && comments.map(c => {
           const a = ai[c.id];
           const busy = busyId === c.id;
+          const isForeign = a?.lang && !String(a.lang).toLowerCase().startsWith('fr');
+          const viewingFr = !!(showFr[c.id] && translations[c.id]);
           return (
             <div key={c.id} className="glass-card p-4">
               <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -388,7 +424,20 @@ export default function Commentaires() {
                 </div>
               </div>
 
-              <p className="text-sm text-gray-700 mt-2 leading-relaxed whitespace-pre-line">{c.content}</p>
+              <p className="text-sm text-gray-700 mt-2 leading-relaxed whitespace-pre-line">
+                {viewingFr ? translations[c.id] : c.content}
+              </p>
+              {isForeign && (
+                <button
+                  onClick={() => toggleTranslate(c)}
+                  disabled={translatingId === c.id}
+                  className="inline-flex items-center gap-1.5 text-[12px] text-gray-500 hover:text-violet-600 mt-1.5 disabled:opacity-50"
+                  title={`Commentaire en « ${a.lang} » — afficher la traduction française`}
+                >
+                  {translatingId === c.id ? <Loader2 size={12} className="animate-spin" /> : <FrFlag size={12} />}
+                  {viewingFr ? "Voir l'original" : 'Traduire en FR'}
+                </button>
+              )}
               {a?.summary && <p className="text-[12px] text-gray-400 italic mt-1">IA : {a.summary}</p>}
 
               <div className="flex items-center gap-2 mt-3 flex-wrap">
@@ -477,5 +526,20 @@ function ActionBtn({ onClick, busy, icon: Icon, className = '', children }) {
     >
       {busy ? <Loader2 size={13} className="animate-spin" /> : <Icon size={13} />} {children}
     </button>
+  );
+}
+
+// Drapeau français tricolore (rendu fiable partout, contrairement à l'emoji selon l'OS).
+function FrFlag({ size = 14 }) {
+  return (
+    <span
+      className="inline-flex rounded-sm overflow-hidden border border-gray-200"
+      style={{ width: Math.round(size * 1.4), height: size, verticalAlign: '-1px' }}
+      aria-hidden="true"
+    >
+      <span style={{ flex: 1, background: '#0055A4' }} />
+      <span style={{ flex: 1, background: '#ffffff' }} />
+      <span style={{ flex: 1, background: '#EF4135' }} />
+    </span>
   );
 }

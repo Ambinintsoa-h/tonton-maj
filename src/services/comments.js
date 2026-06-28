@@ -91,9 +91,10 @@ export const classifyComments = async (comments) => {
 - "sentiment" : "positif" | "neutre" | "négatif"
 - "priority" : "haute" (toxique, critique à traiter vite, question importante) | "moyenne" | "basse"
 - "confidence" : "haute" | "moyenne" | "basse" — ta certitude sur la catégorie. Mets "haute" UNIQUEMENT si c'est flagrant (ex. spam évident : liens promotionnels, charabia, contenu commercial hors-sujet). Au moindre doute → "moyenne" ou "basse".
+- "lang" : code langue ISO 639-1 en minuscules du commentaire (ex. "fr", "en", "es", "de", "it", "pt", "ar"…)
 - "summary" : résumé en 8 mots maximum, en français
 Réponds UNIQUEMENT avec un JSON valide, sans texte autour :
-{"results":[{"i":<id>,"category":"...","sentiment":"...","priority":"...","confidence":"...","summary":"..."}]}`,
+{"results":[{"i":<id>,"category":"...","sentiment":"...","priority":"...","confidence":"...","lang":"...","summary":"..."}]}`,
       messages: [{ role: 'user', content: `Commentaires à classer :\n${JSON.stringify(batch)}` }],
     });
 
@@ -108,6 +109,7 @@ Réponds UNIQUEMENT avec un JSON valide, sans texte autour :
           sentiment:  r.sentiment  || 'neutre',
           priority:   r.priority   || 'basse',
           confidence: r.confidence || 'basse',   // défaut prudent : sans certitude, jamais de spam auto
+          lang:       (r.lang || 'fr').toLowerCase(),   // défaut 'fr' → pas de drapeau de traduction
           summary:    r.summary    || '',
         };
       }
@@ -115,5 +117,25 @@ Réponds UNIQUEMENT avec un JSON valide, sans texte autour :
     return map;
   } catch {
     return {};
+  }
+};
+
+/**
+ * Traduit un commentaire en français (Haiku, rapide/éco). Renvoie la traduction
+ * brute, ou '' en cas d'échec. Utilisé pour lire les commentaires d'autres langues.
+ */
+export const translateComment = async ({ text }) => {
+  const src = (text || '').trim();
+  if (!src) return '';
+  try {
+    const { data } = await axios.post(CLAUDE_PROXY, {
+      model: 'claude-haiku-4-5',
+      max_tokens: 1000,
+      system: `Tu es un traducteur. Traduis le texte de l'utilisateur en français naturel et fidèle. Réponds UNIQUEMENT par la traduction, sans guillemets, sans préambule ni commentaire. Si le texte est déjà en français, renvoie-le tel quel.`,
+      messages: [{ role: 'user', content: src }],
+    });
+    return (data?.content?.[0]?.text || '').trim();
+  } catch {
+    return '';
   }
 };
