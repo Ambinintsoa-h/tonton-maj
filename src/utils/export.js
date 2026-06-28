@@ -68,7 +68,12 @@ const convertFaqToAccordion = (div) => {
 
         const details = div.ownerDocument.createElement('details');
         const summary = div.ownerDocument.createElement('summary');
-        summary.innerHTML = node.innerHTML;
+        // Le heading original (h3, h4…) est conservé DANS le <summary>.
+        // Si WordPress < 6.4 supprime <details>/<summary>, le <h3> reste intact
+        // et la structure h3/p d'origine est préservée — pas de régression.
+        const qEl = div.ownerDocument.createElement(node.tagName);
+        qEl.innerHTML = node.innerHTML;
+        summary.appendChild(qEl);
         details.appendChild(summary);
         if (hasAnswer) details.appendChild(answerEl); // déplace (pas clone) le <p>
 
