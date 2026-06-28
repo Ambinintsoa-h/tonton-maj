@@ -282,6 +282,24 @@ export const saveCommentAi = async (siteId, commentId, data) => {
   );
 };
 
+// ── Commentaires : réglages par site (collection comment_settings) ────────────
+// Un doc par site (id = siteId). Ex. autoSpam : passe en spam automatiquement les
+// commentaires détectés spam à HAUTE confiance (réversible). OFF par défaut.
+export const getCommentSettings = async (siteId) => {
+  if (!db || !siteId) return {};
+  const snap = await getDoc(doc(db, 'comment_settings', siteId));
+  return snap.exists() ? snap.data() : {};
+};
+
+export const saveCommentSettings = async (siteId, data) => {
+  if (!db || !siteId) return;
+  await setDoc(
+    doc(db, 'comment_settings', siteId),
+    { siteId, ...data, updatedAt: Date.now() },
+    { merge: true }
+  );
+};
+
 // Settings
 export const getSettings = async () => {
   if (!db) return {};

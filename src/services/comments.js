@@ -76,9 +76,10 @@ export const classifyComments = async (comments) => {
 - "category" : un seul de ${JSON.stringify(COMMENT_CATEGORIES)}
 - "sentiment" : "positif" | "neutre" | "négatif"
 - "priority" : "haute" (toxique, critique à traiter vite, question importante) | "moyenne" | "basse"
+- "confidence" : "haute" | "moyenne" | "basse" — ta certitude sur la catégorie. Mets "haute" UNIQUEMENT si c'est flagrant (ex. spam évident : liens promotionnels, charabia, contenu commercial hors-sujet). Au moindre doute → "moyenne" ou "basse".
 - "summary" : résumé en 8 mots maximum, en français
 Réponds UNIQUEMENT avec un JSON valide, sans texte autour :
-{"results":[{"i":<id>,"category":"...","sentiment":"...","priority":"...","summary":"..."}]}`,
+{"results":[{"i":<id>,"category":"...","sentiment":"...","priority":"...","confidence":"...","summary":"..."}]}`,
       messages: [{ role: 'user', content: `Commentaires à classer :\n${JSON.stringify(batch)}` }],
     });
 
@@ -89,10 +90,11 @@ Réponds UNIQUEMENT avec un JSON valide, sans texte autour :
     for (const r of parsed.results || []) {
       if (r && r.i != null) {
         map[r.i] = {
-          category:  r.category  || 'hors-sujet',
-          sentiment: r.sentiment || 'neutre',
-          priority:  r.priority  || 'basse',
-          summary:   r.summary   || '',
+          category:   r.category   || 'hors-sujet',
+          sentiment:  r.sentiment  || 'neutre',
+          priority:   r.priority   || 'basse',
+          confidence: r.confidence || 'basse',   // défaut prudent : sans certitude, jamais de spam auto
+          summary:    r.summary    || '',
         };
       }
     }
