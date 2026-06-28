@@ -179,8 +179,10 @@ body {
   background-color: #fecaca !important;
 }
 
-/* Texte ajouté : fond vert sauge vif, texte vert foncé, demi-gras */
-.article-diff-content mark,
+/* Texte ajouté : fond vert sauge vif, texte vert foncé, demi-gras.
+   :not(.manual-highlight) → exclut les surlignages manuels de l'utilisateur
+   pour ne pas écraser leur couleur avec !important. */
+.article-diff-content mark:not(.manual-highlight),
 .article-diff-content .updated-content {
   background-color: #bbf7d0 !important;
   color: #14532d !important;
@@ -193,9 +195,17 @@ body {
   transition: background-color 0.15s;
 }
 
-.article-diff-content mark:hover,
+.article-diff-content mark:not(.manual-highlight):hover,
 .article-diff-content .updated-content:hover {
   background-color: #86efac !important;
+}
+
+/* Surlignage manuel utilisateur — respecte la couleur inline définie par l'utilisateur.
+   Aucune règle !important ici : le background-color vient du style="background-color:…"
+   posé par applyHighlight(). border-radius/padding alignés visuellement sur les diff-marks. */
+.article-diff-content mark.manual-highlight {
+  border-radius: 3px;
+  padding: 1px 4px;
 }
 
 /* Nouveau paragraphe ajouté (enrichissement actualités) : fond bleu, bordure gauche */
