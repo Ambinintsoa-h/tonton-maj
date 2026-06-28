@@ -7,7 +7,7 @@ import {
   ExternalLink, Inbox, ShieldAlert, AlertTriangle, Reply, Send, X,
 } from 'lucide-react';
 import { fetchComments, moderateComment, classifyComments, generateReply, publishReply } from '../services/comments';
-import { getCommentAi, saveCommentAi } from '../services/firebase';
+import { getCommentAi, saveCommentAi, getCommentSettings, saveCommentSettings } from '../services/firebase';
 
 // Onglets de statut. `filter` = valeur envoyée à l'API WP (verbe), `match` = valeurs
 // possibles renvoyées par WP dans le champ status (WP renvoie 'approved' mais filtre 'approve').
@@ -53,6 +53,7 @@ export default function Commentaires() {
   const [analyzing, setAnalyzing] = useState(false);
   const [busyId, setBusyId]     = useState(null);    // commentaire en cours de modération
   const [error, setError]       = useState('');
+  const [autoSpam, setAutoSpam] = useState(false);   // réglage par site : spam auto haute confiance
 
   // Phase 2 — réponses de marque (brouillon IA → édition humaine → publication).
   const [openReplyId, setOpenReplyId] = useState(null);   // commentaire dont la zone réponse est ouverte
@@ -62,7 +63,7 @@ export default function Commentaires() {
 
   const site = useMemo(() => sites.find(s => s.id === siteId), [sites, siteId]);
 
-  // Charge le cache d'analyse IA Firestore quand le site change (survit au reload).
+  // Charge le cache d'analyse IA + le réglage auto-spam quand le site change.
   useEffect(() => {
     if (!siteId) return;
     let cancelled = false;
@@ -77,7 +78,18 @@ export default function Commentaires() {
       setAi(map);
       setDrafts(savedDrafts);
     }).catch(() => {});
+    getCommentSettings(siteId)
+      .then(s => { if (!cancelled) setAutoSpam(!!s.autoSpam); })
+      .catch(() => { if (!cancelled) setAutoSpam(false); });
     return () => { cancelled = true; };
+  }, [siteId]);
+
+  // Active/désactive l'auto-spam pour le site courant (persisté côté Firestore).
+  const toggleAutoSpam = useCallback(async (e) => {
+    const next = e.target.checked;
+    setAutoSpam(next);
+    try { await saveCommentSettings(siteId, { autoSpam: next }); }
+    catch { toast.error('Réglage non enregistré — réessaie.'); }
   }, [siteId]);
 
   // Charge les commentaires WordPress (site + onglet).
@@ -112,10 +124,30 @@ export default function Commentaires() {
         saveCommentAi(siteId, cid, data).catch(() => {})
       ));
       toast.success(`${Object.keys(map).length} commentaire(s) analysé(s)`);
+
+      // Auto-spam : seulement sur la file « En attente » et UNIQUEMENT pour le spam
+      // détecté à HAUTE confiance — en cas de doute, on ne touche à rien. Réversible
+      // (dossier Spam WP). Agit sur les commentaires fraîchement analysés.
+      if (autoSpam && tab === 'hold' && site) {
+        const targets = todo.filter(c => {
+          const a = map[c.id];
+          return a && a.category === 'spam' && a.confidence === 'haute';
+        });
+        if (targets.length) {
+          const results = await Promise.allSettled(
+            targets.map(c => moderateComment({ site, commentId: c.id, action: 'spam' }))
+          );
+          const okSet = new Set(targets.filter((_, i) => results[i].status === 'fulfilled').map(c => c.id));
+          if (okSet.size) {
+            setComments(prev => prev.filter(c => !okSet.has(c.id)));
+            toast.success(`${okSet.size} commentaire(s) passé(s) en spam automatiquement`);
+          }
+        }
+      }
     } finally {
       setAnalyzing(false);
     }
-  }, [comments, ai, siteId]);
+  }, [comments, ai, siteId, autoSpam, tab, site]);
 
   // Action de modération avec confirmation sur les actions destructives.
   const act = useCallback(async (comment, action) => {
@@ -229,6 +261,21 @@ export default function Commentaires() {
           {sites.length === 0 && <option value="">Aucun site configuré</option>}
           {sites.map(s => <option key={s.id} value={s.id}>{s.name || s.url}</option>)}
         </select>
+
+        <label
+          className="inline-flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none"
+          title="Passe automatiquement en spam les commentaires détectés spam à HAUTE confiance (réversible). En cas de doute, rien n'est touché."
+        >
+          <input
+            type="checkbox"
+            checked={autoSpam}
+            onChange={toggleAutoSpam}
+            disabled={!site}
+            className="w-4 h-4 accent-violet-600 rounded disabled:opacity-50"
+          />
+          <ShieldAlert size={15} className={autoSpam ? 'text-violet-600' : 'text-gray-400'} />
+          Auto-spam
+        </label>
 
         <div className="flex-1" />
 
