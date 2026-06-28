@@ -26,6 +26,62 @@ export const stripParasiticFontSize = (root) => {
   });
 };
 
+// Convertit les sections FAQ au format h2/h3/p → <details>/<summary> pour WordPress.
+// Les sections déjà en <details>/<summary> (générées par l'IA) sont ignorées.
+// WordPress ≥ 5.9 préserve <details>/<summary> via wp_kses_post : comportement accordéon
+// natif du navigateur, aucun JS ni plugin requis, quel que soit le thème.
+const convertFaqToAccordion = (div) => {
+  const headings = Array.from(div.querySelectorAll('h1, h2, h3, h4'));
+  for (const faqH of headings) {
+    const text = faqH.textContent.toLowerCase().trim();
+    if (
+      !text.includes('faq') &&
+      !text.includes('questions fréquentes') &&
+      !text.includes('questions frequentes') &&
+      !text.includes('foire aux questions')
+    ) continue;
+
+    const faqLevel = parseInt(faqH.tagName[1], 10);
+    const qTag     = 'H' + (faqLevel + 1);
+
+    // Section déjà convertie en accordéon → skip
+    let probe = faqH.nextElementSibling;
+    let hasDetails = false;
+    while (probe) {
+      const lvl = parseInt(probe.tagName?.[1], 10);
+      if (!isNaN(lvl) && lvl <= faqLevel) break;
+      if (probe.tagName === 'DETAILS') { hasDetails = true; break; }
+      probe = probe.nextElementSibling;
+    }
+    if (hasDetails) continue;
+
+    // Convertir chaque paire <qTag>question</qTag><p>réponse</p> en <details>/<summary>
+    let node = faqH.nextElementSibling;
+    while (node) {
+      const lvl = parseInt(node.tagName?.[1], 10);
+      if (!isNaN(lvl) && lvl <= faqLevel) break; // fin de section FAQ
+
+      if (node.tagName === qTag) {
+        const answerEl  = node.nextElementSibling;
+        const hasAnswer = answerEl && answerEl.tagName === 'P';
+        const nextStart = hasAnswer ? answerEl.nextElementSibling : node.nextElementSibling;
+
+        const details = div.ownerDocument.createElement('details');
+        const summary = div.ownerDocument.createElement('summary');
+        summary.innerHTML = node.innerHTML;
+        details.appendChild(summary);
+        if (hasAnswer) details.appendChild(answerEl); // déplace (pas clone) le <p>
+
+        node.parentNode.insertBefore(details, node);
+        node.remove();
+        node = nextStart;
+      } else {
+        node = node.nextElementSibling;
+      }
+    }
+  }
+};
+
 export const exportAsHtml = (content) => {
   const div = document.createElement('div');
   div.innerHTML = content;
@@ -101,6 +157,10 @@ export const exportAsHtml = (content) => {
       if (video && wrapper.parentNode) wrapper.parentNode.replaceChild(video, wrapper);
     }
   });
+
+  // Convertir les FAQ en h2/h3/p vers <details>/<summary> avant publication.
+  // Les sections déjà en accordéon (générées par l'IA) sont ignorées.
+  convertFaqToAccordion(div);
 
   // FAQ en accordéon : conserver les <details>/<summary> natifs (acceptés par
   // WordPress ≥ 5.9) mais retirer toute classe/couleur/style inline → apparence
