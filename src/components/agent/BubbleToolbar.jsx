@@ -362,10 +362,49 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
       }
     });
 
+    // Débaliser les <mark class="manual-highlight"> dont le fond vient d'être retiré
+    scope.querySelectorAll('mark.manual-highlight').forEach((el) => {
+      try { if (!range.intersectsNode(el)) return; } catch { return; }
+      const frag = document.createDocumentFragment();
+      while (el.firstChild) frag.appendChild(el.firstChild);
+      el.parentNode?.replaceChild(frag, el);
+    });
+
     // Filet : retire aussi un éventuel surlignage posé par execCommand (span hiliteColor)
     document.execCommand('hiliteColor', false, 'transparent');
 
     if (contentRef) contentRef.current = articleEl.innerHTML;
+    setPanel(null);
+  }, [popRange, articleEl, contentRef]);
+
+  /**
+   * Applique un surlignage manuel à la sélection en insérant un
+   * <mark class="manual-highlight" style="background-color: COLOR;">.
+   * Distinct des <mark class="updated-content"> du diff (jamais publiés).
+   * Le <mark> natif est le format de surlignage de Gutenberg → WordPress le préserve.
+   */
+  const applyHighlight = useCallback((color) => {
+    popRange();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !articleEl) return;
+    const range = sel.getRangeAt(0);
+    if (range.collapsed) return;
+
+    const mark = document.createElement('mark');
+    mark.className = 'manual-highlight';
+    mark.style.backgroundColor = color;
+
+    try {
+      range.surroundContents(mark);
+    } catch {
+      // La sélection traverse des limites d'éléments : extraire + envelopper
+      const frag = range.extractContents();
+      mark.appendChild(frag);
+      range.insertNode(mark);
+    }
+
+    sel.removeAllRanges();
+    if (contentRef) contentRef.current = articleEl.innerHTML || '';
     setPanel(null);
   }, [popRange, articleEl, contentRef]);
 
@@ -884,8 +923,7 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
             <Swatch key={c.value} color={c.value} label={c.label}
               onClick={() => {
                 if (c.value === 'transparent') { clearBackground(); return; }
-                popRange();
-                format('hiliteColor', c.value);
+                applyHighlight(c.value);
               }}
             />
           ))}

@@ -311,8 +311,10 @@ export default function ArticleResult() {
     //     dans la vue finale ni dans l'article publié.
     tmp.querySelectorAll('.deleted-content, s, strike, [style*="line-through"]').forEach(el => el.remove());
 
-    // 3. Débaliser les <mark> et <ins class="added-content"> : conserver le contenu
-    tmp.querySelectorAll('mark').forEach(el => {
+    // 3. Débaliser les <mark> de diff : conserver le contenu, ignorer les surlignages manuels
+    //    Les <mark class="manual-highlight"> sont des surlignages intentionnels de l'utilisateur
+    //    et doivent survivre jusqu'à la publication WordPress.
+    tmp.querySelectorAll('mark:not(.manual-highlight)').forEach(el => {
       const frag = document.createDocumentFragment();
       while (el.firstChild) frag.appendChild(el.firstChild);
       if (el.parentNode) el.parentNode.replaceChild(frag, el);
@@ -332,7 +334,9 @@ export default function ArticleResult() {
       'rgb(254,226,226)', 'rgb(254,202,202)',  // rouge deleted + hover (#fee2e2 / #fecaca)
       'rgb(219,234,254)', 'rgb(191,219,254)',  // bleu added + hover   (#dbeafe / #bfdbfe)
     ];
-    tmp.querySelectorAll('[style]').forEach(el => {
+    // Les <mark class="manual-highlight"> sont exclus : leur couleur est intentionnelle
+    // même si elle coïncide avec une couleur de diff (ex: vert #bbf7d0).
+    tmp.querySelectorAll('[style]:not(.manual-highlight)').forEach(el => {
       const bg = (el.style.backgroundColor || '').replace(/\s/g, '').toLowerCase();
       if (bg && DIFF_BG.includes(bg)) {
         el.style.removeProperty('background-color');
@@ -351,12 +355,13 @@ export default function ArticleResult() {
     html = html.replace(/<del\b[^>]*>[\s\S]*?<\/del>/gi, '');
     // Idem pour <s>/<strike> résiduels (texte barré = supprimé → jamais publié)
     html = html.replace(/<(s|strike)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
-    // Débaliser tout <mark …>…</mark> résiduel (garder le contenu interne)
+    // Débaliser tout <mark> résiduel de diff (sans "manual-highlight") — garder le contenu interne.
+    // Les <mark class="manual-highlight"> (surlignages manuels) sont exclus et préservés.
     // Boucle pour gérer les marks éventuellement imbriqués (ex: édition manuelle)
     let prev = '';
     while (prev !== html) {
       prev = html;
-      html = html.replace(/<mark\b[^>]*>([\s\S]*?)<\/mark>/gi, '$1');
+      html = html.replace(/<mark\b(?![^>]*manual-highlight)[^>]*>([\s\S]*?)<\/mark>/gi, '$1');
     }
     // Débaliser tout <ins class="added-content">…</ins> résiduel
     html = html.replace(/<ins\b[^>]*class="added-content"[^>]*>([\s\S]*?)<\/ins>/gi, '$1');

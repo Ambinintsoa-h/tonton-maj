@@ -37,8 +37,9 @@ export const exportAsHtml = (content) => {
   // Remove deleted content entirely
   div.querySelectorAll('.deleted-content, del').forEach(el => el.remove());
 
-  // Unwrap updated content: keep inner HTML, discard the <mark> wrapper
-  div.querySelectorAll('.updated-content, mark').forEach(el => {
+  // Unwrap diff marks: keep inner HTML, discard the <mark> wrapper.
+  // Les <mark class="manual-highlight"> (surlignages manuels) sont préservés pour WordPress.
+  div.querySelectorAll('.updated-content, mark:not(.manual-highlight)').forEach(el => {
     const frag = document.createDocumentFragment();
     while (el.firstChild) frag.appendChild(el.firstChild);
     if (el.parentNode) el.parentNode.replaceChild(frag, el);
@@ -49,6 +50,13 @@ export const exportAsHtml = (content) => {
     const frag = document.createDocumentFragment();
     while (el.firstChild) frag.appendChild(el.firstChild);
     if (el.parentNode) el.parentNode.replaceChild(frag, el);
+  });
+
+  // Nettoyer la classe interne "manual-highlight" des <mark> → sortie propre pour WordPress
+  // Le <mark style="background-color:..."> nu est le format Gutenberg natif (wp_kses_post OK).
+  div.querySelectorAll('mark.manual-highlight').forEach(el => {
+    el.classList.remove('manual-highlight');
+    if (!el.getAttribute('class')?.trim()) el.removeAttribute('class');
   });
 
   // Supprimer les overlays éditeur (data-media-overlay) — éléments UI uniquement,
@@ -109,10 +117,12 @@ export const exportAsHtml = (content) => {
   // Filet de sécurité regex — élimine tout résidu <del>/<mark>/<ins> non capturé par le DOM
   let html = div.innerHTML;
   html = html.replace(/<del\b[^>]*>[\s\S]*?<\/del>/gi, '');
+  // Débaliser les <mark> résiduels SANS attribut style (diff non capturés par le DOM).
+  // Les <mark style="..."> (surlignages manuels, class déjà nettoyée) sont préservés.
   let prev = '';
   while (prev !== html) {
     prev = html;
-    html = html.replace(/<mark\b[^>]*>([\s\S]*?)<\/mark>/gi, '$1');
+    html = html.replace(/<mark\b(?![^>]*\bstyle\s*=)[^>]*>([\s\S]*?)<\/mark>/gi, '$1');
   }
   html = html.replace(/<ins\b[^>]*class="added-content"[^>]*>([\s\S]*?)<\/ins>/gi, '$1');
   return html;
