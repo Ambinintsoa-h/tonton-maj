@@ -577,7 +577,7 @@ const buildSystemPrompt = (skills, knowledge = [], auditReport = '') => {
   const brainSkills = getBrainSkills(skills);
   let skillsBlock;
   if (brainSkills.length && auditReport) {
-    skillsBlock = `\n\n## ═══ MODE CORRECTION — un audit complet a été réalisé ═══\nUn audit détaillé de l'article t'est fourni dans le message utilisateur. Ton rôle ici : transformer ses conclusions ACTIONNABLES en corrections concrètes, au format JSON d'updates défini plus bas. Corrige les données fausses/obsolètes (updates) et ajoute les éléments recommandés — TL;DR, FAQ, tableau comparatif, paragraphe d'actualité — via "type":"addition". N'insère JAMAIS le rapport d'audit (scores, tableaux d'audit, EEAT…) dans le contenu de l'article ; ces éléments + les recommandations vont dans le champ "analysis".`;
+    skillsBlock = `\n\n## ═══ MODE CORRECTION — un audit complet a été réalisé ═══\nUn audit détaillé de l'article t'est fourni dans le message utilisateur. Ton rôle ici : transformer ses conclusions ACTIONNABLES en corrections concrètes, au format JSON d'updates défini plus bas. Corrige les données fausses/obsolètes (updates) et ajoute TOUS les éléments recommandés — TL;DR, FAQ, tableau comparatif, paragraphe d'actualité, sections normatives/réglementaires (DTU, RE2020, codes, lois…), données ou angles manquants signalés — via "type":"addition". N'insère JAMAIS le rapport d'audit (scores, tableaux d'audit, EEAT…) dans le contenu de l'article ; ces éléments + les recommandations vont dans le champ "analysis".`;
   } else if (brainSkills.length) {
     skillsBlock = buildBrainBlock(brainSkills);
   } else {
@@ -1011,7 +1011,7 @@ ${content.substring(0, 5000)}`,
     : '';
 
   const auditBlock = auditReport
-    ? `## AUDIT DÉJÀ RÉALISÉ — base de tes corrections\nTransforme les conclusions ACTIONNABLES de cet audit en updates/additions concrètes (corrige les données fausses/obsolètes, ajoute TL;DR/FAQ/tableau recommandés). Ne recopie PAS le rapport dans l'article ; scores/EEAT/recommandations → champ "analysis".\n\n${auditReport}\n\n---\n\n`
+    ? `## AUDIT DÉJÀ RÉALISÉ — base de tes corrections\nTransforme les conclusions ACTIONNABLES de cet audit en updates/additions concrètes (corrige les données fausses/obsolètes, ajoute TOUS les contenus recommandés : TL;DR, FAQ, tableaux, sections normatives/réglementaires, données ou angles manquants…). Ne recopie PAS le rapport dans l'article ; scores/EEAT/recommandations → champ "analysis".\n\n${auditReport}\n\n---\n\n`
     : '';
 
   const userMessage = `Nous sommes le ${fr} (${iso}).
