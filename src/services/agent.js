@@ -577,7 +577,7 @@ const buildSystemPrompt = (skills, knowledge = [], auditReport = '') => {
   const brainSkills = getBrainSkills(skills);
   let skillsBlock;
   if (brainSkills.length && auditReport) {
-    skillsBlock = `\n\n## ═══ MODE CORRECTION — un audit complet a été réalisé ═══\nUn audit détaillé de l'article t'est fourni dans le message utilisateur. Ton rôle ici : transformer ses conclusions ACTIONNABLES en corrections concrètes, au format JSON d'updates défini plus bas. Corrige les données fausses/obsolètes (updates) et ajoute TOUS les éléments recommandés — TL;DR, FAQ, tableau comparatif, paragraphe d'actualité, sections normatives/réglementaires (DTU, RE2020, codes, lois…), données ou angles manquants signalés — via "type":"addition". N'insère JAMAIS le rapport d'audit (scores, tableaux d'audit, EEAT…) dans le contenu de l'article ; ces éléments + les recommandations vont dans le champ "analysis".`;
+    skillsBlock = `\n\n## ═══ MODE CORRECTION — un audit complet a été réalisé ═══\nUn audit détaillé de l'article t'est fourni dans le message utilisateur. Ton rôle ici : transformer ses conclusions ACTIONNABLES en corrections concrètes, au format JSON d'updates défini plus bas. Corrige les données fausses/obsolètes (updates) et ajoute TOUS les éléments recommandés — TL;DR, FAQ, tableau comparatif, paragraphe d'actualité, sections normatives/réglementaires (DTU, RE2020, codes, lois…), données ou angles manquants signalés — via "type":"addition".\nSi l'audit signale un article trop court ou recommande de nouveaux H2 : chaque H2 ajouté doit apporter un contenu NOUVEAU et informatif (exemples concrets, normes, données chiffrées, cas d'usage, comparatifs) — JAMAIS une reformulation du contenu existant pour gonfler artificiellement la longueur.\nN'insère JAMAIS le rapport d'audit (scores, tableaux d'audit, EEAT…) dans le contenu de l'article ; ces éléments + les recommandations vont dans le champ "analysis".`;
   } else if (brainSkills.length) {
     skillsBlock = buildBrainBlock(brainSkills);
   } else {
@@ -802,7 +802,9 @@ Produis TOUTES les sections du format, sans en omettre ni les tronquer (le table
 
 ${auditBodies}${auditResBlock}`;
     const linkStats = analyzeLinks(contentHtml || content, articleUrl);
-    const auditUser = `## ARTICLE À AUDITER\n${content}\n\n## MAILLAGE EXISTANT (compté automatiquement — chiffres fiables, reprends-les tels quels)\n- Liens INTERNES (même site) : ${linkStats.internal}\n- Liens EXTERNES (autres sites) : ${linkStats.external}\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill.`;
+    const rawText = stripHtml(contentHtml || content || '').trim();
+    const wordCount = rawText ? rawText.split(/\s+/).length : 0;
+    const auditUser = `## ARTICLE À AUDITER\n${content}\n\n## DONNÉES FACTUELLES (comptées automatiquement — chiffres fiables, reprends-les tels quels)\n- Liens INTERNES (même site) : ${linkStats.internal}\n- Liens EXTERNES (autres sites) : ${linkStats.external}\n- Longueur article : ~${wordCount} mots (cible SEO minimale : 800-1 500 mots)\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill. IMPORTANT : analyse systématiquement la longueur de l'article. Si < 800 mots, signale-le en priorité haute et propose des H2 à ajouter. Chaque H2 suggéré doit apporter un contenu NOUVEAU et informatif (exemples concrets, normes, cas d'usage, comparatifs, données chiffrées) — JAMAIS une simple reformulation du contenu existant pour gonfler artificiellement la longueur.`;
 
     for (let attempt = 1; attempt <= 3 && !auditReport; attempt++) {
       try {
