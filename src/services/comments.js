@@ -76,17 +76,7 @@ export const publishReply = async ({ site, comment, content, status = 'approve' 
  * Retourne une map { [commentId]: { category, sentiment, priority, summary } }.
  * Silencieux en cas d'erreur (renvoie {}) — le tri IA ne doit jamais bloquer l'écran.
  */
-export const classifyComments = async (comments) => {
-  const batch = (comments || []).slice(0, 40)
-    .map(c => ({ i: c.id, t: (c.content || '').substring(0, 400) }))
-    .filter(c => c.t);
-  if (!batch.length) return {};
-
-  try {
-    const { data } = await axios.post(CLAUDE_PROXY, {
-      model: 'claude-haiku-4-5',
-      max_tokens: 1800,
-      system: `Tu classes des commentaires de blog pour aider un modérateur. Pour CHAQUE commentaire, donne :
+const CLASSIFY_SYSTEM = `Tu classes des commentaires de blog pour aider un modérateur. Pour CHAQUE commentaire, donne :
 - "category" : un seul de ${JSON.stringify(COMMENT_CATEGORIES)}
 - "sentiment" : "positif" | "neutre" | "négatif"
 - "priority" : "haute" (toxique, critique à traiter vite, question importante) | "moyenne" | "basse"
@@ -94,10 +84,16 @@ export const classifyComments = async (comments) => {
 - "lang" : code langue ISO 639-1 en minuscules du commentaire (ex. "fr", "en", "es", "de", "it", "pt", "ar"…)
 - "summary" : résumé en 8 mots maximum, en français
 Réponds UNIQUEMENT avec un JSON valide, sans texte autour :
-{"results":[{"i":<id>,"category":"...","sentiment":"...","priority":"...","confidence":"...","lang":"...","summary":"..."}]}`,
+{"results":[{"i":<id>,"category":"...","sentiment":"...","priority":"...","confidence":"...","lang":"...","summary":"..."}]}`;
+
+const classifyChunk = async (batch) => {
+  try {
+    const { data } = await axios.post(CLAUDE_PROXY, {
+      model: 'claude-haiku-4-5',
+      max_tokens: 4000,
+      system: CLASSIFY_SYSTEM,
       messages: [{ role: 'user', content: `Commentaires à classer :\n${JSON.stringify(batch)}` }],
     });
-
     const text = data?.content?.[0]?.text || '';
     const slice = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
     const parsed = JSON.parse(slice);
@@ -116,8 +112,24 @@ Réponds UNIQUEMENT avec un JSON valide, sans texte autour :
     }
     return map;
   } catch {
-    return {};
+    return {};   // un lot en échec ne fait pas tomber les autres
   }
+};
+
+export const classifyComments = async (comments) => {
+  const all = (comments || [])
+    .map(c => ({ i: c.id, t: (c.content || '').substring(0, 400) }))
+    .filter(c => c.t);
+  if (!all.length) return {};
+
+  // Petits lots : évite une sortie JSON tronquée par max_tokens (cause d'échec
+  // d'analyse sur de gros volumes) et classe TOUS les commentaires, pas que 40.
+  const CHUNK = 15;
+  const chunks = [];
+  for (let i = 0; i < all.length; i += CHUNK) chunks.push(all.slice(i, i + CHUNK));
+
+  const maps = await Promise.all(chunks.map(classifyChunk));
+  return Object.assign({}, ...maps);
 };
 
 /**
