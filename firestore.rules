@@ -123,6 +123,16 @@ service cloud.firestore {
       allow read, write: if isAuthenticated() && request.auth.uid == userId;
     }
 
+    // ── Commentaires : cache d'analyse IA + réglages par site ────────────────
+    // Même audience que la feature Commentaires (et que wordpress_sites) :
+    // super_admin / manager / support. Pas cq_ia.
+    match /comment_ai/{docId} {
+      allow read, write: if isAdmin() || isSupport();
+    }
+    match /comment_settings/{docId} {
+      allow read, write: if isAdmin() || isSupport();
+    }
+
     // ── Refus par défaut (toute collection non listée ci-dessus) ─────────────
     match /{document=**} {
       allow read, write: if false;
