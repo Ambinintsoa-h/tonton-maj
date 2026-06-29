@@ -96,6 +96,16 @@ export const exportAsHtml = (content) => {
   // d'un <p>, marqueurs de diff vides, <p> vidés → HTML publié toujours valide.
   repairStructureEl(div);
 
+  // Nettoyer les vestiges ez-toc (spans ajoutés par WordPress à chaque publication).
+  // Si le contenu de l'éditeur contient déjà ces spans d'une publication précédente,
+  // ils provoqueraient une accumulation à la prochaine publication. On débalise
+  // sans perdre le texte (replaceChild par un fragment de leurs enfants).
+  div.querySelectorAll('span.ez-toc-section, span.ez-toc-section-end').forEach(span => {
+    const frag = document.createDocumentFragment();
+    while (span.firstChild) frag.appendChild(span.firstChild);
+    if (span.parentNode) span.parentNode.replaceChild(frag, span);
+  });
+
   // Remove deleted content entirely
   div.querySelectorAll('.deleted-content, del').forEach(el => el.remove());
 

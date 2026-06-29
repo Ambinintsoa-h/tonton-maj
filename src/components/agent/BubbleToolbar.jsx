@@ -362,8 +362,12 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
       }
     });
 
-    // Débaliser les <mark class="manual-highlight"> dont le fond vient d'être retiré
-    scope.querySelectorAll('mark.manual-highlight').forEach((el) => {
+    // Débaliser les <mark class="manual-highlight"> dont le fond vient d'être retiré.
+    // querySelectorAll ne retourne pas scope lui-même : si la sélection est
+    // entièrement dans un seul <mark>, il faut l'ajouter manuellement.
+    const markEls = [...scope.querySelectorAll('mark.manual-highlight')];
+    if (scope.matches?.('mark.manual-highlight')) markEls.unshift(scope);
+    markEls.forEach((el) => {
       try { if (!range.intersectsNode(el)) return; } catch { return; }
       const frag = document.createDocumentFragment();
       while (el.firstChild) frag.appendChild(el.firstChild);
