@@ -73,6 +73,7 @@ const convertFaqToAccordion = (div) => {
         // et la structure h3/p d'origine est préservée — pas de régression.
         const qEl = div.ownerDocument.createElement(node.tagName);
         qEl.innerHTML = node.innerHTML;
+        qEl.style.display = 'inline';
         summary.appendChild(qEl);
         details.appendChild(summary);
         if (hasAnswer) details.appendChild(answerEl); // déplace (pas clone) le <p>
@@ -136,6 +137,9 @@ export const exportAsHtml = (content) => {
     h.style.removeProperty('padding-bottom');
     if (!h.getAttribute('style')?.trim()) h.removeAttribute('style');
   });
+  div.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(h => {
+    h.innerHTML = h.innerHTML.replace(/\s*\(TL[;:]?DR\)/gi, '');
+  });
 
   // Dépublier les surlignages de liens internes non appliqués : remplacer le <span>
   // par son contenu texte brut (le lien n'a pas été validé par l'utilisateur).
@@ -178,6 +182,25 @@ export const exportAsHtml = (content) => {
   // Uniformiser la typo : retirer les tailles de police parasites (0.8125rem)
   // → WordPress applique la taille du thème à tout le contenu.
   stripParasiticFontSize(div);
+
+  // Lier les ancres du sommaire aux headings correspondants.
+  // L'IA génère <a href="#slug"> sans mettre d'id sur les <h2>. WordPress/ez-toc
+  // ajoute ses propres ids (différents) → les ancres pointaient dans le vide.
+  // Fix : matcher chaque lien de liste interne au heading dont le texte correspond,
+  // et injecter l'id directement sur le <h2>/<h3>.
+  const normToc = t => t.toLowerCase().replace(/\s*\(TL[;:]?DR\)/gi, '').replace(/\s+/g, ' ').trim();
+  div.querySelectorAll('li a[href^="#"]').forEach(link => {
+    const targetId = link.getAttribute('href').slice(1);
+    if (!targetId) return;
+    const linkText = normToc(link.textContent);
+    if (!linkText) return;
+    for (const h of div.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+      if (!h.id && normToc(h.textContent) === linkText) {
+        h.setAttribute('id', targetId);
+        break;
+      }
+    }
+  });
 
   // Filet de sécurité regex — élimine tout résidu <del>/<mark>/<ins> non capturé par le DOM
   let html = div.innerHTML;
