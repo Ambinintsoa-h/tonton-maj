@@ -204,8 +204,17 @@ body {
    Aucune règle !important ici : le background-color vient du style="background-color:…"
    posé par applyHighlight(). border-radius/padding alignés visuellement sur les diff-marks. */
 .article-diff-content mark.manual-highlight {
+  background-color: transparent;
   border-radius: 3px;
   padding: 1px 4px;
+}
+
+/* FAQ accordéon dans l'éditeur — <h3> dans <summary> est block par défaut.
+   display:inline aligne le marker ▶ avec le texte de la question. */
+.article-diff-content details summary h3,
+.article-diff-content details summary h4,
+.article-diff-content details summary h5 {
+  display: inline;
 }
 
 /* Nouveau paragraphe ajouté (enrichissement actualités) : fond bleu, bordure gauche */
