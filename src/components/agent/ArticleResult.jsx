@@ -22,7 +22,7 @@ import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setW
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
-import { saveArticle } from '../../services/firebase';
+import { saveArticle, updateArticleHtml } from '../../services/firebase';
 import { saveDraft, flushDraftRemote, clearDraft, onDraftStatus } from '../../services/articleDraft';
 import { renderMarkdown, emojiToIcons, unwrapProseFences, trimAuditForDisplay } from '../../utils/markdown';
 import { useNavigate } from 'react-router-dom';
@@ -653,8 +653,18 @@ export default function ArticleResult() {
     clearTimeout(autosaveTimer.current);
     keystrokesRef.current = 0;
     const { userId, build } = draftDataRef.current;
-    if (build) saveDraft(userId, build());
-  }, []);
+    if (!build) return;
+    const draft = build();
+    saveDraft(userId, draft);
+    // Mettre à jour l'entrée existante dans l'historique Redux/localStorage
+    if (draft.currentArticleId) {
+      dispatch(updateInHistory({
+        id: draft.currentArticleId,
+        updatedContent: draft.html,
+        updatedAt: Date.now(),
+      }));
+    }
+  }, [dispatch]);
   const triggerAutosave = useCallback((isKeystroke = false) => {
     if (isKeystroke && ++keystrokesRef.current >= AUTOSAVE_BURST) { doSave(); return; }
     clearTimeout(autosaveTimer.current);
@@ -682,6 +692,20 @@ export default function ArticleResult() {
       if (d && d.html) { saveDraft(userId, d); flushDraftRemote(userId, d); }
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Synchronisation Firestore articles/{id} après chaque remote save réussi.
+  // draftStatus passe à 'saved' après l'écriture Firestore du brouillon (throttlée ≥12 s).
+  // On profite de ce signal pour mettre à jour updatedContent dans la collection articles.
+  const lastSyncedHtmlRef = useRef(null);
+  useEffect(() => {
+    if (agent.draftStatus !== 'saved') return;
+    const articleId = agent.currentArticleId;
+    if (!articleId) return;
+    const html = contentRef.current || '';
+    if (!html || html === lastSyncedHtmlRef.current) return;
+    lastSyncedHtmlRef.current = html;
+    updateArticleHtml(articleId, html).catch(() => {});
+  }, [agent.draftStatus, agent.currentArticleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Collage dans la vue diff : on retire tout style copié d'un autre site et on
   // ne garde que la structure + le style par défaut (cf. sanitizePastedHtml).

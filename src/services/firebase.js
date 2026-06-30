@@ -176,6 +176,23 @@ export const saveArticle = async (article) => {
   return { id: docId, originalContentUrl, updatedContentUrl };
 };
 
+// Mise à jour légère d'un article existant : re-upload uniquement updated.html.
+// Appelée par l'autosave (throttlé ≥12 s via le remote draft) — évite de
+// re-uploader l'originalContent inchangé à chaque keystroke.
+export const updateArticleHtml = async (articleId, updatedContent) => {
+  if (!db || !articleId || !updatedContent) return;
+  const docRef = doc(db, 'articles', articleId);
+  let updatedContentUrl = null;
+  try { updatedContentUrl = await uploadHtml(`articles/${articleId}/updated.html`, updatedContent); } catch {}
+  const patch = { updatedAt: Date.now() };
+  if (updatedContentUrl) {
+    patch.updatedContentUrl = updatedContentUrl;
+  } else if (updatedContent.length <= 800_000) {
+    patch.updatedContent = updatedContent;
+  }
+  await updateDoc(docRef, patch);
+};
+
 export const deleteArticle = async (id) => {
   if (!db) throw new Error('Firebase non initialisé');
   await deleteDoc(doc(db, 'articles', id));
