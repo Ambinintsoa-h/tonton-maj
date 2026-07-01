@@ -1218,11 +1218,19 @@ export default function ArticleResult() {
     const currentHtml = contentRef.current;
     let newHtml = currentHtml;
     let matched = false;
+    const isSuppression = update.type === 'suppression';
 
-    // Stratégie 1 : remplacement exact (applyDiff — toutes stratégies)
+    // Stratégie 1 : remplacement exact OU suppression (applyDiff — toutes stratégies)
     if (update.type !== 'addition' && update.original) {
-      const r = applyDiff(currentHtml, update.original, update.updated, update.reason);
+      const r = applyDiff(currentHtml, update.original, isSuppression ? '' : update.updated, update.reason, isSuppression);
       if (r.matched) { newHtml = r.html; matched = true; }
+    }
+
+    // Une suppression ne retombe JAMAIS sur une insertion de secours (cela injecterait
+    // le texte "undefined" sans rien supprimer) : si non localisée, on n'applique rien.
+    if (isSuppression && !matched) {
+      toast.error('Passage à supprimer introuvable — retire-le manuellement dans la vue diff.');
+      return;
     }
 
     // Stratégie 2 : insertion par ancre (applyAddition)
@@ -2508,6 +2516,7 @@ export default function ArticleResult() {
               const isApplied = u.applied !== false;
               const isPass2 = u.pass === 2;
               const isAddition = u.type === 'addition';
+              const isSuppression = u.type === 'suppression';
               const isIncoherent = u.coherent === false;
               return (
                 <div key={i} className={`rounded-xl p-4 border transition-colors ${
@@ -2540,7 +2549,7 @@ export default function ArticleResult() {
                             isAddition ? 'text-blue-700 bg-blue-100'
                             : isPass2 ? 'text-purple-700 bg-purple-100' : 'text-green-600 bg-green-100'
                           }`}>
-                            <CheckCircle2 size={13} className="inline text-emerald-600 shrink-0" /> {isAddition ? 'Paragraphe ajouté' : 'Appliquée dans l\'article'}
+                            <CheckCircle2 size={13} className="inline text-emerald-600 shrink-0" /> {isAddition ? 'Paragraphe ajouté' : isSuppression ? 'Contenu supprimé' : 'Appliquée dans l\'article'}
                           </span>
                         ) : (
                           <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 rounded-full px-2 py-0.5">
@@ -2568,13 +2577,15 @@ export default function ArticleResult() {
                       ) : (
                         <p className="text-gray-400 line-through text-xs leading-relaxed break-words">{u.original}</p>
                       )}
-                      <div className="flex items-start gap-1.5">
-                        <ArrowRight size={12} className={`flex-shrink-0 mt-0.5 ${isAddition ? 'text-blue-400' : 'text-sage-500'}`} />
-                        <p className="text-xs leading-relaxed font-medium break-words"
-                          style={{ color: isAddition ? '#1d4ed8' : '#2d6a2d' }}
-                          dangerouslySetInnerHTML={{ __html: u.updated }}
-                        />
-                      </div>
+                      {!isSuppression && (
+                        <div className="flex items-start gap-1.5">
+                          <ArrowRight size={12} className={`flex-shrink-0 mt-0.5 ${isAddition ? 'text-blue-400' : 'text-sage-500'}`} />
+                          <p className="text-xs leading-relaxed font-medium break-words"
+                            style={{ color: isAddition ? '#1d4ed8' : '#2d6a2d' }}
+                            dangerouslySetInnerHTML={{ __html: u.updated }}
+                          />
+                        </div>
+                      )}
                       {u.reason && <p className="text-[11px] text-gray-400 italic pt-0.5">{u.reason}</p>}
                       {isIncoherent && u.coherenceIssue && (
                         <p className="text-[11px] text-orange-600 font-medium flex items-center gap-1 pt-0.5">

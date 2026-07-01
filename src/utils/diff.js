@@ -17,10 +17,12 @@ export const escRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * 4 stratégies par ordre de précision décroissante.
  * @returns {{ html: string, matched: boolean }}
  */
-export const applyDiff = (html, original, updated, reason) => {
+export const applyDiff = (html, original, updated, reason, deleteOnly = false) => {
   const safeReason = (reason || "").replace(/"/g, "'");
   const replacement = (matched) =>
-    `<del class="deleted-content">${matched}</del><mark class="updated-content" title="${safeReason}">${updated}</mark>`;
+    deleteOnly
+      ? `<del class="deleted-content" title="${safeReason}">${matched}</del>`
+      : `<del class="deleted-content">${matched}</del><mark class="updated-content" title="${safeReason}">${updated}</mark>`;
 
   // Guard : sur les articles très longs (>150 000 chars), bypasser les stratégies
   // avec quantificateurs flexibles (gap) pour éviter le backtracking catastrophique.
@@ -575,6 +577,15 @@ export const applyAllDiffs = (html, updates, passNumber = 1) => {
         return { ...update, applied: true, pass: passNumber };
       }
       console.warn(`[diff p${passNumber}] Addition non localisée (anchor):`, (update.anchor || '').substring(0, 70));
+      return { ...update, applied: false, pass: passNumber };
+    }
+    // Suppression pure (redondance / répétition) : barré rouge SANS ajout vert.
+    // Le contenu barré est réellement retiré dans la vue « Après » (getFinalHtml supprime les <del>).
+    if (update.type === 'suppression') {
+      if (!update.original) return { ...update, applied: false, pass: passNumber };
+      const { html: delHtml, matched: delMatched } = applyDiff(updatedHtml, update.original, '', update.reason, true);
+      if (delMatched) { updatedHtml = delHtml; return { ...update, applied: true, pass: passNumber }; }
+      console.warn(`[diff p${passNumber}] Suppression non localisée :`, update.original.substring(0, 70));
       return { ...update, applied: false, pass: passNumber };
     }
     // Remplacement classique

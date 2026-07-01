@@ -274,6 +274,7 @@ Réponds UNIQUEMENT avec le JSON : {"results":[{"i":0,"valid":true},{"i":1,"vali
   const byIndex = new Map(results.map(r => [r.i, r]));
 
   return updates.map((u, i) => {
+    if (u.type === 'suppression') return u;   // suppression : rien à valider (pas de "updated")
     const check = byIndex.get(i);
     if (!check) return u;
     return check.valid
@@ -577,7 +578,7 @@ const buildSystemPrompt = (skills, knowledge = [], auditReport = '') => {
   const brainSkills = getBrainSkills(skills);
   let skillsBlock;
   if (brainSkills.length && auditReport) {
-    skillsBlock = `\n\n## ═══ MODE CORRECTION — un audit complet a été réalisé ═══\nUn audit détaillé de l'article t'est fourni dans le message utilisateur. Ton rôle ici : transformer ses conclusions ACTIONNABLES en corrections concrètes, au format JSON d'updates défini plus bas. Corrige les données fausses/obsolètes (updates) et ajoute TOUS les éléments recommandés — TL;DR, FAQ, tableau comparatif, paragraphe d'actualité, sections normatives/réglementaires (DTU, RE2020, codes, lois…), données ou angles manquants signalés — via "type":"addition".\nSi l'audit signale un article trop court ou recommande de nouveaux H2 : chaque H2 ajouté doit apporter un contenu NOUVEAU et informatif (exemples concrets, normes, données chiffrées, cas d'usage, comparatifs) — JAMAIS une reformulation du contenu existant pour gonfler artificiellement la longueur.\nN'insère JAMAIS le rapport d'audit (scores, tableaux d'audit, EEAT…) dans le contenu de l'article ; ces éléments + les recommandations vont dans le champ "analysis".`;
+    skillsBlock = `\n\n## ═══ MODE CORRECTION — un audit complet a été réalisé ═══\nUn audit détaillé de l'article t'est fourni dans le message utilisateur. Ton rôle ici : transformer ses conclusions ACTIONNABLES en corrections concrètes, au format JSON d'updates défini plus bas. Corrige les données fausses/obsolètes (updates) et ajoute TOUS les éléments recommandés — TL;DR, FAQ, tableau comparatif, paragraphe d'actualité, sections normatives/réglementaires (DTU, RE2020, codes, lois…), données ou angles manquants signalés — via "type":"addition".\nSi l'audit signale un article trop court ou recommande de nouveaux H2 : chaque H2 ajouté doit apporter un contenu NOUVEAU et informatif (exemples concrets, normes, données chiffrées, cas d'usage, comparatifs) — JAMAIS une reformulation du contenu existant pour gonfler artificiellement la longueur.\nAGIS COMME UN RÉDACTEUR WEB SEO SENIOR : au-delà des corrections factuelles, traque les REDONDANCES et RÉPÉTITIONS (même information répétée, paragraphe de remplissage qui n'apporte rien de neuf) et RETIRE-les via "type":"suppression" en gardant la meilleure occurrence ; assure la cohérence (un concept = un seul endroit). Ne supprime JAMAIS une information unique/nuancée, une donnée chiffrée, ni (sujet santé/YMYL) une information de sécurité — en cas de doute, ne supprime pas.\nN'insère JAMAIS le rapport d'audit (scores, tableaux d'audit, EEAT…) dans le contenu de l'article ; ces éléments + les recommandations vont dans le champ "analysis".`;
   } else if (brainSkills.length) {
     skillsBlock = buildBrainBlock(brainSkills);
   } else {
@@ -646,6 +647,14 @@ Ton entraînement s'arrête en début ${prevYear} — soit plus de 12 mois avant
 **Une addition ne peut exister QUE si une source web scrapée avec URL réelle la confirme.**
 Si aucune source web récente disponible → pas d'addition, pas de bloc actualité inventé.
 
+### Type "suppression" — Retirer un contenu redondant/répétitif
+Utilise ce type pour SUPPRIMER un passage qui répète une information déjà présente ailleurs dans l'article, ou un paragraphe de remplissage qui n'apporte rien de neuf.
+- \`"type": "suppression"\`
+- \`"original"\` : copie EXACTE mot-pour-mot du passage à retirer
+- PAS de champ \`"updated"\`
+- \`"reason"\` : ex. "Redondant : répète le paragraphe sur X déjà présent plus haut"
+Règles : garde la MEILLEURE occurrence, supprime le doublon (jamais les deux). Ne supprime JAMAIS une information unique, une nuance, une donnée chiffrée, ni (sujet santé/YMYL) une information de sécurité. En cas de doute, ne supprime pas.
+
 ### Résumé de l'article (TL;DR) — OBLIGATOIRE, INSÉRÉ DANS L'ARTICLE (jamais dans "analysis")
 Tu DOIS toujours produire un résumé de l'article, sous forme d'**addition** placée tout EN HAUT (juste après l'introduction) :
 - \`"type": "addition"\`
@@ -682,6 +691,11 @@ Ajoute TOUJOURS une FAQ (3 questions/réponses), idéalement à partir des **que
       "updated": "<p>Nouveau contenu avec actualité récente.</p>",
       "reason": "Nouvelle information absente de l'article : ...",
       "source": "URL de la source"
+    },
+    {
+      "type": "suppression",
+      "original": "copie EXACTE du passage redondant/répétitif à retirer",
+      "reason": "Redondant : répète l'information déjà donnée plus haut"
     }
   ],
   "sources": [
