@@ -10,6 +10,7 @@ import {
   RefreshCw, ArrowRight, Link, ChevronUp,
   Clipboard, ClipboardCheck, Sparkles, Loader, ShieldCheck,
   Plus, Link2, X, Tag, Search, Image,
+  Undo2, Redo2,
 } from 'lucide-react';
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripParasiticFontSize } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
@@ -314,6 +315,8 @@ export default function ArticleResult() {
   const articleRef = useRef(null);      // pointe sur le div contentEditable
   const contentRef = useRef('');        // stocke le HTML édité SANS re-render React
   const changeIdxRef = useRef(-1);
+  const isRestoringRef  = useRef(false); // vrai pendant une restauration undo/redo (n'empile pas)
+  const commitHistoryRef = useRef(null); // assigné plus bas — évite une dépendance circulaire avec doSave
   const fileImgInputRef = useRef(null); // input file caché pour l'upload image à la une
   const [articleEl, setArticleEl] = useState(null); // exposé à BubbleToolbar (déclenche re-render quand le div monte)
 
@@ -691,6 +694,8 @@ export default function ArticleResult() {
     if (!build) return;
     const draft = build();
     saveDraft(userId, draft);
+    // Historique undo/redo du contenu : enregistre l'état (ignoré pendant une restauration)
+    if (!isRestoringRef.current && commitHistoryRef.current) commitHistoryRef.current(draft.html);
     // Mettre à jour l'entrée existante dans l'historique Redux/localStorage
     if (draft.currentArticleId) {
       dispatch(updateInHistory({
@@ -705,6 +710,58 @@ export default function ArticleResult() {
     clearTimeout(autosaveTimer.current);
     autosaveTimer.current = setTimeout(doSave, AUTOSAVE_IDLE_MS);
   }, [doSave]);
+
+  // ── Undo / Redo du CONTENU de l'article (Ctrl+Z / Ctrl+Y + boutons) ──────────
+  // Historique d'instantanés du HTML édité (contentRef). Couvre frappe, accepter/
+  // rejeter, insertion média/lien — que l'undo natif du navigateur ne gère pas.
+  const MAX_HISTORY = 100;
+  const historyRef = useRef({ past: [], present: null, future: [] });
+  const [histState, setHistState] = useState({ canUndo: false, canRedo: false });
+  const syncHist = useCallback(() => {
+    const h = historyRef.current;
+    setHistState({ canUndo: h.past.length > 0, canRedo: h.future.length > 0 });
+  }, []);
+  // Enregistre l'état courant (dédupliqué). Assigné au ref → appelable depuis doSave.
+  commitHistoryRef.current = (html) => {
+    const h = historyRef.current;
+    const snap = html != null ? html : (contentRef.current || '');
+    if (h.present == null) { h.present = snap; return; }   // 1er état = référence, pas d'undo dessus
+    if (snap === h.present) return;                          // rien de neuf
+    h.past.push(h.present);
+    if (h.past.length > MAX_HISTORY) h.past.shift();
+    h.present = snap;
+    h.future = [];
+    syncHist();
+  };
+  // Applique un instantané dans l'éditeur (sans ré-empiler) + persiste.
+  const applyHistorySnap = useCallback((html) => {
+    isRestoringRef.current = true;
+    if (articleRef.current) { articleRef.current.innerHTML = html; lockMedia(articleRef.current); }
+    contentRef.current = html;
+    setTimeout(() => { isRestoringRef.current = false; }, 0);
+    triggerAutosave(); // persiste l'état restauré (no-op côté historique : snap === present)
+  }, [lockMedia, triggerAutosave]);
+  const undo = useCallback(() => {
+    const h = historyRef.current;
+    if (!h.past.length) return;
+    h.future.unshift(h.present);
+    h.present = h.past.pop();
+    syncHist();
+    applyHistorySnap(h.present);
+  }, [syncHist, applyHistorySnap]);
+  const redo = useCallback(() => {
+    const h = historyRef.current;
+    if (!h.future.length) return;
+    h.past.push(h.present);
+    h.present = h.future.shift();
+    syncHist();
+    applyHistorySnap(h.present);
+  }, [syncHist, applyHistorySnap]);
+  // Nouvel article → historique repart propre, ancré sur l'état courant.
+  useEffect(() => {
+    historyRef.current = { past: [], present: contentRef.current || agent.updatedContent || null, future: [] };
+    setHistState({ canUndo: false, canRedo: false });
+  }, [agent.currentArticleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Frappe clavier : mise à jour du ref uniquement, SANS setState → pas de re-render
   const handleInput = useCallback((e) => {
@@ -2314,6 +2371,20 @@ export default function ArticleResult() {
                   </>
                 )}
 
+                {/* Annuler / Rétablir (undo/redo du contenu) */}
+                {diffMode && (
+                  <div className="flex items-center gap-0.5 border-l border-gray-200 pl-2">
+                    <button onClick={undo} disabled={!histState.canUndo} title="Annuler (Ctrl+Z)"
+                      className="flex items-center justify-center w-6 h-6 rounded-lg hover:bg-black/10 text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors">
+                      <Undo2 size={14} />
+                    </button>
+                    <button onClick={redo} disabled={!histState.canRedo} title="Rétablir (Ctrl+Y)"
+                      className="flex items-center justify-center w-6 h-6 rounded-lg hover:bg-black/10 text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors">
+                      <Redo2 size={14} />
+                    </button>
+                  </div>
+                )}
+
                 {/* Badge vue finale */}
                 {!diffMode && (
                   <span className="text-[11px] text-gray-400 italic">
@@ -2358,6 +2429,13 @@ export default function ArticleResult() {
                         className="article-diff-content md-content text-sm leading-loose p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px] focus:outline-none focus:ring-2 focus:ring-black/10"
                         onInput={handleInput}
                         onPaste={handlePaste}
+                        onKeyDown={(e) => {
+                          // Undo/redo maison (couvre accepter/rejeter, médias… que l'undo
+                          // natif ignore) → on court-circuite l'undo natif du navigateur.
+                          const k = e.key.toLowerCase();
+                          if ((e.ctrlKey || e.metaKey) && k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+                          else if ((e.ctrlKey || e.metaKey) && (k === 'y' || (k === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
+                        }}
                         onMouseOver={(e) => {
                           // 1) Lien interne PROPOSÉ (span non encore appliqué) → popup "Appliquer"
                           const il = e.target.closest('[data-il-idx]');
