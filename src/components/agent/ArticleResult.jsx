@@ -722,6 +722,27 @@ export default function ArticleResult() {
     const h = historyRef.current;
     setHistState({ canUndo: h.past.length > 0, canRedo: h.future.length > 0 });
   }, []);
+  // Persistance de l'historique undo/redo dans localStorage (par article) → survit au
+  // Ctrl+F5. Plafond d'octets : les instantanés HTML sont lourds ; on retire les plus
+  // anciens jusqu'à tenir dans le budget (en session la profondeur reste MAX_HISTORY).
+  const UNDO_MAX_BYTES = 800_000;   // marge sous le quota (payload.length ≈ UTF-16, octets réels ≥)
+  const UNDO_PERSIST_PAST = 40;      // profondeur persistée (bornée pour le coût de sérialisation)
+  const UNDO_PERSIST_FUTURE = 20;
+  const undoStoreKey = draftUserId ? `tonton_undo_${draftUserId}` : null;
+  const persistHistory = useCallback(() => {
+    const aid = agent.currentArticleId || cqItem?.id || null;
+    if (!aid || !undoStoreKey) return;
+    const h = historyRef.current;
+    // Borne d'abord par NOMBRE d'entrées (limite le coût de JSON.stringify), puis par octets.
+    let past = h.past.slice(-UNDO_PERSIST_PAST);
+    let future = h.future.slice(0, UNDO_PERSIST_FUTURE);
+    const build = () => JSON.stringify({ articleId: aid, past, present: h.present, future });
+    let payload = build();
+    while (payload.length > UNDO_MAX_BYTES && past.length)   { past = past.slice(1);        payload = build(); }
+    while (payload.length > UNDO_MAX_BYTES && future.length) { future = future.slice(0, -1); payload = build(); }
+    try { localStorage.setItem(undoStoreKey, payload); }
+    catch { try { localStorage.removeItem(undoStoreKey); } catch { /* quota — on abandonne */ } }
+  }, [agent.currentArticleId, cqItem, undoStoreKey]);
   // Enregistre l'état courant (dédupliqué). Assigné au ref → appelable depuis doSave.
   commitHistoryRef.current = (html) => {
     const h = historyRef.current;
@@ -733,6 +754,7 @@ export default function ArticleResult() {
     h.present = snap;
     h.future = [];
     syncHist();
+    persistHistory();
   };
   // Applique un instantané dans l'éditeur (sans ré-empiler) + persiste.
   const applyHistorySnap = useCallback((html) => {
@@ -748,20 +770,36 @@ export default function ArticleResult() {
     h.future.unshift(h.present);
     h.present = h.past.pop();
     syncHist();
+    persistHistory();
     applyHistorySnap(h.present);
-  }, [syncHist, applyHistorySnap]);
+  }, [syncHist, persistHistory, applyHistorySnap]);
   const redo = useCallback(() => {
     const h = historyRef.current;
     if (!h.future.length) return;
     h.past.push(h.present);
     h.present = h.future.shift();
     syncHist();
+    persistHistory();
     applyHistorySnap(h.present);
-  }, [syncHist, applyHistorySnap]);
-  // Nouvel article → historique repart propre, ancré sur l'état courant.
+  }, [syncHist, persistHistory, applyHistorySnap]);
+  // Changement d'article : restaure l'historique persisté (localStorage) s'il correspond
+  // à CET article (→ undo survit au Ctrl+F5), sinon repart propre ancré sur le contenu courant.
   useEffect(() => {
-    historyRef.current = { past: [], present: contentRef.current || agent.updatedContent || null, future: [] };
-    setHistState({ canUndo: false, canRedo: false });
+    const aid = agent.currentArticleId || cqItem?.id || null;
+    let restored = null;
+    if (aid && undoStoreKey) {
+      try {
+        const p = JSON.parse(localStorage.getItem(undoStoreKey) || 'null');
+        if (p && p.articleId === aid) restored = p;
+      } catch { /* ignore */ }
+    }
+    const current = contentRef.current || agent.updatedContent || null;
+    historyRef.current = restored
+      ? { past: Array.isArray(restored.past) ? restored.past : [],
+          present: restored.present ?? current,
+          future: Array.isArray(restored.future) ? restored.future : [] }
+      : { past: [], present: current, future: [] };
+    setHistState({ canUndo: historyRef.current.past.length > 0, canRedo: historyRef.current.future.length > 0 });
   }, [agent.currentArticleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Frappe clavier : mise à jour du ref uniquement, SANS setState → pas de re-render
