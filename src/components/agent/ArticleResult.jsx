@@ -19,12 +19,12 @@ import TableToolbar from './TableToolbar';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, moveFaqToEnd } from '../../utils/diff';
-import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus } from '../../store/slices/agentSlice';
+import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
 import { saveArticle, updateArticleHtml } from '../../services/firebase';
-import { saveDraft, flushDraftRemote, clearDraft, onDraftStatus } from '../../services/articleDraft';
+import { saveDraft, flushDraftRemote, onDraftStatus } from '../../services/articleDraft';
 import { renderMarkdown, emojiToIcons, unwrapProseFences, trimAuditForDisplay } from '../../utils/markdown';
 import { useNavigate } from 'react-router-dom';
 
@@ -104,6 +104,7 @@ export default function ArticleResult() {
   const authUid         = useSelector(s => s.auth.uid);
   const authUsername    = useSelector(s => s.auth.username);
   const draftUserId     = authUid || authUsername || null;  // clé du brouillon autosave
+  const historyList     = useSelector(s => s.articles.history) || []; // pour savoir si l'article est déjà archivé
   const wpMcpData       = agent.wpData || null;  // données MCP WordPress (post ID, featured_media…)
 
   // Mode validation CQ : l'item pending avec cet ID est en statut 'a_valider'
@@ -1602,18 +1603,65 @@ export default function ArticleResult() {
     if (!result.success) {
       toast.error(`Erreur WordPress : ${result.error}`, { duration: 8000 });
     } else {
-      // MAJ publiée → le brouillon d'autosave n'a plus lieu d'être
-      clearDraft(draftUserId);
-      if (agent.currentArticleId) {
-        // ── Auto-archivage dans Historique après publication réussie ────────────
+      // NB : on ne vide PLUS le brouillon ici. Publier ne doit pas détruire la session —
+      // on peut vouloir continuer à éditer/republier (ex. ajouter une image). Le brouillon
+      // est nettoyé au démarrage d'une NOUVELLE MAJ (Articles.jsx), pas à la publication.
+      const finalHtml = getFinalHtml();
+      const pub = { publishedAt: new Date().toISOString(), publishedUrl: result.link || articleUrl || '' };
+      const alreadyArchived = agent.currentArticleId && historyList.some(a => a.id === agent.currentArticleId);
+
+      if (alreadyArchived) {
+        // Déjà dans l'Historique (flux Articles, ou déjà publié/terminé) → simple mise à jour.
         dispatch(updateInHistory({
-          id:             agent.currentArticleId,
-          updatedContent: getFinalHtml(),
-          updates:        agent.diff    || [],
-          sources:        agent.sources || [],
-          publishedAt:    new Date().toISOString(),
-          publishedUrl:   result.link   || articleUrl || '',
+          id: agent.currentArticleId,
+          updatedContent: finalHtml,
+          updates: agent.diff || [],
+          sources: agent.sources || [],
+          ...pub,
         }));
+      } else {
+        // Pas encore archivé (flux CQ publié sans « Terminer ») → on ARCHIVE à la publication,
+        // sinon la MAJ n'apparaît jamais dans l'Historique (bug « Historique vide »).
+        const r = cqItem?.majResult || {};
+        const articleData = {
+          ...(agent.currentArticleId ? { id: agent.currentArticleId } : (cqItem ? { id: cqItem.id } : {})),
+          title:           editedTitle || r.articleTitle || cqItem?.title || extractH1FromHtml(agent.originalContent) || '',
+          originalContent: agent.originalContent || r.originalContent || '',
+          updatedContent:  finalHtml,
+          updates:         agent.diff    || [],
+          sources:         agent.sources || [],
+          analysis:        agent.analysis || r.analysis || '',
+          audit:           agent.audit    || r.audit    || '',
+          url:             articleUrl || cqItem?.url || '',
+          keyword:         cqItem?.keyword || '',
+          priority:        cqItem?.priority || 'normale',
+          assigneeId:      cqItem?.assigneeId || authUid || authUsername || null,
+          createdAt:       new Date().toISOString(),
+          tokenUsage:      agent.tokenUsage || null,
+          ...pub,
+        };
+        // Repli local (Firestore KO / hors-ligne) : archive en session ET fixe
+        // currentArticleId → évite un doublon si l'utilisateur republie dans la foulée.
+        const localId = articleData.id || Date.now().toString();
+        const archiveLocal = () => {
+          dispatch(addToHistory({ ...articleData, id: localId }));
+          dispatch(setCurrentArticleId(localId));
+        };
+        if (firebaseReady) {
+          saveArticle(articleData)
+            .then(({ id, originalContentUrl, updatedContentUrl }) => {
+              const { originalContent, updatedContent, ...meta } = articleData;
+              dispatch(addToHistory({
+                ...meta, id,
+                ...(originalContentUrl ? { originalContentUrl } : { originalContent }),
+                ...(updatedContentUrl  ? { updatedContentUrl  } : { updatedContent  }),
+              }));
+              dispatch(setCurrentArticleId(id));
+            })
+            .catch(archiveLocal);
+        } else {
+          archiveLocal();
+        }
       }
     }
 
