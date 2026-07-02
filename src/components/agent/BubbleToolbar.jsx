@@ -18,7 +18,7 @@ import {
   Palette, Highlighter,
   Link, Unlink2,
   Image, Film, Code2,
-  Check, X, Trash2,
+  Check, X, Trash2, Upload, Loader2,
   CaseSensitive, Weight, ALargeSmall,
 } from 'lucide-react';
 
@@ -110,7 +110,7 @@ const Btn = ({ onClick, title, active = false, children }) => (
 
 const Sep = () => <div className="w-px h-4 bg-white/15 mx-0.5 flex-shrink-0" />;
 
-const InputPanel = ({ placeholder, value, onChange, onConfirm, onClose }) => (
+const InputPanel = ({ placeholder, value, onChange, onConfirm, onClose, onUpload, uploading, accept }) => (
   <div className="flex items-center gap-1.5 bg-gray-900 border border-white/10 rounded-xl px-3 py-1.5 shadow-2xl">
     <input
       autoFocus
@@ -124,6 +124,23 @@ const InputPanel = ({ placeholder, value, onChange, onConfirm, onClose }) => (
       placeholder={placeholder}
       className="flex-1 bg-transparent text-white text-xs outline-none placeholder-white/30 w-56"
     />
+    {/* Téléversement local → médiathèque WordPress (en plus du lien) */}
+    {onUpload && (
+      <label
+        title="Téléverser un fichier depuis l'ordinateur vers la médiathèque WordPress"
+        className={`flex items-center gap-1 text-[11px] font-medium flex-shrink-0 px-1 border-l border-white/10 pl-2 ${uploading ? 'text-sky-400/60 cursor-wait' : 'text-sky-300 hover:text-sky-200 cursor-pointer'}`}
+      >
+        {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+        {uploading ? '…' : 'Téléverser'}
+        <input
+          type="file"
+          accept={accept}
+          disabled={uploading}
+          className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onUpload(f); }}
+        />
+      </label>
+    )}
     <button
       type="button"
       onMouseDown={(e) => { e.preventDefault(); onConfirm(); }}
@@ -202,13 +219,14 @@ const Swatch = ({ color, label, onClick }) => (
 
 // ── Composant principal ───────────────────────────────────────────────────────
 
-export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, siteFonts = [] }) {
+export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, onUploadMedia, siteFonts = [] }) {
   // Polices proposées : celles détectées sur le site, sinon repli web-safe
   const fontList = (Array.isArray(siteFonts) && siteFonts.length > 0) ? siteFonts : FALLBACK_FONTS;
   const [visible, setVisible]   = useState(false);
   const [pos, setPos]           = useState({ top: 0, left: 0, below: false });
   const [panel, setPanel]       = useState(null);
   const [inputVal, setInputVal] = useState('');
+  const [uploading, setUploading] = useState(false);   // téléversement média en cours
   // Élément média sélectionné (img, video, wrapper iframe) → affiche bouton supprimer
   const [mediaEl, setMediaEl]   = useState(null);
   // Setter seul exposé : incrémenter force un re-render → mediaRect recalculé après scroll
@@ -551,25 +569,42 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
     setInputVal('');
   }, [inputVal, popRange, articleEl, contentRef]);
 
-  const insertImage = useCallback(() => {
-    if (!inputVal.trim()) { setPanel(null); return; }
-    const url = inputVal.trim();
+  // Insertion image à partir d'une URL (lien saisi OU URL renvoyée par l'upload WP).
+  const doInsertImage = useCallback((url) => {
+    if (!url) { setPanel(null); return; }
     // data-media-type permet la détection du clic pour le bouton supprimer
     insertAtSaved('insertHTML', `<img src="${url}" alt="" data-media-type="image" style="max-width:100%;height:auto;display:block;margin:1em auto;" /><br>`);
     // Notifier ArticleResult pour la génération automatique du texte ALT
     onImageInserted?.(url);
-  }, [inputVal, insertAtSaved, onImageInserted]);
+  }, [insertAtSaved, onImageInserted]);
+  const insertImage = useCallback(() => doInsertImage(inputVal.trim()), [inputVal, doInsertImage]);
 
-  const insertVideo = useCallback(() => {
-    if (!inputVal.trim()) { setPanel(null); return; }
-    const yt = inputVal.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
+  // Insertion vidéo à partir d'une URL : embed YouTube si détecté, sinon <video> (ex. fichier WP uploadé).
+  const doInsertVideo = useCallback((url) => {
+    if (!url) { setPanel(null); return; }
+    const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
     const html = yt
       // L'iframe YouTube absorbe tous les événements souris → overlay transparent posé dessus
       // pour que les clics atteignent le document et déclenchent le bouton supprimer.
       ? `<div data-media-type="video" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1em 0;max-width:100%;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/${yt[1]}" frameborder="0" allowfullscreen loading="lazy" title="Vidéo YouTube"></iframe><div data-media-overlay style="position:absolute;inset:0;cursor:pointer;z-index:1;" title="Cliquer pour sélectionner — supprimer via le bouton corbeille"></div></div><br>`
-      : `<video src="${inputVal.trim()}" controls data-media-type="video" style="max-width:100%;display:block;margin:1em auto;"></video><br>`;
+      : `<video src="${url}" controls data-media-type="video" style="max-width:100%;display:block;margin:1em auto;"></video><br>`;
     insertAtSaved('insertHTML', html);
-  }, [inputVal, insertAtSaved]);
+  }, [insertAtSaved]);
+  const insertVideo = useCallback(() => doInsertVideo(inputVal.trim()), [inputVal, doInsertVideo]);
+
+  // Téléversement d'un fichier local vers la médiathèque WP (via le parent) → insertion.
+  const handleUpload = useCallback(async (file) => {
+    if (!onUploadMedia || !file) return;
+    setUploading(true);
+    try {
+      const url = await onUploadMedia(file, panel);   // panel = 'image' | 'video'
+      if (!url) return;                                // erreur déjà signalée par le parent
+      if (panel === 'video') doInsertVideo(url);
+      else doInsertImage(url);
+    } finally {
+      setUploading(false);
+    }
+  }, [onUploadMedia, panel, doInsertImage, doInsertVideo]);
 
   const insertHtml = useCallback(() => {
     if (!inputVal.trim()) { setPanel(null); return; }
@@ -855,10 +890,10 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
         <Sep />
 
         {/* Médias */}
-        <Btn onClick={() => openPanel('image')} title="Insérer une image (URL)" active={panel === 'image'}>
+        <Btn onClick={() => openPanel('image')} title="Insérer une image (lien ou téléversement)" active={panel === 'image'}>
           <Image size={16} />
         </Btn>
-        <Btn onClick={() => openPanel('video')} title="Insérer une vidéo YouTube" active={panel === 'video'}>
+        <Btn onClick={() => openPanel('video')} title="Insérer une vidéo (YouTube, lien ou téléversement)" active={panel === 'video'}>
           <Film size={16} />
         </Btn>
 
@@ -879,6 +914,9 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
             onChange={setInputVal}
             onConfirm={panelConfirm[panel]}
             onClose={closePanel}
+            onUpload={onUploadMedia && (panel === 'image' || panel === 'video') ? handleUpload : undefined}
+            uploading={uploading}
+            accept={panel === 'video' ? 'video/*' : 'image/*'}
           />
         </div>
       )}
