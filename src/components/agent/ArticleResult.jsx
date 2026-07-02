@@ -217,11 +217,17 @@ export default function ArticleResult() {
     setEditedTitle(h1 || '');
   }, [wpMcpData?.wpTitle, agent.originalContent]);
 
-  // Reset SEO fields quand on passe à un nouvel article
+  // Reset SEO fields + état catégories quand on passe à un nouvel article.
+  // Réinitialiser catsDirty/selectedCategories/catSuggestedRef évite d'hériter d'un
+  // état « dirty » d'un article précédent (sinon on pourrait publier des catégories
+  // non désirées → changement de permalien → 404).
   useEffect(() => {
     seoGeneratedRef.current = false;
     setSeoTitle('');
     setSeoDescription('');
+    setCatsDirty(false);
+    setSelectedCategories([]);
+    catSuggestedRef.current = false;
   }, [agent.currentArticleId]);
 
   // Génération SEO — utilisée par l'auto-génération ET le bouton manuel.
@@ -258,6 +264,9 @@ export default function ArticleResult() {
   // ── Catégories WordPress ──────────────────────────────────────────────────────
   const [wpCategories, setWpCategories]       = useState([]);
   const [selectedCategories, setSelectedCategories] = useState([]);
+  // true UNIQUEMENT si l'utilisateur modifie la sélection à la main : sinon on ne
+  // réécrit JAMAIS les catégories du post à la publication (préserve son permalien → pas de 404).
+  const [catsDirty, setCatsDirty] = useState(false);
   const [catLoading, setCatLoading]           = useState(false);
   const [catSearch, setCatSearch]             = useState('');
   const [showCatPanel, setShowCatPanel]       = useState(false);
@@ -1336,9 +1345,10 @@ export default function ArticleResult() {
     if (site) loadWpCategories(site);
   }, [wpMcpData?.siteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Pré-sélectionner les catégories de l'article dès qu'on a les données MCP
+  // Pré-sélectionner les catégories de l'article dès qu'on a les données MCP.
+  // Réinitialise catsDirty : c'est l'état d'origine du post, pas une modif utilisateur.
   useEffect(() => {
-    if (wpMcpData?.categories?.length) setSelectedCategories(wpMcpData.categories);
+    if (wpMcpData?.categories?.length) { setSelectedCategories(wpMcpData.categories); setCatsDirty(false); }
   }, [wpMcpData?.categories]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-suggestion de catégorie : uniquement si l'article n'a AUCUNE vraie catégorie
@@ -1348,6 +1358,9 @@ export default function ArticleResult() {
   useEffect(() => {
     if (catSuggestedRef.current) return;
     if (!agent.updatedContent || wpCategories.length === 0) return;
+    // Ne JAMAIS suggérer/écraser si l'article a déjà de vraies catégories (données MCP).
+    // Changer les catégories d'un post à permalien /catégorie/slug casse son URL → 404.
+    if (wpMcpData?.categories?.length) return;
     const onlyUncat = selectedCategories.length > 0 && selectedCategories.every(id => {
       const c = wpCategories.find(x => String(x.id) === String(id));
       return c && /non[\s-]?class|uncategor/i.test(c.name || '');
@@ -1477,7 +1490,10 @@ export default function ArticleResult() {
       const postData = { content: htmlContent, status: wantDraft ? 'draft' : 'publish' };
       if (titleDirty && editedTitle) postData.title = editedTitle;
       if (featuredMatchesTarget) postData.featured_media = wpMcpData.featuredMediaId;
-      if (selectedCategories.length > 0) postData.categories = selectedCategories;
+      // Catégories : envoyées UNIQUEMENT si l'utilisateur les a modifiées à la main.
+      // Sinon on ne TOUCHE PAS aux catégories du post existant → son permalien
+      // (souvent /catégorie/slug) reste intact → pas de 404 sur l'ancienne URL.
+      if (catsDirty && selectedCategories.length > 0) postData.categories = selectedCategories;
       if (seoTitle || seoDescription) postData.seoMeta = { seoTitle, seoDescription };
 
       result = await updatePost(site, postToUse.id, postData, postToUse.postType || 'posts');
@@ -1745,9 +1761,9 @@ export default function ArticleResult() {
                   return (
                     <button
                       key={cat.id}
-                      onClick={() => setSelectedCategories(prev =>
+                      onClick={() => { setCatsDirty(true); setSelectedCategories(prev =>
                         checked ? prev.filter(id => id !== cat.id) : [...prev, cat.id]
-                      )}
+                      ); }}
                       className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
                         checked
                           ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
@@ -1967,9 +1983,9 @@ export default function ArticleResult() {
                                               <input
                                                 type="checkbox"
                                                 checked={selectedCategories.includes(cat.id)}
-                                                onChange={e => setSelectedCategories(prev =>
+                                                onChange={e => { setCatsDirty(true); setSelectedCategories(prev =>
                                                   e.target.checked ? [...prev, cat.id] : prev.filter(id => id !== cat.id)
-                                                )}
+                                                ); }}
                                                 className="w-3.5 h-3.5 rounded text-indigo-600 accent-indigo-600"
                                               />
                                               <span className="text-xs text-gray-700 truncate flex-1">{decodeHtml(cat.name)}</span>
