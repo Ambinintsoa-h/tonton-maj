@@ -672,6 +672,30 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB max (limite Groq Whisper)
 });
 
+// ─── Multer dédié médias WP (image / vidéo depuis l'éditeur) ──────────────────
+// Plafond plus large que l'audio pour accepter des vidéos. Le VRAI plafond reste
+// `upload_max_filesize` / `post_max_size` côté WordPress (souvent 64 Mo par défaut).
+const uploadWpMedia = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 64 * 1024 * 1024 }, // 64 MB
+});
+// Middleware qui renvoie une erreur JSON claire (au lieu d'un 500 opaque) si le
+// fichier dépasse la limite — sinon le client n'affiche qu'un message générique.
+const wpMediaUpload = (req, res, next) => {
+  uploadWpMedia.single('file')(req, res, (err) => {
+    if (err) {
+      const tooBig = err.code === 'LIMIT_FILE_SIZE';
+      return res.status(tooBig ? 413 : 400).json({
+        success: false,
+        error: tooBig
+          ? 'Fichier trop volumineux (max 64 Mo). Pour une vidéo lourde, préférez un lien YouTube.'
+          : 'Téléversement invalide',
+      });
+    }
+    next();
+  });
+};
+
 // ─── Paramètres serveur (clés API partagées entre utilisateurs) ──────────────
 // Stockés dans data/settings.json (gitignorés — jamais versionnés)
 const DATA_DIR = path.join(__dirname, 'data');
@@ -2739,8 +2763,8 @@ app.get('/api/ticket-attachments/:ticketId/:filename', requireAuth, (req, res) =
 // ─── POST /api/wp-upload-file — upload d'un fichier local vers la médiathèque WP ─
 // Accepte multipart/form-data : file (image), site (JSON site object).
 // Utilisé pour le téléversement direct depuis le PC (bouton "Parcourir") dans l'UI.
-app.post('/api/wp-upload-file', requireAuth, upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ success: false, error: 'Fichier image requis' });
+app.post('/api/wp-upload-file', requireAuth, wpMediaUpload, async (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, error: 'Fichier requis (image ou vidéo)' });
 
   let site;
   try { site = JSON.parse(req.body.site || '{}'); } catch { return res.status(400).json({ success: false, error: 'Paramètre site invalide' }); }
@@ -2764,7 +2788,7 @@ app.post('/api/wp-upload-file', requireAuth, upload.single('file'), async (req, 
           'Content-Type':    mime,
           'Content-Disposition': `attachment; filename="${fname}"`,
         },
-        timeout: 60000,
+        timeout: 180000,   // vidéos potentiellement lourdes
         maxContentLength: Infinity,
         maxBodyLength:    Infinity,
       }

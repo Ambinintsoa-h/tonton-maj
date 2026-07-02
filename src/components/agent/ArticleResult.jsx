@@ -152,6 +152,32 @@ export default function ArticleResult() {
     } catch { return null; }
   }, [wpMcpData, articleUrl, wpSites]);
 
+  // Téléverse un fichier local (image OU vidéo) vers la médiathèque WP du site de
+  // l'article et renvoie l'URL du média (ou '' en cas d'échec). Réutilise l'endpoint
+  // /api/wp-upload-file (déjà utilisé pour l'image à la une). Passé à la barre d'édition.
+  const uploadMediaToWp = useCallback(async (file) => {
+    if (!resolvedSite) { toast.error('Aucun site WordPress connecté pour cet article'); return ''; }
+    if (!file) return '';
+    try {
+      const formData = new FormData();
+      formData.append('file', file, file.name);
+      formData.append('site', JSON.stringify({ url: resolvedSite.url, username: resolvedSite.username, password: resolvedSite.password }));
+      const resp = await axios.post('/api/wp-upload-file', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 180000,   // les vidéos peuvent être lourdes
+      });
+      if (resp.data?.success && resp.data.url) {
+        toast.success('Fichier téléversé dans la médiathèque WordPress');
+        return resp.data.url;
+      }
+      toast.error(resp.data?.error || 'Téléversement impossible');
+      return '';
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Téléversement impossible');
+      return '';
+    }
+  }, [resolvedSite]);
+
   // Atterrissage sur l'AUDIT quand il est attendu (priorité produit) ; sinon APRÈS.
   const [activeTab, setActiveTab] = useState((auditReport || hasBrainSkill) ? TAB_AUDIT : TAB_APRES);
   const [showExport, setShowExport] = useState(false);
@@ -2479,6 +2505,7 @@ export default function ArticleResult() {
             articleEl={articleEl}
             contentRef={contentRef}
             siteFonts={resolvedSiteFonts}
+            onUploadMedia={resolvedSite ? uploadMediaToWp : undefined}
             onImageInserted={settings.anthropicKey ? (url) => {
               generateAltText(url, settings.anthropicKey).then(altText => {
                 if (!altText || !articleRef.current) return;
