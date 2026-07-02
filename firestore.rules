@@ -22,9 +22,13 @@ service cloud.firestore {
     }
 
     // ── wordpress_sites : contient des Application Passwords WP ──────────────
-    // Lecture/écriture : managers, super_admin et support technique.
+    // LECTURE : tous les membres authentifiés — nécessaire pour PUBLIER (les cq_ia
+    //   rédacteurs publient aussi : « Publier sur le site » / « Publier en brouillon »).
+    //   ⚠ expose les Application Passwords (jetons WP révocables, ≠ mot de passe admin).
+    // ÉCRITURE (ajout / édition / suppression de site) : managers / super_admin / support.
     match /wordpress_sites/{siteId} {
-      allow read, write: if isAdmin() || isSupport();
+      allow read:  if isAuthenticated();
+      allow write: if isAdmin() || isSupport();
     }
 
     // ── activity_sessions : tracking d'activité des membres ──────────────────
