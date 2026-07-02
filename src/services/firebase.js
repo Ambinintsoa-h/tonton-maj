@@ -168,7 +168,11 @@ export const saveArticle = async (article) => {
   };
 
   if (article.id) {
-    await updateDoc(docRef, { ...firestoreData, updatedAt: Date.now() });
+    // setDoc merge (upsert) plutôt qu'updateDoc : crée le doc s'il n'existe pas encore
+    // (cas flux CQ où l'id vient du pending et n'a jamais été écrit en base — updateDoc
+    // échouait alors « No document to update »). Merge = ne touche pas aux champs non fournis
+    // (ex. seoTracking maintenu par le cron, volontairement absent de firestoreData).
+    await setDoc(docRef, { ...firestoreData, updatedAt: Date.now() }, { merge: true });
   } else {
     await setDoc(docRef, { ...firestoreData, createdAt: Date.now() });
   }
