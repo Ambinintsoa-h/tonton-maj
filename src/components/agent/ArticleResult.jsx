@@ -10,7 +10,7 @@ import {
   RefreshCw, ArrowRight, Link, ChevronUp,
   Clipboard, ClipboardCheck, Sparkles, Loader, ShieldCheck,
   Plus, Link2, X, Tag, Search, Image,
-  Undo2, Redo2,
+  Undo2, Redo2, Scissors, Trash2,
 } from 'lucide-react';
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripParasiticFontSize } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
@@ -19,6 +19,11 @@ import TableToolbar from './TableToolbar';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, moveFaqToEnd } from '../../utils/diff';
+import {
+  findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
+  insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
+  insertFaqHtmlAtCaret, rectOfNodes,
+} from '../../utils/faq';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
@@ -1215,6 +1220,133 @@ export default function ArticleResult() {
     if (mark) mark.remove();
     afterSegEdit();
   }, [afterSegEdit]);
+
+  // ── Manipulation de la FAQ (bloc entier + questions/réponses) ────────────────
+  // faqHover = { rect, qa: { index, count, rect } | null } — au survol de la FAQ :
+  //   • qa = null  → barre du BLOC (↑↓ section, copier, couper, supprimer) sur le titre
+  //   • qa ≠ null  → barre de la Q/R survolée (↑↓ réordonner, ➕ ajouter, 🗑 supprimer)
+  const [faqHover, setFaqHover] = useState(null);
+  const faqClipRef = useRef('');                          // HTML FAQ coupé/copié (presse-papiers interne)
+  const [faqClipboard, setFaqClipboard] = useState(null); // 'couper' | 'copier' | null → bandeau « Coller »
+
+  // Même contrat qu'afterSegEdit : resynchronise contentRef + autosave (qui
+  // empile aussi l'instantané undo/redo via commitHistory).
+  const afterFaqEdit = useCallback(() => {
+    if (articleRef.current) {
+      lockMedia(articleRef.current);
+      contentRef.current = articleRef.current.innerHTML;
+      triggerAutosave();
+    }
+    setFaqHover(null);
+  }, [lockMedia, triggerAutosave]);
+
+  // Scroll doux vers un nœud — technique de jumpToChange (pas de scrollIntoView,
+  // bug Chrome sur contentEditable).
+  const scrollToFaqNode = useCallback((node) => {
+    const container = articleRef.current;
+    if (!container || !node || node.nodeType !== Node.ELEMENT_NODE) return;
+    const relativeTop = node.getBoundingClientRect().top
+      - container.getBoundingClientRect().top
+      + container.scrollTop;
+    container.scrollTo({ top: Math.max(0, relativeTop - container.clientHeight / 3), behavior: 'smooth' });
+  }, []);
+
+  // Détection du survol (appelée depuis onMouseOver du contentEditable)
+  const detectFaqHover = useCallback((target) => {
+    const container = articleRef.current;
+    if (!container) return null;
+    const block = findFaqBlock(container);
+    if (!block || !isInsideFaq(block, target)) return null;
+    const rect = rectOfNodes(block.nodes);
+    if (!rect) return null;
+    const { groups } = getQAGroups(block);
+    const qaIdx = findQAIndex(groups, target);
+    const qa = qaIdx >= 0
+      ? { index: qaIdx, count: groups.length, rect: rectOfNodes(groups[qaIdx].nodes) || rect }
+      : null;
+    return { rect, qa };
+  }, []);
+
+  // Relit le bloc FAQ au moment du clic (le DOM a pu changer depuis le survol)
+  const withFaqBlock = useCallback((fn) => {
+    const container = articleRef.current;
+    if (!container) return;
+    const block = findFaqBlock(container);
+    if (!block) { toast.error('Section FAQ introuvable'); setFaqHover(null); return; }
+    fn(container, block);
+  }, []);
+
+  const faqCopyOrCut = useCallback((cut) => {
+    withFaqBlock((container, block) => {
+      faqClipRef.current = serializeFaqBlock(block);
+      if (cut) removeFaqBlock(block);
+      setFaqClipboard(cut ? 'couper' : 'copier');
+      afterFaqEdit();
+      toast.success(
+        `FAQ ${cut ? 'coupée' : 'copiée'} — cliquez à l'endroit voulu dans l'article puis « Coller la FAQ ici »`,
+        { duration: 6000 },
+      );
+    });
+  }, [withFaqBlock, afterFaqEdit]);
+
+  const faqPaste = useCallback(() => {
+    if (!faqClipRef.current || !articleRef.current) return;
+    const first = insertFaqHtmlAtCaret(articleRef.current, faqClipRef.current);
+    if (!first) { toast.error('Collage impossible'); return; }
+    setFaqClipboard(null);
+    afterFaqEdit();
+    scrollToFaqNode(first);
+    toast.success('FAQ collée');
+  }, [afterFaqEdit, scrollToFaqNode]);
+
+  const faqMoveBlock = useCallback((dir) => {
+    withFaqBlock((container, block) => {
+      if (!moveFaqBlockBySection(container, block, dir)) {
+        toast(dir < 0 ? 'La FAQ est déjà tout en haut' : 'La FAQ est déjà tout en bas', { icon: 'ℹ️' });
+        return;
+      }
+      afterFaqEdit();
+      scrollToFaqNode(block.nodes.find(n => n.nodeType === Node.ELEMENT_NODE));
+    });
+  }, [withFaqBlock, afterFaqEdit, scrollToFaqNode]);
+
+  const faqDeleteBlock = useCallback(() => {
+    withFaqBlock((container, block) => {
+      if (!window.confirm('Supprimer toute la section FAQ ? (annulable avec Ctrl+Z)')) return;
+      removeFaqBlock(block);
+      afterFaqEdit();
+      toast.success('FAQ supprimée');
+    });
+  }, [withFaqBlock, afterFaqEdit]);
+
+  // Actions sur une Q/R : 'up' | 'down' | 'add' | 'delete'
+  const faqQAAction = useCallback((action, index) => {
+    withFaqBlock((container, block) => {
+      const qa = getQAGroups(block);
+      if (action === 'up' || action === 'down') {
+        if (!moveQAGroup(qa.groups, index, action === 'up' ? -1 : 1)) return;
+      } else if (action === 'delete') {
+        const label = qa.groups[index]?.question?.textContent?.trim().slice(0, 60) || '';
+        if (!window.confirm(`Supprimer la question « ${label} » et sa réponse ? (annulable avec Ctrl+Z)`)) return;
+        deleteQAGroup(qa.groups, index);
+      } else if (action === 'add') {
+        const questionEl = insertQAAfter(block, qa, index);
+        if (!questionEl) { toast.error('Format de FAQ non reconnu'); return; }
+        // Sélectionner le texte placeholder de la nouvelle question → remplacé à la frappe
+        requestAnimationFrame(() => {
+          try {
+            const range = document.createRange();
+            range.selectNodeContents(questionEl);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            articleRef.current?.focus();
+          } catch { /* sélection impossible — sans gravité */ }
+        });
+      }
+      afterFaqEdit();
+    });
+  }, [withFaqBlock, afterFaqEdit]);
 
   // ── Appliquer un lien interne (depuis le span surligné ou fallback regex) ──
   const applyInternalLink = useCallback((anchor, url, linkIdx) => {
@@ -2509,6 +2641,31 @@ export default function ArticleResult() {
                     /* ── Vue diff : del barrés + mark surlignés ── */
                     <motion.div key="diff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
 
+                      {/* Bandeau « Coller la FAQ » après un couper/copier du bloc FAQ */}
+                      {faqClipboard && (
+                        <div className="sticky top-2 z-30 mb-2 flex items-center gap-2 rounded-xl border-2 border-indigo-300 bg-indigo-50 px-4 py-2.5 shadow-md">
+                          <Info size={15} className="text-indigo-600 shrink-0" />
+                          <p className="text-xs text-indigo-800 flex-1">
+                            FAQ {faqClipboard === 'couper' ? 'coupée' : 'copiée'} — cliquez à l'endroit voulu dans l'article, puis collez.
+                          </p>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => { e.preventDefault(); faqPaste(); }}
+                            className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors"
+                          >
+                            Coller la FAQ ici
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFaqClipboard(null)}
+                            title="Fermer (le contenu coupé reste annulable avec Ctrl+Z)"
+                            className="p-1.5 rounded-lg hover:bg-indigo-100 text-indigo-500 transition-colors"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      )}
+
                       {/* Contenu diff */}
                       <div
                         ref={setArticleRef}
@@ -2531,6 +2688,7 @@ export default function ArticleResult() {
                               clearTimeout(leaveTimerRef.current);
                               setLinkHover({ idx, url: il.getAttribute('data-il-url') || '', anchor: il.textContent, rect: il.getBoundingClientRect() });
                               setAnchorHover(null);
+                              setFaqHover(null);
                               return;
                             }
                           }
@@ -2539,22 +2697,31 @@ export default function ArticleResult() {
                           if (seg && e.currentTarget.contains(seg)) {
                             clearTimeout(leaveTimerRef.current);
                             setSegHover({ node: seg, rect: seg.getBoundingClientRect() });
-                            setLinkHover(null); setAnchorHover(null);
+                            setLinkHover(null); setAnchorHover(null); setFaqHover(null);
                             return;
                           }
-                          // 3) Vraie ancre <a href> → tooltip URL complète
+                          // 3) Section FAQ → barres flottantes (bloc entier / Q-R survolée)
+                          const fq = detectFaqHover(e.target);
+                          if (fq) {
+                            clearTimeout(leaveTimerRef.current);
+                            setFaqHover(fq);
+                            setLinkHover(null);
+                            showAnchorTooltip(e); // les tooltips de liens restent actifs dans la FAQ
+                            return;
+                          }
+                          // 4) Vraie ancre <a href> → tooltip URL complète
                           showAnchorTooltip(e);
-                          // Hors lien interne / segment de diff : on n'est plus sur l'élément
+                          // Hors lien interne / segment de diff / FAQ : on n'est plus sur l'élément
                           // → planifier le masquage des mini-boutons ✓/✗ (la souris sur le
                           // segment OU sur la barre flottante annule ce timer). Évite qu'ils
                           // restent affichés en glissant la souris sur le texte voisin.
-                          if (segHover || linkHover) {
+                          if (segHover || linkHover || faqHover) {
                             clearTimeout(leaveTimerRef.current);
-                            leaveTimerRef.current = setTimeout(() => { setSegHover(null); setLinkHover(null); }, 1200);
+                            leaveTimerRef.current = setTimeout(() => { setSegHover(null); setLinkHover(null); setFaqHover(null); }, 1200);
                           }
                         }}
                         onMouseLeave={() => {
-                          leaveTimerRef.current = setTimeout(() => { setLinkHover(null); setAnchorHover(null); setSegHover(null); }, 1200);
+                          leaveTimerRef.current = setTimeout(() => { setLinkHover(null); setAnchorHover(null); setSegHover(null); setFaqHover(null); }, 1200);
                         }}
                         onBlur={() => {
                           // Fin d'édition (déplacement/collage terminé) → réparer la structure (#2)
@@ -2977,6 +3144,132 @@ export default function ArticleResult() {
             <X size={13} /> Rejeter
           </button>
         </div>,
+        document.body,
+      )}
+
+      {/* ── Barres flottantes FAQ : bloc entier (survol du titre) ou Q/R survolée ── */}
+      {faqHover && createPortal(
+        (() => {
+          const zone = faqHover.qa?.rect || faqHover.rect;
+          return (
+            <>
+              {/* Cadre indicatif de la zone ciblée (aucune classe injectée dans le contenu) */}
+              <div
+                style={{
+                  position: 'fixed',
+                  top: zone.top - 4,
+                  left: zone.left - 6,
+                  width: zone.width + 12,
+                  height: zone.height + 8,
+                  border: '2px dashed rgba(99,102,241,0.45)',
+                  borderRadius: 8,
+                  zIndex: 399,
+                  pointerEvents: 'none',
+                }}
+              />
+              <div
+                style={{
+                  position: 'fixed',
+                  top: Math.max(6, zone.top - 34),
+                  left: zone.left,
+                  zIndex: 401,
+                }}
+                onMouseEnter={() => clearTimeout(leaveTimerRef.current)}
+                onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setFaqHover(null), 220); }}
+                className="flex items-center gap-1 bg-gray-900 rounded-lg px-1.5 py-1 shadow-[0_6px_24px_rgba(0,0,0,0.4)]"
+              >
+                {faqHover.qa ? (
+                  <>
+                    <span className="px-1.5 text-[10px] font-bold uppercase tracking-wide text-indigo-300 select-none">
+                      Question {faqHover.qa.index + 1}/{faqHover.qa.count}
+                    </span>
+                    <button
+                      type="button"
+                      title="Monter la question"
+                      disabled={faqHover.qa.index === 0}
+                      onMouseDown={(e) => { e.preventDefault(); faqQAAction('up', faqHover.qa.index); }}
+                      className="flex items-center px-1.5 py-1 rounded-md text-white/90 hover:bg-white/15 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <ChevronUp size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Descendre la question"
+                      disabled={faqHover.qa.index >= faqHover.qa.count - 1}
+                      onMouseDown={(e) => { e.preventDefault(); faqQAAction('down', faqHover.qa.index); }}
+                      className="flex items-center px-1.5 py-1 rounded-md text-white/90 hover:bg-white/15 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <ChevronDown size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Ajouter une question/réponse après celle-ci"
+                      onMouseDown={(e) => { e.preventDefault(); faqQAAction('add', faqHover.qa.index); }}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-green-300 hover:bg-green-500/20 hover:text-green-200 transition-colors"
+                    >
+                      <Plus size={13} /> Ajouter
+                    </button>
+                    <div className="w-px h-4 bg-white/15" />
+                    <button
+                      type="button"
+                      title="Supprimer cette question et sa réponse"
+                      onMouseDown={(e) => { e.preventDefault(); faqQAAction('delete', faqHover.qa.index); }}
+                      className="flex items-center px-1.5 py-1 rounded-md text-red-300 hover:bg-red-500/20 hover:text-red-200 transition-colors"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="px-1.5 text-[10px] font-bold uppercase tracking-wide text-indigo-300 select-none">FAQ</span>
+                    <button
+                      type="button"
+                      title="Monter la FAQ d'une section"
+                      onMouseDown={(e) => { e.preventDefault(); faqMoveBlock(-1); }}
+                      className="flex items-center px-1.5 py-1 rounded-md text-white/90 hover:bg-white/15 transition-colors"
+                    >
+                      <ChevronUp size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Descendre la FAQ d'une section"
+                      onMouseDown={(e) => { e.preventDefault(); faqMoveBlock(1); }}
+                      className="flex items-center px-1.5 py-1 rounded-md text-white/90 hover:bg-white/15 transition-colors"
+                    >
+                      <ChevronDown size={14} />
+                    </button>
+                    <div className="w-px h-4 bg-white/15" />
+                    <button
+                      type="button"
+                      title="Copier toute la FAQ (coller ensuite à l'endroit voulu)"
+                      onMouseDown={(e) => { e.preventDefault(); faqCopyOrCut(false); }}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-white/90 hover:bg-white/15 transition-colors"
+                    >
+                      <Copy size={13} /> Copier
+                    </button>
+                    <button
+                      type="button"
+                      title="Couper toute la FAQ (coller ensuite à l'endroit voulu)"
+                      onMouseDown={(e) => { e.preventDefault(); faqCopyOrCut(true); }}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-amber-300 hover:bg-amber-500/20 hover:text-amber-200 transition-colors"
+                    >
+                      <Scissors size={13} /> Couper
+                    </button>
+                    <div className="w-px h-4 bg-white/15" />
+                    <button
+                      type="button"
+                      title="Supprimer toute la FAQ"
+                      onMouseDown={(e) => { e.preventDefault(); faqDeleteBlock(); }}
+                      className="flex items-center px-1.5 py-1 rounded-md text-red-300 hover:bg-red-500/20 hover:text-red-200 transition-colors"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          );
+        })(),
         document.body,
       )}
 
