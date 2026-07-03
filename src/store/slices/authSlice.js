@@ -1,6 +1,7 @@
 import { createSlice } from '@reduxjs/toolkit';
 
-const TOKEN_KEY = 'tonton_auth_token';
+// Exporté : « Vider le cache » (Header) préserve ce jeton pour garder la session.
+export const TOKEN_KEY = 'tonton_auth_token';
 
 // Décode le payload JWT sans vérifier la signature (vérification faite côté serveur sur chaque appel).
 // Utilisé uniquement pour restaurer role/username/uid au rechargement de page (F5).

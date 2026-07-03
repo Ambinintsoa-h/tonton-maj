@@ -2,9 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
-import { Bell, Check, Loader2, CloudOff } from 'lucide-react';
+import { Bell, Check, Loader2, CloudOff, Eraser } from 'lucide-react';
 import axios from 'axios';
-import { setProfile } from '../../store/slices/authSlice';
+import { setProfile, TOKEN_KEY } from '../../store/slices/authSlice';
 import { AccountAvatar } from '../account/MonComptePanel';
 import MonComptePanel from '../account/MonComptePanel';
 import NotificationPanel from '../notifications/NotificationPanel';
@@ -31,6 +31,100 @@ function timeAgoShort(ts) {
   if (m < 60) return `il y a ${m} min`;
   const h = Math.floor(m / 60);
   return `il y a ${h} h`;
+}
+
+// ── Vidage complet des caches navigateur ─────────────────────────────────────
+// Efface Cache Storage (fichiers JS/CSS téléchargés), service workers,
+// sessionStorage (SAUF le jeton de connexion → l'utilisateur reste connecté),
+// localStorage (brouillons, undo, caches locaux — resynchronisés depuis
+// Firestore au prochain chargement) et les cookies accessibles. Puis recharge
+// la page avec une URL cache-bustée → le navigateur retélécharge tout depuis
+// le serveur.
+async function clearAllCaches() {
+  // 1. Cache Storage (fichiers mis en cache par le navigateur / un service worker)
+  try {
+    if (window.caches?.keys) {
+      const keys = await window.caches.keys();
+      await Promise.all(keys.map((k) => window.caches.delete(k)));
+    }
+  } catch { /* API indisponible (http non sécurisé…) — non bloquant */ }
+
+  // 2. Service workers (au cas où un ancien SW servirait des fichiers périmés)
+  try {
+    if (navigator.serviceWorker?.getRegistrations) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+  } catch { /* non bloquant */ }
+
+  // 3. sessionStorage — on préserve UNIQUEMENT le jeton de connexion
+  try {
+    const authToken = sessionStorage.getItem(TOKEN_KEY);
+    sessionStorage.clear();
+    if (authToken) sessionStorage.setItem(TOKEN_KEY, authToken);
+  } catch { /* non bloquant */ }
+
+  // 4. localStorage — brouillons, historiques undo, caches locaux.
+  //    Les données durables (historique, sites WP, skills…) sont dans Firestore
+  //    et resynchronisées au boot (App.js).
+  try { localStorage.clear(); } catch { /* non bloquant */ }
+
+  // 5. Cookies accessibles en JS (les HttpOnly ne sont pas atteignables ici)
+  try {
+    document.cookie.split(';').forEach((c) => {
+      const name = c.split('=')[0].trim();
+      if (!name) return;
+      document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`;
+      document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=${window.location.hostname}`;
+    });
+  } catch { /* non bloquant */ }
+
+  // 6. Rechargement forcé : URL cache-bustée → index.html et les assets sont
+  //    redemandés au serveur (les bundles CRA étant hashés, tout est re-téléchargé).
+  const url = new URL(window.location.href);
+  url.searchParams.set('nocache', Date.now().toString());
+  window.location.replace(url.toString());
+}
+
+// Bouton « Vider le cache » (Header, à côté du titre de page)
+function ClearCacheButton() {
+  const [clearing, setClearing] = useState(false);
+
+  const handleClick = async () => {
+    if (!window.confirm(
+      'Vider tous les caches (fichiers, session, cookies, données locales) et recharger '
+      + 'la page depuis le serveur ?\n\nVous resterez connecté. Les brouillons non '
+      + 'synchronisés et l\'historique d\'annulation (Ctrl+Z) locaux seront effacés.'
+    )) return;
+    setClearing(true);
+    try { await clearAllCaches(); }
+    finally { setClearing(false); }  // atteint seulement si le rechargement échoue
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={clearing}
+      title="Effacer tous les caches (navigateur, session, cookies) et recharger les fichiers depuis le serveur"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5,
+        fontSize: 11, fontWeight: 600,
+        color: clearing ? '#9ca3af' : '#b45309',
+        background: 'rgba(245,158,11,0.10)',
+        border: '1px solid rgba(245,158,11,0.25)',
+        borderRadius: 8,
+        padding: '4px 9px',
+        cursor: clearing ? 'wait' : 'pointer',
+        whiteSpace: 'nowrap',
+        transition: 'background 0.15s',
+      }}
+      onMouseEnter={(e) => { if (!clearing) e.currentTarget.style.background = 'rgba(245,158,11,0.18)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(245,158,11,0.10)'; }}
+    >
+      {clearing ? <Loader2 size={12} className="animate-spin" /> : <Eraser size={12} />}
+      Vider le cache
+    </button>
+  );
 }
 
 // Indicateur d'enregistrement façon Google Docs (affiché sur la page « Faire une MAJ »).
@@ -126,11 +220,12 @@ export default function Header() {
         gap: 8,
       }}>
 
-        {/* Titre de la page + indicateur d'enregistrement (page MAJ) */}
+        {/* Titre de la page + Vider le cache + indicateur d'enregistrement (page MAJ) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: '#999', letterSpacing: '0.01em' }}>
             {pageLabel}
           </span>
+          <ClearCacheButton />
           {location.pathname === '/' && <DraftIndicator />}
         </div>
 
