@@ -2641,31 +2641,6 @@ export default function ArticleResult() {
                     /* ── Vue diff : del barrés + mark surlignés ── */
                     <motion.div key="diff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
 
-                      {/* Bandeau « Coller la FAQ » après un couper/copier du bloc FAQ */}
-                      {faqClipboard && (
-                        <div className="sticky top-2 z-30 mb-2 flex items-center gap-2 rounded-xl border-2 border-indigo-300 bg-indigo-50 px-4 py-2.5 shadow-md">
-                          <Info size={15} className="text-indigo-600 shrink-0" />
-                          <p className="text-xs text-indigo-800 flex-1">
-                            FAQ {faqClipboard === 'couper' ? 'coupée' : 'copiée'} — cliquez à l'endroit voulu dans l'article, puis collez.
-                          </p>
-                          <button
-                            type="button"
-                            onMouseDown={(e) => { e.preventDefault(); faqPaste(); }}
-                            className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors"
-                          >
-                            Coller la FAQ ici
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setFaqClipboard(null)}
-                            title="Fermer (le contenu coupé reste annulable avec Ctrl+Z)"
-                            className="p-1.5 rounded-lg hover:bg-indigo-100 text-indigo-500 transition-colors"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      )}
-
                       {/* Contenu diff */}
                       <div
                         ref={setArticleRef}
@@ -3142,6 +3117,39 @@ export default function ArticleResult() {
             className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-red-300 hover:bg-red-500/20 hover:text-red-200 transition-colors"
           >
             <X size={13} /> Rejeter
+          </button>
+        </div>,
+        document.body,
+      )}
+
+      {/* ── Snackbar « Coller la FAQ ici » après un couper/copier du bloc FAQ ──────
+          En position FIXE bas-centre de l'écran (portal) : toujours visible quel
+          que soit le scroll — un sticky dans le flux restait hors écran quand on
+          était scrollé au niveau de la FAQ. */}
+      {faqClipboard && diffMode && hasContent && createPortal(
+        <div
+          style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 402 }}
+          className="flex items-center gap-2.5 rounded-2xl border-2 border-indigo-300 bg-white px-4 py-2.5 shadow-[0_10px_40px_rgba(0,0,0,0.25)] max-w-[92vw]"
+        >
+          <Info size={16} className="text-indigo-600 shrink-0" />
+          <p className="text-xs text-indigo-900 flex-1 min-w-0">
+            <span className="font-semibold">FAQ {faqClipboard === 'couper' ? 'coupée' : 'copiée'}.</span>
+            {' '}Cliquez à l'endroit voulu dans l'article, puis collez.
+          </p>
+          <button
+            type="button"
+            onMouseDown={(e) => { e.preventDefault(); faqPaste(); }}
+            className="shrink-0 px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors shadow-sm"
+          >
+            Coller la FAQ ici
+          </button>
+          <button
+            type="button"
+            onClick={() => setFaqClipboard(null)}
+            title="Fermer (un couper reste annulable avec Ctrl+Z)"
+            className="shrink-0 p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-400 hover:text-indigo-600 transition-colors"
+          >
+            <X size={15} />
           </button>
         </div>,
         document.body,
