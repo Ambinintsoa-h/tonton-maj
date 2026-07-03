@@ -9,7 +9,7 @@
  * Rendu via createPortal(document.body) pour s'affranchir des transforms Framer Motion.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Bold, Italic, Underline, Strikethrough,
@@ -20,6 +20,7 @@ import {
   Image, Film, Code2,
   Check, X, Trash2, Upload, Loader2,
   CaseSensitive, Weight, ALargeSmall,
+  GripVertical,
 } from 'lucide-react';
 
 // Polices web-safe de repli si le site n'expose aucune police détectable
@@ -75,8 +76,11 @@ const PANEL_PLACEHOLDERS = {
 const TOOLBAR_H = 44;
 // Marge entre la sélection/curseur et la barre
 const GAP = 8;
-// Demi-largeur max pour ne pas sortir du viewport
+// Demi-largeur max pour ne pas sortir du viewport (première approximation —
+// la position est ensuite recalée sur la largeur RÉELLE mesurée au rendu)
 const HALF_W = 260;
+// Marge de sécurité vis-à-vis des bords de l'écran (recadrage post-rendu + drag)
+const EDGE_MARGIN = 12;
 
 /**
  * Calcule top/left/below pour positionner la toolbar.
@@ -292,6 +296,56 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
     setPos(computeToolbarPos(rect.left + rect.width / 2, rect.top, rect.bottom));
     return true;
   }, [articleEl]);
+
+  // ── Recadrage post-rendu ─────────────────────────────────────────────────
+  // computeToolbarPos borne avec une demi-largeur FIXE (HALF_W) qui sous-estime
+  // la barre réelle (sélecteur de police, panels…) → boutons coupés au bord de
+  // l'écran. Ici on mesure la largeur/hauteur RÉELLES après rendu et on recale
+  // la position pour que la barre reste entièrement visible (marge EDGE_MARGIN).
+  useLayoutEffect(() => {
+    if (!visible || !toolbarRef.current) return;
+    const w = toolbarRef.current.offsetWidth;
+    const h = toolbarRef.current.offsetHeight;
+    setPos((p) => {
+      const minLeft = EDGE_MARGIN + w / 2;                                        // left = centre (translateX(-50%))
+      const maxLeft = Math.max(minLeft, window.innerWidth - EDGE_MARGIN - w / 2);
+      const minTop  = EDGE_MARGIN;
+      const maxTop  = Math.max(minTop, window.innerHeight - h - EDGE_MARGIN);
+      const left = Math.min(Math.max(p.left, minLeft), maxLeft);
+      const top  = Math.min(Math.max(p.top,  minTop),  maxTop);
+      return (left === p.left && top === p.top) ? p : { ...p, left, top };
+    });
+  }, [visible, pos.left, pos.top, panel]);
+
+  // ── Déplacement manuel de la barre (poignée ⋮⋮) ──────────────────────────
+  // La position suit la souris, bornée dans le viewport avec la même marge.
+  // La prochaine sélection de texte repositionne la barre normalement.
+  const startDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = toolbarRef.current;
+    const w = el?.offsetWidth  ?? 0;
+    const h = el?.offsetHeight ?? 0;
+    const offX = e.clientX - pos.left;
+    const offY = e.clientY - pos.top;
+    const onMove = (ev) => {
+      const minLeft = EDGE_MARGIN + w / 2;
+      const maxLeft = Math.max(minLeft, window.innerWidth - EDGE_MARGIN - w / 2);
+      const minTop  = EDGE_MARGIN;
+      const maxTop  = Math.max(minTop, window.innerHeight - h - EDGE_MARGIN);
+      setPos((p) => ({
+        ...p,
+        left: Math.min(Math.max(ev.clientX - offX, minLeft), maxLeft),
+        top:  Math.min(Math.max(ev.clientY - offY, minTop),  maxTop),
+      }));
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   // ── Helpers sélection ─────────────────────────────────────────────────────
 
@@ -806,6 +860,17 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
       {/* ── Barre principale ── */}
       <div className="relative flex items-center gap-0.5 bg-gray-900 border border-gray-700 rounded-xl px-2 py-1.5 shadow-[0_8px_32px_rgba(0,0,0,0.55)] whitespace-nowrap">
         <div style={arrowStyle} />
+
+        {/* Poignée de déplacement */}
+        <div
+          title="Déplacer la barre d'outils"
+          onMouseDown={startDrag}
+          className="flex items-center justify-center w-5 h-9 -ml-1 rounded-lg cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300 hover:bg-white/10 transition-colors"
+        >
+          <GripVertical size={14} />
+        </div>
+
+        <Sep />
 
         {/* Style texte */}
         <Btn onClick={() => format('bold')}          title="Gras (Ctrl+B)"      active={active.bold}>      <Bold size={16} /></Btn>
