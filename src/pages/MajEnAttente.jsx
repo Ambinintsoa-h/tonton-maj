@@ -23,11 +23,12 @@ import {
   setWpData, setAudit,
 } from '../store/slices/agentSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
+import { addToHistory } from '../store/slices/articlesSlice';
 import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
-import { initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
+import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
@@ -1190,9 +1191,56 @@ export default function MajEnAttente() {
         },
       }));
 
+      // ── Étape 7 : Archivage automatique dans l'Historique ────────────────
+      // L'analyse est sauvegardée dès qu'elle se termine : plus besoin de la
+      // refaire si la session est perdue avant le « Terminer ». Même ID que
+      // l'item de la file → « Terminer » mettra à jour la MÊME entrée (pas de
+      // doublon, addToHistory est idempotent par id) et l'autosave synchronise
+      // ensuite l'entrée en continu. L'item RESTE dans « À valider » — le
+      // bouton « Terminer » garde son rôle (validation + retrait de la file).
+      // saveArticle = setDoc merge → ne touche pas au seoTracking déjà écrit.
+      try {
+        const articleData = {
+          id:              item.id,
+          title:           articleTitle,
+          originalContent: articleHtml,
+          updatedContent:  updatedHtml,
+          updates:         allUpdatesWithStatus,
+          sources:         result.sources || [],
+          analysis:        result.analysis || '',
+          audit:           result.audit || '',
+          url:             item.url || '',
+          keyword:         item.keyword || '',
+          priority:        item.priority || 'normale',
+          assigneeId:      item.assigneeId || null,
+          createdAt:       new Date().toISOString(),
+          tokenUsage:      result.tokenUsage || null,
+        };
+        if (firebaseReady) {
+          const { id, originalContentUrl, updatedContentUrl } = await saveArticle(articleData);
+          const { originalContent, updatedContent, ...meta } = articleData;
+          dispatch(addToHistory({
+            ...meta,
+            id,
+            ...(capturedSeoTracking ? { seoTracking: capturedSeoTracking } : {}),   // badge en session (la base est maintenue par le cron)
+            ...(originalContentUrl ? { originalContentUrl } : { originalContent }),
+            ...(updatedContentUrl  ? { updatedContentUrl  } : { updatedContent  }),
+          }));
+        } else {
+          dispatch(addToHistory({
+            ...articleData,
+            ...(capturedSeoTracking ? { seoTracking: capturedSeoTracking } : {}),
+          }));
+        }
+      } catch (archiveErr) {
+        // Non bloquant : le résultat reste dans l'item « À valider » (majResult)
+        // et « Terminer » archivera comme avant.
+        console.warn('[maj] Archivage automatique échoué :', archiveErr);
+      }
+
       const applied = allUpdatesWithStatus.filter(u => u.applied).length;
       const total   = allUpdatesWithStatus.length;
-      toast.success(`MAJ prête — ${applied}/${total} modif. appliquées`, { icon: <Search size={18} /> });
+      toast.success(`MAJ prête — ${applied}/${total} modif. appliquées et archivées dans l'Historique`, { icon: <Search size={18} /> });
 
       return {
         originalContent: articleHtml,

@@ -15,7 +15,13 @@ const articlesSlice = createSlice({
   },
   reducers: {
     setHistory: (state, action) => { state.history = action.payload; },
-    addToHistory: (state, action) => { state.history.unshift(action.payload); },
+    // Idempotent par id : si l'article existe déjà (ex. archivé automatiquement en
+    // fin d'analyse, puis « Terminer »), on fusionne au lieu de créer un doublon.
+    addToHistory: (state, action) => {
+      const idx = state.history.findIndex(a => a.id === action.payload.id);
+      if (idx !== -1) state.history[idx] = { ...state.history[idx], ...action.payload };
+      else state.history.unshift(action.payload);
+    },
     updateInHistory: (state, action) => {
       const idx = state.history.findIndex(a => a.id === action.payload.id);
       // Merge partiel : ne remplace que les champs fournis (préserve title, url, originalContent…)
