@@ -665,8 +665,9 @@ export default function Historique() {
 
   // Rafraîchit depuis Firestore les infos « vivantes » des entrées déjà connues :
   // verrou d'édition (qui modifie quoi EN CE MOMENT) + trace de dernière
-  // modification faite par un AUTRE membre. Merge par id (updateInHistory) :
-  // ne touche pas aux entrées locales non synchronisées.
+  // modification. La BASE est la source de vérité pour « modifié le … par … » :
+  // le partage entre membres passe par elle, et cela purge aussi les marquages
+  // locaux parasites (consultations comptées à tort comme modifications).
   useEffect(() => {
     if (!firebaseReady) return;
     let cancelled = false;
@@ -676,7 +677,8 @@ export default function Historique() {
         list.forEach(a => dispatch(updateInHistory({
           id: a.id,
           editingLock: a.editingLock || null,
-          ...(a.lastModifiedAt ? { lastModifiedAt: a.lastModifiedAt, lastModifiedBy: a.lastModifiedBy || '' } : {}),
+          lastModifiedAt: a.lastModifiedAt || null,
+          lastModifiedBy: a.lastModifiedAt ? (a.lastModifiedBy || '') : '',
           ...(a.updatedAt ? { updatedAt: a.updatedAt } : {}),
         })));
       })

@@ -125,49 +125,51 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
     return () => { mo.disconnect(); clearTimeout(debounceRef.current); };
   }, [open, articleEl, refresh]);
 
-  // ── Navigation « ancre » (table des matières) : scroll doux + flash ─────────
-  // Deux niveaux de défilement, calculés AVANT de scroller (pas de course entre
-  // les deux animations) :
-  //   1. l'ÉDITEUR (scroll interne du contentEditable) → le bloc au tiers haut ;
-  //   2. la PAGE (ancêtre défilant, <main> du layout) → la zone où le bloc va
-  //      atterrir est amenée dans le viewport. Sans ce 2e niveau, quand
-  //      l'éditeur n'était que partiellement visible à l'écran, le clic semblait
-  //      ne rien faire : le contenu bougeait hors du viewport.
+  // ── Navigation « ancre » (table des matières) : saut DIRECT + flash ─────────
+  // Défilement INSTANTANÉ (pas de smooth : deux animations smooth imbriquées —
+  // éditeur + page — s'annulent mutuellement dans Chrome, d'où des clics qui ne
+  // défilaient pas). Chaque niveau est appliqué puis la position RÉELLE du bloc
+  // est relue avant d'ajuster le niveau suivant :
+  //   1. scroll interne de l'éditeur (si l'éditeur défile) → bloc au tiers haut ;
+  //   2. tous les ancêtres défilants (le <main> du layout), sinon la fenêtre →
+  //      le bloc est amené au quart haut du viewport.
   // (Pas de scrollIntoView : bug Chrome sur contentEditable — même technique
   // que jumpToChange.)
   const scrollToEl = useCallback((el) => {
     if (!articleEl || !el) return;
-    const containerRect = articleEl.getBoundingClientRect();
-    const relativeTop = el.getBoundingClientRect().top - containerRect.top + articleEl.scrollTop;
+    const viewH = window.innerHeight || document.documentElement.clientHeight;
 
-    // 1. Scroll interne de l'éditeur (borné à sa plage réelle)
+    // 1. Scroll interne de l'éditeur — instantané (assignation synchrone :
+    //    la position du bloc relue ensuite est déjà à jour)
     const innerMax = Math.max(0, articleEl.scrollHeight - articleEl.clientHeight);
-    const innerTarget = Math.min(innerMax, Math.max(0, relativeTop - articleEl.clientHeight / 3));
-    if (innerMax > 0) articleEl.scrollTo({ top: innerTarget, behavior: 'smooth' });
+    if (innerMax > 0) {
+      const relativeTop = el.getBoundingClientRect().top
+        - articleEl.getBoundingClientRect().top
+        + articleEl.scrollTop;
+      articleEl.scrollTop = Math.min(innerMax, Math.max(0, relativeTop - articleEl.clientHeight / 3));
+    }
 
-    // 2. Scroll de la page : position (viewport) où le bloc va atterrir une fois
-    //    le scroll interne terminé → si hors de la zone confortable, on amène
-    //    cette position au quart haut de l'écran.
-    const scroller = (() => {
-      let p = articleEl.parentElement;
-      while (p) {
+    // 2. Ancêtres défilants (du plus proche au plus lointain) : chacun corrige
+    //    le reste de l'écart pour poser le bloc au quart haut de l'écran.
+    let adjusted = false;
+    let p = articleEl.parentElement;
+    while (p) {
+      if (p.scrollHeight > p.clientHeight + 1) {
         const s = getComputedStyle(p);
-        if (/(auto|scroll)/.test(s.overflowY) && p.scrollHeight > p.clientHeight + 1) return p;
-        p = p.parentElement;
+        if (/(auto|scroll)/.test(s.overflowY)) {
+          p.scrollTop += el.getBoundingClientRect().top - viewH / 4; // clampé par le DOM
+          adjusted = true;
+        }
       }
-      return null;
-    })();
-    if (scroller) {
-      const futureElViewportY = containerRect.top + (relativeTop - innerTarget);
-      const viewH = window.innerHeight || document.documentElement.clientHeight;
-      if (futureElViewportY < 90 || futureElViewportY > viewH - 160) {
-        scroller.scrollBy({ top: futureElViewportY - viewH / 4, behavior: 'smooth' });
-      }
+      p = p.parentElement;
+    }
+    if (!adjusted) {
+      window.scrollBy(0, el.getBoundingClientRect().top - viewH / 4);
     }
 
     el.style.outline = '2px solid #6366f1';
     el.style.outlineOffset = '3px';
-    setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = ''; }, 1200);
+    setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = ''; }, 1400);
   }, [articleEl]);
 
   const commit = useCallback(() => {
