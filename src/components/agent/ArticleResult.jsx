@@ -25,7 +25,7 @@ import {
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
   insertFaqHtmlAtCaret, rectOfNodes, normalizeFaqToAccordion,
 } from '../../utils/faq';
-import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive } from '../../utils/blocks';
+import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf } from '../../utils/blocks';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
@@ -1319,6 +1319,10 @@ export default function ArticleResult() {
   //   • qa ≠ null  → barre de la Q/R survolée (↑↓ réordonner, ➕ ajouter, 🗑 supprimer)
   const [faqHover, setFaqHover] = useState(null);
 
+  // Survol d'un TABLEAU → barre « bloc entier » (copier / couper / supprimer),
+  // même expérience que la FAQ : cadre pointillé + barre au-dessus du tableau.
+  const [tableHover, setTableHover] = useState(null); // { el, rect } — el = bloc top-level
+
   // ── Presse-papiers interne de BLOCS (FAQ, tableau, titre, image, liste…) ────
   // blockClipRef = { html, meta } — contenu coupé/copié · blockClipboard =
   // { mode:'couper'|'copier', name, art, fem } | null → snackbar + boutons
@@ -1338,10 +1342,11 @@ export default function ArticleResult() {
     }
   }, [lockMedia, triggerAutosave]);
 
-  // Même contrat + masque les barres FAQ
+  // Même contrat + masque les barres flottantes (FAQ, tableau)
   const afterFaqEdit = useCallback(() => {
     afterDomEdit();
     setFaqHover(null);
+    setTableHover(null);
   }, [afterDomEdit]);
 
   // Scroll doux vers un nœud — technique de jumpToChange (pas de scrollIntoView,
@@ -1425,8 +1430,14 @@ export default function ArticleResult() {
       const sel = window.getSelection();
       if (sel && sel.rangeCount) { try { el = blockAtRange(container, sel.getRangeAt(0)); } catch {} }
     }
+    // FAQ : un clic droit N'IMPORTE OÙ dans la FAQ cible la FAQ ENTIÈRE
+    // (titre + toutes les questions) — pas seulement l'élément cliqué.
+    if (el) {
+      const faqBlk = findFaqBlock(container);
+      if (faqBlk && isInsideFaq(faqBlk, el)) { faqCopyOrCut(cut); return; }
+    }
     blockClipFromEl(el, cut);
-  }, [blockClipFromEl]);
+  }, [blockClipFromEl, faqCopyOrCut]);
 
   // Colle le presse-papiers au CARET courant (bloc top-level le plus proche),
   // sinon en fin d'article.
@@ -2859,6 +2870,7 @@ export default function ArticleResult() {
                               setLinkHover({ idx, url: il.getAttribute('data-il-url') || '', anchor: il.textContent, rect: il.getBoundingClientRect() });
                               setAnchorHover(null);
                               setFaqHover(null);
+                              setTableHover(null);
                               return;
                             }
                           }
@@ -2867,7 +2879,7 @@ export default function ArticleResult() {
                           if (seg && e.currentTarget.contains(seg)) {
                             clearTimeout(leaveTimerRef.current);
                             setSegHover({ node: seg, rect: seg.getBoundingClientRect() });
-                            setLinkHover(null); setAnchorHover(null); setFaqHover(null);
+                            setLinkHover(null); setAnchorHover(null); setFaqHover(null); setTableHover(null);
                             return;
                           }
                           // 3) Section FAQ → barres flottantes (bloc entier / Q-R survolée)
@@ -2876,7 +2888,18 @@ export default function ArticleResult() {
                             clearTimeout(leaveTimerRef.current);
                             setFaqHover(fq);
                             setLinkHover(null);
+                            setTableHover(null);
                             showAnchorTooltip(e); // les tooltips de liens restent actifs dans la FAQ
+                            return;
+                          }
+                          // 3bis) Tableau → barre « bloc entier » (copier / couper / supprimer)
+                          const tbl = e.target.closest('table, [data-tt-table-wrap]');
+                          if (tbl && e.currentTarget.contains(tbl)) {
+                            const top = topLevelBlockOf(articleRef.current, tbl) || tbl;
+                            clearTimeout(leaveTimerRef.current);
+                            setTableHover({ el: top, rect: top.getBoundingClientRect() });
+                            setLinkHover(null);
+                            showAnchorTooltip(e);
                             return;
                           }
                           // 4) Vraie ancre <a href> → tooltip URL complète
@@ -2885,9 +2908,9 @@ export default function ArticleResult() {
                           // → planifier le masquage des mini-boutons ✓/✗ (la souris sur le
                           // segment OU sur la barre flottante annule ce timer). Évite qu'ils
                           // restent affichés en glissant la souris sur le texte voisin.
-                          if (segHover || linkHover || faqHover) {
+                          if (segHover || linkHover || faqHover || tableHover) {
                             clearTimeout(leaveTimerRef.current);
-                            leaveTimerRef.current = setTimeout(() => { setSegHover(null); setLinkHover(null); setFaqHover(null); }, 1200);
+                            leaveTimerRef.current = setTimeout(() => { setSegHover(null); setLinkHover(null); setFaqHover(null); setTableHover(null); }, 1200);
                           }
                         }}
                         onMouseLeave={() => {
@@ -3532,6 +3555,69 @@ export default function ArticleResult() {
             </>
           );
         })(),
+        document.body,
+      )}
+
+      {/* ── Barre flottante TABLEAU : sélection du tableau ENTIER au survol ──────
+          Même expérience que la FAQ : cadre pointillé + barre au-dessus —
+          copier / couper (presse-papiers de blocs) / supprimer. */}
+      {tableHover && createPortal(
+        <>
+          <div
+            style={{
+              position: 'fixed',
+              top: tableHover.rect.top - 4,
+              left: tableHover.rect.left - 6,
+              width: tableHover.rect.width + 12,
+              height: tableHover.rect.height + 8,
+              border: '2px dashed rgba(16,185,129,0.5)',
+              borderRadius: 8,
+              zIndex: 399,
+              pointerEvents: 'none',
+            }}
+          />
+          <div
+            style={{ position: 'fixed', top: Math.max(6, tableHover.rect.top - 34), left: tableHover.rect.left, zIndex: 401 }}
+            onMouseEnter={() => clearTimeout(leaveTimerRef.current)}
+            onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setTableHover(null), 220); }}
+            className="flex items-center gap-1 bg-gray-900 rounded-lg px-1.5 py-1 shadow-[0_6px_24px_rgba(0,0,0,0.4)]"
+          >
+            <span className="px-1.5 text-[10px] font-bold uppercase tracking-wide text-emerald-300 select-none">Tableau</span>
+            <button
+              type="button"
+              title="Copier le tableau entier (coller ensuite au clic droit à l'endroit voulu)"
+              onMouseDown={(e) => { e.preventDefault(); blockClipFromEl(tableHover.el, false); }}
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-white/90 hover:bg-white/15 transition-colors"
+            >
+              <Copy size={13} /> Copier
+            </button>
+            <button
+              type="button"
+              title="Couper le tableau entier (coller ensuite au clic droit à l'endroit voulu)"
+              onMouseDown={(e) => { e.preventDefault(); blockClipFromEl(tableHover.el, true); }}
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-amber-300 hover:bg-amber-500/20 hover:text-amber-200 transition-colors"
+            >
+              <Scissors size={13} /> Couper
+            </button>
+            <div className="w-px h-4 bg-white/15" />
+            <button
+              type="button"
+              title="Supprimer le tableau (annulable avec Ctrl+Z)"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                const el = tableHover.el;
+                if (!el || el.parentNode !== articleRef.current) { setTableHover(null); return; }
+                if (!window.confirm('Supprimer ce tableau ? (annulable avec Ctrl+Z)')) return;
+                el.remove();
+                afterFaqEdit();
+                toast('Tableau supprimé — Ctrl+Z pour annuler', { icon: '🗑️' });
+              }}
+              className="flex items-center px-1.5 py-1 rounded-md text-red-300 hover:bg-red-500/20 hover:text-red-200 transition-colors"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        </>,
         document.body,
       )}
 
