@@ -20,7 +20,7 @@ import {
   Image, Film, Code2,
   Check, X, Trash2, Upload, Loader2,
   CaseSensitive, Weight, ALargeSmall,
-  GripVertical,
+  GripVertical, ClipboardPaste,
 } from 'lucide-react';
 
 // Polices web-safe de repli si le site n'expose aucune police détectable
@@ -223,7 +223,10 @@ const Swatch = ({ color, label, onClick }) => (
 
 // ── Composant principal ───────────────────────────────────────────────────────
 
-export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, onUploadMedia, siteFonts = [] }) {
+// faqClipboard / onPasteFaq : quand une FAQ est copiée/coupée (presse-papiers
+// interne d'ArticleResult), la barre — qui s'ouvre au CLIC DROIT à l'endroit
+// voulu — affiche un bouton « Coller la FAQ » qui colle au point du clic.
+export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, onUploadMedia, siteFonts = [], faqClipboard = false, onPasteFaq }) {
   // Polices proposées : celles détectées sur le site, sinon repli web-safe
   const fontList = (Array.isArray(siteFonts) && siteFonts.length > 0) ? siteFonts : FALLBACK_FONTS;
   const [visible, setVisible]   = useState(false);
@@ -871,6 +874,27 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
         </div>
 
         <Sep />
+
+        {/* ── Coller la FAQ au point du clic droit (presse-papiers FAQ actif) ── */}
+        {faqClipboard && onPasteFaq && (
+          <>
+            <button
+              type="button"
+              title="Coller la FAQ à cet endroit"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                const range = savedRangeRef.current;   // caret posé au clic droit
+                savedRangeRef.current = null;
+                setVisible(false);
+                onPasteFaq(range);
+              }}
+              className="flex items-center gap-1.5 h-9 px-2.5 rounded-lg text-[12px] font-semibold bg-indigo-500 text-white hover:bg-indigo-400 transition-colors whitespace-nowrap"
+            >
+              <ClipboardPaste size={14} /> Coller la FAQ
+            </button>
+            <Sep />
+          </>
+        )}
 
         {/* Style texte */}
         <Btn onClick={() => format('bold')}          title="Gras (Ctrl+B)"      active={active.bold}>      <Bold size={16} /></Btn>
