@@ -1312,7 +1312,9 @@ export default function MajEnAttente() {
     dispatch(setSources(data.sources || []));
     dispatch(setAnalysis(data.analysis || ''));
     dispatch(setParseFailed(data.parseFailed === true));
-    if (data.wpData) dispatch(setWpData(data.wpData));
+    // TOUJOURS rebinder (null si absent) : sinon le wpData de l'article PRÉCÉDENT
+    // reste en mémoire → publication proposée sur le mauvais site (confusion de sites).
+    dispatch(setWpData(data.wpData || null));
     dispatch(setAudit(data.audit || ''));
     dispatch(setCurrentArticleId(item.id));
     dispatch(setStatus('done'));

@@ -15,7 +15,7 @@ import { removeFromHistory } from '../store/slices/articlesSlice';
 import { addPendingItem } from '../store/slices/pendingSlice';
 import {
   setOriginalContent, setUpdatedContent, setDiff,
-  setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit,
+  setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit, setWpData,
 } from '../store/slices/agentSlice';
 import { deleteArticle, fetchArticleHtml } from '../services/firebase';
 import { useNavigate } from 'react-router-dom';
@@ -692,6 +692,11 @@ export default function Historique() {
     dispatch(setSources(article.sources || []));
     dispatch(setAnalysis(article.analysis || ''));
     dispatch(setAudit(article.audit || ''));   // restaure le rapport d'audit (rétrocompat: anciens docs → '')
+    // Rebinder la cible WordPress sur CET article (null : les entrées d'historique
+    // ne mémorisent pas de wpData) — sinon le site MCP d'un article ouvert
+    // PRÉCÉDEMMENT reste en mémoire → menu Publier lié au MAUVAIS site.
+    // La publication retrouve le bon post par l'URL de l'article (findPostByUrl).
+    dispatch(setWpData(article.wpData || null));
     dispatch(setCurrentArticleId(article.id));
     dispatch(setStatus('done'));
     navigate('/');

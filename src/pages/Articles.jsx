@@ -199,7 +199,9 @@ export default function Articles() {
         onReplace:  (s) => dispatch(replaceLastStep(s)),
         onProgress: (p) => dispatch(setProgress(p)),
       });
-      if (result.wpData) dispatch(setWpData(result.wpData));
+      // TOUJOURS rebinder (null si absent) : sinon le wpData de l'article PRÉCÉDENT
+      // reste en mémoire → le menu Publier propose le mauvais site (confusion de sites).
+      dispatch(setWpData(result.wpData || null));
 
       // ── Application des diffs via utils/diff ─────────────────────────────
       // On applique les diffs sur le HTML structuré (articleHtml) pour préserver
