@@ -7,17 +7,17 @@ import {
   Clock, Trash2, Eye, Search, X, ExternalLink,
   Calendar, CheckCircle2, Sparkles, AlertTriangle, ChevronDown, ChevronUp,
   UserCircle2, RotateCcw, Loader, TrendingUp, TrendingDown, Minus,
-  ArrowUp, ArrowDown, Timer, Activity, RefreshCw,
+  ArrowUp, ArrowDown, Timer, Activity, RefreshCw, Pencil, Lock,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import axios from 'axios';
-import { removeFromHistory } from '../store/slices/articlesSlice';
+import { removeFromHistory, updateInHistory } from '../store/slices/articlesSlice';
 import { addPendingItem } from '../store/slices/pendingSlice';
 import {
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit, setWpData,
 } from '../store/slices/agentSlice';
-import { deleteArticle, fetchArticleHtml } from '../services/firebase';
+import { deleteArticle, fetchArticleHtml, getArticles, isLockActive } from '../services/firebase';
 import { useNavigate } from 'react-router-dom';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
@@ -361,6 +361,10 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
   const applied = article.updates?.filter(u => u.applied !== false) || [];
   const missed  = article.updates?.filter(u => u.applied === false)  || [];
 
+  // Dernière modification humaine (éditeur) + verrou d'édition en cours
+  const lastMod = article.lastModifiedAt ? formatDate(new Date(article.lastModifiedAt)) : null;
+  const locked  = isLockActive(article.editingLock) ? article.editingLock : null;
+
   return (
     <>
       <motion.div
@@ -416,18 +420,38 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
           </span>
         </div>
 
-        {/* Date */}
-        {date && (
-          <div className="flex-shrink-0 hidden sm:block">
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-400 font-medium">
+        {/* Dates : ajout + dernière modification (tri de la liste) */}
+        <div className="flex-shrink-0 hidden sm:flex flex-col items-start gap-1">
+          {date && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-400 font-medium whitespace-nowrap" title="Date d'ajout dans l'historique (fin d'analyse)">
               <Calendar size={10} className="flex-shrink-0" />
-              {date.short}
+              ajouté le {date.short}
             </span>
-          </div>
-        )}
+          )}
+          {lastMod && (
+            <span
+              className="inline-flex items-center gap-1.5 text-[11px] text-indigo-500 font-medium whitespace-nowrap"
+              title={`Dernière modification le ${lastMod.long} à ${lastMod.time}${article.lastModifiedBy ? ` par ${article.lastModifiedBy}` : ''}`}
+            >
+              <Pencil size={10} className="flex-shrink-0" />
+              modifié le {lastMod.short} · {lastMod.time}{article.lastModifiedBy ? ` · ${article.lastModifiedBy}` : ''}
+            </span>
+          )}
+        </div>
 
         {/* Badges MAJ */}
         <div className="flex items-center gap-1.5 flex-shrink-0">
+          {/* Verrou : en cours de modification par un membre (temps réel côté éditeur) */}
+          {locked && (
+            <span
+              className="inline-flex items-center gap-1.5 text-[11px] font-semibold bg-red-50 text-red-600 border border-red-200 rounded-full px-2.5 py-1 leading-none whitespace-nowrap"
+              title={`En cours de modification par ${locked.name || 'un membre'}`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
+              <Lock size={9} className="flex-shrink-0" />
+              en modification · {locked.name || '…'}
+            </span>
+          )}
           {applied.length > 0 && (
             <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2.5 py-1 leading-none whitespace-nowrap">
               <Sparkles size={9} />
@@ -565,8 +589,28 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
               <div className="flex items-start gap-8 flex-wrap">
                 {date && (
                   <div>
-                    <p className="text-[10px] text-gray-400 uppercase tracking-widest font-semibold mb-1">Traité le</p>
+                    <p className="text-[10px] text-gray-400 uppercase tracking-widest font-semibold mb-1">Ajouté le</p>
                     <p className="text-xs text-gray-600">{date.long} · {date.time}</p>
+                  </div>
+                )}
+                <div>
+                  <p className="text-[10px] text-gray-400 uppercase tracking-widest font-semibold mb-1">Dernière modification</p>
+                  {lastMod ? (
+                    <p className="text-xs text-gray-600">
+                      {lastMod.long} · {lastMod.time}
+                      {article.lastModifiedBy ? <> · par <span className="font-semibold">{article.lastModifiedBy}</span></> : null}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-400 italic">jamais modifié depuis l'analyse</p>
+                  )}
+                </div>
+                {locked && (
+                  <div>
+                    <p className="text-[10px] text-red-400 uppercase tracking-widest font-semibold mb-1">En cours de modification</p>
+                    <p className="text-xs text-red-600 font-semibold inline-flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                      par {locked.name || 'un membre'}
+                    </p>
                   </div>
                 )}
                 {applied.length > 0 && (
@@ -619,6 +663,27 @@ export default function Historique() {
   const [previewHtml,   setPreviewHtml]   = useState({ original: '', updated: '' });
   const [previewLoading, setPreviewLoading] = useState(false);
 
+  // Rafraîchit depuis Firestore les infos « vivantes » des entrées déjà connues :
+  // verrou d'édition (qui modifie quoi EN CE MOMENT) + trace de dernière
+  // modification faite par un AUTRE membre. Merge par id (updateInHistory) :
+  // ne touche pas aux entrées locales non synchronisées.
+  useEffect(() => {
+    if (!firebaseReady) return;
+    let cancelled = false;
+    getArticles()
+      .then(list => {
+        if (cancelled) return;
+        list.forEach(a => dispatch(updateInHistory({
+          id: a.id,
+          editingLock: a.editingLock || null,
+          ...(a.lastModifiedAt ? { lastModifiedAt: a.lastModifiedAt, lastModifiedBy: a.lastModifiedBy || '' } : {}),
+          ...(a.updatedAt ? { updatedAt: a.updatedAt } : {}),
+        })));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [firebaseReady, dispatch]);
+
   // CQ IA : uniquement ses propres articles
   const visibleHistory = authRole === 'cq_ia'
     ? history.filter(a => a.assigneeId === authUid || a.assigneeId === authUsername)
@@ -628,12 +693,19 @@ export default function Historique() {
   const suggestions = [...new Set(visibleHistory.map(a => a.title).filter(Boolean))];
 
   const q = search.toLowerCase();
-  const filtered = visibleHistory.filter(a =>
-    !q ||
-    a.title?.toLowerCase().includes(q) ||
-    a.url?.toLowerCase().includes(q) ||
-    a.keyword?.toLowerCase().includes(q)
-  );
+  // Tri : DERNIÈRE MODIFICATION la plus récente en premier — repli sur la date
+  // de synchronisation (updatedAt) puis sur la date d'ajout pour les articles
+  // jamais modifiés.
+  const sortKey = (a) =>
+    a.lastModifiedAt || a.updatedAt || (getArticleDate(a)?.getTime() ?? 0);
+  const filtered = visibleHistory
+    .filter(a =>
+      !q ||
+      a.title?.toLowerCase().includes(q) ||
+      a.url?.toLowerCase().includes(q) ||
+      a.keyword?.toLowerCase().includes(q)
+    )
+    .sort((a, b) => sortKey(b) - sortKey(a));
 
   const handleDelete = (id) => {
     dispatch(removeFromHistory(id));

@@ -20,7 +20,7 @@ import toast from 'react-hot-toast';
 import {
   List, ListOrdered, X, ChevronUp, ChevronDown, Copy, Trash2, GripVertical,
   Heading1, Heading2, Heading3, Heading4, Type, Table2, Image as ImageIcon,
-  Film, HelpCircle, Quote, Box, PanelRight,
+  Film, HelpCircle, Quote, Box, PanelRight, Scissors, ClipboardPaste, CopyPlus,
 } from 'lucide-react';
 
 // ── Description d'un bloc top-level ──────────────────────────────────────────
@@ -63,17 +63,27 @@ const describe = (el) => {
       if (cls.includes('faq') || (el.id || '').toLowerCase().includes('faq')) {
         return { Icon: HelpCircle, kind: 'Bloc FAQ', label: excerpt(el.querySelector('h1,h2,h3,h4')?.textContent, 40) || 'FAQ', strong: true };
       }
+      // Tableau responsive : <div data-tt-table-wrap><table>…</table></div>
+      if (el.querySelector?.('table')) {
+        const rows = el.querySelectorAll('tr').length;
+        return { Icon: Table2, kind: 'Tableau', label: `${rows} ligne${rows > 1 ? 's' : ''}`, indent: true };
+      }
       if (el.querySelector?.('iframe, video')) return { Icon: Film, kind: 'Vidéo', label: 'Vidéo', indent: true };
       return { Icon: Box, kind: tag.toLowerCase(), label: excerpt(el.textContent, 40), indent: true };
     }
   }
 };
 
-export default function DocNavigator({ articleEl, onEdited }) {
+// Presse-papiers de blocs (ArticleResult) :
+//  clipboard ({ name, art } | null) — contenu actuel du presse-papiers interne
+//  onCopyBlock(el) / onCutBlock(el) — copier/couper un bloc depuis le panneau
+//  onPasteRelative(el, 'before'|'after') — coller le presse-papiers autour d'un bloc
+export default function DocNavigator({ articleEl, onEdited, clipboard = null, onCopyBlock, onCutBlock, onPasteRelative }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);      // [{ el, Icon, kind, label, … }]
   const [dragIdx, setDragIdx] = useState(null);
   const [dropPos, setDropPos] = useState(null); // { idx, after }
+  const [ctxMenu, setCtxMenu] = useState(null); // { x, y, idx } — menu contextuel (clic droit)
   const debounceRef = useRef(null);
 
   // ── Visibilité limitée au bloc « Après — MAJ proposées » ──────────────────
@@ -99,6 +109,7 @@ export default function DocNavigator({ articleEl, onEdited }) {
       .filter(el => !['SCRIPT', 'STYLE', 'BR'].includes(el.tagName))
       .map(el => ({ el, ...describe(el) }));
     setItems(list);
+    setCtxMenu(null); // les index changent → menu contextuel périmé
   }, [articleEl]);
 
   useEffect(() => { if (open) refresh(); }, [open, refresh]);
@@ -233,6 +244,11 @@ export default function DocNavigator({ articleEl, onEdited }) {
                   onDrop={(e) => { e.preventDefault(); handleDrop(); }}
                   onDragEnd={() => { setDragIdx(null); setDropPos(null); }}
                   onClick={() => scrollToEl(it.el)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setCtxMenu({ x: e.clientX, y: e.clientY, idx });
+                  }}
                   className={[
                     'group flex items-center gap-1.5 mx-1.5 px-1.5 py-[5px] rounded-lg cursor-pointer select-none',
                     'hover:bg-indigo-50/80 transition-colors',
@@ -282,11 +298,67 @@ export default function DocNavigator({ articleEl, onEdited }) {
 
           <div className="px-3.5 py-2 border-t border-gray-100 bg-gray-50/60">
             <p className="text-[10px] text-gray-400 leading-snug">
-              Clic : aller au bloc · Glisser <GripVertical size={9} className="inline -mt-0.5" /> : réordonner · Survol : ↑ ↓ dupliquer, supprimer
+              Clic : aller au bloc · <span className="font-semibold text-gray-500">Clic droit : copier, couper, coller avant/après</span> · Glisser <GripVertical size={9} className="inline -mt-0.5" /> : réordonner
             </p>
           </div>
         </div>
       )}
+
+      {/* ── Menu contextuel d'un bloc (clic droit sur une ligne du panneau) ── */}
+      {open && ctxMenu && (() => {
+        const it = items[ctxMenu.idx];
+        if (!it) return null;
+        const MENU_W = 240;
+        const left = Math.max(8, Math.min(ctxMenu.x, window.innerWidth - MENU_W - 8));
+        const top  = Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 300));
+        const close = () => setCtxMenu(null);
+        const MenuItem = ({ Icon, label, danger = false, onClick }) => (
+          <button
+            type="button"
+            onClick={() => { onClick(); close(); }}
+            className={`flex items-center gap-2.5 w-full px-3 py-2 text-xs font-medium text-left transition-colors ${
+              danger ? 'text-red-600 hover:bg-red-50' : 'text-gray-700 hover:bg-indigo-50'
+            }`}
+          >
+            <Icon size={13} className={danger ? 'text-red-400' : 'text-gray-400'} />
+            {label}
+          </button>
+        );
+        return (
+          <>
+            {/* Fond invisible : ferme le menu au clic ailleurs */}
+            <div
+              style={{ position: 'fixed', inset: 0, zIndex: 250 }}
+              onMouseDown={close}
+              onContextMenu={(e) => { e.preventDefault(); close(); }}
+            />
+            <div
+              style={{ position: 'fixed', top, left, width: MENU_W, zIndex: 251 }}
+              className="bg-white border border-gray-200 rounded-xl shadow-[0_16px_48px_rgba(0,0,0,0.22)] py-1.5 overflow-hidden"
+            >
+              <p className="px-3 pt-1 pb-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wide truncate border-b border-gray-100">
+                {it.kind} — {it.label || '…'}
+              </p>
+              {onCopyBlock && (
+                <MenuItem Icon={Copy} label="Copier le bloc" onClick={() => onCopyBlock(it.el)} />
+              )}
+              {onCutBlock && (
+                <MenuItem Icon={Scissors} label="Couper le bloc" onClick={() => onCutBlock(it.el)} />
+              )}
+              {clipboard && onPasteRelative && (
+                <>
+                  <div className="my-1 border-t border-gray-100" />
+                  <MenuItem Icon={ClipboardPaste} label={`Coller ${clipboard.art} AVANT ce bloc`} onClick={() => onPasteRelative(it.el, 'before')} />
+                  <MenuItem Icon={ClipboardPaste} label={`Coller ${clipboard.art} APRÈS ce bloc`} onClick={() => onPasteRelative(it.el, 'after')} />
+                </>
+              )}
+              <div className="my-1 border-t border-gray-100" />
+              <MenuItem Icon={CopyPlus} label="Dupliquer" onClick={() => duplicateItem(ctxMenu.idx)} />
+              <MenuItem Icon={Trash2} label="Supprimer (Ctrl+Z pour annuler)" danger onClick={() => deleteItem(ctxMenu.idx)} />
+            </div>
+          </>
+        );
+      })()}
     </>,
     document.body,
   );

@@ -10,7 +10,7 @@ import {
   RefreshCw, ArrowRight, Link, ChevronUp,
   Clipboard, ClipboardCheck, Sparkles, Loader, ShieldCheck,
   Plus, Link2, X, Tag, Search, Image,
-  Undo2, Redo2, Scissors, Trash2,
+  Undo2, Redo2, Scissors, Trash2, Lock,
 } from 'lucide-react';
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripParasiticFontSize } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
@@ -25,11 +25,15 @@ import {
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
   insertFaqHtmlAtCaret, rectOfNodes, normalizeFaqToAccordion,
 } from '../../utils/faq';
+import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive } from '../../utils/blocks';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
-import { saveArticle, updateArticleHtml } from '../../services/firebase';
+import {
+  saveArticle, updateArticleHtml,
+  acquireEditLock, heartbeatEditLock, releaseEditLock, watchEditLock, isLockActive, LOCK_HEARTBEAT_MS,
+} from '../../services/firebase';
 import { saveDraft, flushDraftRemote, onDraftStatus } from '../../services/articleDraft';
 import { renderMarkdown, emojiToIcons, unwrapProseFences, trimAuditForDisplay } from '../../utils/markdown';
 import { useNavigate } from 'react-router-dom';
@@ -666,6 +670,16 @@ export default function ArticleResult() {
     }
   }, [lockMedia]);
 
+  // ── Trace « dernière modification » (Historique) ─────────────────────────────
+  // humanEditRef ne passe à true QUE sur une modification humaine (frappe,
+  // barres FAQ/blocs, accepter/rejeter, navigateur de structure) — jamais sur
+  // les synchronisations automatiques de fin d'analyse. editorNameRef : nom
+  // affichable du membre courant (réassigné à chaque render, comme draftDataRef).
+  const humanEditRef = useRef(false);
+  const editorNameRef = useRef('');
+  editorNameRef.current = [authUser?.prenom, authUser?.nom].filter(Boolean).join(' ')
+    || authUser?.username || '';
+
   // ── Autosave (façon Google Docs) ───────────────────────────────────────────
   // Construit le brouillon à partir du HTML édité en direct (contentRef) + état agent.
   // Un ref évite les closures périmées dans les handlers stables.
@@ -714,6 +728,10 @@ export default function ArticleResult() {
         id: draft.currentArticleId,
         updatedContent: draft.html,
         updatedAt: Date.now(),
+        // Dernière modification HUMAINE (affichée + triée dans l'Historique)
+        ...(humanEditRef.current
+          ? { lastModifiedAt: Date.now(), lastModifiedBy: editorNameRef.current }
+          : {}),
       }));
     }
   }, [dispatch]);
@@ -814,8 +832,10 @@ export default function ArticleResult() {
   }, [agent.currentArticleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Frappe clavier : mise à jour du ref uniquement, SANS setState → pas de re-render
+  // (couvre aussi la mise en forme BubbleToolbar : execCommand déclenche 'input')
   const handleInput = useCallback((e) => {
     contentRef.current = e.currentTarget.innerHTML;
+    humanEditRef.current = true;
     triggerAutosave(true);
   }, [triggerAutosave]);
 
@@ -846,8 +866,61 @@ export default function ArticleResult() {
     const html = contentRef.current || '';
     if (!html || html === lastSyncedHtmlRef.current) return;
     lastSyncedHtmlRef.current = html;
-    updateArticleHtml(articleId, html).catch(() => {});
+    updateArticleHtml(articleId, html, humanEditRef.current
+      ? { lastModifiedAt: Date.now(), lastModifiedBy: editorNameRef.current }
+      : null).catch(() => {});
   }, [agent.draftStatus, agent.currentArticleId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Verrou d'édition collaboratif (façon WordPress « Prendre la main ») ─────
+  // Un seul membre à la fois sur un article : à l'ouverture on tente de prendre
+  // le verrou articles/{id}.editingLock ; s'il est tenu par un AUTRE membre, un
+  // écran bloque l'accès avec « Prendre la main » (force) ou retour. onSnapshot
+  // en temps réel : si quelqu'un prend la main pendant que j'édite, l'écran
+  // apparaît immédiatement chez moi. Un heartbeat prolonge le verrou ; une
+  // session fermée brutalement expire toute seule (LOCK_STALE_MS).
+  const [editLockedBy, setEditLockedBy] = useState(null); // { name, uid } | null
+  const takeOverRef = useRef(null);
+  useEffect(() => {
+    const articleId = agent.currentArticleId;
+    if (!articleId || !firebaseReady || !authUid) { setEditLockedBy(null); return; }
+    let disposed = false;
+    let acquiring = false;
+
+    const tryAcquire = async (force = false) => {
+      if (disposed || acquiring) return;
+      acquiring = true;
+      try {
+        const r = await acquireEditLock(articleId, { uid: authUid, name: editorNameRef.current }, { force });
+        if (!disposed) setEditLockedBy(r.ok ? null : { name: r.lock?.name || '', uid: r.lock?.uid });
+      } catch { /* erreur réseau — ne jamais bloquer l'édition là-dessus */ }
+      finally { acquiring = false; }
+    };
+    takeOverRef.current = () => tryAcquire(true);
+    tryAcquire();
+
+    // Temps réel : prise de main par un autre membre / libération du verrou
+    const unsub = watchEditLock(articleId, (lock) => {
+      if (disposed) return;
+      if (isLockActive(lock)) {
+        if (lock.uid !== authUid) setEditLockedBy({ name: lock.name || '', uid: lock.uid });
+        else setEditLockedBy(null);
+      } else {
+        tryAcquire(); // verrou libéré/périmé (ou doc créé par l'archivage) → prendre la main
+      }
+    });
+
+    const hb = setInterval(() => { heartbeatEditLock(articleId, authUid).catch(() => {}); }, LOCK_HEARTBEAT_MS);
+    const onUnload = () => { releaseEditLock(articleId, authUid); }; // best-effort (sinon expiration auto)
+    window.addEventListener('beforeunload', onUnload);
+    return () => {
+      disposed = true;
+      takeOverRef.current = null;
+      unsub();
+      clearInterval(hb);
+      window.removeEventListener('beforeunload', onUnload);
+      releaseEditLock(articleId, authUid).catch(() => {});
+    };
+  }, [agent.currentArticleId, firebaseReady, authUid]);
 
   // Collage dans la vue diff : on retire tout style copié d'un autre site et on
   // ne garde que la structure + le style par défaut (cf. sanitizePastedHtml).
@@ -938,7 +1011,8 @@ export default function ArticleResult() {
       // Conversion \n→<br> uniquement si pas de structure de blocs HTML
       const p2HasBlocks = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(newHtml);
       // FAQ : fin d'article + normalisation en accordéon (même structure pour toutes les FAQ)
-      const finalHtml = normalizeFaqToAccordion(moveFaqToEnd(p2HasBlocks ? newHtml : newHtml.replace(/\n/g, '<br>')));
+      // Tableaux : enveloppés dans un conteneur responsive (défilement horizontal)
+      const finalHtml = makeTablesResponsive(normalizeFaqToAccordion(moveFaqToEnd(p2HasBlocks ? newHtml : newHtml.replace(/\n/g, '<br>'))));
 
       // Mettre à jour le DOM — finalHtml contient maintenant passe 1 + passe 2
       // Conserver le scroll pour ne pas remonter en haut lors de l'injection innerHTML
@@ -1087,6 +1161,9 @@ export default function ArticleResult() {
         assigneeId:      cqItem.assigneeId || null,
         createdAt:       new Date().toISOString(),
         tokenUsage:      agent.tokenUsage  || null,
+        // « Terminer » = action humaine → trace de dernière modification (Historique)
+        lastModifiedAt:  Date.now(),
+        lastModifiedBy:  editorNameRef.current,
         // seoTracking EXCLU de l'écriture : il est maintenu en base par le cron (snapshots
         // J+7/J+30). L'inclure ferait un updateDoc qui ÉCRASE tout le champ → snapshots perdus.
         // On le passe seulement aux dispatch Redux ci-dessous (badge en session) ; la base
@@ -1126,6 +1203,7 @@ export default function ArticleResult() {
     // On met à jour l'entrée avec le HTML final propre (sans balises diff).
     if (!agent.currentArticleId) { setTerminant(false); return; }
     try {
+      const lastMod = { lastModifiedAt: Date.now(), lastModifiedBy: editorNameRef.current };
       dispatch(updateInHistory({
         id:             agent.currentArticleId,
         title:          editedTitle || extractH1FromHtml(agent.originalContent) || '',
@@ -1133,7 +1211,13 @@ export default function ArticleResult() {
         updates:        agent.diff    || [],
         sources:        agent.sources || [],
         finishedAt:     new Date().toISOString(),
+        ...lastMod,
       }));
+      // Persiste le HTML final + la trace de modification côté base (non bloquant :
+      // l'autosave throttlé peut ne pas avoir eu le temps de pousser les derniers changements)
+      if (firebaseReady && finalHtml) {
+        updateArticleHtml(agent.currentArticleId, finalHtml, lastMod).catch(() => {});
+      }
       dispatch(resetAgent());
       toast.success('Article archivé dans l\'historique !', { icon: <CheckCircle2 size={18} className="text-green-600" /> });
       navigate('/historique');
@@ -1203,6 +1287,7 @@ export default function ArticleResult() {
     if (articleRef.current) {
       lockMedia(articleRef.current);
       contentRef.current = articleRef.current.innerHTML;
+      humanEditRef.current = true;
       triggerAutosave();
     }
     setSegHover(null);
@@ -1233,16 +1318,22 @@ export default function ArticleResult() {
   //   • qa = null  → barre du BLOC (↑↓ section, copier, couper, supprimer) sur le titre
   //   • qa ≠ null  → barre de la Q/R survolée (↑↓ réordonner, ➕ ajouter, 🗑 supprimer)
   const [faqHover, setFaqHover] = useState(null);
-  const faqClipRef = useRef('');                          // HTML FAQ coupé/copié (presse-papiers interne)
-  const [faqClipboard, setFaqClipboard] = useState(null); // 'couper' | 'copier' | null → bandeau « Coller »
+
+  // ── Presse-papiers interne de BLOCS (FAQ, tableau, titre, image, liste…) ────
+  // blockClipRef = { html, meta } — contenu coupé/copié · blockClipboard =
+  // { mode:'couper'|'copier', name, art, fem } | null → snackbar + boutons
+  // « Coller » (clic droit BubbleToolbar, panneau Structure : avant/après).
+  const blockClipRef = useRef(null);
+  const [blockClipboard, setBlockClipboard] = useState(null);
 
   // Resynchronisation après une manipulation DOM externe (navigateur de
-  // structure, barres FAQ…) : lockMedia + contentRef + autosave (qui empile
-  // aussi l'instantané undo/redo via commitHistory).
+  // structure, barres FAQ/blocs…) : lockMedia + contentRef + autosave (qui
+  // empile aussi l'instantané undo/redo via commitHistory).
   const afterDomEdit = useCallback(() => {
     if (articleRef.current) {
       lockMedia(articleRef.current);
       contentRef.current = articleRef.current.innerHTML;
+      humanEditRef.current = true;
       triggerAutosave();
     }
   }, [lockMedia, triggerAutosave]);
@@ -1289,11 +1380,14 @@ export default function ArticleResult() {
     fn(container, block);
   }, []);
 
+  // Copier/couper la FAQ ENTIÈRE (barre au survol du titre FAQ) → presse-papiers
+  // de blocs commun (mêmes boutons « Coller » que les autres blocs).
   const faqCopyOrCut = useCallback((cut) => {
     withFaqBlock((container, block) => {
-      faqClipRef.current = serializeFaqBlock(block);
+      const meta = { name: 'FAQ', art: 'la FAQ', fem: true };
+      blockClipRef.current = { html: serializeFaqBlock(block), meta };
       if (cut) removeFaqBlock(block);
-      setFaqClipboard(cut ? 'couper' : 'copier');
+      setBlockClipboard({ mode: cut ? 'couper' : 'copier', ...meta });
       afterFaqEdit();
       toast.success(
         `FAQ ${cut ? 'coupée' : 'copiée'} — faites un CLIC DROIT à l'endroit voulu puis « Coller la FAQ »`,
@@ -1302,20 +1396,55 @@ export default function ArticleResult() {
     });
   }, [withFaqBlock, afterFaqEdit]);
 
-  const faqPaste = useCallback(() => {
-    if (!faqClipRef.current || !articleRef.current) return;
-    const first = insertFaqHtmlAtCaret(articleRef.current, faqClipRef.current);
+  // Copier/couper N'IMPORTE QUEL bloc (élément top-level : tableau, titre,
+  // paragraphe, image…) — depuis le panneau Structure ou le clic droit.
+  const blockClipFromEl = useCallback((el, cut) => {
+    if (!el || !articleRef.current || el.parentNode !== articleRef.current) {
+      toast.error('Aucun bloc identifié à cet endroit');
+      return;
+    }
+    const meta = blockMeta(el);
+    blockClipRef.current = { html: el.outerHTML, meta };
+    if (cut) el.remove();
+    setBlockClipboard({ mode: cut ? 'couper' : 'copier', ...meta });
+    if (cut) afterFaqEdit(); else setFaqHover(null);
+    toast.success(
+      `${meta.name} ${accord(meta, cut ? 'coupé' : 'copié')} — CLIC DROIT à l'endroit voulu puis « Coller ${meta.art} »`,
+      { duration: 6000 },
+    );
+  }, [afterFaqEdit]);
+
+  // Variante BubbleToolbar : résout le bloc au point du clic droit (range
+  // sauvegardé), sinon à la sélection courante.
+  const blockClipFromRange = useCallback((range, cut) => {
+    const container = articleRef.current;
+    if (!container) return;
+    let el = null;
+    try { el = blockAtRange(container, range); } catch { el = null; }
+    if (!el) {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount) { try { el = blockAtRange(container, sel.getRangeAt(0)); } catch {} }
+    }
+    blockClipFromEl(el, cut);
+  }, [blockClipFromEl]);
+
+  // Colle le presse-papiers au CARET courant (bloc top-level le plus proche),
+  // sinon en fin d'article.
+  const blockPaste = useCallback(() => {
+    const clip = blockClipRef.current;
+    if (!clip?.html || !articleRef.current) return;
+    const first = insertFaqHtmlAtCaret(articleRef.current, clip.html);
     if (!first) { toast.error('Collage impossible'); return; }
-    setFaqClipboard(null);
+    setBlockClipboard(null);
     afterFaqEdit();
     scrollToFaqNode(first);
-    toast.success('FAQ collée');
+    toast.success(`${clip.meta.name} ${accord(clip.meta, 'collé')}`);
   }, [afterFaqEdit, scrollToFaqNode]);
 
   // Collage au point du CLIC DROIT : la barre d'outils (BubbleToolbar) fournit
   // la sélection sauvegardée au moment du clic droit → on la restaure puis on
   // colle. Repli : caret courant / fin d'article si le range est périmé.
-  const pasteFaqAtRange = useCallback((range) => {
+  const pasteBlockAtRange = useCallback((range) => {
     try {
       if (range && articleRef.current && articleRef.current.contains(range.startContainer)) {
         const sel = window.getSelection();
@@ -1323,8 +1452,21 @@ export default function ArticleResult() {
         sel.addRange(range);
       }
     } catch { /* range périmé — collage au caret courant */ }
-    faqPaste();
-  }, [faqPaste]);
+    blockPaste();
+  }, [blockPaste]);
+
+  // Collage AVANT/APRÈS un bloc précis — menu contextuel du panneau Structure.
+  const pasteBlockRelative = useCallback((refEl, where) => {
+    const clip = blockClipRef.current;
+    const container = articleRef.current;
+    if (!clip?.html || !container) return;
+    const first = insertBlockHtml(container, clip.html, refEl, where);
+    if (!first) { toast.error('Collage impossible'); return; }
+    setBlockClipboard(null);
+    afterFaqEdit();
+    scrollToFaqNode(first);
+    toast.success(`${clip.meta.name} ${accord(clip.meta, 'collé')} ${where === 'before' ? 'avant' : 'après'} le bloc`);
+  }, [afterFaqEdit, scrollToFaqNode]);
 
   const faqMoveBlock = useCallback((dir) => {
     withFaqBlock((container, block) => {
@@ -1730,6 +1872,12 @@ export default function ArticleResult() {
       tmp.querySelectorAll('figure[data-featured]').forEach(f => f.remove());
       htmlContent = tmp.innerHTML;
     }
+
+    // ── Tableaux responsives sur le site WordPress ───────────────────────────────
+    // Filet de publication (idempotent) : chaque <table> part enveloppée dans un
+    // conteneur à défilement horizontal (styles inline, indépendants du thème) —
+    // un tableau large ne casse plus l'affichage mobile du site.
+    htmlContent = makeTablesResponsive(htmlContent);
 
     // ── Tag auteur (champ caché) ─────────────────────────────────────────────────
     // Signe la MAJ avec l'auteur courant via un commentaire HTML : invisible pour le
@@ -2858,8 +3006,9 @@ export default function ArticleResult() {
             articleEl={articleEl}
             contentRef={contentRef}
             siteFonts={resolvedSiteFonts}
-            faqClipboard={!!faqClipboard}
-            onPasteFaq={pasteFaqAtRange}
+            clipboard={blockClipboard ? { art: blockClipboard.art } : null}
+            onPasteBlock={pasteBlockAtRange}
+            onCopyBlock={blockClipFromRange}
             onUploadMedia={resolvedSite ? uploadMediaToWp : undefined}
             onImageInserted={settings.anthropicKey ? (url) => {
               generateAltText(url, settings.anthropicKey).then(altText => {
@@ -2877,7 +3026,16 @@ export default function ArticleResult() {
         {/* Barre contextuelle d'édition de tableaux (vue diff) */}
         {diffMode && <TableToolbar articleEl={articleEl} contentRef={contentRef} />}
         {/* Navigateur de structure du document (façon Gutenberg) — vue diff */}
-        {diffMode && <DocNavigator articleEl={articleEl} onEdited={afterDomEdit} />}
+        {diffMode && (
+          <DocNavigator
+            articleEl={articleEl}
+            onEdited={afterDomEdit}
+            clipboard={blockClipboard ? { name: blockClipboard.name, art: blockClipboard.art } : null}
+            onCopyBlock={(el) => blockClipFromEl(el, false)}
+            onCutBlock={(el) => blockClipFromEl(el, true)}
+            onPasteRelative={pasteBlockRelative}
+          />
+        )}
       </div>
 
       {/* ── Détail des modifications ── */}
@@ -3173,35 +3331,80 @@ export default function ArticleResult() {
         document.body,
       )}
 
-      {/* ── Snackbar « Coller la FAQ ici » après un couper/copier du bloc FAQ ──────
+      {/* ── Snackbar « Coller … ici » après un couper/copier d'un bloc ─────────────
           En position FIXE bas-centre de l'écran (portal) : toujours visible quel
           que soit le scroll — un sticky dans le flux restait hors écran quand on
-          était scrollé au niveau de la FAQ. */}
-      {faqClipboard && diffMode && hasContent && createPortal(
+          était scrollé au niveau du bloc. */}
+      {blockClipboard && diffMode && hasContent && createPortal(
         <div
           style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 402 }}
           className="flex items-center gap-2.5 rounded-2xl border-2 border-indigo-300 bg-white px-4 py-2.5 shadow-[0_10px_40px_rgba(0,0,0,0.25)] max-w-[92vw]"
         >
           <Info size={16} className="text-indigo-600 shrink-0" />
           <p className="text-xs text-indigo-900 flex-1 min-w-0">
-            <span className="font-semibold">FAQ {faqClipboard === 'couper' ? 'coupée' : 'copiée'}.</span>
-            {' '}<span className="font-semibold">Clic droit</span> à l'endroit voulu → « Coller la FAQ » — ou posez le curseur et utilisez ce bouton :
+            <span className="font-semibold">
+              {blockClipboard.name} {accord(blockClipboard, blockClipboard.mode === 'couper' ? 'coupé' : 'copié')}.
+            </span>
+            {' '}<span className="font-semibold">Clic droit</span> à l'endroit voulu → « Coller {blockClipboard.art} » — aussi via le panneau <span className="font-semibold">Structure</span> (clic droit sur un bloc : coller avant/après) — ou posez le curseur et utilisez ce bouton :
           </p>
           <button
             type="button"
-            onMouseDown={(e) => { e.preventDefault(); faqPaste(); }}
+            onMouseDown={(e) => { e.preventDefault(); blockPaste(); }}
             className="shrink-0 px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors shadow-sm"
           >
-            Coller la FAQ ici
+            Coller ici
           </button>
           <button
             type="button"
-            onClick={() => setFaqClipboard(null)}
+            onClick={() => setBlockClipboard(null)}
             title="Fermer (un couper reste annulable avec Ctrl+Z)"
             className="shrink-0 p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-400 hover:text-indigo-600 transition-colors"
           >
             <X size={15} />
           </button>
+        </div>,
+        document.body,
+      )}
+
+      {/* ── Écran de verrouillage : un AUTRE membre édite cet article ──────────────
+          (façon WordPress) — bloque tout l'écran ; « Prendre la main » force le
+          verrou pour soi, l'autre membre voit cet écran à son tour en temps réel. */}
+      {editLockedBy && hasContent && createPortal(
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 600 }}
+          className="bg-gray-900/50 backdrop-blur-[3px] flex items-center justify-center p-6"
+        >
+          <div className="bg-white rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,0.35)] max-w-md w-full p-7 text-center">
+            <div className="mx-auto w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center mb-4">
+              <Lock size={22} className="text-amber-500" />
+            </div>
+            <h3 className="text-base font-bold text-gray-900">Article en cours de modification</h3>
+            <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+              <span className="font-semibold text-gray-800">{editLockedBy.name || 'Un autre membre'}</span>{' '}
+              travaille actuellement sur cet article. L'accès est verrouillé pour éviter
+              d'écraser ses modifications.
+            </p>
+            <div className="flex items-center justify-center gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => navigate('/historique')}
+                className="px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                Retour à l'historique
+              </button>
+              <button
+                type="button"
+                onClick={() => takeOverRef.current?.()}
+                className="px-4 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600 transition-colors shadow-sm"
+                title="Récupérer le verrou d'édition sur cet article"
+              >
+                Prendre la main
+              </button>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-4">
+              « Prendre la main » verrouille l'article pour vous — {editLockedBy.name || 'l\'autre membre'} verra cet écran à son tour.
+            </p>
+          </div>
         </div>,
         document.body,
       )}

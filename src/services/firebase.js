@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, initializeFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query, onSnapshot, where, limit, increment, arrayUnion } from 'firebase/firestore';
+import { getFirestore, initializeFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query, onSnapshot, where, limit, increment, arrayUnion, deleteField } from 'firebase/firestore';
 import { getStorage, ref as storageRef, uploadString, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { getAuth, signInWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
 
@@ -198,18 +198,88 @@ export const saveArticle = async (article) => {
 // Mise à jour légère d'un article existant : re-upload uniquement updated.html.
 // Appelée par l'autosave (throttlé ≥12 s via le remote draft) — évite de
 // re-uploader l'originalContent inchangé à chaque keystroke.
-export const updateArticleHtml = async (articleId, updatedContent) => {
+// editorMeta (optionnel) : { lastModifiedAt, lastModifiedBy } — trace de la
+// DERNIÈRE MODIFICATION HUMAINE (affichée + triée dans l'Historique). Non
+// renseignée pour les synchronisations automatiques (fin d'analyse).
+export const updateArticleHtml = async (articleId, updatedContent, editorMeta = null) => {
   if (!db || !articleId || !updatedContent) return;
   const docRef = doc(db, 'articles', articleId);
   let updatedContentUrl = null;
   try { updatedContentUrl = await uploadHtml(`articles/${articleId}/updated.html`, updatedContent); } catch {}
   const patch = { updatedAt: Date.now() };
+  if (editorMeta?.lastModifiedAt) {
+    patch.lastModifiedAt = editorMeta.lastModifiedAt;
+    patch.lastModifiedBy = editorMeta.lastModifiedBy || '';
+  }
   if (updatedContentUrl) {
     patch.updatedContentUrl = updatedContentUrl;
   } else if (updatedContent.length <= 800_000) {
     patch.updatedContent = updatedContent;
   }
   await updateDoc(docRef, patch);
+};
+
+// ── Verrou d'édition collaboratif (façon WordPress « Prendre la main ») ──────
+// Champ editingLock { uid, name, since, heartbeat } sur articles/{id}.
+// Un verrou est ACTIF si son heartbeat date de moins de LOCK_STALE_MS : une
+// session fermée brutalement (crash, onglet tué) expire donc toute seule —
+// personne ne reste bloqué. Verrouillage APPLICATIF (les règles Firestore
+// autorisent déjà l'écriture articles à tout membre authentifié).
+export const LOCK_STALE_MS = 90_000;     // périmé après 3 heartbeats manqués
+export const LOCK_HEARTBEAT_MS = 30_000; // battement pendant l'édition
+
+export const isLockActive = (lock) =>
+  !!(lock && lock.uid && Date.now() - (lock.heartbeat || 0) < LOCK_STALE_MS);
+
+// Tente de prendre le verrou. → { ok:true } si obtenu (libre, périmé, déjà à
+// moi, ou force=true « Prendre la main ») · { ok:false, lock } si un AUTRE
+// membre édite. Ne crée jamais le document (article pas encore archivé →
+// rien à verrouiller, l'acquisition sera retentée via watchEditLock).
+export const acquireEditLock = async (articleId, { uid, name }, { force = false } = {}) => {
+  if (!db || !articleId || !uid) return { ok: true, offline: true };
+  const ref = doc(db, 'articles', articleId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return { ok: true, missing: true };
+  const lock = snap.data().editingLock || null;
+  if (isLockActive(lock) && lock.uid !== uid && !force) return { ok: false, lock };
+  const since = isLockActive(lock) && lock.uid === uid ? (lock.since || Date.now()) : Date.now();
+  await updateDoc(ref, { editingLock: { uid, name: name || '', since, heartbeat: Date.now() } });
+  return { ok: true };
+};
+
+// Prolonge le verrou si (et seulement si) il m'appartient encore — ne JAMAIS
+// écraser le verrou d'un membre qui a pris la main entre-temps.
+export const heartbeatEditLock = async (articleId, uid) => {
+  if (!db || !articleId || !uid) return;
+  const ref = doc(db, 'articles', articleId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const lock = snap.data().editingLock;
+  if (!lock || lock.uid !== uid) return;
+  await updateDoc(ref, { 'editingLock.heartbeat': Date.now() });
+};
+
+// Libère le verrou s'il m'appartient (fermeture propre de l'éditeur).
+export const releaseEditLock = async (articleId, uid) => {
+  if (!db || !articleId || !uid) return;
+  try {
+    const ref = doc(db, 'articles', articleId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    const lock = snap.data().editingLock;
+    if (!lock || lock.uid !== uid) return;
+    await updateDoc(ref, { editingLock: deleteField() });
+  } catch { /* best-effort */ }
+};
+
+// Observe le verrou en temps réel. Retourne la fonction de désabonnement.
+export const watchEditLock = (articleId, callback) => {
+  if (!db || !articleId) return () => {};
+  return onSnapshot(
+    doc(db, 'articles', articleId),
+    (snap) => callback(snap.exists() ? (snap.data().editingLock || null) : null),
+    () => {},
+  );
 };
 
 export const deleteArticle = async (id) => {
