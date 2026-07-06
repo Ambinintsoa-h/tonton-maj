@@ -71,6 +71,20 @@ export const isInsideFaq = (block, target) =>
 //   - 'details'  : chaque <details><summary>Q</summary>…réponse…</details>
 //   - 'section'  : chaque .schema-faq-section (Yoast)
 //   - 'heading'  : heading hN (niveau min > titre FAQ) + frères jusqu'au hN suivant
+//   - 'pb'       : <p><b>Question ?</b></p> suivi de <p> de réponse (ancien format WP)
+
+// <p> dont le contenu est essentiellement un <b>/<strong> se terminant par « ? »
+// → question de FAQ à l'ancien format. Le ratio évite de confondre avec un simple
+// passage en gras au début d'une réponse.
+const isQuestionParagraph = (el) => {
+  if (!el || el.nodeType !== Node.ELEMENT_NODE || el.tagName !== 'P') return false;
+  const first = el.firstElementChild;
+  if (!first || !['B', 'STRONG'].includes(first.tagName)) return false;
+  const pText = (el.textContent || '').trim();
+  const bText = (first.textContent || '').trim();
+  if (!bText.endsWith('?')) return false;
+  return bText.length >= pText.length * 0.5;
+};
 
 /** Nœuds internes du bloc : frères après le titre (kind heading) ou enfants du root. */
 const faqScope = (block) =>
@@ -102,20 +116,37 @@ export const getQAGroups = (block) => {
   // Format headings : niveau de question = plus petit niveau strictement > titre FAQ
   const titleLevel = block.level || 2;
   const qLevels = elems.map(headingLevel).filter(l => l && l > titleLevel);
-  if (!qLevels.length) return { format: null, groups: [] };
-  const qLevel = Math.min(...qLevels);
-
-  const groups = [];
-  let current = null;
-  for (const n of scope) {
-    if (headingLevel(n) === qLevel) {
-      current = { nodes: [n], question: n };
-      groups.push(current);
-    } else if (current) {
-      current.nodes.push(n);
+  if (qLevels.length) {
+    const qLevel = Math.min(...qLevels);
+    const groups = [];
+    let current = null;
+    for (const n of scope) {
+      if (headingLevel(n) === qLevel) {
+        current = { nodes: [n], question: n };
+        groups.push(current);
+      } else if (current) {
+        current.nodes.push(n);
+      }
     }
+    return { format: 'heading', groups, qLevel };
   }
-  return { format: 'heading', groups, qLevel };
+
+  // Ancien format WP : <p><b>Question ?</b></p><br><p>réponse…</p>
+  if (elems.some(isQuestionParagraph)) {
+    const groups = [];
+    let current = null;
+    for (const n of scope) {
+      if (isQuestionParagraph(n)) {
+        current = { nodes: [n], question: n.querySelector('b, strong') };
+        groups.push(current);
+      } else if (current) {
+        current.nodes.push(n); // <br> séparateurs inclus → déplacés/supprimés avec le groupe
+      }
+    }
+    return { format: 'pb', groups };
+  }
+
+  return { format: null, groups: [] };
 };
 
 /** Groupe Q/R contenant `target` (index dans groups), ou -1. */
@@ -202,6 +233,15 @@ export const insertQAAfter = (block, qa, index) => {
     p.textContent = NEW_ANSWER_TEXT;
     nodes = [h, p];
     questionEl = h;
+  } else if (format === 'pb') {
+    const q = doc.createElement('p');
+    const b = doc.createElement('b');
+    b.textContent = NEW_QUESTION_TEXT;
+    q.appendChild(b);
+    const p = doc.createElement('p');
+    p.textContent = NEW_ANSWER_TEXT;
+    nodes = [q, p];
+    questionEl = b;
   } else {
     return null;
   }
@@ -315,6 +355,108 @@ export const insertFaqHtmlAtCaret = (container, html) => {
     nodes.forEach(n => container.appendChild(n));
   }
   return nodes.find(n => n.nodeType === Node.ELEMENT_NODE) || nodes[0];
+};
+
+// ── Normalisation de la FAQ au format accordéon ───────────────────────────────
+// Convertit N'IMPORTE QUEL format de FAQ détecté (h3/p, <p><b>Q</b></p> + <br>,
+// .schema-faq-section Yoast) vers le format canonique :
+//   <h2>Titre FAQ</h2><details><summary>Q</summary><p>A</p></details>…
+// Appelée après moveFaqToEnd à CHAQUE analyse (passe 1 et 2, les deux flux) →
+// toutes les FAQ, anciennes comme nouvelles, ont la même structure dans
+// l'éditeur (barres de manipulation) et à la publication WordPress.
+// Les marques de diff (<ins>/<mark>) à l'intérieur des Q/R sont préservées
+// (on déplace les innerHTML, pas les textContent).
+export const normalizeFaqToAccordion = (html) => {
+  if (!html || typeof document === 'undefined') return html;
+  const container = document.createElement('div');
+  container.innerHTML = html;
+  const block = findFaqBlock(container);
+  if (!block) return html;
+
+  const qa = getQAGroups(block);
+
+  // Déjà en accordéon : on retire juste les <br> séparateurs parasites du scope
+  if (qa.format === 'details') {
+    let cleaned = 0;
+    const scope = block.kind === 'container' ? Array.from(block.root.childNodes) : block.nodes;
+    for (const n of scope) {
+      if (n.nodeType === Node.ELEMENT_NODE && n.tagName === 'BR') { n.remove(); cleaned++; }
+    }
+    return cleaned ? container.innerHTML : html;
+  }
+
+  if (!qa.groups.length) return html;
+
+  // Construit un <details> à partir d'un groupe Q/R (contenu déplacé, pas cloné —
+  // le container est détaché, les marques de diff restent intactes)
+  const buildDetails = (g) => {
+    const d = document.createElement('details');
+    const s = document.createElement('summary');
+    d.appendChild(s);
+
+    let answers = [];
+    if (qa.format === 'heading') {
+      s.innerHTML = g.question.innerHTML;
+      answers = g.nodes.slice(1);
+    } else if (qa.format === 'pb') {
+      s.innerHTML = g.question.innerHTML;      // contenu du <b> (sans le gras)
+      // Reste éventuel du <p> question après le <b> → début de réponse
+      const rest = document.createElement('p');
+      let n = g.question.nextSibling;
+      while (n) { const next = n.nextSibling; rest.appendChild(n); n = next; }
+      if ((rest.textContent || '').trim()) answers.push(rest);
+      answers.push(...g.nodes.slice(1));
+    } else if (qa.format === 'section') {
+      s.innerHTML = g.question.innerHTML;
+      answers = Array.from(g.nodes[0].children).filter(c => c !== g.question);
+    }
+
+    if (!(s.textContent || '').trim()) return null;   // question vide → groupe ignoré
+
+    for (const a of answers) {
+      if (a.nodeType === Node.TEXT_NODE) {
+        if ((a.textContent || '').trim()) {
+          const p = document.createElement('p');
+          p.textContent = a.textContent.trim();
+          d.appendChild(p);
+        }
+        continue;
+      }
+      if (a.nodeType !== Node.ELEMENT_NODE) continue;
+      if (a.tagName === 'BR') continue;                // séparateurs de l'ancien format
+      d.appendChild(a);
+    }
+    // Réponse totalement vide → conserver quand même la question (réponse à rédiger)
+    if (d.children.length === 1) {
+      const p = document.createElement('p');
+      p.textContent = '';
+      d.appendChild(p);
+    }
+    return d;
+  };
+
+  const detailsList = qa.groups.map(buildDetails).filter(Boolean);
+  if (!detailsList.length) return html;
+
+  if (block.kind === 'heading') {
+    // Retirer les nœuds du bloc restés au niveau racine (les réponses ont été
+    // DÉPLACÉES dans les <details> — leur parent n'est plus le container, on
+    // ne doit surtout pas les retirer des accordéons). Le titre est conservé.
+    const title = block.heading;
+    for (const n of block.nodes) {
+      if (n !== title && n.parentNode === container) container.removeChild(n);
+    }
+    let ref = title.nextSibling;
+    for (const d of detailsList) container.insertBefore(d, ref);
+  } else {
+    // Conteneur (div.faq…) : titre conservé, contenu remplacé par les <details>
+    const root = block.root;
+    const title = block.heading;
+    while (root.firstChild) root.removeChild(root.firstChild);
+    if (title) root.appendChild(title);
+    for (const d of detailsList) root.appendChild(d);
+  }
+  return container.innerHTML;
 };
 
 /** Rect union (viewport) des nœuds éléments d'une liste — pour positionner les toolbars. */

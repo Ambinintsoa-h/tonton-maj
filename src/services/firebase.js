@@ -167,6 +167,21 @@ export const saveArticle = async (article) => {
         : (updatedContent  && !updTooLarge)  ? { updatedContent  } : {}),
   };
 
+  // Filet limite Firestore (1 Mo/document) : sur les gros articles, updates/audit/
+  // analysis peuvent dépasser la limite → l'écriture ENTIÈRE échouait (et l'archivage
+  // automatique de fin d'analyse avec). On retire les champs les plus lourds du
+  // DOCUMENT UNIQUEMENT (Redux/localStorage conservent tout), un par un.
+  const MAX_DOC_CHARS = 800_000;
+  for (const heavy of ['updates', 'audit', 'analysis', 'originalContent', 'updatedContent']) {
+    let size;
+    try { size = JSON.stringify(firestoreData).length; } catch { break; }
+    if (size <= MAX_DOC_CHARS) break;
+    if (heavy in firestoreData) {
+      console.warn(`[firebase] articles/${docId} dépasse ~1 Mo — champ "${heavy}" exclu du document Firestore`);
+      delete firestoreData[heavy];
+    }
+  }
+
   if (article.id) {
     // setDoc merge (upsert) plutôt qu'updateDoc : crée le doc s'il n'existe pas encore
     // (cas flux CQ où l'id vient du pending et n'a jamais été écrit en base — updateDoc

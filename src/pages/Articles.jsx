@@ -16,6 +16,7 @@ import tracker from '../services/activityTracker';
 import AgentThinking from '../components/agent/AgentThinking';
 import ArticleResult from '../components/agent/ArticleResult';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
+import { normalizeFaqToAccordion } from '../utils/faq';
 
 const TAB_URL = 'url';
 const TAB_TEXT = 'text';
@@ -213,7 +214,9 @@ export default function Articles() {
       //   - HTML pauvre (Readability sans <p>) → conversion pour éviter le mur de texte
       const hasBlockStructure = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(rawHtml);
       const baseHtml    = hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>');
-      const updatedHtml = moveFaqToEnd(baseHtml);
+      // FAQ : déplacée en fin d'article PUIS normalisée au format accordéon
+      // (<details>/<summary>) quel que soit son format d'origine (h3/p, <p><b>Q</b>, Yoast…)
+      const updatedHtml = normalizeFaqToAccordion(moveFaqToEnd(baseHtml));
 
       const appliedUpdates = allUpdatesWithStatus.filter(u => u.applied);
       dispatch(setUpdatedContent(updatedHtml));
