@@ -74,4 +74,28 @@ describe('getQAGroups — détection dans l’éditeur', () => {
     expect(qa.format).toBe('details');
     expect(qa.groups.length).toBe(2);
   });
+
+  test('stratégie 3 : titre SANS mot-clé « faq » + suite de <details> → bloc détecté avec son titre', () => {
+    const c = document.createElement('div');
+    c.innerHTML = `<p>Corps</p><h2>Les questions des lecteurs</h2><details><summary>Q1 ?</summary><p>A1</p></details><details><summary>Q2 ?</summary><p>A2</p></details>`;
+    const block = findFaqBlock(c);
+    expect(block).not.toBeNull();
+    // Le titre (texte libre) fait partie du bloc → sélectionnable/coupable avec la FAQ
+    expect(block.heading?.textContent).toBe('Les questions des lecteurs');
+    expect(block.nodes.length).toBe(3);
+    const qa = getQAGroups(block);
+    expect(qa.format).toBe('details');
+    expect(qa.groups.length).toBe(2);
+  });
+
+  test('stratégie 3 : <details> sans titre (FAQ décapitée) → bloc détecté, toutes les questions', () => {
+    const c = document.createElement('div');
+    c.innerHTML = `<p>Intro</p><details><summary>Q1 ?</summary><p>A1</p></details><details><summary>Q2 ?</summary><p>A2</p></details>`;
+    const block = findFaqBlock(c);
+    expect(block).not.toBeNull();
+    expect(block.heading).toBeNull();
+    const qa = getQAGroups(block);
+    expect(qa.format).toBe('details');
+    expect(qa.groups.length).toBe(2); // slice(0) : la 1re question n'est pas avalée comme « titre »
+  });
 });

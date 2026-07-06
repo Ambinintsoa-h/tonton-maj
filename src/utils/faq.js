@@ -4,6 +4,9 @@
 // Les heuristiques de détection sont alignées sur moveFaqToEnd (utils/diff.js) :
 //   1. enfant direct avec classe/id contenant "faq"
 //   2. heading direct h1-h4 contenant "faq" / "questions fréquentes" / "foire aux questions"
+//   3. suite d'accordéons <details> top-level (FAQ normalisée dont le titre ne
+//      contient pas les mots-clés — reformulé par l'agent — ou a été coupé) ;
+//      le heading immédiatement précédent, quel que soit son texte, sert de titre
 
 const isFaqTitle = (text) => {
   const t = (text || '').toLowerCase().trim();
@@ -58,6 +61,29 @@ export const findFaqBlock = (container) => {
     return { kind: 'heading', nodes, root: null, heading: h, level };
   }
 
+  // Stratégie 3 : suite de <details> top-level consécutifs (format accordéon
+  // normalisé). Sans elle, une FAQ dont le titre ne matche pas les mots-clés
+  // (ou dont le titre a été coupé/déplacé) devenait insélectionnable : plus de
+  // barre au survol, plus de couper/copier/coller du bloc.
+  {
+    const kids = Array.from(container.children);
+    const firstIdx = kids.findIndex(el => el.tagName === 'DETAILS');
+    if (firstIdx !== -1) {
+      const nodes = [];
+      // Titre = heading (h1-h4) immédiatement AVANT la première question — texte libre
+      const prev = kids[firstIdx - 1];
+      const heading = prev && headingLevel(prev) && headingLevel(prev) <= 4 ? prev : null;
+      if (heading) nodes.push(heading);
+      // Collecte de la suite de <details> (tolère les <br> intercalés)
+      for (let i = firstIdx; i < kids.length; i++) {
+        if (kids[i].tagName === 'DETAILS' || kids[i].tagName === 'BR') nodes.push(kids[i]);
+        else break;
+      }
+      while (nodes.length && nodes[nodes.length - 1].tagName === 'BR') nodes.pop();
+      return { kind: 'heading', nodes, root: null, heading, level: headingLevel(heading) || 2 };
+    }
+  }
+
   return null;
 };
 
@@ -86,9 +112,12 @@ const isQuestionParagraph = (el) => {
   return bText.length >= pText.length * 0.5;
 };
 
-/** Nœuds internes du bloc : frères après le titre (kind heading) ou enfants du root. */
+/** Nœuds internes du bloc : frères après le titre (kind heading) ou enfants du root.
+ *  Un bloc sans titre (stratégie 3, FAQ décapitée) garde TOUS ses nœuds. */
 const faqScope = (block) =>
-  block.kind === 'container' ? Array.from(block.root.childNodes) : block.nodes.slice(1);
+  block.kind === 'container'
+    ? Array.from(block.root.childNodes)
+    : block.nodes.slice(block.heading ? 1 : 0);
 
 export const getQAGroups = (block) => {
   if (!block) return { format: null, groups: [] };

@@ -125,17 +125,49 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
     return () => { mo.disconnect(); clearTimeout(debounceRef.current); };
   }, [open, articleEl, refresh]);
 
-  // ── Scroll doux + flash (même technique que jumpToChange — pas de
-  //    scrollIntoView, bug Chrome sur contentEditable) ────────────────────────
+  // ── Navigation « ancre » (table des matières) : scroll doux + flash ─────────
+  // Deux niveaux de défilement, calculés AVANT de scroller (pas de course entre
+  // les deux animations) :
+  //   1. l'ÉDITEUR (scroll interne du contentEditable) → le bloc au tiers haut ;
+  //   2. la PAGE (ancêtre défilant, <main> du layout) → la zone où le bloc va
+  //      atterrir est amenée dans le viewport. Sans ce 2e niveau, quand
+  //      l'éditeur n'était que partiellement visible à l'écran, le clic semblait
+  //      ne rien faire : le contenu bougeait hors du viewport.
+  // (Pas de scrollIntoView : bug Chrome sur contentEditable — même technique
+  // que jumpToChange.)
   const scrollToEl = useCallback((el) => {
     if (!articleEl || !el) return;
-    const relativeTop = el.getBoundingClientRect().top
-      - articleEl.getBoundingClientRect().top
-      + articleEl.scrollTop;
-    articleEl.scrollTo({ top: Math.max(0, relativeTop - articleEl.clientHeight / 3), behavior: 'smooth' });
+    const containerRect = articleEl.getBoundingClientRect();
+    const relativeTop = el.getBoundingClientRect().top - containerRect.top + articleEl.scrollTop;
+
+    // 1. Scroll interne de l'éditeur (borné à sa plage réelle)
+    const innerMax = Math.max(0, articleEl.scrollHeight - articleEl.clientHeight);
+    const innerTarget = Math.min(innerMax, Math.max(0, relativeTop - articleEl.clientHeight / 3));
+    if (innerMax > 0) articleEl.scrollTo({ top: innerTarget, behavior: 'smooth' });
+
+    // 2. Scroll de la page : position (viewport) où le bloc va atterrir une fois
+    //    le scroll interne terminé → si hors de la zone confortable, on amène
+    //    cette position au quart haut de l'écran.
+    const scroller = (() => {
+      let p = articleEl.parentElement;
+      while (p) {
+        const s = getComputedStyle(p);
+        if (/(auto|scroll)/.test(s.overflowY) && p.scrollHeight > p.clientHeight + 1) return p;
+        p = p.parentElement;
+      }
+      return null;
+    })();
+    if (scroller) {
+      const futureElViewportY = containerRect.top + (relativeTop - innerTarget);
+      const viewH = window.innerHeight || document.documentElement.clientHeight;
+      if (futureElViewportY < 90 || futureElViewportY > viewH - 160) {
+        scroller.scrollBy({ top: futureElViewportY - viewH / 4, behavior: 'smooth' });
+      }
+    }
+
     el.style.outline = '2px solid #6366f1';
     el.style.outlineOffset = '3px';
-    setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = ''; }, 900);
+    setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = ''; }, 1200);
   }, [articleEl]);
 
   const commit = useCallback(() => {
