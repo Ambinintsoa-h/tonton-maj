@@ -1296,8 +1296,8 @@ export default function ArticleResult() {
       setFaqClipboard(cut ? 'couper' : 'copier');
       afterFaqEdit();
       toast.success(
-        `FAQ ${cut ? 'coupée' : 'copiée'} — cliquez à l'endroit voulu dans l'article puis « Coller la FAQ ici »`,
-        { duration: 6000 },
+        `FAQ ${cut ? 'coupée' : 'copiée'} — faites un CLIC DROIT à l'endroit voulu puis « Coller la FAQ »`,
+        { duration: 7000 },
       );
     });
   }, [withFaqBlock, afterFaqEdit]);
@@ -1311,6 +1311,20 @@ export default function ArticleResult() {
     scrollToFaqNode(first);
     toast.success('FAQ collée');
   }, [afterFaqEdit, scrollToFaqNode]);
+
+  // Collage au point du CLIC DROIT : la barre d'outils (BubbleToolbar) fournit
+  // la sélection sauvegardée au moment du clic droit → on la restaure puis on
+  // colle. Repli : caret courant / fin d'article si le range est périmé.
+  const pasteFaqAtRange = useCallback((range) => {
+    try {
+      if (range && articleRef.current && articleRef.current.contains(range.startContainer)) {
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    } catch { /* range périmé — collage au caret courant */ }
+    faqPaste();
+  }, [faqPaste]);
 
   const faqMoveBlock = useCallback((dir) => {
     withFaqBlock((container, block) => {
@@ -2844,6 +2858,8 @@ export default function ArticleResult() {
             articleEl={articleEl}
             contentRef={contentRef}
             siteFonts={resolvedSiteFonts}
+            faqClipboard={!!faqClipboard}
+            onPasteFaq={pasteFaqAtRange}
             onUploadMedia={resolvedSite ? uploadMediaToWp : undefined}
             onImageInserted={settings.anthropicKey ? (url) => {
               generateAltText(url, settings.anthropicKey).then(altText => {
@@ -3169,7 +3185,7 @@ export default function ArticleResult() {
           <Info size={16} className="text-indigo-600 shrink-0" />
           <p className="text-xs text-indigo-900 flex-1 min-w-0">
             <span className="font-semibold">FAQ {faqClipboard === 'couper' ? 'coupée' : 'copiée'}.</span>
-            {' '}Cliquez à l'endroit voulu dans l'article, puis collez.
+            {' '}<span className="font-semibold">Clic droit</span> à l'endroit voulu → « Coller la FAQ » — ou posez le curseur et utilisez ce bouton :
           </p>
           <button
             type="button"
