@@ -31,6 +31,7 @@ import { runAgent } from '../services/agent';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
 import { normalizeFaqToAccordion } from '../utils/faq';
+import { makeTablesResponsive } from '../utils/blocks';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
 import { detectAgent } from '../constants/agents';
@@ -1121,7 +1122,8 @@ export default function MajEnAttente() {
       const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1);
       const hasBlockStructure = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(rawHtml);
       // FAQ : fin d'article + normalisation en accordéon (structure unique pour toutes les FAQ)
-      const updatedHtml = normalizeFaqToAccordion(moveFaqToEnd(hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>')));
+      // Tableaux : enveloppés dans un conteneur responsive (défilement horizontal sur mobile)
+      const updatedHtml = makeTablesResponsive(normalizeFaqToAccordion(moveFaqToEnd(hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>'))));
 
       // ── Étape 4 : Stats tokens ────────────────────────────────────────────
       const extractH1 = (html) => {

@@ -20,7 +20,7 @@ import {
   Image, Film, Code2,
   Check, X, Trash2, Upload, Loader2,
   CaseSensitive, Weight, ALargeSmall,
-  GripVertical, ClipboardPaste,
+  GripVertical, ClipboardPaste, Copy, Scissors,
 } from 'lucide-react';
 
 // Polices web-safe de repli si le site n'expose aucune police détectable
@@ -223,10 +223,15 @@ const Swatch = ({ color, label, onClick }) => (
 
 // ── Composant principal ───────────────────────────────────────────────────────
 
-// faqClipboard / onPasteFaq : quand une FAQ est copiée/coupée (presse-papiers
-// interne d'ArticleResult), la barre — qui s'ouvre au CLIC DROIT à l'endroit
-// voulu — affiche un bouton « Coller la FAQ » qui colle au point du clic.
-export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, onUploadMedia, siteFonts = [], faqClipboard = false, onPasteFaq }) {
+// Presse-papiers de BLOCS (ArticleResult) :
+//  • clipboard ({ art: 'le tableau' } | null) / onPasteBlock(range) : quand un
+//    bloc (FAQ, tableau, image, paragraphe…) est copié/coupé, la barre — qui
+//    s'ouvre au CLIC DROIT à l'endroit voulu — affiche un bouton
+//    « Coller le tableau » qui colle au point du clic.
+//  • onCopyBlock(range, cut) : boutons « Copier / Couper le bloc » qui mettent
+//    dans le presse-papiers le bloc top-level au point du clic droit (ou de la
+//    sélection courante).
+export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, onUploadMedia, siteFonts = [], clipboard = null, onPasteBlock, onCopyBlock }) {
   // Polices proposées : celles détectées sur le site, sinon repli web-safe
   const fontList = (Array.isArray(siteFonts) && siteFonts.length > 0) ? siteFonts : FALLBACK_FONTS;
   const [visible, setVisible]   = useState(false);
@@ -875,23 +880,50 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
 
         <Sep />
 
-        {/* ── Coller la FAQ au point du clic droit (presse-papiers FAQ actif) ── */}
-        {faqClipboard && onPasteFaq && (
+        {/* ── Coller le bloc au point du clic droit (presse-papiers de blocs actif) ── */}
+        {clipboard && onPasteBlock && (
           <>
             <button
               type="button"
-              title="Coller la FAQ à cet endroit"
+              title={`Coller ${clipboard.art} à cet endroit`}
               onMouseDown={(e) => {
                 e.preventDefault();
                 const range = savedRangeRef.current;   // caret posé au clic droit
                 savedRangeRef.current = null;
                 setVisible(false);
-                onPasteFaq(range);
+                onPasteBlock(range);
               }}
               className="flex items-center gap-1.5 h-9 px-2.5 rounded-lg text-[12px] font-semibold bg-indigo-500 text-white hover:bg-indigo-400 transition-colors whitespace-nowrap"
             >
-              <ClipboardPaste size={14} /> Coller la FAQ
+              <ClipboardPaste size={14} /> Coller {clipboard.art}
             </button>
+            <Sep />
+          </>
+        )}
+
+        {/* ── Copier / Couper le BLOC top-level au point du clic droit ─────────
+            (paragraphe, titre, tableau, image, liste… — coller ensuite par
+            clic droit ailleurs, ou via le panneau Structure : coller avant/après) */}
+        {onCopyBlock && (
+          <>
+            <span className="pl-0.5 pr-1 text-[9px] font-bold uppercase tracking-wider text-gray-500 select-none">Bloc</span>
+            <Btn
+              onClick={() => onCopyBlock(savedRangeRef.current, false)}
+              title="Copier le bloc entier (paragraphe, tableau, image…) — coller ensuite au clic droit"
+            >
+              <Copy size={15} />
+            </Btn>
+            <Btn
+              onClick={() => {
+                const range = savedRangeRef.current;
+                savedRangeRef.current = null;         // le bloc va disparaître → range périmé
+                setVisible(false);
+                onCopyBlock(range, true);
+              }}
+              title="Couper le bloc entier — coller ensuite au clic droit à l'endroit voulu"
+            >
+              <Scissors size={15} />
+            </Btn>
             <Sep />
           </>
         )}

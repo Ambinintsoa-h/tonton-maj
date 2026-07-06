@@ -17,6 +17,7 @@ import AgentThinking from '../components/agent/AgentThinking';
 import ArticleResult from '../components/agent/ArticleResult';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
 import { normalizeFaqToAccordion } from '../utils/faq';
+import { makeTablesResponsive } from '../utils/blocks';
 
 const TAB_URL = 'url';
 const TAB_TEXT = 'text';
@@ -218,7 +219,8 @@ export default function Articles() {
       const baseHtml    = hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>');
       // FAQ : déplacée en fin d'article PUIS normalisée au format accordéon
       // (<details>/<summary>) quel que soit son format d'origine (h3/p, <p><b>Q</b>, Yoast…)
-      const updatedHtml = normalizeFaqToAccordion(moveFaqToEnd(baseHtml));
+      // Tableaux : enveloppés dans un conteneur responsive (défilement horizontal sur mobile)
+      const updatedHtml = makeTablesResponsive(normalizeFaqToAccordion(moveFaqToEnd(baseHtml)));
 
       const appliedUpdates = allUpdatesWithStatus.filter(u => u.applied);
       dispatch(setUpdatedContent(updatedHtml));
