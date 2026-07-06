@@ -76,6 +76,22 @@ export default function DocNavigator({ articleEl, onEdited }) {
   const [dropPos, setDropPos] = useState(null); // { idx, after }
   const debounceRef = useRef(null);
 
+  // ── Visibilité limitée au bloc « Après — MAJ proposées » ──────────────────
+  // Le widget (positionné fixed) n'apparaît que quand le bloc éditeur est
+  // réellement À L'ÉCRAN : scrollé sur la Synthèse, le Détail des modifications
+  // ou les Sources → il disparaît. (Sur les onglets Audit/Avant, l'éditeur est
+  // démonté → articleEl est null → déjà masqué.)
+  const [inView, setInView] = useState(false);
+  useEffect(() => {
+    if (!articleEl) { setInView(false); return; }
+    const io = new IntersectionObserver(
+      ([entry]) => setInView(entry.isIntersecting),
+      { threshold: 0.05 },
+    );
+    io.observe(articleEl);
+    return () => io.disconnect();
+  }, [articleEl]);
+
   // ── Construction de la liste depuis les enfants top-level de l'article ─────
   const refresh = useCallback(() => {
     if (!articleEl) { setItems([]); return; }
@@ -157,7 +173,7 @@ export default function DocNavigator({ articleEl, onEdited }) {
     scrollToEl(el);
   }, [dragIdx, dropPos, items, commit, scrollToEl]);
 
-  if (!articleEl) return null;
+  if (!articleEl || !inView) return null;
 
   return createPortal(
     <>
