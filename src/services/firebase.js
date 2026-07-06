@@ -21,7 +21,15 @@ export const initFirebase = (config) => {
     try {
       // initializeFirestore lève si Firestore est déjà démarré pour cette app
       // (HMR / double-init) → on retombe alors sur l'instance existante.
-      db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+      // ignoreUndefinedProperties : Firestore REFUSE la valeur undefined (partout,
+      // y compris dans les éléments de tableaux — updates/sources générés par
+      // l'agent IA) et l'écriture ENTIÈRE échouait : « Unsupported field value:
+      // undefined » → archivage automatique de fin d'analyse en repli local.
+      // Avec cette option, undefined est traité comme « champ omis » (≈ null).
+      db = initializeFirestore(app, {
+        experimentalAutoDetectLongPolling: true,
+        ignoreUndefinedProperties: true,
+      });
     } catch {
       db = getFirestore(app);
     }
@@ -159,13 +167,22 @@ export const saveArticle = async (article) => {
   if (origTooLarge) console.warn('[firebase] originalContent trop volumineux (>800 000 chars) — exclut du fallback Firestore');
   if (updTooLarge)  console.warn('[firebase] updatedContent trop volumineux (>800 000 chars) — exclut du fallback Firestore');
 
-  const firestoreData = {
+  let firestoreData = {
     ...metadata,
     ...(originalContentUrl ? { originalContentUrl }
         : (originalContent && !origTooLarge) ? { originalContent } : {}),
     ...(updatedContentUrl  ? { updatedContentUrl  }
         : (updatedContent  && !updTooLarge)  ? { updatedContent  } : {}),
   };
+
+  // Filet anti-undefined (ceinture en plus d'ignoreUndefinedProperties, qui ne
+  // s'applique pas si l'init est retombée sur getFirestore) : le JSON round-trip
+  // supprime les propriétés undefined et convertit les éléments de tableau
+  // undefined en null — sans quoi setDoc rejette le document ENTIER et
+  // l'archivage automatique de fin d'analyse part en repli local.
+  // Sans risque ici : firestoreData ne contient que des données JSON simples
+  // (pas de sentinelles serverTimestamp/deleteField ni d'objets Date).
+  try { firestoreData = JSON.parse(JSON.stringify(firestoreData)); } catch { /* données non sérialisables — laisser setDoc trancher */ }
 
   // Filet limite Firestore (1 Mo/document) : sur les gros articles, updates/audit/
   // analysis peuvent dépasser la limite → l'écriture ENTIÈRE échouait (et l'archivage
