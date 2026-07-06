@@ -142,22 +142,26 @@ export default function ArticleResult() {
     } catch { return []; }
   }, [wpMcpData, articleUrl, wpSites]);
 
-  // Site WordPress connecté correspondant à l'article : via les données MCP, sinon
-  // par correspondance d'URL (couvre la réouverture depuis l'historique). Sert à
-  // savoir si on peut téléverser une image à la une dans la médiathèque WP.
+  // Site WordPress connecté correspondant à l'article : par correspondance d'hôte
+  // avec l'URL de l'article — SOURCE DE VÉRITÉ (couvre la réouverture depuis
+  // l'historique). Le wpData mémorisé (MCP) ne sert de repli que si l'article n'a
+  // pas d'URL : il peut être périmé (article précédent) → les médias partaient
+  // dans la médiathèque du MAUVAIS site. Sert à savoir si on peut téléverser une
+  // image à la une dans la médiathèque WP.
   const resolvedSite = useMemo(() => {
-    if (wpMcpData?.siteId) {
-      const s = wpSites.find(x => x.id === wpMcpData.siteId);
-      if (s) return s;
+    if (articleUrl) {
+      try {
+        const h = new URL(articleUrl).hostname.replace(/^www\./, '');
+        return wpSites.find(s => {
+          try { return new URL(s.url).hostname.replace(/^www\./, '') === h; }
+          catch { return false; }
+        }) || null;
+      } catch { return null; }
     }
-    if (!articleUrl) return null;
-    try {
-      const h = new URL(articleUrl).hostname.replace(/^www\./, '');
-      return wpSites.find(s => {
-        try { return new URL(s.url).hostname.replace(/^www\./, '') === h; }
-        catch { return false; }
-      }) || null;
-    } catch { return null; }
+    if (wpMcpData?.siteId) {
+      return wpSites.find(x => x.id === wpMcpData.siteId) || null;
+    }
+    return null;
   }, [wpMcpData, articleUrl, wpSites]);
 
   // Téléverse un fichier local (image OU vidéo) vers la médiathèque WP du site de
@@ -1568,13 +1572,19 @@ export default function ArticleResult() {
   // Normalise le hostname : supprime www. et met en minuscules pour comparaison robuste
   const normalizeHost = (h) => h.replace(/^www\./, '').toLowerCase();
 
-  // Site WP de l'article (un seul) : via MCP, sinon par correspondance d'hôte avec l'URL.
+  // Site WP de l'article (un seul) : par correspondance d'hôte avec l'URL de
+  // l'article — SOURCE DE VÉRITÉ. Le wpData mémorisé (MCP) ne sert de repli que
+  // si l'article n'a pas d'URL : il peut être périmé (article précédent) et
+  // pointait alors le MAUVAIS site dans le menu Publier (confusion de sites).
   // Le menu Publier ne propose QUE ce site (l'article n'appartient qu'à lui).
-  const articleSiteId = wpMcpData?.siteId || (() => {
-    try {
-      const h = normalizeHost(new URL(articleUrl).hostname);
-      return wpSites.find(s => { try { return normalizeHost(new URL(s.url).hostname) === h; } catch { return false; } })?.id || null;
-    } catch { return null; }
+  const articleSiteId = (() => {
+    if (articleUrl) {
+      try {
+        const h = normalizeHost(new URL(articleUrl).hostname);
+        return wpSites.find(s => { try { return normalizeHost(new URL(s.url).hostname) === h; } catch { return false; } })?.id || null;
+      } catch { return null; }
+    }
+    return wpMcpData?.siteId || null;
   })();
   const articleSite  = articleSiteId ? wpSites.find(s => s.id === articleSiteId) : null;
   const publishSites = articleSite ? [articleSite] : wpSites;
