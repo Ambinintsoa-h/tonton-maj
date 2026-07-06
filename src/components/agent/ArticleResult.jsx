@@ -675,10 +675,27 @@ export default function ArticleResult() {
   // barres FAQ/blocs, accepter/rejeter, navigateur de structure) — jamais sur
   // les synchronisations automatiques de fin d'analyse. editorNameRef : nom
   // affichable du membre courant (réassigné à chaque render, comme draftDataRef).
+  //
+  // openedHtmlRef = « photo » du HTML au premier enregistrement SANS édition
+  // (état d'ouverture, après lockMedia). On ne signe « modifié par X » que si le
+  // contenu DIFFÈRE réellement de cette photo : une simple CONSULTATION — clic
+  // dans le texte, correcteur orthographique, couper/coller annulé par Ctrl+Z —
+  // ne doit jamais écraser le nom du vrai dernier modificateur.
   const humanEditRef = useRef(false);
+  const openedHtmlRef = useRef(null);
   const editorNameRef = useRef('');
   editorNameRef.current = [authUser?.prenom, authUser?.nom].filter(Boolean).join(' ')
     || authUser?.username || '';
+  // Contenu réellement modifié depuis l'ouverture ? (baseline nulle + édition
+  // humaine = édité avant le premier enregistrement → vraie modification)
+  const reallyEdited = useCallback((html) =>
+    humanEditRef.current && (openedHtmlRef.current === null || html !== openedHtmlRef.current), []);
+  // Nouvel article ouvert → réinitialiser le suivi (le composant reste monté
+  // quand on enchaîne les articles : les refs ne doivent pas fuiter de l'un à l'autre)
+  useEffect(() => {
+    humanEditRef.current = false;
+    openedHtmlRef.current = null;
+  }, [agent.currentArticleId]);
 
   // ── Autosave (façon Google Docs) ───────────────────────────────────────────
   // Construit le brouillon à partir du HTML édité en direct (contentRef) + état agent.
@@ -720,6 +737,8 @@ export default function ArticleResult() {
     if (!build) return;
     const draft = build();
     saveDraft(userId, draft);
+    // Photo de référence de l'état d'ouverture (premier enregistrement sans édition)
+    if (openedHtmlRef.current === null && !humanEditRef.current) openedHtmlRef.current = draft.html;
     // Historique undo/redo du contenu : enregistre l'état (ignoré pendant une restauration)
     if (!isRestoringRef.current && commitHistoryRef.current) commitHistoryRef.current(draft.html);
     // Mettre à jour l'entrée existante dans l'historique Redux/localStorage
@@ -728,13 +747,14 @@ export default function ArticleResult() {
         id: draft.currentArticleId,
         updatedContent: draft.html,
         updatedAt: Date.now(),
-        // Dernière modification HUMAINE (affichée + triée dans l'Historique)
-        ...(humanEditRef.current
+        // Dernière modification HUMAINE (affichée + triée dans l'Historique) —
+        // uniquement si le contenu diffère vraiment de l'état d'ouverture
+        ...(reallyEdited(draft.html)
           ? { lastModifiedAt: Date.now(), lastModifiedBy: editorNameRef.current }
           : {}),
       }));
     }
-  }, [dispatch]);
+  }, [dispatch, reallyEdited]);
   const triggerAutosave = useCallback((isKeystroke = false) => {
     if (isKeystroke && ++keystrokesRef.current >= AUTOSAVE_BURST) { doSave(); return; }
     clearTimeout(autosaveTimer.current);
@@ -866,7 +886,7 @@ export default function ArticleResult() {
     const html = contentRef.current || '';
     if (!html || html === lastSyncedHtmlRef.current) return;
     lastSyncedHtmlRef.current = html;
-    updateArticleHtml(articleId, html, humanEditRef.current
+    updateArticleHtml(articleId, html, reallyEdited(html)
       ? { lastModifiedAt: Date.now(), lastModifiedBy: editorNameRef.current }
       : null).catch(() => {});
   }, [agent.draftStatus, agent.currentArticleId]); // eslint-disable-line react-hooks/exhaustive-deps
