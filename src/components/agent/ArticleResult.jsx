@@ -16,13 +16,14 @@ import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripPar
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
 import BubbleToolbar from './BubbleToolbar';
 import TableToolbar from './TableToolbar';
+import DocNavigator from './DocNavigator';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, moveFaqToEnd } from '../../utils/diff';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
-  insertFaqHtmlAtCaret, rectOfNodes,
+  insertFaqHtmlAtCaret, rectOfNodes, normalizeFaqToAccordion,
 } from '../../utils/faq';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
@@ -217,6 +218,7 @@ export default function ArticleResult() {
   const [showMissed, setShowMissed]   = useState(true);   // Suggestions à appliquer — déplié par défaut (action mise en évidence)
   const [showDetails, setShowDetails] = useState(false);  // Détail des modifications
   const [showSources, setShowSources] = useState(false);  // Sources vérifiées
+  const [showAnalysis, setShowAnalysis] = useState(false); // Synthèse de l'agent — repliée : les onglets Audit/Avant/Après restent visibles directement
   // Titre éditable de l'article
   const [editedTitle, setEditedTitle] = useState('');
   // titleDirty = true uniquement si l'utilisateur a tapé dans le champ
@@ -931,7 +933,8 @@ export default function ArticleResult() {
       const { html: newHtml, updates: p2Updates } = applyAllDiffs(contentRef.current, result.updates, 2);
       // Conversion \n→<br> uniquement si pas de structure de blocs HTML
       const p2HasBlocks = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(newHtml);
-      const finalHtml = moveFaqToEnd(p2HasBlocks ? newHtml : newHtml.replace(/\n/g, '<br>'));
+      // FAQ : fin d'article + normalisation en accordéon (même structure pour toutes les FAQ)
+      const finalHtml = normalizeFaqToAccordion(moveFaqToEnd(p2HasBlocks ? newHtml : newHtml.replace(/\n/g, '<br>')));
 
       // Mettre à jour le DOM — finalHtml contient maintenant passe 1 + passe 2
       // Conserver le scroll pour ne pas remonter en haut lors de l'injection innerHTML
@@ -1229,16 +1232,22 @@ export default function ArticleResult() {
   const faqClipRef = useRef('');                          // HTML FAQ coupé/copié (presse-papiers interne)
   const [faqClipboard, setFaqClipboard] = useState(null); // 'couper' | 'copier' | null → bandeau « Coller »
 
-  // Même contrat qu'afterSegEdit : resynchronise contentRef + autosave (qui
-  // empile aussi l'instantané undo/redo via commitHistory).
-  const afterFaqEdit = useCallback(() => {
+  // Resynchronisation après une manipulation DOM externe (navigateur de
+  // structure, barres FAQ…) : lockMedia + contentRef + autosave (qui empile
+  // aussi l'instantané undo/redo via commitHistory).
+  const afterDomEdit = useCallback(() => {
     if (articleRef.current) {
       lockMedia(articleRef.current);
       contentRef.current = articleRef.current.innerHTML;
       triggerAutosave();
     }
-    setFaqHover(null);
   }, [lockMedia, triggerAutosave]);
+
+  // Même contrat + masque les barres FAQ
+  const afterFaqEdit = useCallback(() => {
+    afterDomEdit();
+    setFaqHover(null);
+  }, [afterDomEdit]);
 
   // Scroll doux vers un nœud — technique de jumpToChange (pas de scrollIntoView,
   // bug Chrome sur contentEditable).
@@ -2005,24 +2014,38 @@ export default function ArticleResult() {
         </div>
       </motion.div>
 
-      {/* ── Analyse globale ── */}
+      {/* ── Analyse globale — accordéon replié par défaut (même pattern que
+             « Détail des modifications ») pour laisser les onglets visibles ── */}
       {agent.analysis && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.05 }}
-          className="glass-card p-4 flex items-start gap-3"
+          className="glass-card p-4 space-y-3"
         >
-          <div className="w-7 h-7 bg-black rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
-            <Info size={13} className="text-white" />
+          <div
+            className="flex items-center gap-3 cursor-pointer"
+            onClick={() => setShowAnalysis(v => !v)}
+          >
+            <div className="w-7 h-7 bg-black rounded-lg flex items-center justify-center flex-shrink-0">
+              <Info size={13} className="text-white" />
+            </div>
+            <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2 flex-1">
+              Synthèse de l'agent
+              {showAnalysis ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
+            </h3>
+            {!showAnalysis && (
+              <span className="text-[11px] text-gray-400 truncate max-w-[45%]">
+                {String(agent.analysis).replace(/[#*_`>]/g, '').slice(0, 90)}…
+              </span>
+            )}
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Synthèse de l'agent</p>
+          {showAnalysis && (
             <div
               className="md-content text-gray-700 text-[13px] leading-snug [&_h1]:!text-lg [&_h1]:!my-2 [&_h1]:!border-0 [&_h1]:!pb-0 [&_h2]:!text-base [&_h2]:!my-2 [&_h2]:!border-0 [&_h2]:!pb-0 [&_h3]:!text-sm [&_h3]:!my-1.5 [&_h4]:!text-sm [&_h4]:!my-1 [&_p]:!text-[13px] [&_p]:!my-1 [&_p]:!leading-snug [&_li]:!text-[13px] [&_li]:!my-0.5 [&_ul]:!my-1 [&_ol]:!my-1"
               dangerouslySetInnerHTML={{ __html: emojiToIcons(renderMarkdown(agent.analysis)) }}
             />
-          </div>
+          )}
         </motion.div>
       )}
 
@@ -2827,6 +2850,8 @@ export default function ArticleResult() {
         )}
         {/* Barre contextuelle d'édition de tableaux (vue diff) */}
         {diffMode && <TableToolbar articleEl={articleEl} contentRef={contentRef} />}
+        {/* Navigateur de structure du document (façon Gutenberg) — vue diff */}
+        {diffMode && <DocNavigator articleEl={articleEl} onEdited={afterDomEdit} />}
       </div>
 
       {/* ── Détail des modifications ── */}

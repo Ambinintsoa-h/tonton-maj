@@ -30,6 +30,7 @@ import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
+import { normalizeFaqToAccordion } from '../utils/faq';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
 import { detectAgent } from '../constants/agents';
@@ -1119,7 +1120,8 @@ export default function MajEnAttente() {
       // ── Étape 3 : Application des diffs ───────────────────────────────────
       const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1);
       const hasBlockStructure = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(rawHtml);
-      const updatedHtml = moveFaqToEnd(hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>'));
+      // FAQ : fin d'article + normalisation en accordéon (structure unique pour toutes les FAQ)
+      const updatedHtml = normalizeFaqToAccordion(moveFaqToEnd(hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>')));
 
       // ── Étape 4 : Stats tokens ────────────────────────────────────────────
       const extractH1 = (html) => {
@@ -1217,15 +1219,28 @@ export default function MajEnAttente() {
           tokenUsage:      result.tokenUsage || null,
         };
         if (firebaseReady) {
-          const { id, originalContentUrl, updatedContentUrl } = await saveArticle(articleData);
-          const { originalContent, updatedContent, ...meta } = articleData;
-          dispatch(addToHistory({
-            ...meta,
-            id,
-            ...(capturedSeoTracking ? { seoTracking: capturedSeoTracking } : {}),   // badge en session (la base est maintenue par le cron)
-            ...(originalContentUrl ? { originalContentUrl } : { originalContent }),
-            ...(updatedContentUrl  ? { updatedContentUrl  } : { updatedContent  }),
-          }));
+          try {
+            const { id, originalContentUrl, updatedContentUrl } = await saveArticle(articleData);
+            const { originalContent, updatedContent, ...meta } = articleData;
+            dispatch(addToHistory({
+              ...meta,
+              id,
+              ...(capturedSeoTracking ? { seoTracking: capturedSeoTracking } : {}),   // badge en session (la base est maintenue par le cron)
+              ...(originalContentUrl ? { originalContentUrl } : { originalContent }),
+              ...(updatedContentUrl  ? { updatedContentUrl  } : { updatedContent  }),
+            }));
+          } catch (fsErr) {
+            // Firestore KO (doc trop lourd, réseau…) → on archive quand même
+            // LOCALEMENT (Redux + localStorage) : l'article apparaît dans
+            // l'Historique de la session, « Terminer » retentera la base.
+            // Même filet que le flux normal (Articles.jsx).
+            console.error('[maj] Archivage Firestore échoué — repli local :', fsErr);
+            toast(`Analyse archivée localement — synchronisation base impossible (${fsErr?.message || 'erreur inconnue'})`, { icon: '⚠️', duration: 7000 });
+            dispatch(addToHistory({
+              ...articleData,
+              ...(capturedSeoTracking ? { seoTracking: capturedSeoTracking } : {}),
+            }));
+          }
         } else {
           dispatch(addToHistory({
             ...articleData,
@@ -1235,7 +1250,7 @@ export default function MajEnAttente() {
       } catch (archiveErr) {
         // Non bloquant : le résultat reste dans l'item « À valider » (majResult)
         // et « Terminer » archivera comme avant.
-        console.warn('[maj] Archivage automatique échoué :', archiveErr);
+        console.error('[maj] Archivage automatique échoué :', archiveErr);
       }
 
       const applied = allUpdatesWithStatus.filter(u => u.applied).length;
