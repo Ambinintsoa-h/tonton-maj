@@ -450,6 +450,27 @@ export const getPendingItems = async () => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
+// Allège un item de file pour Firestore. Les HTML COMPLETS de majResult
+// (avant/après) font facilement dépasser la limite de 1 Mo/document →
+// setDoc rejetait le document ENTIER en silence : l'item « À valider »
+// n'existait alors QUE dans le navigateur du lanceur et disparaissait au
+// premier vidage de cache / sur les autres postes. Les contenus lourds sont
+// déjà archivés dans articles/{id} (archivage automatique de fin d'analyse) :
+// la review les y retrouve (repli dans handleViewDiff).
+const slimPendingItem = (item) => {
+  if (!item?.majResult) return { ...item };
+  const { originalContent, updatedContent, ...rest } = item.majResult;
+  let slim = { ...item, majResult: { ...rest, contentInHistory: true } };
+  // Filet 1 Mo : retirer aussi les champs restants les plus lourds si besoin
+  for (const heavy of ['audit', 'analysis', 'updates', 'sources']) {
+    let size;
+    try { size = JSON.stringify(slim).length; } catch { break; }
+    if (size <= 900_000) break;
+    slim = { ...slim, majResult: { ...slim.majResult, [heavy]: null } };
+  }
+  return slim;
+};
+
 // Remplace la totalité de la liste pending en Firestore (full-replace debounced)
 export const savePendingList = async (items) => {
   if (!db || !Array.isArray(items)) return;
@@ -457,9 +478,9 @@ export const savePendingList = async (items) => {
   // Supprimer les docs qui ne sont plus dans la liste
   const currentIds = new Set(items.map(i => String(i.id)));
   await Promise.all(snap.docs.filter(d => !currentIds.has(d.id)).map(d => deleteDoc(d.ref)));
-  // Upsert tous les items courants
+  // Upsert tous les items courants (allégés — voir slimPendingItem)
   await Promise.all(items.map(item =>
-    setDoc(doc(db, 'pending', String(item.id)), { ...item })
+    setDoc(doc(db, 'pending', String(item.id)), slimPendingItem(item))
   ));
 };
 

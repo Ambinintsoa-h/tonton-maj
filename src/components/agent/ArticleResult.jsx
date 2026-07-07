@@ -2045,6 +2045,15 @@ export default function ArticleResult() {
           archiveLocal();
         }
       }
+
+      // ── La PUBLICATION SUR LE SITE clôt la validation ─────────────────────────
+      // L'article publié sort de la file « MAJ en attente » : il ne vit plus que
+      // dans l'Historique (archivé ci-dessus / à la fin d'analyse). « Publier
+      // dans brouillons » ne clôt PAS — le travail est encore en cours.
+      if (!wantDraft && cqItem) {
+        dispatch(removePendingItem(cqItem.id));
+        toast.success('Publié — retiré de « MAJ en attente », consultable dans l\'Historique', { duration: 5000 });
+      }
     }
 
     setPublishing(false);
