@@ -76,6 +76,13 @@ axios.interceptors.response.use(
 // rechargement de module par le HMR Webpack.
 // window.__tontonFirebaseBooted protège contre le double-chargement HMR.
 // ─────────────────────────────────────────────────────────────────────────────
+// Garde anti-écrasement de la file partagée : tant que la lecture INITIALE de
+// la collection pending n'a pas RÉUSSI, FirestoreSync ne pousse rien. Sans ça,
+// après un vidage de cache (Redux = liste vide) une hydratation lente ou en
+// échec laissait le full-replace debounce 3 s SUPPRIMER les items de toute
+// l'équipe (dont les « À valider »).
+let pendingHydrated = false;
+
 // Stocké sur window pour que App puisse attendre la fin avant de retirer le splash
 window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
   if (window.__tontonFirebaseBooted) return;
@@ -114,7 +121,7 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
       getArticles().catch(() => []),
       getWordPressSites().catch(() => []),
       getUsers().catch(() => []),
-      getPendingItems().catch(() => []),
+      getPendingItems().then(list => { pendingHydrated = true; return list; }).catch(() => []),
       getStats().catch(() => null),
       getKnowledge().catch(() => []),
     ]);
@@ -241,6 +248,10 @@ function FirestoreSync() {
     if (!firebaseReady) return;
     clearTimeout(pendingTimer.current);
     pendingTimer.current = setTimeout(() => {
+      // Jamais de full-replace avant une hydratation RÉUSSIE de la file :
+      // pousser une liste locale vide/partielle supprimerait les items des
+      // autres membres (vidage de cache, lecture initiale en échec…).
+      if (!pendingHydrated) return;
       savePendingList(pending).catch(() => {});
     }, 3000);
     return () => clearTimeout(pendingTimer.current);

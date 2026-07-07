@@ -28,7 +28,7 @@ import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
-import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts, createNotification } from '../services/firebase';
+import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts, createNotification, fetchArticleHtml } from '../services/firebase';
 import store from '../store';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
@@ -1499,9 +1499,37 @@ export default function MajEnAttente() {
   const handleAssign         = (id, assigneeId) => dispatch(updatePendingItem({ id, assigneeId }));
   const handlePriorityChange = (id, priority) => dispatch(updatePendingItem({ id, priority }));
 
-  // Rouvrir la page Articles avec le résultat d'un item déjà traité
-  const handleViewDiff = (item) => {
-    const r = item.majResult || {};
+  // Rouvrir la page Articles avec le résultat d'un item déjà traité.
+  // Les documents pending Firestore sont ALLÉGÉS (les HTML complets dépassent
+  // 1 Mo) : après un vidage de cache / sur un autre poste, majResult n'a plus
+  // les contenus → on les recharge depuis l'ARCHIVE Historique (même id,
+  // créée automatiquement à la fin de l'analyse, HTML dans Storage).
+  const handleViewDiff = async (item) => {
+    let r = item.majResult || {};
+    if (!r.originalContent || !r.updatedContent) {
+      const arch = store.getState().articles.history.find(a => a.id === item.id);
+      if (arch) {
+        const [orig, updated] = await Promise.all([
+          arch.originalContent || fetchArticleHtml(arch.originalContentUrl),
+          arch.updatedContent  || fetchArticleHtml(arch.updatedContentUrl),
+        ]);
+        r = {
+          articleTitle:    r.articleTitle || arch.title || '',
+          originalContent: r.originalContent || orig    || '',
+          updatedContent:  r.updatedContent  || updated || '',
+          updates:         r.updates  || arch.updates  || [],
+          sources:         r.sources  || arch.sources  || [],
+          analysis:        r.analysis || arch.analysis || '',
+          audit:           r.audit    || arch.audit    || '',
+          wpData:          r.wpData   || arch.wpData   || null,
+          seoTracking:     r.seoTracking || arch.seoTracking || null,
+        };
+      }
+    }
+    if (!r.updatedContent) {
+      toast.error('Contenu de l\'analyse introuvable — relancez la MAJ de cet article');
+      return;
+    }
     dispatch(setOriginalContent(r.originalContent || ''));
     dispatch(setUpdatedContent(r.updatedContent   || ''));
     dispatch(setDiff(r.updates   || []));
