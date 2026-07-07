@@ -33,7 +33,7 @@ const NAV_ALL = [
   { to: '/tickets',        label: 'Tickets',           icon: Bug,      badge: true },
 ];
 
-function NavItem({ to, label, icon: Icon, badge, beta }) {
+function NavItem({ to, label, icon: Icon, badge, beta, badgeColor = 'bg-amber-400', badgeTitle }) {
   const location = useLocation();
   const active = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to);
   return (
@@ -51,7 +51,10 @@ function NavItem({ to, label, icon: Icon, badge, beta }) {
           </span>
         )}
         {!beta && badge > 0 && (
-          <span className="text-[10px] font-bold bg-amber-400 text-white rounded-full px-1.5 py-0.5 leading-none min-w-[18px] text-center">
+          <span
+            title={badgeTitle || undefined}
+            className={`text-[10px] font-bold ${badgeColor} text-white rounded-full px-1.5 py-0.5 leading-none min-w-[18px] text-center`}
+          >
             {badge > 99 ? '99+' : badge}
           </span>
         )}
@@ -68,6 +71,14 @@ export default function Sidebar() {
   const pendingCount = useSelector(s =>
     s.pending.list.filter(i => i.status === 'pending').length
   );
+  // Pastille « X à valider » : priorité à MES articles (assignés à moi) ; les
+  // managers/admins voient le total s'il n'y a rien pour eux personnellement.
+  const aValiderCount = useSelector(s => {
+    const aValider = s.pending.list.filter(i => i.status === 'a_valider');
+    const mine = aValider.filter(i => i.assigneeId && (i.assigneeId === s.auth.uid || i.assigneeId === s.auth.username));
+    if (s.auth.role === 'cq_ia') return mine.length;
+    return mine.length > 0 ? mine.length : aValider.length;
+  });
   const ticketCount = useSelector(s => s.notifications?.unreadCount || 0);
   const role = useSelector(s => s.auth.role) || 'cq_ia';
   const navItems = NAV_ALL.filter(item => !item.roles || item.roles.includes(role));
@@ -118,7 +129,12 @@ export default function Sidebar() {
           <NavItem
             key={item.to}
             {...item}
-            badge={item.to === '/tickets' ? ticketCount : item.to === '/maj-en-attente' ? pendingCount : 0}
+            badge={item.to === '/tickets' ? ticketCount
+              : item.to === '/maj-en-attente' ? (aValiderCount > 0 ? aValiderCount : pendingCount) : 0}
+            badgeColor={item.to === '/maj-en-attente' && aValiderCount > 0 ? 'bg-indigo-500' : 'bg-amber-400'}
+            badgeTitle={item.to === '/maj-en-attente'
+              ? (aValiderCount > 0 ? `${aValiderCount} analyse${aValiderCount > 1 ? 's' : ''} à valider` : `${pendingCount} en attente de MAJ`)
+              : undefined}
           />
         ))}
       </nav>

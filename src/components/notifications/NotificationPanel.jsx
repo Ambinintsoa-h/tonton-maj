@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Bug, MessageSquare, ArrowUpRight, CheckCircle2,
-  Bell, Check, CheckCheck, X,
+  Bell, Check, CheckCheck, X, Sparkles,
 } from 'lucide-react';
 import { markRead, markAllRead } from '../../store/slices/notificationsSlice';
 import { markNotificationRead, markAllNotificationsRead } from '../../services/firebase';
@@ -16,6 +16,7 @@ function NotifIcon({ type }) {
     new_comment:   { icon: MessageSquare,  bg: 'bg-purple-100', color: 'text-purple-500' },
     escalade_l2:   { icon: ArrowUpRight,   bg: 'bg-orange-100', color: 'text-orange-500' },
     status_change: { icon: CheckCircle2,   bg: 'bg-green-100',  color: 'text-green-500'  },
+    maj_ready:     { icon: Sparkles,       bg: 'bg-indigo-100', color: 'text-indigo-500' },
   };
   const { icon: Icon, bg, color } = map[type] || { icon: Bell, bg: 'bg-gray-100', color: 'text-gray-500' };
   return (
@@ -70,6 +71,9 @@ export default function NotificationPanel({ onClose }) {
     await handleMarkRead(notif);
     if (notif.ticketId) {
       navigate('/tickets', { state: { openTicketId: notif.ticketId } });
+    } else if (notif.type === 'maj_ready') {
+      // Analyse prête à valider → file des MAJ (onglet À valider)
+      navigate('/maj-en-attente');
     }
     onClose();
   };
