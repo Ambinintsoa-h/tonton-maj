@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { STORAGE_KEYS } from './constants/storage';
+import { safeSetItem, persistHistory, persistPending } from './utils/localCache';
 import { useDispatch } from 'react-redux';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Provider, useSelector } from 'react-redux';
@@ -132,7 +133,7 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     const localSkills = store.getState().skills.list;
     if (countCustomSkills(localSkills) === 0 && skills.length > 0) {
       dispatch(setSkills(skills));
-      localStorage.setItem(STORAGE_KEYS.skills, JSON.stringify(skills));
+      safeSetItem(STORAGE_KEYS.skills, skills);
     } else {
       // Garde-fou : les skills CERVEAU (format SKILL.md) sont globaux/partagés. On fusionne
       // toujours par id ceux qui manquent en local, même si l'utilisateur a déjà des skills
@@ -144,23 +145,23 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
       if (missingBrain.length > 0) {
         const merged = [...localSkills, ...missingBrain];
         dispatch(setSkills(merged));
-        localStorage.setItem(STORAGE_KEYS.skills, JSON.stringify(merged));
+        safeSetItem(STORAGE_KEYS.skills, merged);
       }
     }
     if (articles.length > 0) {
       dispatch(setHistory(articles));
-      localStorage.setItem(STORAGE_KEYS.history, JSON.stringify(articles));
+      persistHistory(articles); // cache local allégé (HTML exclu) — Firestore = source de vérité
     }
     if (sites.length > 0) {
       dispatch(setSites(sites));
-      localStorage.setItem(STORAGE_KEYS.wpSites, JSON.stringify(sites));
+      safeSetItem(STORAGE_KEYS.wpSites, sites);
     }
     if (users.length > 0) {
       dispatch(setUsers(users));
     }
     if (pending.length > 0) {
       dispatch(setPending(pending));
-      localStorage.setItem(STORAGE_KEYS.pending, JSON.stringify(pending));
+      persistPending(pending); // cache local allégé (HTML de majResult exclu)
     }
     if (stats) {
       dispatch(setStats(stats));
@@ -168,7 +169,7 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     const localKnowledge = store.getState().knowledge.list;
     if (localKnowledge.length === 0 && knowledge.length > 0) {
       dispatch(setKnowledge(knowledge));
-      localStorage.setItem(STORAGE_KEYS.knowledge, JSON.stringify(knowledge));
+      safeSetItem(STORAGE_KEYS.knowledge, knowledge);
     }
   } catch (e) {
     console.error('[firebase] Erreur chargement données :', e.message);
@@ -309,33 +310,35 @@ function LocalStorageSync() {
   const users      = useSelector(s => s.users.list);
   const stats      = useSelector(s => s.stats);
 
+  // Toutes les écritures passent par les helpers tolérants au quota (jamais
+  // d'exception → jamais de page blanche ; historique allégé, sans HTML).
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.skills, JSON.stringify(skills));
+    safeSetItem(STORAGE_KEYS.skills, skills);
   }, [skills]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.knowledge, JSON.stringify(knowledge));
+    safeSetItem(STORAGE_KEYS.knowledge, knowledge);
   }, [knowledge]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.history, JSON.stringify(history));
+    persistHistory(history);
   }, [history]);
 
   useEffect(() => {
     // localStorage : Application Passwords WP persistés entre sessions
-    localStorage.setItem(STORAGE_KEYS.wpSites, JSON.stringify(sites));
+    safeSetItem(STORAGE_KEYS.wpSites, sites);
   }, [sites]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.users, JSON.stringify(users));
+    safeSetItem(STORAGE_KEYS.users, users);
   }, [users]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.statsArticles, JSON.stringify(stats.totalArticles));
-    localStorage.setItem(STORAGE_KEYS.statsInput,    JSON.stringify(stats.totalInputTokens));
-    localStorage.setItem(STORAGE_KEYS.statsOutput,   JSON.stringify(stats.totalOutputTokens));
-    localStorage.setItem(STORAGE_KEYS.statsCost,     JSON.stringify(stats.totalCostUsd));
-    localStorage.setItem(STORAGE_KEYS.statsHistory,  JSON.stringify(stats.history));
+    safeSetItem(STORAGE_KEYS.statsArticles, stats.totalArticles);
+    safeSetItem(STORAGE_KEYS.statsInput,    stats.totalInputTokens);
+    safeSetItem(STORAGE_KEYS.statsOutput,   stats.totalOutputTokens);
+    safeSetItem(STORAGE_KEYS.statsCost,     stats.totalCostUsd);
+    safeSetItem(STORAGE_KEYS.statsHistory,  stats.history);
   }, [stats]);
 
   return null;
