@@ -593,6 +593,12 @@ Toute donnée antérieure au ${cutoffIso} est OBLIGATOIREMENT suspecte et doit �
 
 ## ═══ RÈGLES SEO STANDARD ═══
 
+### RÈGLE ABSOLUE — LIENS EXTERNES INTOUCHABLES
+Tu ne dois JAMAIS ajouter ni supprimer de lien EXTERNE (balise <a href> vers un autre domaine que celui de l'article).
+- Si un passage à réécrire contient un lien externe, le lien (href ET texte d'ancre) doit apparaître À L'IDENTIQUE dans "updated".
+- N'insère JAMAIS de nouveau <a href> externe dans "updated" — cite la source dans "source", pas dans le texte.
+(Un verrou technique rejette toute update qui viole cette règle : elle serait perdue.)
+
 ### Règle fondamentale — Ne jamais rendre un tableau vide
 Il est statistiquement impossible qu'un article de plus de 6 mois ne contienne AUCUNE information à actualiser.
 **Un tableau "updates: []" n'est JAMAIS acceptable** sauf si l'article a moins de 3 mois.
@@ -1275,6 +1281,7 @@ const buildReviewSystemPrompt = (skills, knowledge = []) => {
 - "updated" = substitution directe
 - Mieux vaut [à vérifier en ${year}] que rien
 - "updates: []" acceptable SEULEMENT si tout est parfait et à jour
+- RÈGLE ABSOLUE : ne JAMAIS ajouter ni supprimer de lien EXTERNE (<a href> vers un autre domaine) — un lien externe présent dans "original" doit rester À L'IDENTIQUE dans "updated"
 
 ## Format — JSON valide UNIQUEMENT
 

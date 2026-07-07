@@ -553,9 +553,130 @@ export const moveFaqToEnd = (html) => {
  * Applique une liste de mises à jour sur un HTML, retourne le HTML annoté
  * et les updates avec leur flag applied + pass.
  */
-export const applyAllDiffs = (html, updates, passNumber = 1) => {
+// ── VERROU LIENS EXTERNES — RÈGLE ABSOLUE, NE JAMAIS AFFAIBLIR ────────────────
+// L'agent IA ne doit JAMAIS ajouter ni supprimer de lien EXTERNE (href http(s)
+// vers un autre domaine que celui de l'article). Verrou appliqué EN DUR à
+// chaque update AVANT application (passes 1 et 2, tous les flux) :
+//   • lien externe AJOUTÉ dans "updated" (absent d'"original") → désenveloppé :
+//     le texte de l'ancre est conservé, la balise <a> disparaît ;
+//   • lien externe SUPPRIMÉ ("original" le contient, "updated" non) :
+//       1. si le texte d'ancre existe encore en clair dans "updated" → il est
+//          RÉ-ENVELOPPÉ avec le lien d'origine (attributs conservés) ;
+//       2. sinon → update REJETÉE (applied:false) : le passage d'origine, avec
+//          son lien, reste intact dans l'article.
+// Les liens INTERNES (même domaine que l'article, chemins relatifs, ancres #,
+// mailto) ne sont PAS concernés — le maillage interne reste une feature voulue.
+// Sans URL d'article connue (contenu collé), TOUT lien http(s) absolu est
+// considéré externe : protection maximale.
+
+const hostOf = (href) => {
+  try { return new URL(href).hostname.replace(/^www\./, '').toLowerCase(); }
+  catch { return null; }
+};
+
+// Liens externes d'un fragment HTML : Map href → { text, attrs }
+const externalLinksOf = (fragmentHtml, articleHost) => {
+  const map = new Map();
+  if (!fragmentHtml || typeof document === 'undefined') return map;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = fragmentHtml;
+  tmp.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    if (!/^https?:\/\//i.test(href)) return;            // relatif, #ancre, mailto… → hors périmètre
+    const h = hostOf(href);
+    if (!h || (articleHost && h === articleHost)) return; // lien interne
+    if (!map.has(href)) {
+      map.set(href, {
+        text: (a.textContent || '').trim(),
+        attrs: Array.from(a.attributes).map(({ name, value }) => [name, value]),
+      });
+    }
+  });
+  return map;
+};
+
+// Désenveloppe les liens externes NON autorisés d'un fragment (texte conservé)
+const stripForeignExternalLinks = (fragmentHtml, allowedHrefs, articleHost) => {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = fragmentHtml;
+  let changed = false;
+  tmp.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    if (!/^https?:\/\//i.test(href)) return;
+    const h = hostOf(href);
+    if (!h || (articleHost && h === articleHost)) return;
+    if (allowedHrefs.has(href)) return;                  // lien externe préexistant → conservé
+    while (a.firstChild) a.parentNode.insertBefore(a.firstChild, a);
+    a.remove();
+    changed = true;
+  });
+  return changed ? tmp.innerHTML : fragmentHtml;
+};
+
+export const enforceExternalLinkPolicy = (update, articleUrl = '') => {
+  if (!update || typeof document === 'undefined') return { update, blocked: false };
+  const articleHost = articleUrl ? hostOf(articleUrl) : null;
+
+  // Suppression pure : si le passage supprimé contient un lien externe → rejet
+  if (update.type === 'suppression') {
+    const removed = externalLinksOf(update.original || '', articleHost);
+    return removed.size > 0 ? { update, blocked: true } : { update, blocked: false };
+  }
+
+  // Addition : aucun lien externe préexistant → tout lien externe est désenveloppé
+  if (update.type === 'addition') {
+    if (!update.updated) return { update, blocked: false };
+    const cleaned = stripForeignExternalLinks(update.updated, new Map(), articleHost);
+    return { update: cleaned === update.updated ? update : { ...update, updated: cleaned }, blocked: false };
+  }
+
+  // Remplacement
+  if (!update.original || !update.updated) return { update, blocked: false };
+  const before = externalLinksOf(update.original, articleHost);
+  let updatedHtml = stripForeignExternalLinks(update.updated, before, articleHost);
+
+  const after = externalLinksOf(updatedHtml, articleHost);
+  for (const [href, info] of before) {
+    if (after.has(href)) continue;
+    // Lien externe disparu → ré-envelopper son ancre si elle existe encore en clair
+    let reinjected = false;
+    if (info.text) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = updatedHtml;
+      const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        const idx = node.textContent.indexOf(info.text);
+        if (idx === -1) continue;
+        if (node.parentElement?.closest('a')) continue;  // déjà lié
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + info.text.length);
+        const a = document.createElement('a');
+        info.attrs.forEach(([name, value]) => { try { a.setAttribute(name, value); } catch {} });
+        try { range.surroundContents(a); reinjected = true; } catch { /* sélection à cheval sur des balises */ }
+        break;
+      }
+      if (reinjected) updatedHtml = tmp.innerHTML;
+    }
+    if (!reinjected) return { update, blocked: true };
+  }
+
+  return {
+    update: updatedHtml === update.updated ? update : { ...update, updated: updatedHtml },
+    blocked: false,
+  };
+};
+
+export const applyAllDiffs = (html, updates, passNumber = 1, articleUrl = '') => {
   let updatedHtml = html;
-  const withStatus = (updates || []).map((update) => {
+  const withStatus = (updates || []).map((rawUpdate) => {
+    // Verrou liens externes (règle absolue) — assainit ou rejette AVANT application
+    const { update, blocked } = enforceExternalLinkPolicy(rawUpdate, articleUrl);
+    if (blocked) {
+      console.warn(`[diff p${passNumber}] Update BLOQUÉE (supprimerait un lien externe) :`, (update.original || '').substring(0, 70));
+      return { ...update, applied: false, pass: passNumber, blockedReason: 'lien-externe' };
+    }
     // Nouveau paragraphe (enrichissement actualités)
     if (update.type === 'addition') {
       if (!update.updated) return { ...update, applied: false, pass: passNumber };
