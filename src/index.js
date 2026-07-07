@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
+import ErrorBoundary from './components/common/ErrorBoundary';
 
 // Note : le suppresseur d'AbortError/CanceledError est dans public/index.html
 // (script inline en capture phase) car il doit s'exécuter AVANT le HMR de CRA.
@@ -20,6 +21,8 @@ window.addEventListener('error', (e) => {
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>
 );
