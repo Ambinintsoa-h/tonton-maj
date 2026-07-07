@@ -10,7 +10,7 @@ import {
   ExternalLink, Plus, X, RefreshCw, ChevronDown, ChevronUp,
   FileSpreadsheet, Link2, Sparkles, Filter, Loader, UserCircle2,
   Globe, PencilLine, ListChecks, PlayCircle, ShieldCheck, Tag,
-  ClipboardList, AlertTriangle, Search, Lightbulb, Info,
+  ClipboardList, AlertTriangle, Search, Lightbulb,
 } from 'lucide-react';
 import {
   addPendingItems, addPendingItem, removePendingItem,
@@ -28,7 +28,9 @@ import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
-import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
+import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts, createNotification } from '../services/firebase';
+import store from '../store';
+import ConfirmDialog from '../components/common/ConfirmDialog';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
 import { normalizeFaqToAccordion } from '../utils/faq';
 import { makeTablesResponsive } from '../utils/blocks';
@@ -51,6 +53,16 @@ const PRIORITY_ORDER = ['haute', 'normale', 'basse'];
 
 const CONCURRENCY = 3;        // Nombre max de MAJ simultanées
 const SLOT_STAGGER_MS = 4000; // Décalage entre le démarrage de chaque slot
+
+// ── File d'exécution des analyses (niveau module) ────────────────────────────
+// Au-delà de CONCURRENCY analyses actives, les lancements sont mis EN FILE et
+// démarrent automatiquement dès qu'un créneau se libère (plus de refus).
+// Niveau module : la file et les analyses survivent aux NAVIGATIONS dans
+// l'app ; un vrai rechargement (F5) remet tout à zéro — les items concernés
+// sont alors réparés au montage (voir « zombies » plus bas).
+const liveRuns    = new Set(); // ids des analyses actives dans CET onglet
+const launchQueue = [];        // ids en attente d'un créneau (FIFO)
+const STALE_RUN_MS = 30 * 60 * 1000; // « En cours » d'un autre poste considéré mort après 30 min sans fin
 
 // Détecte automatiquement les colonnes du fichier importé
 const detectColumns = (headers) => {
@@ -645,7 +657,7 @@ function AssigneePicker({ value, onChange, teamMembers }) {
 }
 
 // ── Ligne article ─────────────────────────────────────────────────────────────
-function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onViewDiff, running, teamMembers }) {
+function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onViewDiff, running, queuedPos = null, onDequeue, isMine = false, teamMembers }) {
   const [expanded, setExpanded] = useState(false);
   const assignee    = teamMembers.find(m => m.id === item.assigneeId) || null;
   const domain      = extractDomain(item.url);
@@ -707,9 +719,14 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onVi
           )}
         </div>
 
-        {/* Status badge */}
-        <div className="flex-shrink-0">
+        {/* Status badge (+ « À vous » : à valider assigné à moi) */}
+        <div className="flex-shrink-0 flex items-center gap-1.5">
           <StatusBadge status={item.status} />
+          {isAValider && isMine && (
+            <span className="inline-flex items-center text-[10px] font-bold uppercase tracking-wide bg-indigo-500 text-white rounded-full px-2 py-0.5 leading-none whitespace-nowrap">
+              À vous
+            </span>
+          )}
         </div>
 
         {/* Actions + Assignee */}
@@ -729,7 +746,7 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onVi
           ) : null}
 
           {/* Bouton MAJ (pending) / Relancer (après une erreur) */}
-          {(item.status === 'pending' || item.status === 'error') && !running && (
+          {(item.status === 'pending' || item.status === 'error') && !running && !queuedPos && (
             <button
               onClick={() => onRunMaj(item)}
               className={`text-xs px-3 py-1.5 flex items-center gap-1.5 whitespace-nowrap ${item.status === 'error' ? 'btn-secondary !text-red-600 !border-red-200 hover:!bg-red-50' : 'btn-primary'}`}
@@ -737,6 +754,26 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onVi
               {item.status === 'error' ? <RefreshCw size={11} /> : <Sparkles size={11} />}
               {item.status === 'error' ? 'Relancer' : 'MAJ'}
             </button>
+          )}
+
+          {/* En file de lancement — démarrera automatiquement dès qu'un créneau se libère */}
+          {queuedPos && !running && (
+            <div className="flex items-center gap-1 whitespace-nowrap">
+              <span
+                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-full px-2.5 py-1 leading-none"
+                title="Démarrera automatiquement dès qu'une analyse en cours se termine"
+              >
+                <Clock size={9} className="flex-shrink-0" />
+                En file — n°{queuedPos}
+              </span>
+              <button
+                onClick={() => onDequeue?.(item.id)}
+                className="btn-ghost !p-1 text-gray-300 hover:text-red-500"
+                title="Retirer de la file de lancement"
+              >
+                <X size={12} />
+              </button>
+            </div>
           )}
 
           {/* En cours… */}
@@ -958,8 +995,40 @@ export default function MajEnAttente() {
     });
   }, []);
 
+  // Miroir React de la file de lancement (module) → affichage des positions
+  const [queuedIds, setQueuedIds] = useState([...launchQueue]);
+  const syncQueueUi = useCallback(() => setQueuedIds([...launchQueue]), []);
+  const dequeueItem = useCallback((id) => {
+    const idx = launchQueue.indexOf(id);
+    if (idx !== -1) launchQueue.splice(idx, 1);
+    syncQueueUi();
+  }, [syncQueueUi]);
+
   // Purge les anciens items "done" au montage (migration : avant, ils restaient dans la liste)
   useEffect(() => { dispatch(clearDone()); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Réparation des « En cours » zombies ─────────────────────────────────────
+  // Une analyse tuée (rechargement F5, crash d'onglet) laissait l'item bloqué
+  // in_progress sans bouton ni progression → compteur « En cours » faussé.
+  // Au montage : tout item in_progress qui ne tourne PAS dans cet onglet et qui
+  // a été démarré par MOI (ou qui est trop vieux / sans horodatage) est remis
+  // « En attente ». L'analyse VIVANTE d'un collègue (startedBy ≠ moi, récente)
+  // n'est jamais touchée.
+  useEffect(() => {
+    const me = authUid || authUsername || null;
+    const zombies = itemsRef.current.filter(i =>
+      i.status === 'in_progress'
+      && !liveRuns.has(i.id)
+      && (i.startedBy === me || !i.startedAt || Date.now() - i.startedAt > STALE_RUN_MS));
+    if (!zombies.length) return;
+    zombies.forEach(i => dispatch(updatePendingItem({
+      id: i.id, status: 'pending', startedBy: null, startedAt: null,
+    })));
+    toast(
+      `${zombies.length} analyse${zombies.length > 1 ? 's' : ''} interrompue${zombies.length > 1 ? 's' : ''} remise${zombies.length > 1 ? 's' : ''} « En attente »`,
+      { icon: '🔁' },
+    );
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Exclure les items "done" — ils ne doivent plus apparaître ici (ils sont dans l'historique)
   // CQ IA ne voit que ses articles assignés (par uid ou username)
@@ -984,9 +1053,16 @@ export default function MajEnAttente() {
     return true;
   });
 
+  // « À valider » : MES articles d'abord (badge « À vous ») — chacun voit son
+  // travail à valider en tête de chaque groupe de priorité
+  const isMine = (i) => !!i.assigneeId && (i.assigneeId === authUid || i.assigneeId === authUsername);
+  const sorted = [...filtered].sort((a, b) =>
+    ((a.status === 'a_valider' && isMine(a)) ? 0 : 1)
+    - ((b.status === 'a_valider' && isMine(b)) ? 0 : 1));
+
   // Groupement par priorité (haute → normale → basse)
   const grouped = PRIORITY_ORDER
-    .map(p => ({ priority: p, items: filtered.filter(i => (i.priority || 'normale') === p) }))
+    .map(p => ({ priority: p, items: sorted.filter(i => (i.priority || 'normale') === p) }))
     .filter(g => g.items.length > 0);
 
   // Un cq_ia ne voit que SES articles assignés (filtre activeItems ci-dessus). On
@@ -1042,7 +1118,12 @@ export default function MajEnAttente() {
     const step     = (s) => updateRunState(item.id, { step: s });
     const progress = (p) => updateRunState(item.id, { progress: p });
 
-    dispatch(updatePendingItem({ id: item.id, status: 'in_progress' }));
+    // startedBy/startedAt : signature du lanceur — permet de réparer les
+    // « En cours » zombies après un crash sans toucher aux analyses des collègues
+    dispatch(updatePendingItem({
+      id: item.id, status: 'in_progress',
+      startedBy: authUid || authUsername || null, startedAt: Date.now(),
+    }));
     updateRunState(item.id, { step: '', progress: 0 });
 
     try {
@@ -1182,6 +1263,8 @@ export default function MajEnAttente() {
       dispatch(updatePendingItem({
         id:     item.id,
         status: 'a_valider',
+        startedBy: null,
+        startedAt: null,
         majResult: {
           articleTitle,
           originalContent: articleHtml,
@@ -1194,6 +1277,24 @@ export default function MajEnAttente() {
           audit:           result.audit || '',     // rapport d'audit complet — onglet AUDIT
         },
       }));
+
+      // ── Étape 6bis : Notifier l'assigné (sinon le lanceur) ────────────────
+      // Cloche + badge sidebar : « prêt à valider » sans surveiller la page.
+      // toUserId doit être un UID (règles Firestore) : on résout l'assigneeId
+      // qui peut être un username (auto-assignation cq_ia sans uid).
+      try {
+        const assignee = teamMembers.find(m => m.id === item.assigneeId || m.username === item.assigneeId);
+        const targetUid = assignee?.id || authUid || null;
+        if (firebaseReady && targetUid) {
+          createNotification({
+            toUserId:     targetUid,
+            fromUsername: authUsername || '',
+            type:         'maj_ready',
+            majItemId:    item.id,
+            message:      `Analyse terminée : « ${articleTitle} » est prêt à valider`,
+          });
+        }
+      } catch { /* non bloquant */ }
 
       // ── Étape 7 : Archivage automatique dans l'Historique ────────────────
       // L'analyse est sauvegardée dès qu'elle se termine : plus besoin de la
@@ -1274,57 +1375,127 @@ export default function MajEnAttente() {
       console.error('[maj]', e);
       toast.error('Erreur : ' + e.message);
       dispatch(setError(e.message));
-      dispatch(updatePendingItem({ id: item.id, status: 'error', errorMsg: e.message }));
+      dispatch(updatePendingItem({ id: item.id, status: 'error', errorMsg: e.message, startedBy: null, startedAt: null }));
       return null;
     } finally {
       updateRunState(item.id, null);
     }
   };
 
-  // ── Lancement single item → navigate vers la review ───────────────────────
-  const handleRunMaj = async (item) => {
+  // ── Démarrage réel d'une analyse (occupe un créneau) ───────────────────────
+  // interactive = lancement au clic (comportement historique : navigation vers
+  // la review si c'est la SEULE analyse) · false = démarrage automatique depuis
+  // la file → jamais de navigation ni d'écriture dans l'état global de l'agent
+  // (ne pas arracher l'utilisateur ni écraser une review en cours).
+  const startAnalysis = async (item, { interactive = false } = {}) => {
+    liveRuns.add(item.id);
+
+    // Feedback visuel immédiat — le bouton MAJ disparaît dès le clic
+    const others = liveRuns.size - 1;
+    updateRunState(item.id, { step: others > 0 ? 'Démarrage dans quelques secondes…' : '', progress: 0 });
+
+    // Stagger : décaler le démarrage selon le nombre de slots déjà actifs
+    // pour éviter un burst simultané sur l'API Anthropic
+    if (others > 0) {
+      await new Promise(r => setTimeout(r, others * SLOT_STAGGER_MS));
+    }
+
+    if (interactive) {
+      dispatch(resetAgent());
+      dispatch(setStatus('running'));
+    }
+
+    let data = null;
+    try {
+      data = await processItem(item);
+    } finally {
+      liveRuns.delete(item.id);
+      pumpQueue(); // un créneau se libère → démarrer l'analyse suivante en file
+    }
+
+    // Navigation vers la review UNIQUEMENT pour un lancement interactif resté
+    // seul (pas d'autres analyses actives ni en file) ET si l'utilisateur est
+    // toujours sur la page de la file — sinon le résultat attend sagement dans
+    // « À valider » (+ notification à l'assigné).
+    const canNavigate = interactive
+      && data
+      && liveRuns.size === 0
+      && launchQueue.length === 0
+      && window.location.pathname === '/maj-en-attente';
+
+    if (canNavigate) {
+      dispatch(setOriginalContent(data.originalContent || ''));
+      dispatch(setUpdatedContent(data.updatedContent   || ''));
+      dispatch(setDiff(data.updates   || []));
+      dispatch(setSources(data.sources || []));
+      dispatch(setAnalysis(data.analysis || ''));
+      dispatch(setParseFailed(data.parseFailed === true));
+      // TOUJOURS rebinder (null si absent) : sinon le wpData de l'article PRÉCÉDENT
+      // reste en mémoire → publication proposée sur le mauvais site (confusion de sites).
+      dispatch(setWpData(data.wpData || null));
+      dispatch(setAudit(data.audit || ''));
+      dispatch(setCurrentArticleId(item.id));
+      dispatch(setStatus('done'));
+      navigate('/');
+    } else if (store.getState().agent.status === 'running' && liveRuns.size === 0) {
+      // Plus rien ne tourne et personne n'a ouvert de review entre-temps :
+      // libérer l'écran « analyse en cours » de la page Faire une MAJ
+      dispatch(setStatus('idle'));
+    }
+  };
+
+  // Démarre les analyses en file tant qu'il reste des créneaux libres.
+  // Relit la liste depuis le store (l'item a pu être supprimé/modifié entre-temps).
+  const pumpQueue = () => {
+    while (liveRuns.size < CONCURRENCY && launchQueue.length > 0) {
+      const nextId = launchQueue.shift();
+      syncQueueUi();
+      const next = store.getState().pending.list.find(i => i.id === nextId);
+      if (!next || !['pending', 'error'].includes(next.status)) continue; // retiré/déjà traité
+      startAnalysis(next, { interactive: false }); // liveRuns.add est synchrone → le while voit le créneau occupé
+    }
+  };
+
+  // ── Lancement au clic : créneau libre → démarre · file pleine → mise en file ──
+  const handleRunMaj = (item) => {
     if (!settings.aiConfigured && !settings.useLocalProxy && !settings.anthropicKey) {
       toast.error('Clé API Anthropic manquante — vérifiez les Paramètres');
       return;
     }
-    if (runStates.size >= CONCURRENCY) {
-      toast(`Limite de ${CONCURRENCY} MAJ simultanées — attendez qu'un article se termine`, { icon: <Info size={18} className="text-blue-500" /> });
+    if (liveRuns.has(item.id) || launchQueue.includes(item.id)) return; // déjà lancé/en file
+    if (liveRuns.size >= CONCURRENCY) {
+      launchQueue.push(item.id);
+      syncQueueUi();
+      toast(
+        `${CONCURRENCY} analyses déjà en cours — « ${item.title || item.url} » démarrera automatiquement (n°${launchQueue.length} en file)`,
+        { icon: <Clock size={18} className="text-indigo-500" />, duration: 5000 },
+      );
       return;
     }
-
-    // Feedback visuel immédiat — le bouton MAJ disparaît dès le clic
-    const slotIndex = runStates.size;
-    updateRunState(item.id, { step: slotIndex > 0 ? 'Démarrage dans quelques secondes…' : '', progress: 0 });
-
-    // Stagger : décaler le démarrage selon le nombre de slots déjà actifs
-    // pour éviter un burst simultané sur l'API Anthropic
-    if (slotIndex > 0) {
-      await new Promise(r => setTimeout(r, slotIndex * SLOT_STAGGER_MS));
-    }
-
-    dispatch(resetAgent());
-    dispatch(setStatus('running'));
-
-    const data = await processItem(item);
-    if (!data) return;
-
-    dispatch(setOriginalContent(data.originalContent || ''));
-    dispatch(setUpdatedContent(data.updatedContent   || ''));
-    dispatch(setDiff(data.updates   || []));
-    dispatch(setSources(data.sources || []));
-    dispatch(setAnalysis(data.analysis || ''));
-    dispatch(setParseFailed(data.parseFailed === true));
-    // TOUJOURS rebinder (null si absent) : sinon le wpData de l'article PRÉCÉDENT
-    // reste en mémoire → publication proposée sur le mauvais site (confusion de sites).
-    dispatch(setWpData(data.wpData || null));
-    dispatch(setAudit(data.audit || ''));
-    dispatch(setCurrentArticleId(item.id));
-    dispatch(setStatus('done'));
-    navigate('/');
+    startAnalysis(item, { interactive: true });
   };
 
 
-  const handleDelete         = (id) => dispatch(removePendingItem(id));
+  // ── Suppressions avec garde-fou (ConfirmDialog) ────────────────────────────
+  // { type:'item', id, label } → confirmation simple · { type:'all' } → renforcée
+  const [confirmState, setConfirmState] = useState(null);
+  const handleDelete = (id) => {
+    const it = itemsRef.current.find(i => i.id === id);
+    setConfirmState({ type: 'item', id, label: it?.title || it?.url || 'cet article' });
+  };
+  const confirmDeletion = () => {
+    if (!confirmState) return;
+    if (confirmState.type === 'all') {
+      launchQueue.length = 0;
+      syncQueueUi();
+      dispatch(clearAll());
+      toast.success('File vidée');
+    } else {
+      dequeueItem(confirmState.id); // retiré aussi de la file de lancement le cas échéant
+      dispatch(removePendingItem(confirmState.id));
+      toast.success('Article retiré de la file');
+    }
+  };
   const handleAssign         = (id, assigneeId) => dispatch(updatePendingItem({ id, assigneeId }));
   const handlePriorityChange = (id, priority) => dispatch(updatePendingItem({ id, priority }));
 
@@ -1482,12 +1653,25 @@ export default function MajEnAttente() {
             ))}
           </div>
           <button
-            onClick={() => { if (window.confirm('Vider toute la liste ?')) dispatch(clearAll()); }}
+            onClick={() => setConfirmState({ type: 'all' })}
             className="btn-ghost text-xs text-red-400 hover:text-red-600 hover:bg-red-50 flex items-center gap-1.5"
           >
             <Trash2 size={12} />
             Tout supprimer
           </button>
+
+          {/* Garde-fou de suppression (item : simple · tout : renforcé) */}
+          <ConfirmDialog
+            open={!!confirmState}
+            onClose={() => setConfirmState(null)}
+            onConfirm={confirmDeletion}
+            definitive={confirmState?.type === 'all'}
+            title={confirmState?.type === 'all' ? 'Vider toute la file ?' : 'Retirer cet article de la file ?'}
+            message={confirmState?.type === 'all'
+              ? `Les ${activeItems.length} article${activeItems.length > 1 ? 's' : ''} de la file (en attente, en cours et à valider) seront supprimés définitivement. Les articles déjà archivés dans l'Historique ne sont pas touchés.`
+              : `« ${confirmState?.label || ''} » sera retiré de la file de MAJ. S'il a déjà été analysé, son archive reste dans l'Historique.`}
+            confirmLabel={confirmState?.type === 'all' ? 'SUPPRIMER DÉFINITIVEMENT' : 'Retirer'}
+          />
         </div>
       )}
 
@@ -1534,6 +1718,9 @@ export default function MajEnAttente() {
                     onPriorityChange={handlePriorityChange}
                     onViewDiff={handleViewDiff}
                     running={runStates.get(item.id) || null}
+                    queuedPos={queuedIds.indexOf(item.id) + 1 || null}
+                    onDequeue={dequeueItem}
+                    isMine={isMine(item)}
                     teamMembers={teamMembers}
                   />
                 ))}

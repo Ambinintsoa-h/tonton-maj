@@ -18,6 +18,7 @@ import {
   setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit, setWpData,
 } from '../store/slices/agentSlice';
 import { deleteArticle, fetchArticleHtml, getArticles, isLockActive } from '../services/firebase';
+import ConfirmDialog from '../components/common/ConfirmDialog';
 import { useNavigate } from 'react-router-dom';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
@@ -709,7 +710,13 @@ export default function Historique() {
     )
     .sort((a, b) => sortKey(b) - sortKey(a));
 
-  const handleDelete = (id) => {
+  // Garde-fou : la suppression d'une archive efface aussi le doc Firestore
+  // (avant/après, suivi SEO) → confirmation obligatoire avant d'agir.
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const handleDelete = (id) => setConfirmDeleteId(id);
+  const confirmDeletion = () => {
+    const id = confirmDeleteId;
+    if (!id) return;
     dispatch(removeFromHistory(id));
     toast.success('Supprimé de l\'historique');
     if (preview?.id === id) setPreview(null);
@@ -838,6 +845,19 @@ export default function Historique() {
           </AnimatePresence>
         </div>
       )}
+
+      {/* ── Garde-fou de suppression d'archive ── */}
+      <ConfirmDialog
+        open={!!confirmDeleteId}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={confirmDeletion}
+        title="Supprimer cet article de l'historique ?"
+        message={(() => {
+          const a = history.find(x => x.id === confirmDeleteId);
+          return `« ${a?.title || a?.url || 'Article'} » — l'avant/après, les modifications et le suivi SEO seront supprimés (base comprise).`;
+        })()}
+        confirmLabel="Supprimer"
+      />
 
       {/* ── Modal avant / après ── */}
       <AnimatePresence>

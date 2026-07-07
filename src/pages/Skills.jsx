@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { STORAGE_KEYS } from '../constants/storage';
+import ConfirmDialog from '../components/common/ConfirmDialog';
 import axios from 'axios';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -1308,7 +1309,14 @@ export default function Skills() {
     setShowNewSkill(false);
   };
 
-  const handleDeleteSkill = async (id) => {
+  // Garde-fou : confirmation avant suppression d'un skill / document (les cartes
+  // appellent onDelete directement — aucune confirmation n'existait).
+  const [confirmDelete, setConfirmDelete] = useState(null); // { kind:'skill'|'knowledge', id, name }
+  const handleDeleteSkill = (id) => {
+    const s = skills.find(x => x.id === id);
+    setConfirmDelete({ kind: 'skill', id, name: s?.name || 'ce skill' });
+  };
+  const doDeleteSkill = async (id) => {
     if (firebaseReady) { try { await deleteSkill(id); } catch {} }
     dispatch(removeSkill(id));
     toast.success('Skill supprimé');
@@ -1330,7 +1338,11 @@ export default function Skills() {
     setShowNewKnowledge(false);
   };
 
-  const handleDeleteKnowledge = async (id) => {
+  const handleDeleteKnowledge = (id) => {
+    const k = knowledge.find(x => x.id === id);
+    setConfirmDelete({ kind: 'knowledge', id, name: k?.name || 'ce document' });
+  };
+  const doDeleteKnowledge = async (id) => {
     if (firebaseReady) { try { await deleteKnowledge(id); } catch {} }
     dispatch(removeKnowledge(id));
     toast.success('Document supprimé');
@@ -1499,6 +1511,20 @@ export default function Skills() {
     <div className="space-y-10 animate-fade-in">
 
       <input ref={jsonInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
+
+      {/* Garde-fou de suppression (skill / document de connaissance) */}
+      <ConfirmDialog
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={() => {
+          if (!confirmDelete) return;
+          if (confirmDelete.kind === 'skill') doDeleteSkill(confirmDelete.id);
+          else doDeleteKnowledge(confirmDelete.id);
+        }}
+        title={confirmDelete?.kind === 'skill' ? 'Supprimer ce skill ?' : 'Supprimer ce document ?'}
+        message={`« ${confirmDelete?.name || ''} » sera supprimé pour toute l'équipe (base comprise).`}
+        confirmLabel="Supprimer"
+      />
 
       {/* ══════════════════ BARRE BUDGET + OUTILS ══════════════════ */}
       <div className="glass-card px-5 py-4 flex flex-wrap items-center justify-between gap-4">

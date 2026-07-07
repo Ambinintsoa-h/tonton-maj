@@ -14,6 +14,7 @@ import {
   User, ListTodo, Target, Activity, Award,
 } from 'lucide-react';
 import { resetStats } from '../store/slices/statsSlice';
+import ConfirmDialog from '../components/common/ConfirmDialog';
 import { ROLE_COLORS } from '../constants/theme';
 import { getActivitySessionsRange } from '../services/firebase';
 
@@ -706,11 +707,12 @@ function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, di
   const todayCount = stats.history.filter(h => isToday(h.createdAt)).length;
   const weekCount  = stats.history.filter(h => isThisWeek(h.createdAt)).length;
 
-  const handleReset = () => {
-    if (window.confirm('Réinitialiser toutes les statistiques ? Cette action est irréversible.')) {
-      dispatch(resetStats());
-      toast.success('Statistiques réinitialisées');
-    }
+  // Garde-fou renforcé : remise à zéro de TOUTES les statistiques (irréversible)
+  const [confirmReset, setConfirmReset] = useState(false);
+  const handleReset = () => setConfirmReset(true);
+  const doReset = () => {
+    dispatch(resetStats());
+    toast.success('Statistiques réinitialisées');
   };
 
   return (
@@ -727,6 +729,15 @@ function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, di
           className="btn-ghost flex items-center gap-2 text-red-400 hover:text-red-600 hover:bg-red-50 text-xs">
           <Trash2 size={13} />Réinitialiser les stats
         </button>
+        <ConfirmDialog
+          open={confirmReset}
+          onClose={() => setConfirmReset(false)}
+          onConfirm={doReset}
+          definitive
+          title="Réinitialiser toutes les statistiques ?"
+          message="Tous les compteurs (articles traités, tokens, coûts, historique des stats) repartiront de zéro pour toute l'équipe."
+          confirmLabel="RÉINITIALISER"
+        />
       </div>
 
       {/* Widget coût — en premier, le plus important */}
