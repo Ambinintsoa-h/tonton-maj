@@ -36,6 +36,10 @@ export default function Articles() {
   const [tab, setTab] = useState(TAB_URL);
   const [url, setUrl] = useState('');
   const [text, setText] = useState('');
+  // URL du post original en mode « Coller le contenu » (optionnel) : si renseignée,
+  // le collage se comporte comme le mode URL (publication ciblée + suivi SEO),
+  // SANS re-scraper — on garde le contenu collé.
+  const [pasteUrl, setPasteUrl] = useState('');
   const [scraping, setScraping] = useState(false);
   const [targetKeyword, setTargetKeyword] = useState('');
   const [seoKeywords, setSeoKeywords] = useState([]);
@@ -101,6 +105,10 @@ export default function Articles() {
     clearDraft(authUid || authUsername || null);
     dispatch(resetAgent());
     dispatch(setStatus('running'));
+
+    // URL de l'article : celle de l'onglet URL, ou celle (optionnelle) saisie en
+    // mode collage. Unifie publication ciblée, suivi SEO, verrou liens, historique.
+    const articleUrl = (tab === TAB_URL ? url : pasteUrl).trim();
 
     let articleContent   = '';    // texte brut → envoyé à Claude + applyAllDiffs
     let articleHtml      = '';    // HTML structuré → affiché dans l'UI (tableaux, titres…)
@@ -191,7 +199,7 @@ export default function Articles() {
         contentHtml: articleHtml,  // HTML (avec liens) pour l'analyse du maillage
         skills,
         knowledge,
-        articleUrl:      tab === TAB_URL ? url : '',
+        articleUrl,
         targetKeyword:   targetKeyword.trim(),
         wpSites,
         existingWpData:  prefetchedWpData,  // évite un 2e appel WP MCP dans runAgent
@@ -207,7 +215,7 @@ export default function Articles() {
       // ── Application des diffs via utils/diff ─────────────────────────────
       // On applique les diffs sur le HTML structuré (articleHtml) pour préserver
       // la mise en page originale : tableaux, titres, listes…
-      const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1, tab === TAB_URL ? url : '');
+      const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1, articleUrl);
 
       // Conversion \n→<br> uniquement si le contenu n'a pas déjà une structure
       // de blocs HTML (<p>, <h1-6>, <table>, <ul>, <ol>).
@@ -241,9 +249,9 @@ export default function Articles() {
           return tmp.querySelector('h1')?.textContent?.trim() || '';
         } catch { return ''; }
       };
-      const articleTitle = tab === TAB_URL
-        ? (extractH1(articleHtml) || url.replace(/\/$/, '').split('/').pop() || url)
-        : (extractH1(articleHtml) || articleContent.substring(0, 60) + '...');
+      const articleTitle = extractH1(articleHtml)
+        || (articleUrl ? (articleUrl.replace(/\/$/, '').split('/').pop() || articleUrl)
+                       : articleContent.substring(0, 60) + '...');
       const articleData = {
         title: articleTitle,
         originalContent: articleHtml,   // HTML pour affichage fidèle (tableaux, titres…)
@@ -252,7 +260,7 @@ export default function Articles() {
         sources: result.sources || [],
         analysis: result.analysis || '',
         audit: result.audit || '',   // persiste le rapport d'audit (onglet AUDIT) — dispo dès la fin de runAgent
-        url: tab === TAB_URL ? url : '',
+        url: articleUrl,
         createdAt: new Date().toISOString(),
         tokenUsage: result.tokenUsage || null,
         assigneeId: authUid || authUsername || null,
@@ -291,7 +299,6 @@ export default function Articles() {
       // seoKeywords   = mots-clés secondaires optionnels ajoutés dans "Suivi SEO"
       const trackingKeywords = [targetKeyword.trim(), ...seoKeywords].filter(Boolean);
       if (trackingKeywords.length > 0 && savedId && firebaseReady && (settings.haloscanConfigured || settings.haloscanKey)) {
-        const articleUrl = tab === TAB_URL ? url.trim() : '';
         const now    = Date.now();
         const DAY_MS = 86400000;
         // Initialisé avant le try pour que le badge "En attente J+7" s'affiche
@@ -447,6 +454,25 @@ export default function Articles() {
                     <p className="text-xs text-gray-400">
                       {text.length > 0 ? `${text.split(/\s+/).length} mots` : 'Collez votre article complet pour une analyse optimale.'}
                     </p>
+
+                    {/* URL du post original (optionnel) — cible la publication + active le suivi SEO */}
+                    <div className="pt-1 space-y-1.5">
+                      <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
+                        <Link2 size={13} className="text-gray-400" />
+                        URL du post original
+                        <span className="text-xs font-normal text-gray-400 ml-1">(optionnel)</span>
+                      </label>
+                      <input
+                        type="url"
+                        value={pasteUrl}
+                        onChange={e => setPasteUrl(e.target.value)}
+                        placeholder="https://exemple.com/mon-article"
+                        className="input-glass"
+                      />
+                      <p className="text-xs text-gray-400">
+                        Renseignez-la pour <strong>publier la MAJ sur le bon post</strong> et <strong>activer le suivi SEO</strong>. Le contenu collé est conservé (aucun re-téléchargement).
+                      </p>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
