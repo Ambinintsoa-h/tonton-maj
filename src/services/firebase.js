@@ -132,12 +132,27 @@ export const fetchArticleHtml = async (url) => {
   }
 };
 
+// Normalise un horodatage (nombre ms OU chaîne ISO) en millisecondes, pour un
+// tri client sûr quand le champ mélange les deux formats selon le flux.
+const toMs = (v) => {
+  if (typeof v === 'number') return v;
+  const t = v ? Date.parse(v) : 0;
+  return Number.isNaN(t) ? 0 : t;
+};
+
 // Articles history
+// ⚠️ PAS d'orderBy Firestore : certains docs (articles CQ créés par setDoc merge
+// depuis l'id du pending) n'ont que `updatedAt`, pas `createdAt` → orderBy les
+// aurait EXCLUS silencieusement (article disparu de l'historique après un vidage
+// de cache). On récupère tous les docs et on trie côté client.
 export const getArticles = async () => {
   if (!db) return [];
-  const q = query(collection(db, 'articles'), orderBy('createdAt', 'desc'));
-  const snap = await getDocs(q);
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const snap = await getDocs(collection(db, 'articles'));
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) =>
+      Math.max(toMs(b.lastModifiedAt), toMs(b.updatedAt), toMs(b.createdAt))
+      - Math.max(toMs(a.lastModifiedAt), toMs(a.updatedAt), toMs(a.createdAt)));
 };
 
 // Sauvegarde un article : HTML → Firebase Storage, métadonnées + URLs → Firestore.
@@ -443,11 +458,18 @@ export const getUsers = async () => {
 // elles synchronisent Firebase Auth (email, mot de passe, rôle) avec Firestore.
 
 // Pending items (file d'attente partagée entre membres de l'équipe)
+// ⚠️ PAS d'orderBy Firestore : les items de la file sont horodatés par `addedAt`
+// (ajout manuel / import / requeue) et n'ont PAS toujours de `createdAt`. Or
+// orderBy('createdAt') EXCLUT silencieusement tout document dépourvu du champ →
+// après un vidage de cache, la file entière semblait disparaître alors que les
+// docs étaient bien en base (juste jamais relus). On récupère donc TOUS les
+// docs et on trie côté client (aucun item ne peut être omis).
 export const getPendingItems = async () => {
   if (!db) return [];
-  const q = query(collection(db, 'pending'), orderBy('createdAt', 'desc'));
-  const snap = await getDocs(q);
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const snap = await getDocs(collection(db, 'pending'));
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (b.addedAt || b.createdAt || 0) - (a.addedAt || a.createdAt || 0));
 };
 
 // Allège un item de file pour Firestore. Les HTML COMPLETS de majResult
@@ -478,10 +500,14 @@ export const savePendingList = async (items) => {
   // Supprimer les docs qui ne sont plus dans la liste
   const currentIds = new Set(items.map(i => String(i.id)));
   await Promise.all(snap.docs.filter(d => !currentIds.has(d.id)).map(d => deleteDoc(d.ref)));
-  // Upsert tous les items courants (allégés — voir slimPendingItem)
-  await Promise.all(items.map(item =>
-    setDoc(doc(db, 'pending', String(item.id)), slimPendingItem(item))
-  ));
+  // Upsert tous les items courants (allégés — voir slimPendingItem).
+  // Filet : garantir un `addedAt` sur chaque doc → horodatage stable pour le tri
+  // à la relecture (et cohérence même pour d'anciens items sans createdAt).
+  await Promise.all(items.map(item => {
+    const slim = slimPendingItem(item);
+    if (!slim.addedAt) slim.addedAt = slim.createdAt || Date.now();
+    return setDoc(doc(db, 'pending', String(item.id)), slim);
+  }));
 };
 
 // Stats globales (document unique partagé par toute l'équipe)
