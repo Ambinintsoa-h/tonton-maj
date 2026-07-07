@@ -207,7 +207,7 @@ export default function Articles() {
       // ── Application des diffs via utils/diff ─────────────────────────────
       // On applique les diffs sur le HTML structuré (articleHtml) pour préserver
       // la mise en page originale : tableaux, titres, listes…
-      const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1);
+      const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1, tab === TAB_URL ? url : '');
 
       // Conversion \n→<br> uniquement si le contenu n'a pas déjà une structure
       // de blocs HTML (<p>, <h1-6>, <table>, <ul>, <ol>).

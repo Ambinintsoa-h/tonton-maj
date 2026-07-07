@@ -1200,7 +1200,7 @@ export default function MajEnAttente() {
       });
 
       // ── Étape 3 : Application des diffs ───────────────────────────────────
-      const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1);
+      const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1, item.url || '');
       const hasBlockStructure = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(rawHtml);
       // FAQ : fin d'article + normalisation en accordéon (structure unique pour toutes les FAQ)
       // Tableaux : enveloppés dans un conteneur responsive (défilement horizontal sur mobile)

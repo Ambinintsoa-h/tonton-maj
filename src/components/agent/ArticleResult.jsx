@@ -44,12 +44,14 @@ const TAB_APRES = 'apres';
 
 // ── Nettoyage du contenu collé dans la vue diff ──────────────────────────────
 // Règle : aucun style collé. On conserve la STRUCTURE (paragraphes, titres,
-// listes, liens, tableaux) mais on retire TOUT style inline et toute mise en
-// forme de caractère (couleurs, fonds, polices, gras, italique, souligné…).
+// listes, liens, tableaux) et le GRAS (b/strong — bonne pratique SEO : les
+// mots-clés en gras doivent le rester), mais on retire tout le reste de la
+// mise en forme de caractère (couleurs, fonds, polices, italique, souligné…).
 const PASTE_KEEP_TAGS = new Set([
   'P', 'BR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
   'UL', 'OL', 'LI', 'A', 'BLOCKQUOTE',
   'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'HR',
+  'B', 'STRONG',
 ]);
 // Balises supprimées intégralement (média / non-texte / scripts)
 const PASTE_DROP_TAGS = new Set([
@@ -57,8 +59,17 @@ const PASTE_DROP_TAGS = new Set([
   'AUDIO', 'SVG', 'CANVAS', 'OBJECT', 'EMBED', 'FORM', 'INPUT', 'BUTTON', 'SELECT',
   'TEXTAREA', 'HEAD', 'META', 'LINK', 'TITLE',
 ]);
-// Toute autre balise (SPAN, B, STRONG, I, EM, U, S, FONT, MARK, DIV…) est
-// "débalisée" : on garde son contenu mais on supprime la balise de mise en forme.
+// Toute autre balise (SPAN, I, EM, U, S, FONT, MARK, DIV…) est "débalisée" :
+// on garde son contenu mais on supprime la balise de mise en forme.
+// Cas particulier : un élément débalisé portant un gras INLINE
+// (style="font-weight:bold/600+" — collages Google Docs/Word) est converti en
+// <strong> pour que le gras SEO survive au nettoyage.
+
+const hasInlineBold = (el) => {
+  const fw = (el.getAttribute?.('style') || '').match(/font-weight\s*:\s*([a-z0-9]+)/i)?.[1];
+  if (!fw) return false;
+  return fw.toLowerCase() === 'bold' || fw.toLowerCase() === 'bolder' || parseInt(fw, 10) >= 600;
+};
 
 const sanitizePastedHtml = (html) => {
   const root = document.createElement('div');
@@ -72,6 +83,17 @@ const sanitizePastedHtml = (html) => {
 
       const tag = child.tagName;
       if (PASTE_DROP_TAGS.has(tag)) { child.remove(); return; }
+
+      // Gras exprimé en style inline (Google Docs/Word collent <span
+      // style="font-weight:700">) → converti en <strong> AVANT le nettoyage
+      // des enfants, pour préserver le gras des mots-clés (SEO).
+      if (!PASTE_KEEP_TAGS.has(tag) && hasInlineBold(child)) {
+        const strong = document.createElement('strong');
+        while (child.firstChild) strong.appendChild(child.firstChild);
+        child.parentNode.replaceChild(strong, child);
+        walk(strong);
+        return;
+      }
 
       walk(child); // nettoyer les enfants AVANT de décider du sort du parent
 
@@ -1027,7 +1049,7 @@ export default function ArticleResult() {
       // vertes de la passe 1 dans le rendu. Les stratégies de diff matchent le texte
       // non touché par la passe 1 (str. 1/2) et peuvent traverser les balises HTML
       // pour les textes longs (str. 4 avec [\s\S]{0,N}).
-      const { html: newHtml, updates: p2Updates } = applyAllDiffs(contentRef.current, result.updates, 2);
+      const { html: newHtml, updates: p2Updates } = applyAllDiffs(contentRef.current, result.updates, 2, articleUrl || '');
       // Conversion \n→<br> uniquement si pas de structure de blocs HTML
       const p2HasBlocks = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(newHtml);
       // FAQ : fin d'article + normalisation en accordéon (même structure pour toutes les FAQ)
