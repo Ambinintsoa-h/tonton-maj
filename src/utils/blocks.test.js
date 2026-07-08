@@ -3,6 +3,7 @@
 import {
   makeTablesResponsive, TABLE_WRAP_ATTR,
   blockMeta, accord, insertBlockHtml, topLevelBlockOf, blockAtRange,
+  isDiffWrapper, unwrapDiffWrapper,
 } from './blocks';
 
 const TABLE = '<table><tbody><tr><td>Prix</td><td>120 €</td></tr></tbody></table>';
@@ -77,6 +78,24 @@ describe('blockMeta / accord', () => {
   it('accorde le participe passé au féminin', () => {
     expect(accord({ fem: true }, 'coupé')).toBe('coupée');
     expect(accord({ fem: false }, 'collé')).toBe('collé');
+  });
+
+  it('voit à travers les marqueurs de diff <ins>/<mark> (bloc ajouté)', () => {
+    const ins = el('<ins class="added-content"><h2>Nouvelle section</h2></ins>');
+    expect(isDiffWrapper(ins)).toBe(true);
+    expect(unwrapDiffWrapper(ins).tagName).toBe('H2');
+    // typé comme un vrai H2, pas comme « ins » générique
+    expect(blockMeta(ins).name).toBe('Titre H2');
+
+    const insTable = el('<ins class="added-content"><table></table></ins>');
+    expect(blockMeta(insTable).name).toBe('Tableau');
+
+    // wrapper enveloppant PLUSIEURS blocs → non déplié (reste le wrapper)
+    const multi = el('<ins class="added-content"><p>a</p><p>b</p></ins>');
+    expect(unwrapDiffWrapper(multi).tagName).toBe('INS');
+
+    // un élément normal n'est pas un wrapper
+    expect(isDiffWrapper(el('<p>x</p>'))).toBe(false);
   });
 });
 

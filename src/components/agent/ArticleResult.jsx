@@ -25,7 +25,7 @@ import {
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
   insertFaqHtmlAtCaret, rectOfNodes, normalizeFaqToAccordion,
 } from '../../utils/faq';
-import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf } from '../../utils/blocks';
+import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf, isDiffWrapper } from '../../utils/blocks';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
@@ -1454,7 +1454,9 @@ export default function ArticleResult() {
       return;
     }
     const meta = blockMeta(el);
-    blockClipRef.current = { html: el.outerHTML, meta };
+    // Bloc AJOUTÉ (enveloppé dans <ins>/<mark> de diff) → on copie le contenu
+    // PROPRE (sans le marqueur), pour qu'il se colle comme un bloc normal.
+    blockClipRef.current = { html: isDiffWrapper(el) ? el.innerHTML : el.outerHTML, meta };
     if (cut) el.remove();
     setBlockClipboard({ mode: cut ? 'couper' : 'copier', ...meta });
     if (cut) afterFaqEdit(); else setFaqHover(null);

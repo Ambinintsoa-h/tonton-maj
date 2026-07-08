@@ -35,10 +35,28 @@ export const blockAtRange = (container, range) => {
   return topLevelBlockOf(container, node);
 };
 
+// ── Traversée des marqueurs de diff ──────────────────────────────────────────
+// Un bloc AJOUTÉ par l'agent (accepté ou encore en vert) est enveloppé dans
+// <ins class="added-content"> (remplacement → <mark class="updated-content">).
+// Pour le typage, l'étiquette, le groupement H2 et le copier/déplacer, on
+// regarde À TRAVERS ce wrapper : s'il n'enveloppe qu'un seul élément de bloc,
+// on le représente par cet élément → il se comporte comme n'importe quel bloc.
+export const isDiffWrapper = (el) =>
+  !!el && el.nodeType === Node.ELEMENT_NODE
+  && (el.tagName === 'INS' || el.tagName === 'MARK')
+  && typeof el.className === 'string' && /(added|updated)-content/.test(el.className);
+
+export const unwrapDiffWrapper = (el) => {
+  if (!isDiffWrapper(el)) return el;
+  const kids = Array.from(el.children);
+  return kids.length === 1 ? kids[0] : el;
+};
+
 // ── Métadonnées d'affichage d'un bloc ────────────────────────────────────────
 // name : libellé (toasts, snackbar) · art : avec article défini (« Coller le
 // tableau ») · fem : accord des participes (« coupée » vs « coupé »).
-export const blockMeta = (el) => {
+export const blockMeta = (rawEl) => {
+  const el = unwrapDiffWrapper(rawEl); // voir à travers <ins>/<mark>
   if (!el || el.nodeType !== Node.ELEMENT_NODE) return { name: 'Bloc', art: 'le bloc', fem: false };
   const tag = el.tagName;
   if (tag === 'TABLE' || el.hasAttribute?.(TABLE_WRAP_ATTR)) return { name: 'Tableau', art: 'le tableau', fem: false };

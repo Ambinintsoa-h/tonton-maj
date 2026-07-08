@@ -23,6 +23,7 @@ import {
   Film, HelpCircle, Quote, Box, PanelRight, Scissors, ClipboardPaste, CopyPlus,
   FoldVertical, UnfoldVertical, ArrowUp, ArrowDown,
 } from 'lucide-react';
+import { unwrapDiffWrapper } from '../../utils/blocks';
 
 // ── Description d'un bloc top-level ──────────────────────────────────────────
 const excerpt = (s, n = 48) => {
@@ -30,7 +31,10 @@ const excerpt = (s, n = 48) => {
   return t.length > n ? t.slice(0, n) + '…' : t;
 };
 
-const describe = (el) => {
+const describe = (rawEl) => {
+  // Voir à travers les marqueurs de diff (<ins>/<mark>) : un bloc AJOUTÉ doit
+  // s'afficher avec son vrai type (H2, tableau…), pas comme un « ins » générique.
+  const el = unwrapDiffWrapper(rawEl);
   const tag = el.tagName;
   const m = tag.match(/^H([1-6])$/);
   if (m) {
@@ -230,7 +234,8 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
     const groups = [];
     let cur = null;
     list.forEach((it, idx) => {
-      if (it.el.tagName === 'H2') {
+      // Voir à travers <ins>/<mark> : un H2 AJOUTÉ ouvre bien une nouvelle section
+      if (unwrapDiffWrapper(it.el).tagName === 'H2') {
         cur = { title: it.label || 'Section', isPreamble: false, members: [] };
         groups.push(cur);
       } else if (!cur) {
