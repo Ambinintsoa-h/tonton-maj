@@ -48,6 +48,18 @@ describe('makeTablesResponsive', () => {
     expect(makeTablesResponsive(noTable)).toBe(noTable);
   });
 
+  it('retire les <br> parasites accumulés dans un conteneur déjà enveloppé', () => {
+    const dirty = '<figure><div data-tt-table-wrap="1" style="overflow-x:auto"><br><br><br><table style="width:100%"><tbody><tr><td>x</td></tr></tbody></table></div></figure>';
+    const out = makeTablesResponsive(dirty);
+    expect(out).not.toContain('<br>');
+    const tmp = document.createElement('div');
+    tmp.innerHTML = out;
+    const wrap = tmp.querySelector(`[${TABLE_WRAP_ATTR}]`);
+    expect(wrap.querySelectorAll('br').length).toBe(0);
+    expect(wrap.querySelector('table')).not.toBeNull();
+    expect(tmp.querySelectorAll(`[${TABLE_WRAP_ATTR}]`).length).toBe(1); // pas de double-wrap
+  });
+
   it('ne modifie pas une largeur inline déjà définie sur le tableau', () => {
     const input = '<table style="width:80%"><tbody><tr><td>x</td></tr></tbody></table>';
     const out = makeTablesResponsive(input);
