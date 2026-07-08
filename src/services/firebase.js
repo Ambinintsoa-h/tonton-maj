@@ -493,6 +493,25 @@ const slimPendingItem = (item) => {
   return slim;
 };
 
+// Abonnement TEMPS RÉEL à la file d'attente partagée. Firestore = source de
+// vérité live : la liste se recharge automatiquement après login / logout /
+// rechargement / sur un autre poste, sans dépendre du timing du bootstrap.
+// Pas d'orderBy (voir getPendingItems) → aucun item omis. Retourne la fonction
+// de désabonnement.
+export const subscribeToPending = (callback) => {
+  if (!db) return () => {};
+  return onSnapshot(
+    collection(db, 'pending'),
+    (snap) => {
+      const items = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.addedAt || b.createdAt || 0) - (a.addedAt || a.createdAt || 0));
+      callback(items);
+    },
+    () => {}, // erreur (permission/réseau) : on garde l'état local, pas de crash
+  );
+};
+
 // Remplace la totalité de la liste pending en Firestore (full-replace debounced)
 export const savePendingList = async (items) => {
   if (!db || !Array.isArray(items)) return;

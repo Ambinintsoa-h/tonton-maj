@@ -36,7 +36,7 @@ import { setStats } from './store/slices/statsSlice';
 import {
   initFirebase, getSkills, getArticles, getWordPressSites, getUsers,
   getPendingItems, getStats, savePendingList, saveStats, getKnowledge,
-  subscribeToNotifications,
+  subscribeToNotifications, subscribeToPending,
 } from './services/firebase';
 import tracker from './services/activityTracker';
 import { setNotifications } from './store/slices/notificationsSlice';
@@ -77,12 +77,10 @@ axios.interceptors.response.use(
 // rechargement de module par le HMR Webpack.
 // window.__tontonFirebaseBooted protège contre le double-chargement HMR.
 // ─────────────────────────────────────────────────────────────────────────────
-// Garde anti-écrasement de la file partagée : tant que la lecture INITIALE de
-// la collection pending n'a pas RÉUSSI, FirestoreSync ne pousse rien. Sans ça,
-// après un vidage de cache (Redux = liste vide) une hydratation lente ou en
-// échec laissait le full-replace debounce 3 s SUPPRIMER les items de toute
-// l'équipe (dont les « À valider »).
-let pendingHydrated = false;
+// La file « MAJ en attente » est désormais synchronisée en TEMPS RÉEL par
+// PendingSync (onSnapshot) dès que l'utilisateur est authentifié → plus besoin
+// de garde d'hydratation au bootstrap. Le bootstrap ne fait qu'un seed rapide
+// (premier paint) ; onSnapshot corrige ensuite avec la vérité serveur.
 
 // Stocké sur window pour que App puisse attendre la fin avant de retirer le splash
 window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
@@ -122,7 +120,7 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
       getArticles().catch(() => []),
       getWordPressSites().catch(() => []),
       getUsers().catch(() => []),
-      getPendingItems().then(list => { pendingHydrated = true; return list; }).catch(() => []),
+      getPendingItems().catch(() => []),
       getStats().catch(() => null),
       getKnowledge().catch(() => []),
     ]);
@@ -238,25 +236,9 @@ function PricingLoader() {
 // Full-replace pour pending (liste courte), setDoc pour stats.
 // ─────────────────────────────────────────────────────────────────────────────
 function FirestoreSync() {
-  const pending       = useSelector(s => s.pending.list);
   const stats         = useSelector(s => s.stats);
   const firebaseReady = useSelector(s => s.settings.firebaseReady);
-
-  const pendingTimer = useRef(null);
   const statsTimer   = useRef(null);
-
-  useEffect(() => {
-    if (!firebaseReady) return;
-    clearTimeout(pendingTimer.current);
-    pendingTimer.current = setTimeout(() => {
-      // Jamais de full-replace avant une hydratation RÉUSSIE de la file :
-      // pousser une liste locale vide/partielle supprimerait les items des
-      // autres membres (vidage de cache, lecture initiale en échec…).
-      if (!pendingHydrated) return;
-      savePendingList(pending).catch(() => {});
-    }, 3000);
-    return () => clearTimeout(pendingTimer.current);
-  }, [pending, firebaseReady]);
 
   useEffect(() => {
     if (!firebaseReady) return;
@@ -266,6 +248,58 @@ function FirestoreSync() {
     }, 8000);
     return () => clearTimeout(statsTimer.current);
   }, [stats, firebaseReady]);
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Synchronisation TEMPS RÉEL de la file « MAJ en attente ».
+// Firestore = source de vérité live (onSnapshot) : la liste est TOUJOURS
+// rechargée depuis la base dès que l'utilisateur est authentifié — après login,
+// logout/re-login, rechargement, vidage de cache ou sur un autre poste. Fini la
+// dépendance au timing du bootstrap et le risque de file « vide ».
+// Écriture (full-replace debounced) UNIQUEMENT quand l'état local DIVERGE
+// vraiment de la dernière version serveur reçue → pas de boucle d'écho, pas
+// d'écrasement de la file des collègues par une liste locale périmée.
+function PendingSync() {
+  const dispatch      = useDispatch();
+  const pending       = useSelector(s => s.pending.list);
+  const firebaseReady = useSelector(s => s.settings.firebaseReady);
+  const isAuthenticated = useSelector(s => s.auth.isAuthenticated);
+
+  const serverSig = useRef(null);   // signature de la dernière file reçue du serveur
+  const gotSnapshot = useRef(false);
+  const writeTimer = useRef(null);
+
+  // Signature « métier » stable (ignore le HTML/ordre) : ce qui définit la file.
+  const sigOf = (list) => JSON.stringify(
+    (list || [])
+      .map(i => [String(i.id), i.status || '', i.assigneeId || '', i.priority || '', i.title || '', i.url || ''])
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1)),
+  );
+
+  // Lecture temps réel
+  useEffect(() => {
+    if (!firebaseReady || !isAuthenticated) return undefined;
+    const unsub = subscribeToPending((items) => {
+      gotSnapshot.current = true;
+      serverSig.current = sigOf(items);
+      dispatch(setPending(items));
+    });
+    return unsub;
+  }, [firebaseReady, isAuthenticated, dispatch]);
+
+  // Écriture différée, seulement si la file locale diverge du serveur
+  useEffect(() => {
+    if (!firebaseReady || !isAuthenticated || !gotSnapshot.current) return undefined;
+    clearTimeout(writeTimer.current);
+    writeTimer.current = setTimeout(() => {
+      if (sigOf(pending) === serverSig.current) return; // écho d'un snapshot → rien à écrire
+      serverSig.current = sigOf(pending); // évite une 2e écriture avant l'écho
+      savePendingList(pending).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(writeTimer.current);
+  }, [pending, firebaseReady, isAuthenticated]);
 
   return null;
 }
@@ -473,6 +507,7 @@ export default function App() {
         <PricingLoader />
         <ProxyDetector />
         <FirestoreSync />
+        <PendingSync />
         <ActivityTrackerInit />
         <NotificationListener />
         <LocalStorageSync />
