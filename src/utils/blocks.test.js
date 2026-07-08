@@ -3,10 +3,51 @@
 import {
   makeTablesResponsive, TABLE_WRAP_ATTR,
   blockMeta, accord, insertBlockHtml, topLevelBlockOf, blockAtRange,
-  isDiffWrapper, unwrapDiffWrapper,
+  isDiffWrapper, unwrapDiffWrapper, normalizeTableStructure,
 } from './blocks';
 
 const TABLE = '<table><tbody><tr><td>Prix</td><td>120 €</td></tr></tbody></table>';
+
+describe('normalizeTableStructure', () => {
+  const norm = (html) => {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    normalizeTableStructure(tmp);
+    return tmp;
+  };
+
+  it('sort un tableau piégé dans un <h2> et déballe les cellules noyées', () => {
+    const dirty = '<h2 class="wp-block-heading"><table><thead><tr><th><p><span style="font-weight: normal;">Matériau</span></p></th></tr></thead><tbody><tr><td><p><span style="font-weight: normal;">Zinc</span></p></td></tr></tbody></table></h2>';
+    const tmp = norm(dirty);
+    const table = tmp.querySelector('table');
+    expect(table).not.toBeNull();
+    // le tableau n'est plus DANS le heading
+    expect(table.closest('h2')).toBeNull();
+    // cellules déballées : plus de <p>/<span>, texte direct
+    expect(tmp.querySelector('th').innerHTML).toBe('Matériau');
+    expect(tmp.querySelector('td').innerHTML).toBe('Zinc');
+    expect(tmp.querySelector('span')).toBeNull();
+  });
+
+  it('supprime les <thead>/<tbody>/lignes vides et les <thead> en double', () => {
+    const dirty = '<table><thead><tr><th></th></tr></thead><thead><tr><th></th></tr></thead>'
+      + '<thead><tr><th>H</th></tr></thead>'
+      + '<tbody><tr><td>A</td></tr></tbody>'
+      + '<tbody><tr><td></td></tr></tbody></table>';
+    const tmp = norm(dirty);
+    expect(tmp.querySelectorAll('thead').length).toBe(1);
+    expect(tmp.querySelector('thead th').textContent).toBe('H');
+    // la ligne vide et son tbody fantôme ont disparu
+    expect(tmp.querySelectorAll('tbody').length).toBe(1);
+    expect(tmp.querySelectorAll('tr').length).toBe(2); // 1 header + 1 data
+  });
+
+  it('retire les styles de police inline des cellules (format standard)', () => {
+    const dirty = '<table><tbody><tr><td style="font-size:20px;color:#f00;padding:4px">X</td></tr></tbody></table>';
+    const td = norm(dirty).querySelector('td');
+    expect(td.getAttribute('style')).toBe('padding:4px'); // police/couleur retirées, padding conservé
+  });
+});
 
 describe('makeTablesResponsive', () => {
   it('enveloppe un tableau nu dans un conteneur à défilement horizontal', () => {
