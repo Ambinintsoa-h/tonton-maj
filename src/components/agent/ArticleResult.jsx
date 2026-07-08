@@ -25,7 +25,7 @@ import {
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
   insertFaqHtmlAtCaret, rectOfNodes, normalizeFaqToAccordion,
 } from '../../utils/faq';
-import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf, isDiffWrapper } from '../../utils/blocks';
+import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf, isDiffWrapper, normalizeTableStructure } from '../../utils/blocks';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId } from '../../store/slices/agentSlice';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
@@ -496,6 +496,11 @@ export default function ArticleResult() {
     // <br> parasites que Chrome injecte dans le conteneur responsive du tableau
     // au fil des éditions (grand vide au-dessus du tableau sur le site publié)
     el.querySelectorAll('[data-tt-table-wrap] > br').forEach(n => n.remove());
+    // Normalisation structurelle des tableaux (lignes/sections vides, table
+    // piégée dans un heading, cellules noyées dans <p><span font-weight>…) →
+    // format standard qui SURVIT à la sauvegarde/réouverture (persisté par
+    // l'autosave qui suit chaque resynchro de l'éditeur).
+    normalizeTableStructure(el);
 
     el.querySelectorAll('img, [data-media="iframe-wrapper"], iframe, video').forEach(m => {
       m.contentEditable = 'false';

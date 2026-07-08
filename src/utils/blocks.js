@@ -124,9 +124,69 @@ const stripWrapBr = (wrap) => {
   return removed;
 };
 
-export const wrapTablesResponsive = (root) => {
+// ── Normalisation STRUCTURELLE d'un tableau ──────────────────────────────────
+// Répare les corruptions accumulées par l'éditeur contentEditable et garantit
+// un format STANDARD (le thème WordPress rend alors le tableau normalement) :
+//   • sort un <table> piégé dans un heading (hN) — cause du rendu « titre » ;
+//   • supprime les <thead>/<tbody>/<tfoot> et les lignes ENTIÈREMENT vides
+//     (les rangées fantômes accumulées) et les <thead> en double ;
+//   • déballe les cellules : <td><p><span style="font-weight:normal">x</span></p>
+//     → <td>x</td>, et retire les styles de police inline (taille/police/poids/
+//     couleur) → le texte reprend la taille/police standard du site.
+const CELL_STYLE_RE = /(font-[\w-]+|color|background(?:-color)?)\s*:[^;]+;?/gi;
+export const normalizeTableStructure = (root) => {
   if (!root) return false;
   let changed = false;
+  root.querySelectorAll('table').forEach((table) => {
+    // 1. Table enfermée dans un heading → l'en sortir (structure invalide)
+    const h = table.closest('h1,h2,h3,h4,h5,h6');
+    if (h && h.parentNode && h !== table) {
+      h.parentNode.insertBefore(table, h.nextSibling);
+      if (!(h.textContent || '').trim() && !h.querySelector('img')) h.remove();
+      changed = true;
+    }
+    // 2. Cellules : déballer les wrappers cosmétiques + retirer styles de police
+    table.querySelectorAll('td, th').forEach((cell) => {
+      cell.querySelectorAll('span[style]').forEach((sp) => {
+        const st = sp.getAttribute('style') || '';
+        if (sp.attributes.length === 1 && /font-|color|background/i.test(st)) {
+          while (sp.firstChild) sp.parentNode.insertBefore(sp.firstChild, sp);
+          sp.remove(); changed = true;
+        }
+      });
+      // <p> unique enfant d'une cellule → déballé (une cellule n'a pas besoin de <p>)
+      const kids = Array.from(cell.childNodes).filter(n => !(n.nodeType === 3 && !n.textContent.trim()));
+      if (kids.length === 1 && kids[0].nodeType === 1 && kids[0].tagName === 'P') {
+        const p = kids[0];
+        while (p.firstChild) cell.insertBefore(p.firstChild, p);
+        p.remove(); changed = true;
+      }
+      const st = cell.getAttribute('style');
+      if (st && CELL_STYLE_RE.test(st)) {
+        const cleaned = st.replace(CELL_STYLE_RE, '').replace(/;\s*;/g, ';').trim().replace(/^;|;$/g, '');
+        if (cleaned) cell.setAttribute('style', cleaned); else cell.removeAttribute('style');
+        changed = true;
+      }
+    });
+    // 3. Lignes entièrement vides → suppression
+    const hasContent = (c) => (c.textContent || '').trim() !== '' || c.querySelector('img, iframe, video');
+    table.querySelectorAll('tr').forEach((tr) => {
+      const cells = Array.from(tr.children).filter(c => c.tagName === 'TD' || c.tagName === 'TH');
+      if (cells.length > 0 && cells.every(c => !hasContent(c))) { tr.remove(); changed = true; }
+    });
+    // 4. Sections vides + <thead> en double (garder le premier)
+    table.querySelectorAll('thead, tbody, tfoot').forEach((sec) => {
+      if (!sec.querySelector('tr')) { sec.remove(); changed = true; }
+    });
+    const theads = table.querySelectorAll('thead');
+    for (let i = 1; i < theads.length; i++) { theads[i].remove(); changed = true; }
+  });
+  return changed;
+};
+
+export const wrapTablesResponsive = (root) => {
+  if (!root) return false;
+  let changed = normalizeTableStructure(root); // répare la structure AVANT d'envelopper
   root.querySelectorAll('table').forEach((table) => {
     // Largeur fluide : occupe l'espace disponible, ne déborde jamais du wrapper
     if (!table.style.width) { table.style.width = '100%'; changed = true; }
