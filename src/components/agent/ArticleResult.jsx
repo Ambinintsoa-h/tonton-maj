@@ -259,6 +259,9 @@ export default function ArticleResult() {
   const [seoTitle,       setSeoTitle]       = useState('');
   const [seoDescription, setSeoDescription] = useState('');
   const [seoGenerating,  setSeoGenerating]  = useState(false);
+  // Date de publication de la MAJ (optionnelle) — format input datetime-local
+  // « YYYY-MM-DDTHH:mm ». Vide = WordPress garde la date existante du post.
+  const [publishDate,    setPublishDate]    = useState('');
   // Ref pour n'auto-générer qu'une seule fois par analyse (évite les re-runs)
   const seoGeneratedRef = useRef(false);
 
@@ -1767,6 +1770,33 @@ export default function ArticleResult() {
     setTimeout(() => setAddedIdx(null), 2000);
   }, [updates, dispatch, lockMedia]);
 
+  // « Placer » une addition : au lieu de l'insertion auto par ancre, on charge le
+  // bloc dans le presse-papiers de blocs → l'utilisateur choisit OÙ le coller
+  // (clic droit dans l'article, ou panneau Structure : coller avant/après).
+  const placeAddition = useCallback((update, missedIdx) => {
+    if (!update.updated) return;
+    let meta = { name: 'Bloc', art: 'le bloc', fem: false };
+    try {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = update.updated;
+      if (tmp.firstElementChild) meta = blockMeta(tmp.firstElementChild);
+    } catch { /* garde le meta par défaut */ }
+    blockClipRef.current = { html: update.updated, meta };
+    setBlockClipboard({ mode: 'copier', ...meta });
+    // La suggestion est considérée traitée (elle va être placée par l'utilisateur)
+    const newDiff = updates.map(d =>
+      (d.applied === false && d.updated === update.updated && d.reason === update.reason)
+        ? { ...d, applied: true } : d
+    );
+    dispatch(setDiff(newDiff));
+    setAddedIdx(missedIdx);
+    setTimeout(() => setAddedIdx(null), 2000);
+    toast.success(
+      `${meta.name} prêt — CLIC DROIT à l'endroit voulu → « Coller », ou panneau Structure (coller avant/après)`,
+      { duration: 6000 },
+    );
+  }, [updates, dispatch]);
+
   const handleExport = async (format) => {
     const finalContent = getFinalHtml();
     let content = '';
@@ -1983,6 +2013,8 @@ export default function ArticleResult() {
       // (souvent /catégorie/slug) reste intact → pas de 404 sur l'ancienne URL.
       if (catsDirty && selectedCategories.length > 0) postData.categories = selectedCategories;
       if (seoTitle || seoDescription) postData.seoMeta = { seoTitle, seoDescription };
+      // Date de publication choisie dans l'outil (optionnelle) → ISO 8601
+      if (publishDate) postData.date = new Date(publishDate).toISOString();
 
       result = await updatePost(site, postToUse.id, postData, postToUse.postType || 'posts');
       const postLabel = postToUse.title?.rendered || postToUse.slug || 'article';
@@ -1998,7 +2030,10 @@ export default function ArticleResult() {
       // Aucun article existant identifiable sur ce site (contenu collé sans URL, ou slug
       // introuvable) → on ne publie/écrase RIEN au hasard : nouveau brouillon de secours.
       const draftTitle = editedTitle || currentArticle?.title || 'Article';
-      result = await publishToWordPress(site, { title: draftTitle, content: htmlContent, status: 'draft' });
+      result = await publishToWordPress(site, {
+        title: draftTitle, content: htmlContent, status: 'draft',
+        ...(publishDate ? { date: new Date(publishDate).toISOString() } : {}),
+      });
       if (result.success) {
         toast(`Article introuvable sur ${site.name} — nouveau brouillon créé à la place.`, { icon: <AlertTriangle size={16} className="text-amber-500" />, duration: 7000 });
       }
@@ -2795,6 +2830,29 @@ export default function ArticleResult() {
                         : 'text-red-500'
                       }`}>{seoDescription.length}/155</span>
                     </div>
+
+                    {/* Date de publication de la MAJ (optionnelle) */}
+                    <div className="flex items-center gap-2 pt-1">
+                      <span className="text-[10px] font-medium text-gray-400 w-20 shrink-0">Date MAJ</span>
+                      <input
+                        type="datetime-local"
+                        value={publishDate}
+                        onChange={e => setPublishDate(e.target.value)}
+                        className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black/20 min-w-0"
+                      />
+                      {publishDate ? (
+                        <button
+                          type="button"
+                          onClick={() => setPublishDate('')}
+                          title="Réinitialiser (garder la date WordPress existante)"
+                          className="shrink-0 text-[10px] text-gray-400 hover:text-red-500 px-1"
+                        >
+                          effacer
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-gray-400 shrink-0 w-28 text-right">date WP inchangée</span>
+                      )}
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -3043,20 +3101,32 @@ export default function ArticleResult() {
                             <p className="text-[10px] text-gray-400 italic">{u.reason}</p>
                           )}
                         </div>
-                        <button
-                          onClick={() => applyMissed(u, i)}
-                          title="Insérer la correction dans l'article"
-                          className={`flex-shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
-                            addedIdx === i
-                              ? 'bg-green-100 text-green-700 border border-green-200'
-                              : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm'
-                          }`}
-                        >
-                          {addedIdx === i
-                            ? <><CheckCircle2 size={12} /> Ajouté</>
-                            : <><Plus size={12} /> Ajouter</>
-                          }
-                        </button>
+                        <div className="flex-shrink-0 flex flex-col items-stretch gap-1">
+                          <button
+                            onClick={() => applyMissed(u, i)}
+                            title="Insérer automatiquement au bon endroit (par ancre)"
+                            className={`flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
+                              addedIdx === i
+                                ? 'bg-green-100 text-green-700 border border-green-200'
+                                : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm'
+                            }`}
+                          >
+                            {addedIdx === i
+                              ? <><CheckCircle2 size={12} /> Ajouté</>
+                              : <><Plus size={12} /> Ajouter</>
+                            }
+                          </button>
+                          {/* Placement manuel avant/après un élément — pour les additions (nouveaux blocs) */}
+                          {u.type === 'addition' && addedIdx !== i && (
+                            <button
+                              onClick={() => placeAddition(u, i)}
+                              title="Choisir où l'insérer : clic droit dans l'article, ou panneau Structure (coller avant/après)"
+                              className="flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border border-indigo-200 text-indigo-700 hover:bg-indigo-50 transition-colors whitespace-nowrap"
+                            >
+                              <ArrowRight size={11} /> Placer…
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -3080,7 +3150,7 @@ export default function ArticleResult() {
             articleEl={articleEl}
             contentRef={contentRef}
             siteFonts={resolvedSiteFonts}
-            clipboard={blockClipboard ? { art: blockClipboard.art } : null}
+            clipboard={blockClipboard ? { art: blockClipboard.art, name: blockClipboard.name, mode: blockClipboard.mode } : null}
             onPasteBlock={pasteBlockAtRange}
             onCopyBlock={blockClipFromRange}
             onUploadMedia={resolvedSite ? uploadMediaToWp : undefined}
@@ -3367,6 +3437,19 @@ export default function ArticleResult() {
           {appliedLinks.size === internalLinks.length && internalLinks.length > 0 && (
             <span className="text-[11px] text-emerald-600 ml-1 font-medium"><CheckCircle2 size={13} className="inline text-emerald-600 shrink-0" /> Tous appliqués</span>
           )}
+        </motion.div>
+      )}
+
+      {/* ── Explication quand AUCUN lien interne n'est proposé ────────────────── */}
+      {internalLinks.length === 0 && agent.internalLinksInfo?.reason && hasContent && diffMode && (
+        <motion.div
+          initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
+          className="flex items-start gap-2 px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200"
+        >
+          <Info size={13} className="text-gray-400 flex-shrink-0 mt-0.5" />
+          <span className="text-[12px] text-gray-500">
+            <span className="font-semibold text-gray-700">Aucun lien interne proposé</span> — {agent.internalLinksInfo.reason}
+          </span>
         </motion.div>
       )}
 

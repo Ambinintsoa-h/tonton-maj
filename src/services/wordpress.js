@@ -87,6 +87,9 @@ export const updatePost = async (site, postId, postData, postType = 'posts') => 
   if (postData.featured_media !== undefined) body.featured_media = postData.featured_media;
   // Catégories
   if (postData.categories?.length) body.categories = postData.categories;
+  // Date de publication (optionnelle) : ISO 8601. WP attend l'heure locale du
+  // site dans `date` (et `date_gmt` en UTC). On envoie `date` ; WP recalcule le GMT.
+  if (postData.date) body.date = postData.date;
   // SEO Meta (Yoast SEO + SEOPress) — WP ignore silencieusement les champs du plugin absent
   if (postData.seoMeta?.seoTitle || postData.seoMeta?.seoDescription) {
     body.meta = {
@@ -115,6 +118,7 @@ export const publishToWordPress = async (site, postData) => {
     title:   postData.title,
     content: postData.content,
     status:  postData.status || 'draft',
+    ...(postData.date ? { date: postData.date } : {}),
   });
   if (!result.success) return result;
   return { success: true, postId: result.data.id, link: result.data.link };

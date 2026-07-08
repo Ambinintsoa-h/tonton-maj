@@ -65,7 +65,7 @@ describe('blockMeta / accord', () => {
 
   it('identifie les types de blocs avec article et genre', () => {
     expect(blockMeta(el('<table></table>'))).toEqual({ name: 'Tableau', art: 'le tableau', fem: false });
-    expect(blockMeta(el('<h2>Titre</h2>'))).toEqual({ name: 'Titre', art: 'le titre', fem: false });
+    expect(blockMeta(el('<h2>Titre</h2>'))).toEqual({ name: 'Titre H2', art: 'le titre H2', fem: false });
     expect(blockMeta(el('<ul><li>a</li></ul>')).fem).toBe(true);
     expect(blockMeta(el('<figure><img alt=""/></figure>')).name).toBe('Image');
     expect(blockMeta(el('<div class="faq-section"></div>')).name).toBe('FAQ');

@@ -42,9 +42,13 @@ export const blockMeta = (el) => {
   if (!el || el.nodeType !== Node.ELEMENT_NODE) return { name: 'Bloc', art: 'le bloc', fem: false };
   const tag = el.tagName;
   if (tag === 'TABLE' || el.hasAttribute?.(TABLE_WRAP_ATTR)) return { name: 'Tableau', art: 'le tableau', fem: false };
-  if (/^H[1-6]$/.test(tag)) return { name: 'Titre', art: 'le titre', fem: false };
+  const hMatch = tag.match(/^H([1-6])$/);
+  if (hMatch) return { name: `Titre H${hMatch[1]}`, art: `le titre H${hMatch[1]}`, fem: false };
   if (tag === 'P') return { name: 'Paragraphe', art: 'le paragraphe', fem: false };
-  if (tag === 'UL' || tag === 'OL') return { name: 'Liste', art: 'la liste', fem: true };
+  if (tag === 'UL') return { name: 'Liste', art: 'la liste', fem: true };
+  if (tag === 'OL') return { name: 'Liste numérotée', art: 'la liste', fem: true };
+  if (tag === 'LI') return { name: 'Élément de liste', art: "l'élément", fem: false };
+  if (tag === 'A') return { name: 'Lien', art: 'le lien', fem: false };
   if (tag === 'IMG') return { name: 'Image', art: "l'image", fem: true };
   if (tag === 'IFRAME' || tag === 'VIDEO') return { name: 'Vidéo', art: 'la vidéo', fem: true };
   if (tag === 'DETAILS') return { name: 'Question FAQ', art: 'la question', fem: true };
