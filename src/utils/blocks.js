@@ -112,6 +112,18 @@ export const insertBlockHtml = (container, html, refEl, where = 'after') => {
 // analyse et à chaque publication.
 export const TABLE_WRAP_ATTR = 'data-tt-table-wrap';
 
+// Retire les <br> parasites DIRECTEMENT enfants du conteneur (avant/après le
+// tableau) : l'éditeur contentEditable de Chrome en injecte au fil des éditions
+// autour d'un tableau non éditable, et ils s'accumulaient en un grand vide au-
+// dessus du tableau sur le site publié. Le tableau seul doit vivre dans le wrap.
+const stripWrapBr = (wrap) => {
+  let removed = false;
+  Array.from(wrap.childNodes).forEach((n) => {
+    if (n.nodeName === 'BR') { n.remove(); removed = true; }
+  });
+  return removed;
+};
+
 export const wrapTablesResponsive = (root) => {
   if (!root) return false;
   let changed = false;
@@ -120,7 +132,11 @@ export const wrapTablesResponsive = (root) => {
     if (!table.style.width) { table.style.width = '100%'; changed = true; }
     if (!table.style.borderCollapse) table.style.borderCollapse = 'collapse';
     const parent = table.parentElement;
-    if (parent && parent.hasAttribute(TABLE_WRAP_ATTR)) return; // déjà enveloppé
+    if (parent && parent.hasAttribute(TABLE_WRAP_ATTR)) {
+      // Déjà enveloppé → nettoyer les <br> parasites accumulés dans le conteneur
+      if (stripWrapBr(parent)) changed = true;
+      return;
+    }
     const wrap = document.createElement('div');
     wrap.setAttribute(TABLE_WRAP_ATTR, '1');
     wrap.style.overflowX = 'auto';
@@ -128,6 +144,7 @@ export const wrapTablesResponsive = (root) => {
     wrap.style.setProperty('-webkit-overflow-scrolling', 'touch');
     table.parentNode.insertBefore(wrap, table);
     wrap.appendChild(table);
+    stripWrapBr(wrap); // sécurité : seul le tableau doit rester dans le conteneur
     changed = true;
   });
   return changed;

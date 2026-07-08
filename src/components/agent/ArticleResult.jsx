@@ -493,6 +493,9 @@ export default function ArticleResult() {
       strayWrap = el.querySelectorAll('table span, table font');
     }
     el.querySelectorAll('table > br, thead > br, tbody > br, tfoot > br, tr > br').forEach(n => n.remove());
+    // <br> parasites que Chrome injecte dans le conteneur responsive du tableau
+    // au fil des éditions (grand vide au-dessus du tableau sur le site publié)
+    el.querySelectorAll('[data-tt-table-wrap] > br').forEach(n => n.remove());
 
     el.querySelectorAll('img, [data-media="iframe-wrapper"], iframe, video').forEach(m => {
       m.contentEditable = 'false';
