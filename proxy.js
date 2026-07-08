@@ -1542,6 +1542,29 @@ const callClaude = (prompt) => new Promise((resolve, reject) => {
   proc.on('error', (e) => { clearTimeout(timer); try { fs.unlinkSync(tmp); } catch {} reject(e); });
 });
 
+// ─── Traduction des erreurs d'appel IA en message clair pour l'utilisateur ────
+// Le motif technique reste dans les logs serveur ; le client reçoit un message
+// actionnable. On NE renvoie JAMAIS la clé API (sanitisée par sécurité même si
+// les messages d'Anthropic n'en contiennent pas).
+const friendlyAiError = (rawMsg = '') => {
+  const m = String(rawMsg);
+  const low = m.toLowerCase();
+  const safe = m.replace(/sk-ant[\w-]+/gi, '***').slice(0, 160);
+  if (/invalide ou expir|invalid.*api.?key|authentication|unauthor|401|403/.test(low))
+    return { status: 401, error: 'Clé API Anthropic invalide ou expirée — prévenez un administrateur.' };
+  if (/credit|balance|quota|payment|billing|402/.test(low))
+    return { status: 402, error: 'Crédits Anthropic épuisés — le compte doit être rechargé.' };
+  if (/too long|maximum.*token|prompt is too long|context|request too large|413/.test(low))
+    return { status: 413, error: "Article trop volumineux pour le modèle — réduisez le contenu (ou désactivez des skills) puis réessayez." };
+  if (/overload|unavailable|bad gateway|gateway timeout|529|503|502|500/.test(low))
+    return { status: 503, error: "L'IA (Anthropic) est momentanément surchargée — réessayez dans quelques instants." };
+  if (/timeout|timed out|>5min|5 min/.test(low))
+    return { status: 504, error: "Délai dépassé (analyse > 5 min) — réessayez, ou réduisez la taille de l'article." };
+  if (/rate.?limit|tous les mod|429/.test(low))
+    return { status: 429, error: 'Limite de requêtes atteinte — patientez une minute puis réessayez.' };
+  return { status: 500, error: `Erreur lors de l'appel à l'IA — ${safe}` };
+};
+
 // ─── Route principale ──────────────────────────────────────────────────────────
 app.post('/api/claude', requireAuth, async (req, res) => {
   const { system, messages, max_tokens = 4096, model } = req.body;
@@ -1579,10 +1602,11 @@ app.post('/api/claude', requireAuth, async (req, res) => {
           throw e;
         }
       }
-      return res.status(429).json({ error: 'Tous les modèles en rate-limit (clé API)' });
+      return res.status(429).json({ error: 'Limite de requêtes atteinte sur tous les modèles — patientez une minute puis réessayez.' });
     } catch (e) {
       console.error('[proxy] Erreur clé API fournie :', e.message);
-      return res.status(500).json({ error: 'Erreur lors de l\'appel à l\'IA' });
+      const f = friendlyAiError(e.message);
+      return res.status(f.status).json({ error: f.error });
     }
   }
 
@@ -1606,7 +1630,8 @@ app.post('/api/claude', requireAuth, async (req, res) => {
     } catch (e) {
       if (e.message !== 'AUTH_REQUIRED') {
         console.error('[proxy] API OAuth échouée:', e.message);
-        return res.status(500).json({ error: 'Erreur lors de l\'appel à l\'IA' });
+        const f = friendlyAiError(e.message);
+        return res.status(f.status).json({ error: f.error });
       }
       console.log('[proxy] Token OAuth invalide, tentative CLI...');
     }
@@ -1624,7 +1649,8 @@ app.post('/api/claude', requireAuth, async (req, res) => {
     console.error('[proxy] Erreur:', e.message);
     // Toujours retourner une réponse HTTP, ne jamais laisser Express crasher
     if (!res.headersSent) {
-      res.status(500).json({ error: e.message });
+      const f = friendlyAiError(e.message);
+      res.status(f.status).json({ error: f.error });
     }
   }
 });
@@ -1698,10 +1724,11 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
       let errData = '';
       apiRes.on('data', d => { errData += d; });
       apiRes.on('end', () => {
-        try {
-          const j = JSON.parse(errData);
-          send({ type: 'error', error: j.error?.message || `HTTP ${apiRes.statusCode}` });
-        } catch { send({ type: 'error', error: `HTTP ${apiRes.statusCode}` }); }
+        let detail;
+        try { detail = JSON.parse(errData).error?.message || `HTTP ${apiRes.statusCode}`; }
+        catch { detail = `HTTP ${apiRes.statusCode}`; }
+        console.error('[proxy] stream API erreur:', apiRes.statusCode, detail);
+        send({ type: 'error', error: friendlyAiError(`${detail} ${apiRes.statusCode}`).error });
         res.end();
       });
       return;
@@ -1750,19 +1777,19 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
       res.end();
     });
 
-    apiRes.on('error', (e) => { send({ type: 'error', error: e.message }); res.end(); });
+    apiRes.on('error', (e) => { send({ type: 'error', error: friendlyAiError(e.message).error }); res.end(); });
   });
 
   const timer = setTimeout(() => {
     apiReq.destroy();
-    send({ type: 'error', error: 'Timeout 5min dépassé' });
+    send({ type: 'error', error: friendlyAiError('Timeout 5min dépassé').error });
     res.end();
   }, 300000);
 
   apiReq.on('close', () => clearTimeout(timer));
   apiReq.on('error', (e) => {
     clearTimeout(timer);
-    send({ type: 'error', error: e.message });
+    send({ type: 'error', error: friendlyAiError(e.message).error });
     if (!res.writableEnded) res.end();
   });
 
