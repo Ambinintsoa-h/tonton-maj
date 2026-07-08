@@ -408,20 +408,28 @@ function ActivityTrackerInit() {
 function NotificationListener() {
   const dispatch = useDispatch();
   const auth = useSelector(s => s.auth);
-  const prevCountRef = useRef(0);
+  // Ne PAS notifier au 1er snapshot : à la connexion, l'abonnement renvoie
+  // TOUTES les notifs (dont d'anciennes non lues) → sans ce garde, on toastait
+  // une notif déjà connue à chaque connexion. On mémorise les ids déjà présents
+  // au premier chargement ; seules les notifs APPARUES ENSUITE toastent.
+  const seenIdsRef = useRef(null); // null = pas encore initialisé (1er snapshot)
 
   useEffect(() => {
-    if (!auth.isAuthenticated || !auth.uid) return;
+    if (!auth.isAuthenticated || !auth.uid) return undefined;
     const userId = auth.uid || auth.username;
+    seenIdsRef.current = null; // réinitialise à chaque (re)connexion
     const unsub = subscribeToNotifications(userId, (notifs) => {
       dispatch(setNotifications(notifs));
-      // Toast pour les nouvelles notifs non lues
       const unread = notifs.filter(n => !n.read);
-      if (unread.length > prevCountRef.current) {
-        const newest = unread[0];
-        if (newest) toast(newest.message, { icon: <Bell size={18} />, duration: 4000 });
+      if (seenIdsRef.current === null) {
+        // 1er snapshot : enregistre l'existant SANS toaster
+        seenIdsRef.current = new Set(unread.map(n => n.id));
+        return;
       }
-      prevCountRef.current = unread.length;
+      // Toast seulement pour une notif non lue JAMAIS vue dans cette session
+      const fresh = unread.find(n => !seenIdsRef.current.has(n.id));
+      if (fresh) toast(fresh.message, { icon: <Bell size={18} />, duration: 4000 });
+      unread.forEach(n => seenIdsRef.current.add(n.id));
     });
     return () => unsub();
   }, [auth.isAuthenticated, auth.uid, auth.username, dispatch]);

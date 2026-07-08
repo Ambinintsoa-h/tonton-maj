@@ -1030,9 +1030,14 @@ function TicketDetail({ ticket, onClose, onUpdate, currentUser, users, history, 
       assigneeUsername: user ? user.username : null,
     };
     await doAction(updates, user ? `Assigné à ${user.username}` : 'Assignation retirée', async () => {
-      if (user) {
+      const targetUid = user ? (user.id || user.uid) : null;
+      const myId = currentUser.uid || currentUser.username;
+      // Ne pas s'auto-notifier : si on s'assigne le ticket à soi-même (ou qu'on
+      // se le ré-attribue), aucune notification. Sinon l'utilisateur recevait
+      // « X vous a assigné le ticket » pour ses propres tickets.
+      if (user && targetUid && targetUid !== myId) {
         await createNotification({
-          toUserId: user.id || user.uid,
+          toUserId: targetUid,
           fromUsername: currentUser.username,
           type: 'ticket_assigned',
           ticketId: ticket.id,

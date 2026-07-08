@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2 } from 'lucide-react';
-import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setAudit } from '../store/slices/agentSlice';
+import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setAudit } from '../store/slices/agentSlice';
 import { addToHistory, updateInHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
 import { cacheSiteFonts } from '../store/slices/wordpressSlice';
@@ -238,6 +238,7 @@ export default function Articles() {
       dispatch(setAnalysis(result.analysis || ''));
       dispatch(setParseFailed(result.parseFailed === true));
       dispatch(setInternalLinks(result.internalLinks || []));
+      dispatch(setInternalLinksInfo(result.internalLinksInfo || null));
       dispatch(setAudit(result.audit || ''));
       dispatch(setStatus('done'));
 

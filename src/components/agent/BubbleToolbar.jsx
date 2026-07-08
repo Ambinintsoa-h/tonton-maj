@@ -885,7 +885,7 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
           <>
             <button
               type="button"
-              title={`Coller ${clipboard.art} à cet endroit`}
+              title={`Coller ${clipboard.art} à cet endroit (${clipboard.mode === 'couper' ? 'coupé' : 'copié'})`}
               onMouseDown={(e) => {
                 e.preventDefault();
                 const range = savedRangeRef.current;   // caret posé au clic droit
@@ -896,6 +896,11 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
               className="flex items-center gap-1.5 h-9 px-2.5 rounded-lg text-[12px] font-semibold bg-indigo-500 text-white hover:bg-indigo-400 transition-colors whitespace-nowrap"
             >
               <ClipboardPaste size={14} /> Coller {clipboard.art}
+              {clipboard.mode && (
+                <span className="text-[10px] font-medium opacity-80 bg-white/20 rounded px-1 py-0.5">
+                  {clipboard.mode === 'couper' ? 'coupé' : 'copié'}
+                </span>
+              )}
             </button>
             <Sep />
           </>

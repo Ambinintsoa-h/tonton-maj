@@ -18,9 +18,10 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import {
-  List, ListOrdered, X, ChevronUp, ChevronDown, Copy, Trash2, GripVertical,
+  List, ListOrdered, X, ChevronUp, ChevronDown, ChevronRight, Copy, Trash2, GripVertical,
   Heading1, Heading2, Heading3, Heading4, Type, Table2, Image as ImageIcon,
   Film, HelpCircle, Quote, Box, PanelRight, Scissors, ClipboardPaste, CopyPlus,
+  FoldVertical, UnfoldVertical, ArrowUp, ArrowDown,
 } from 'lucide-react';
 
 // ── Description d'un bloc top-level ──────────────────────────────────────────
@@ -84,6 +85,9 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
   const [dragIdx, setDragIdx] = useState(null);
   const [dropPos, setDropPos] = useState(null); // { idx, after }
   const [ctxMenu, setCtxMenu] = useState(null); // { x, y, idx } — menu contextuel (clic droit)
+  // Sections H2 dépliées (clé = titre H2). Vide = tout plié (défaut, idéal pour
+  // les longs articles : on voit d'abord la liste des sections).
+  const [expanded, setExpanded] = useState(() => new Set());
   const debounceRef = useRef(null);
 
   // ── Visibilité limitée au bloc « Après — MAJ proposées » ──────────────────
@@ -218,7 +222,60 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
     scrollToEl(el);
   }, [dragIdx, dropPos, items, commit, scrollToEl]);
 
+  // ── Regroupement par section H2 ─────────────────────────────────────────────
+  // Un article = préambule (H1 + intro avant le 1er H2) puis une section par H2.
+  // Chaque section = le H2 + tous les éléments jusqu'au H2 suivant. Permet de
+  // plier/déplier et de DÉPLACER une section entière (le bloc complet).
+  const buildGroups = (list) => {
+    const groups = [];
+    let cur = null;
+    list.forEach((it, idx) => {
+      if (it.el.tagName === 'H2') {
+        cur = { title: it.label || 'Section', isPreamble: false, members: [] };
+        groups.push(cur);
+      } else if (!cur) {
+        cur = { title: 'Introduction', isPreamble: true, members: [] };
+        groups.push(cur);
+      }
+      cur.members.push({ ...it, idx });
+    });
+    // clé stable (titre + rang parmi les titres identiques) pour l'état plié/déplié
+    const seen = {};
+    groups.forEach(g => { const n = (seen[g.title] = (seen[g.title] || 0) + 1); g.key = `${g.title}#${n}`; });
+    return groups;
+  };
+
+  // Déplace une section ENTIÈRE (tous ses éléments) au-dessus/en-dessous de la
+  // section voisine → « déplacer le bloc entier ».
+  const moveSection = useCallback((groups, gIdx, dir) => {
+    const g = groups[gIdx];
+    const target = groups[gIdx + dir];
+    if (!g || !target || !g.members.length || !target.members.length) return;
+    const parent = g.members[0].el.parentNode;
+    if (!parent) return;
+    if (dir < 0) {
+      const ref = target.members[0].el; // insérer avant le 1er élément de la section précédente
+      g.members.forEach(m => parent.insertBefore(m.el, ref));
+    } else {
+      const ref = target.members[target.members.length - 1].el.nextSibling; // après le dernier de la suivante
+      g.members.forEach(m => parent.insertBefore(m.el, ref));
+    }
+    commit();
+    scrollToEl(g.members[0].el);
+  }, [commit, scrollToEl]);
+
+  const toggleGroup = useCallback((key) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
   if (!articleEl || !inView) return null;
+
+  const groups = buildGroups(items);
+  const allExpanded = groups.length > 0 && groups.every(g => expanded.has(g.key));
 
   return createPortal(
     <>
@@ -247,7 +304,15 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
           <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-gray-100 bg-gray-50/80">
             <PanelRight size={14} className="text-indigo-500 shrink-0" />
             <span className="text-xs font-semibold text-gray-800 flex-1">Structure du document</span>
-            <span className="text-[10px] text-gray-400 font-medium">{items.length} blocs</span>
+            <span className="text-[10px] text-gray-400 font-medium">{groups.length} sect. · {items.length} blocs</span>
+            <button
+              type="button"
+              title={allExpanded ? 'Tout replier' : 'Tout déplier'}
+              onClick={() => setExpanded(allExpanded ? new Set() : new Set(groups.map(g => g.key)))}
+              className="p-1 rounded-lg hover:bg-black/5 text-gray-400 hover:text-indigo-600 transition-colors"
+            >
+              {allExpanded ? <FoldVertical size={14} /> : <UnfoldVertical size={14} />}
+            </button>
             <button
               type="button"
               onClick={() => setOpen(false)}
@@ -261,78 +326,123 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
             {items.length === 0 && (
               <p className="text-xs text-gray-400 text-center py-6">Aucun contenu</p>
             )}
-            {items.map((it, idx) => (
-              <div key={idx} className="relative">
-                {/* Indicateur de dépôt */}
-                {dropPos?.idx === idx && !dropPos.after && (
-                  <div className="absolute -top-px left-2 right-2 h-0.5 bg-indigo-500 rounded-full z-10" />
-                )}
-                <div
-                  draggable
-                  onDragStart={(e) => { setDragIdx(idx); e.dataTransfer.effectAllowed = 'move'; }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    const r = e.currentTarget.getBoundingClientRect();
-                    setDropPos({ idx, after: e.clientY > r.top + r.height / 2 });
-                  }}
-                  onDrop={(e) => { e.preventDefault(); handleDrop(); }}
-                  onDragEnd={() => { setDragIdx(null); setDropPos(null); }}
-                  onClick={() => scrollToEl(it.el)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setCtxMenu({ x: e.clientX, y: e.clientY, idx });
-                  }}
-                  className={[
-                    'group flex items-center gap-1.5 mx-1.5 px-1.5 py-[5px] rounded-lg cursor-pointer select-none',
-                    'hover:bg-indigo-50/80 transition-colors',
-                    dragIdx === idx ? 'opacity-40' : '',
-                    it.indent ? 'ml-4' : '',
-                  ].join(' ')}
-                >
-                  <GripVertical size={12} className="text-gray-300 group-hover:text-gray-400 shrink-0 cursor-grab" />
-                  <it.Icon size={13} className={`shrink-0 ${it.strong ? 'text-indigo-600' : 'text-gray-400'}`} />
-                  <span className={[
-                    'flex-1 min-w-0 truncate text-[11.5px] leading-tight',
-                    it.strong ? 'font-semibold text-gray-800' : 'text-gray-600',
-                    it.dim ? 'italic text-gray-300' : '',
-                  ].join(' ')}>
-                    {it.label || it.kind}
-                  </span>
-                  {/* Actions au survol */}
-                  <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-                    <button type="button" title="Monter" disabled={idx === 0}
-                      onClick={(e) => { e.stopPropagation(); moveItem(idx, -1); }}
-                      className="p-0.5 rounded hover:bg-indigo-100 text-gray-400 hover:text-indigo-700 disabled:opacity-25">
-                      <ChevronUp size={12} />
+            {groups.map((g, gIdx) => {
+              const isOpen = expanded.has(g.key);
+              return (
+                <div key={g.key} className="mb-0.5">
+                  {/* ── En-tête de section (H2) — pliable, déplaçable en entier ── */}
+                  <div className="group/sec flex items-center gap-1 mx-1.5 px-1 py-1 rounded-lg bg-gray-50 hover:bg-indigo-50/70 transition-colors">
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(g.key)}
+                      className="p-0.5 rounded text-gray-400 hover:text-indigo-700 shrink-0"
+                      title={isOpen ? 'Replier la section' : 'Déplier la section'}
+                    >
+                      {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </button>
-                    <button type="button" title="Descendre" disabled={idx === items.length - 1}
-                      onClick={(e) => { e.stopPropagation(); moveItem(idx, 1); }}
-                      className="p-0.5 rounded hover:bg-indigo-100 text-gray-400 hover:text-indigo-700 disabled:opacity-25">
-                      <ChevronDown size={12} />
+                    <button
+                      type="button"
+                      onClick={() => { scrollToEl(g.members[0].el); }}
+                      className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
+                      title="Aller à la section"
+                    >
+                      {g.isPreamble
+                        ? <Type size={12} className="text-gray-400 shrink-0" />
+                        : <Heading2 size={12} className="text-indigo-600 shrink-0" />}
+                      <span className="flex-1 min-w-0 truncate text-[11.5px] font-semibold text-gray-800">{g.title}</span>
+                      <span className="text-[10px] text-gray-400 shrink-0">{g.members.length}</span>
                     </button>
-                    <button type="button" title="Dupliquer"
-                      onClick={(e) => { e.stopPropagation(); duplicateItem(idx); }}
-                      className="p-0.5 rounded hover:bg-indigo-100 text-gray-400 hover:text-indigo-700">
-                      <Copy size={12} />
-                    </button>
-                    <button type="button" title="Supprimer (Ctrl+Z pour annuler)"
-                      onClick={(e) => { e.stopPropagation(); deleteItem(idx); }}
-                      className="p-0.5 rounded hover:bg-red-100 text-gray-400 hover:text-red-600">
-                      <Trash2 size={12} />
-                    </button>
-                  </span>
+                    {/* Déplacer la SECTION entière */}
+                    <span className="hidden group-hover/sec:flex items-center gap-0.5 shrink-0">
+                      <button type="button" title="Monter la section entière" disabled={gIdx === 0}
+                        onClick={() => moveSection(groups, gIdx, -1)}
+                        className="p-0.5 rounded hover:bg-indigo-100 text-gray-400 hover:text-indigo-700 disabled:opacity-20">
+                        <ArrowUp size={12} />
+                      </button>
+                      <button type="button" title="Descendre la section entière" disabled={gIdx === groups.length - 1}
+                        onClick={() => moveSection(groups, gIdx, 1)}
+                        className="p-0.5 rounded hover:bg-indigo-100 text-gray-400 hover:text-indigo-700 disabled:opacity-20">
+                        <ArrowDown size={12} />
+                      </button>
+                    </span>
+                  </div>
+
+                  {/* ── Éléments de la section (visibles seulement si dépliée) ── */}
+                  {isOpen && g.members.map((it) => {
+                    const idx = it.idx;
+                    return (
+                      <div key={idx} className="relative">
+                        {dropPos?.idx === idx && !dropPos.after && (
+                          <div className="absolute -top-px left-2 right-2 h-0.5 bg-indigo-500 rounded-full z-10" />
+                        )}
+                        <div
+                          draggable
+                          onDragStart={(e) => { setDragIdx(idx); e.dataTransfer.effectAllowed = 'move'; }}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            const r = e.currentTarget.getBoundingClientRect();
+                            setDropPos({ idx, after: e.clientY > r.top + r.height / 2 });
+                          }}
+                          onDrop={(e) => { e.preventDefault(); handleDrop(); }}
+                          onDragEnd={() => { setDragIdx(null); setDropPos(null); }}
+                          onClick={() => scrollToEl(it.el)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setCtxMenu({ x: e.clientX, y: e.clientY, idx });
+                          }}
+                          className={[
+                            'group flex items-center gap-1.5 ml-5 mr-1.5 px-1.5 py-[5px] rounded-lg cursor-pointer select-none',
+                            'hover:bg-indigo-50/80 transition-colors',
+                            dragIdx === idx ? 'opacity-40' : '',
+                          ].join(' ')}
+                        >
+                          <GripVertical size={12} className="text-gray-300 group-hover:text-gray-400 shrink-0 cursor-grab" />
+                          <it.Icon size={13} className={`shrink-0 ${it.strong ? 'text-indigo-600' : 'text-gray-400'}`} />
+                          <span className={[
+                            'flex-1 min-w-0 truncate text-[11.5px] leading-tight',
+                            it.strong ? 'font-semibold text-gray-800' : 'text-gray-600',
+                            it.dim ? 'italic text-gray-300' : '',
+                          ].join(' ')}>
+                            {it.label || it.kind}
+                          </span>
+                          <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+                            <button type="button" title="Monter" disabled={idx === 0}
+                              onClick={(e) => { e.stopPropagation(); moveItem(idx, -1); }}
+                              className="p-0.5 rounded hover:bg-indigo-100 text-gray-400 hover:text-indigo-700 disabled:opacity-25">
+                              <ChevronUp size={12} />
+                            </button>
+                            <button type="button" title="Descendre" disabled={idx === items.length - 1}
+                              onClick={(e) => { e.stopPropagation(); moveItem(idx, 1); }}
+                              className="p-0.5 rounded hover:bg-indigo-100 text-gray-400 hover:text-indigo-700 disabled:opacity-25">
+                              <ChevronDown size={12} />
+                            </button>
+                            <button type="button" title="Dupliquer"
+                              onClick={(e) => { e.stopPropagation(); duplicateItem(idx); }}
+                              className="p-0.5 rounded hover:bg-indigo-100 text-gray-400 hover:text-indigo-700">
+                              <Copy size={12} />
+                            </button>
+                            <button type="button" title="Supprimer (Ctrl+Z pour annuler)"
+                              onClick={(e) => { e.stopPropagation(); deleteItem(idx); }}
+                              className="p-0.5 rounded hover:bg-red-100 text-gray-400 hover:text-red-600">
+                              <Trash2 size={12} />
+                            </button>
+                          </span>
+                        </div>
+                        {dropPos?.idx === idx && dropPos.after && (
+                          <div className="absolute -bottom-px left-2 right-2 h-0.5 bg-indigo-500 rounded-full z-10" />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-                {dropPos?.idx === idx && dropPos.after && (
-                  <div className="absolute -bottom-px left-2 right-2 h-0.5 bg-indigo-500 rounded-full z-10" />
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="px-3.5 py-2 border-t border-gray-100 bg-gray-50/60">
             <p className="text-[10px] text-gray-400 leading-snug">
-              Clic : aller au bloc · <span className="font-semibold text-gray-500">Clic droit : copier, couper, coller avant/après</span> · Glisser <GripVertical size={9} className="inline -mt-0.5" /> : réordonner
+              Sections H2 pliables · <ArrowUp size={9} className="inline -mt-0.5" /><ArrowDown size={9} className="inline -mt-0.5" /> déplace la section entière · Clic droit : copier/couper/coller avant-après
             </p>
           </div>
         </div>

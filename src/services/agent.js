@@ -1150,6 +1150,22 @@ ${content}
   // ── Phase finale : suggestions liens internes ──────────────────────────────
   // Fonctionne si wpData est disponible OU si articleUrl correspond à un site configuré
   let internalLinks = [];
+  // Explication affichée à l'utilisateur quand 0 lien n'est proposé.
+  let ilReason = '';
+  // Liens internes DÉJÀ présents dans l'article d'origine (comptage fiable).
+  const existingInternal = analyzeLinks(contentHtml || content, articleUrl).internal;
+  // Seuil de FREINAGE : au-delà, on n'ajoute plus de lien interne — SAUF dans un
+  // paragraphe entièrement réécrit par la MAJ (texte neuf).
+  const IL_THROTTLE_AT = 5;
+  const ilThrottled = existingInternal >= IL_THROTTLE_AT;
+  // Texte NEUF de cette MAJ (additions + remplacements) → seule zone où l'on
+  // s'autorise de nouveaux liens quand on freine. Minuscule pour matcher l'ancre.
+  const newText = ((result.updates || [])
+    .map(u => (u.type === 'suppression' ? '' : (u.updated || '')))
+    .join(' \n ') || '')
+    .replace(/<[^>]+>/g, ' ')
+    .toLowerCase();
+
   const ilSiteId = wpData?.siteId || (() => {
     if (!articleUrl || !wpSites?.length) return null;
     try {
@@ -1161,6 +1177,9 @@ ${content}
       return s?.id || null;
     } catch { return null; }
   })();
+  if (!ilSiteId) {
+    ilReason = "Aucune URL d'article ou site WordPress configuré → suggestions de liens internes indisponibles (renseignez l'URL du post pour les activer).";
+  }
   if (ilSiteId && wpSites?.length) {
     // Limite configurable via skills — directive "liens_internes: N" dans le contenu d'un skill
     const { min: ilMin, max: ilMax, exact: ilExact } = extractIlCount(skills);
@@ -1225,12 +1244,29 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
           });
           trackCall('internal_links', linksText);
           const { links = [] } = parseJsonResponse(linksText, { links: [] }, '[internal-links]');
-          internalLinks = links.filter(l => l.anchor && l.url && l.title).slice(0, ilMax);
+          let valid = links.filter(l => l.anchor && l.url && l.title);
+          // FREINAGE : l'article a déjà ≥ IL_THROTTLE_AT liens internes → on ne
+          // garde que les liens dont l'ancre tombe dans un paragraphe RÉÉCRIT
+          // (texte neuf de la MAJ). Sinon aucun nouveau lien.
+          if (ilThrottled) {
+            valid = valid.filter(l => newText.includes((l.anchor || '').toLowerCase()));
+          }
+          internalLinks = valid.slice(0, ilMax);
+          if (internalLinks.length === 0) {
+            ilReason = ilThrottled
+              ? `L'article contient déjà ${existingInternal} liens internes (seuil ${IL_THROTTLE_AT}) : de nouveaux liens ne sont proposés que dans un paragraphe entièrement réécrit — aucun ici.`
+              : "Aucune ancre pertinente trouvée pour un article lié du même site (les sujets ne correspondaient pas assez précisément).";
+          }
+        } else {
+          ilReason = "Aucun article lié pertinent trouvé sur le site pour ce sujet.";
         }
+      } else {
+        ilReason = "Impossible d'extraire des mots-clés pour rechercher des articles liés.";
       }
     } catch (e) {
       // Liens internes non bloquants — on continue sans
       console.warn('[internal-links] erreur:', e.message);
+      ilReason = 'Recherche de liens internes indisponible (erreur réseau/API).';
     }
   }
 
@@ -1243,6 +1279,12 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
     // Données WordPress MCP (null si l'URL ne correspond à aucun site configuré)
     wpData,
     internalLinks,
+    // Contexte des liens internes (affiché dans l'UI quand 0 suggestion)
+    internalLinksInfo: {
+      reason: internalLinks.length === 0 ? ilReason : '',
+      existingInternal,
+      throttled: ilThrottled,
+    },
     audit: auditReport,   // rapport d'audit complet (mode cerveau) → onglet AUDIT
   };
 };
