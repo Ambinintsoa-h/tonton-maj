@@ -13,6 +13,7 @@ import { runAgent } from '../services/agent';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
 import { loadDraftLocal, loadDraftRemote, clearDraft } from '../services/articleDraft';
 import tracker from '../services/activityTracker';
+import articleTimeTracker from '../services/articleTimeTracker';
 import AgentThinking from '../components/agent/AgentThinking';
 import ArticleResult from '../components/agent/ArticleResult';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
@@ -32,6 +33,9 @@ export default function Articles() {
   const wpSites = useSelector(s => s.wordpress.sites);
   const authUid      = useSelector(s => s.auth.uid);
   const authUsername = useSelector(s => s.auth.username);
+  const authRole     = useSelector(s => s.auth.role);
+  const authPrenom   = useSelector(s => s.auth.prenom);
+  const authNom      = useSelector(s => s.auth.nom);
 
   const [tab, setTab] = useState(TAB_URL);
   const [url, setUrl] = useState('');
@@ -109,6 +113,17 @@ export default function Articles() {
     // URL de l'article : celle de l'onglet URL, ou celle (optionnelle) saisie en
     // mode collage. Unifie publication ciblée, suivi SEO, verrou liens, historique.
     const articleUrl = (tab === TAB_URL ? url : pasteUrl).trim();
+
+    // ── Tracking du temps de travail : démarre AU LANCEMENT de l'analyse ────────
+    // L'id Firestore n'existe pas encore → les minutes s'accumulent en buffer et
+    // seront créditées à assignArticle() après la sauvegarde (fin de passe 1).
+    articleTimeTracker.begin({
+      articleId: null,
+      url:       articleUrl,
+      userId:    authUid || authUsername,
+      userName:  [authPrenom, authNom].filter(Boolean).join(' ') || authUsername || '',
+      userRole:  authRole || '',
+    });
 
     let articleContent   = '';    // texte brut → envoyé à Claude + applyAllDiffs
     let articleHtml      = '';    // HTML structuré → affiché dans l'UI (tableaux, titres…)
@@ -296,6 +311,8 @@ export default function Articles() {
       }
 
       tracker.trackAction('articlesUpdated');
+      // L'article a maintenant un id → créditer les minutes bufferisées de l'analyse
+      articleTimeTracker.assignArticle(savedId, { title: articleTitle, url: articleUrl });
 
       // ── Suivi SEO Haloscan — snapshot J+0 ───────────────────────────────────
       // targetKeyword = mot-clé principal (toujours en tête)

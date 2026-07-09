@@ -24,6 +24,8 @@ import MajEnAttente from './pages/MajEnAttente';
 import Equipe from './pages/Equipe';
 import Tickets from './pages/Tickets';
 import SupportDashboard from './pages/SupportDashboard';
+import TempsEquipe from './pages/TempsEquipe';
+import Archives from './pages/Archives';
 import { setSettings, setFirebaseReady, DEFAULT_FIREBASE_CONFIG } from './store/slices/settingsSlice';
 import { setSkills } from './store/slices/skillsSlice';
 import { countCustomSkills } from './constants/defaultSkills';
@@ -468,6 +470,16 @@ function AppRoutes() {
                 </RoleGuard>
               } />
               <Route path="/dashboard"      element={<Dashboard />}    />
+              <Route path="/temps"          element={
+                <RoleGuard allowedRoles={['super_admin']}>
+                  <TempsEquipe />
+                </RoleGuard>
+              } />
+              <Route path="/archives"       element={
+                <RoleGuard allowedRoles={['super_admin']}>
+                  <Archives />
+                </RoleGuard>
+              } />
               <Route path="/equipe"         element={<Equipe />}       />
               <Route path="/tickets"           element={<Tickets />}         />
               <Route path="/support-dashboard" element={

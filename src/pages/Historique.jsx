@@ -7,7 +7,7 @@ import {
   Clock, Trash2, Eye, Search, X, ExternalLink,
   Calendar, CheckCircle2, Sparkles, AlertTriangle, ChevronDown, ChevronUp,
   UserCircle2, RotateCcw, Loader, TrendingUp, TrendingDown, Minus,
-  ArrowUp, ArrowDown, Timer, Activity, RefreshCw, Pencil, Lock,
+  ArrowUp, ArrowDown, Timer, Activity, RefreshCw, Pencil, Lock, Archive,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import axios from 'axios';
@@ -17,8 +17,9 @@ import {
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit, setWpData,
 } from '../store/slices/agentSlice';
-import { deleteArticle, fetchArticleHtml, getArticles, isLockActive } from '../services/firebase';
+import { deleteArticle, fetchArticleHtml, getArticles, isLockActive, archiveArticle } from '../services/firebase';
 import ConfirmDialog from '../components/common/ConfirmDialog';
+import Pagination, { pageSlice } from '../components/common/Pagination';
 import { useNavigate } from 'react-router-dom';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
@@ -349,7 +350,7 @@ function SeoPanel({ seoTracking, majDate }) {
 }
 
 // ── Ligne historique (read-only, même design que MAJ en attente) ──────────────
-function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
+function HistoryRow({ article, users, onView, onRequeue, onDelete, onArchive }) {
   const [expanded, setExpanded] = useState(false);
 
   const domain   = extractDomain(article.url);
@@ -553,6 +554,15 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete }) {
           >
             <RotateCcw size={13} />
           </button>
+          {onArchive && (
+            <button
+              onClick={() => onArchive(article)}
+              className="btn-ghost !p-1.5 text-gray-300 hover:text-indigo-500 hover:bg-indigo-50"
+              title="Archiver — l'article quitte l'Historique (récupérable dans Archives)"
+            >
+              <Archive size={13} />
+            </button>
+          )}
           <button
             onClick={() => setExpanded(x => !x)}
             className="btn-ghost !p-1.5 text-gray-300 hover:text-gray-500"
@@ -687,10 +697,13 @@ export default function Historique() {
     return () => { cancelled = true; };
   }, [firebaseReady, dispatch]);
 
+  // Les articles ARCHIVÉS quittent l'Historique (page Archives — super_admin)
+  const notArchived = history.filter(a => !a.archived);
+
   // CQ IA : uniquement ses propres articles
   const visibleHistory = authRole === 'cq_ia'
-    ? history.filter(a => a.assigneeId === authUid || a.assigneeId === authUsername)
-    : history;
+    ? notArchived.filter(a => a.assigneeId === authUid || a.assigneeId === authUsername)
+    : notArchived;
 
   // Suggestions autocomplete = titres uniques de l'historique visible
   const suggestions = [...new Set(visibleHistory.map(a => a.title).filter(Boolean))];
@@ -710,6 +723,11 @@ export default function Historique() {
     )
     .sort((a, b) => sortKey(b) - sortKey(a));
 
+  // Pagination (50 max par page) — retour page 1 à chaque nouvelle recherche
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [q]);
+  const pageItems = pageSlice(filtered, page);
+
   // Garde-fou : la suppression d'une archive efface aussi le doc Firestore
   // (avant/après, suivi SEO) → confirmation obligatoire avant d'agir.
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -722,6 +740,14 @@ export default function Historique() {
     if (preview?.id === id) setPreview(null);
     // Nettoyage Firestore en arrière-plan (non bloquant — comme handleRequeue)
     if (firebaseReady) deleteArticle(id).catch(() => {});
+  };
+
+  // Archiver (super_admin) : l'article quitte l'Historique, récupérable dans Archives
+  const handleArchive = (article) => {
+    dispatch(updateInHistory({ id: article.id, archived: true, archivedAt: Date.now(), archivedBy: authUsername || '' }));
+    toast.success('Article archivé — retrouvez-le dans la page Archives', { icon: <Archive size={16} /> });
+    if (preview?.id === article.id) setPreview(null);
+    if (firebaseReady) archiveArticle(article.id, authUsername || '').catch(() => {});
   };
 
   const handleRequeue = (article) => {
@@ -832,7 +858,7 @@ export default function Historique() {
       ) : (
         <div className="glass-card overflow-hidden rounded-2xl">
           <AnimatePresence mode="popLayout">
-            {filtered.map(article => (
+            {pageItems.map(article => (
               <HistoryRow
                 key={article.id}
                 article={article}
@@ -840,9 +866,11 @@ export default function Historique() {
                 onView={() => openPreview(article)}
                 onRequeue={handleRequeue}
                 onDelete={handleDelete}
+                onArchive={authRole === 'super_admin' ? handleArchive : null}
               />
             ))}
           </AnimatePresence>
+          <Pagination total={filtered.length} page={page} onPageChange={setPage} />
         </div>
       )}
 

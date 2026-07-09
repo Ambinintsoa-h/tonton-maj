@@ -12,6 +12,18 @@
 | `/parametres` | Parametres.jsx | super_admin |
 | `/dashboard` | Dashboard.jsx | Tous (vue selon rôle) |
 | `/tickets` | Tickets.jsx | Tous |
+| `/temps` | TempsEquipe.jsx | super_admin — temps actif par éditeur et par article |
+| `/archives` | Archives.jsx | super_admin — articles archivés (restaurer / suppression définitive) |
+
+## Temps par article (article_time)
+- `articleTimeTracker.js` — singleton mono-article : `begin()` au lancement d'analyse (Articles.jsx, buffer avant l'id) et à l'ouverture dans l'éditeur (ArticleResult), heartbeat 1 min (inactivité > 5 min = pause), `markPublished()` à la publication WP
+- Doc Firestore `article_time/{articleId}_{userId}` — increment atomique
+
+## Archivage Historique
+- Bouton Archiver (super_admin) dans Historique → flag `archived` sur le doc article → disparaît de l'Historique, visible dans `/archives` (Restaurer / Supprimer définitivement)
+
+## Pagination
+- 50 éléments max par page (composant commun `Pagination.jsx` + `pageSlice`) : Historique, MAJ en attente, Archives, Temps équipe
 
 ## Pipeline MAJ article
 1. **Passe 1** (`runAgent`) : extraction requêtes → Brave+Tavily parallèle → scraping → Claude Sonnet → JSON updates → `applyAllDiffs` → `moveFaqToEnd`

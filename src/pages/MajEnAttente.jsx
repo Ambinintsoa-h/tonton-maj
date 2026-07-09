@@ -31,6 +31,7 @@ import { runAgent } from '../services/agent';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts, createNotification, fetchArticleHtml } from '../services/firebase';
 import store from '../store';
 import ConfirmDialog from '../components/common/ConfirmDialog';
+import Pagination, { pageSlice } from '../components/common/Pagination';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
 import { normalizeFaqToAccordion } from '../utils/faq';
 import { makeTablesResponsive } from '../utils/blocks';
@@ -977,6 +978,8 @@ export default function MajEnAttente() {
   const [showImport,    setShowImport]    = useState(false);
   const [showAddManual, setShowAddManual] = useState(false);
   const [filter,        setFilter]        = useState('Tous');
+  const [page,          setPage]          = useState(1);
+  useEffect(() => { setPage(1); }, [filter]); // nouveau filtre → retour page 1
   // Enrichissement automatique après import : { total, done, errors }
   const [enriching, setEnriching] = useState(null);
   // Suivi des items en cours : Map<id, { step, progress }>
@@ -1060,9 +1063,13 @@ export default function MajEnAttente() {
     ((a.status === 'a_valider' && isMine(a)) ? 0 : 1)
     - ((b.status === 'a_valider' && isMine(b)) ? 0 : 1));
 
+  // Pagination (50 max par page) — la page courante est ensuite regroupée par
+  // priorité ; retour page 1 à chaque changement de filtre de statut.
+  const pageItems = pageSlice(sorted, page);
+
   // Groupement par priorité (haute → normale → basse)
   const grouped = PRIORITY_ORDER
-    .map(p => ({ priority: p, items: sorted.filter(i => (i.priority || 'normale') === p) }))
+    .map(p => ({ priority: p, items: pageItems.filter(i => (i.priority || 'normale') === p) }))
     .filter(g => g.items.length > 0);
 
   // Un cq_ia ne voit que SES articles assignés (filtre activeItems ci-dessus). On
@@ -1755,6 +1762,7 @@ export default function MajEnAttente() {
               </AnimatePresence>
             </div>
           ))}
+          <Pagination total={sorted.length} page={page} onPageChange={setPage} />
         </div>
       )}
 

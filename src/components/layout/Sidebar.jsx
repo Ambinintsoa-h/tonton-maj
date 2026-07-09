@@ -3,6 +3,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import { motion } from 'framer-motion';
 import {
   Zap, Globe, Settings, Clock, ChevronRight, BarChart3, ListTodo, Users, LogOut, Bug, MessageSquare,
+  Timer, Archive,
 } from 'lucide-react';
 import { logout } from '../../store/slices/authSlice';
 
@@ -29,6 +30,8 @@ const NAV_ALL = [
   { to: '/wordpress',      label: 'WordPress',        icon: Globe,    roles: ['super_admin', 'manager', 'support'] },
   { to: '/commentaires',   label: 'Commentaires',     icon: MessageSquare, roles: ['super_admin', 'manager', 'support'], beta: true },
   { to: '/historique',     label: 'Historique',       icon: Clock },
+  { to: '/archives',       label: 'Archives',          icon: Archive,  roles: ['super_admin'] },
+  { to: '/temps',          label: 'Temps équipe',      icon: Timer,    roles: ['super_admin'] },
   { to: '/equipe',         label: 'Équipe',            icon: Users,   roles: ['super_admin', 'manager'] },
   { to: '/tickets',        label: 'Tickets',           icon: Bug,      badge: true },
 ];

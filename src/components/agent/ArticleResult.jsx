@@ -35,6 +35,7 @@ import {
   acquireEditLock, heartbeatEditLock, releaseEditLock, watchEditLock, isLockActive, LOCK_HEARTBEAT_MS,
 } from '../../services/firebase';
 import { saveDraft, flushDraftRemote, onDraftStatus } from '../../services/articleDraft';
+import articleTimeTracker from '../../services/articleTimeTracker';
 import { renderMarkdown, emojiToIcons, unwrapProseFences, trimAuditForDisplay } from '../../utils/markdown';
 import { validateImageFile } from '../../utils/uploadLimits';
 import { useNavigate } from 'react-router-dom';
@@ -151,6 +152,27 @@ export default function ArticleResult() {
   // URL de l'article courant (pour retrouver le post WP à mettre à jour)
   const currentArticle = articlesHistory.find(a => a.id === agent.currentArticleId);
   const articleUrl     = cqItem?.url || currentArticle?.url || '';
+
+  // ── Tracking du temps de travail sur l'article ouvert dans l'éditeur ────────
+  // Démarre quand un article est chargé (CQ depuis MajEnAttente, réouverture
+  // Historique, ou après analyse — begin() est idempotent sur le même article),
+  // s'arrête au changement d'article / démontage. Singleton mono-article : pas
+  // de double comptage avec le begin() du lancement d'analyse (Articles.jsx).
+  useEffect(() => {
+    const id = agent.currentArticleId;
+    if (!id || !draftUserId) return undefined;
+    articleTimeTracker.begin({
+      articleId: id,
+      title:     currentArticle?.title || cqItem?.title || '',
+      url:       articleUrl,
+      userId:    draftUserId,
+      userName:  [authUser?.prenom, authUser?.nom].filter(Boolean).join(' ') || authUser?.username || '',
+      userRole:  authUser?.role || '',
+    });
+    return () => articleTimeTracker.end();
+    // title/url volontairement hors deps : leur chargement async ne doit pas
+    // relancer begin/end (le doc temps est déjà créé avec les bonnes métas)
+  }, [agent.currentArticleId, draftUserId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Polices proposées dans la barre d'outils :
   //  • analyse fraîche → wpMcpData.siteFonts (récupéré via MCP)
@@ -2171,6 +2193,8 @@ export default function ArticleResult() {
     if (!result.success) {
       toast.error(`Erreur WordPress : ${result.error}`, { duration: 8000 });
     } else {
+      // Temps de travail : horodater la publication sur le doc article_time
+      articleTimeTracker.markPublished();
       // NB : on ne vide PLUS le brouillon ici. Publier ne doit pas détruire la session —
       // on peut vouloir continuer à éditer/republier (ex. ajouter une image). Le brouillon
       // est nettoyé au démarrage d'une NOUVELLE MAJ (Articles.jsx), pas à la publication.
