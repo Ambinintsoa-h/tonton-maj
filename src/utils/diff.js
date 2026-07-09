@@ -454,6 +454,19 @@ export const repairStructureEl = (el) => {
       }
     });
   });
+  // 1b) Sortir d'une liste (ul/ol) tout enfant direct qui N'EST PAS un <li> :
+  //     un heading/paragraphe/tableau glissé DANS une <ul> (souvent parce qu'un
+  //     <li> n'a pas été fermé) est une imbrication invalide qui casse le rendu
+  //     sur le site. On le replace APRÈS la liste, en conservant l'ordre.
+  el.querySelectorAll('ul, ol').forEach((list) => {
+    let ref = list;
+    Array.from(list.children).forEach((child) => {
+      if (child.tagName !== 'LI' && list.parentNode) {
+        list.parentNode.insertBefore(child, ref.nextSibling);
+        ref = child;
+      }
+    });
+  });
   // 2) Retirer les marqueurs de diff vides (résidus d'édition manuelle / déplacement)
   el.querySelectorAll('del, mark, ins').forEach((n) => {
     if (!n.textContent.trim() && !n.querySelector('img, table, iframe, video')) n.remove();
