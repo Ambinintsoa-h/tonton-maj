@@ -90,15 +90,28 @@ export const updatePost = async (site, postId, postData, postType = 'posts') => 
   // Date de publication (optionnelle) : ISO 8601. WP attend l'heure locale du
   // site dans `date` (et `date_gmt` en UTC). On envoie `date` ; WP recalcule le GMT.
   if (postData.date) body.date = postData.date;
-  // SEO Meta (Yoast SEO + SEOPress) — WP ignore silencieusement les champs du plugin absent
-  if (postData.seoMeta?.seoTitle || postData.seoMeta?.seoDescription) {
+  // SEO Meta (Yoast SEO + SEOPress + RankMath) — WP ignore silencieusement les
+  // champs des plugins absents. On écrit meta title/description ET le mot-clé
+  // cible (« focus keyphrase » / « Expression clé principale »).
+  const focusKw = (postData.focusKeyword || '').trim();
+  if (postData.seoMeta?.seoTitle || postData.seoMeta?.seoDescription || focusKw) {
     body.meta = {
-      // Yoast SEO
-      _yoast_wpseo_title:    postData.seoMeta.seoTitle       || '',
-      _yoast_wpseo_metadesc: postData.seoMeta.seoDescription || '',
-      // SEOPress
-      _seopress_titles_title: postData.seoMeta.seoTitle       || '',
-      _seopress_titles_desc:  postData.seoMeta.seoDescription || '',
+      ...(postData.seoMeta?.seoTitle || postData.seoMeta?.seoDescription ? {
+        // Yoast SEO
+        _yoast_wpseo_title:    postData.seoMeta?.seoTitle       || '',
+        _yoast_wpseo_metadesc: postData.seoMeta?.seoDescription || '',
+        // SEOPress
+        _seopress_titles_title: postData.seoMeta?.seoTitle       || '',
+        _seopress_titles_desc:  postData.seoMeta?.seoDescription || '',
+        // RankMath
+        rank_math_title:       postData.seoMeta?.seoTitle       || '',
+        rank_math_description: postData.seoMeta?.seoDescription || '',
+      } : {}),
+      ...(focusKw ? {
+        _yoast_wpseo_focuskw:        focusKw, // Yoast — Expression clé principale
+        rank_math_focus_keyword:     focusKw, // RankMath — mot-clé focus
+        _seopress_analysis_target_kw: focusKw, // SEOPress — mot-clé cible
+      } : {}),
     };
   }
   // Sécurité : jamais d'auteur dans une mise à jour

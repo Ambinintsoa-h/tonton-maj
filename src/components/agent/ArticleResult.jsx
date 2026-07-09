@@ -1303,11 +1303,15 @@ export default function ArticleResult() {
     const a = e.target.closest('a[href]');
     if (a && e.currentTarget.contains(a)) {
       clearTimeout(leaveTimerRef.current);
-      setAnchorHover({ url: a.getAttribute('href') || '', rect: a.getBoundingClientRect() });
+      const url = a.getAttribute('href') || '';
+      // Titre connu : titre HTML du lien, sinon titre d'un lien interne suggéré de même URL
+      const known = (agent.internalLinks || []).find(l => l.url === url);
+      const title = a.getAttribute('title') || known?.title || '';
+      setAnchorHover({ url, title, rect: a.getBoundingClientRect() });
     } else {
       setAnchorHover(null);
     }
-  }, []);
+  }, [agent.internalLinks]);
 
   // ── #3 Accepter / Rejeter un changement de diff (par segment, au survol) ──────
   // segHover = { node, rect } où node est le <del>/<mark>/<ins> survolé.
@@ -2023,6 +2027,9 @@ export default function ArticleResult() {
       // (souvent /catégorie/slug) reste intact → pas de 404 sur l'ancienne URL.
       if (catsDirty && selectedCategories.length > 0) postData.categories = selectedCategories;
       if (seoTitle || seoDescription) postData.seoMeta = { seoTitle, seoDescription };
+      // Mot-clé cible → focus keyphrase SEO (Yoast/RankMath/SEOPress)
+      const focusKw = (agent.targetKeyword || currentArticle?.keyword || cqItem?.keyword || '').trim();
+      if (focusKw) postData.focusKeyword = focusKw;
       // Date de publication choisie dans l'outil (optionnelle) → ISO 8601
       if (publishDate) postData.date = new Date(publishDate).toISOString();
 
@@ -3814,12 +3821,28 @@ export default function ArticleResult() {
             top:  anchorHover.rect.bottom + 6,
             left: Math.max(8, Math.min(anchorHover.rect.left, window.innerWidth - 440)),
             zIndex: 400,
-            pointerEvents: 'none',
           }}
+          onMouseEnter={() => clearTimeout(leaveTimerRef.current)}
+          onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setAnchorHover(null), 220); }}
         >
-          <div className="flex items-start gap-1.5 max-w-[420px] px-2.5 py-1.5 rounded-lg bg-gray-900 text-white shadow-lg text-[11px] leading-snug">
-            <Link2 size={11} className="flex-shrink-0 mt-0.5 text-sage-300" />
-            <span className="break-all">{anchorHover.url}</span>
+          <div className="max-w-[420px] px-2.5 py-2 rounded-lg bg-gray-900 text-white shadow-lg text-[11px] leading-snug space-y-1.5">
+            {anchorHover.title && (
+              <p className="font-semibold text-white/95 line-clamp-2">{anchorHover.title}</p>
+            )}
+            <div className="flex items-start gap-1.5">
+              <Link2 size={11} className="flex-shrink-0 mt-0.5 text-sage-300" />
+              <span className="break-all text-white/70">{anchorHover.url}</span>
+            </div>
+            {/^https?:\/\//i.test(anchorHover.url) && (
+              <a
+                href={anchorHover.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 mt-0.5 px-2 py-1 rounded-md bg-white/15 hover:bg-white/25 text-white text-[11px] font-medium transition-colors"
+              >
+                <ExternalLink size={11} /> Ouvrir dans un nouvel onglet
+              </a>
+            )}
           </div>
         </div>,
         document.body

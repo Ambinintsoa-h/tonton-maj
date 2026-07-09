@@ -19,6 +19,7 @@ const agentSlice = createSlice({
     wpData: null,  // { siteId, siteName, postId, postType, featuredMediaId, featuredMediaUrl, postLink }
     internalLinks: [],  // [{ anchor, url, title, reason }] — suggestions de liens internes
     internalLinksInfo: null,  // { reason, existingInternal, throttled } — explication quand 0 suggestion
+    targetKeyword: '',  // mot-clé cible → focus keyphrase SEO (Yoast/RankMath/SEOPress) à la publication
     audit: '',  // rapport d'audit complet (markdown) produit par le skill SKILL.md — onglet AUDIT
     draftStatus: 'idle',   // idle | saving | saved | local — état de l'autosave (indicateur header)
     draftSavedAt: null,    // timestamp du dernier enregistrement réussi
@@ -41,6 +42,7 @@ const agentSlice = createSlice({
       state.wpData = null;
       state.internalLinks = [];
       state.internalLinksInfo = null;
+      state.targetKeyword = '';
       state.audit = '';
       state.draftStatus = 'idle';
       state.draftSavedAt = null;
@@ -73,6 +75,7 @@ const agentSlice = createSlice({
     setWpData: (state, action) => { state.wpData = action.payload; },
     setInternalLinks: (state, action) => { state.internalLinks = action.payload; },
     setInternalLinksInfo: (state, action) => { state.internalLinksInfo = action.payload; },
+    setTargetKeyword: (state, action) => { state.targetKeyword = action.payload || ''; },
     setAudit: (state, action) => { state.audit = action.payload || ''; },
     setDraftStatus: (state, action) => {
       // payload : { status, savedAt? }
@@ -86,6 +89,6 @@ export const {
   resetAgent, setStatus, addStep, replaceLastStep, setProgress,
   setOriginalContent, setUpdatedContent, setDiff, setSources,
   setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
-  setWpData, setInternalLinks, setInternalLinksInfo, setAudit, setDraftStatus,
+  setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword, setAudit, setDraftStatus,
 } = agentSlice.actions;
 export default agentSlice.reducer;
