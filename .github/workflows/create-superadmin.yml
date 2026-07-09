@@ -77,10 +77,13 @@ jobs:
             if (!docSnap.data().createdAt) await db.collection('users').doc(user.uid).update({ createdAt: Date.now() });
             console.log('Claims super_admin + fiche Firestore OK');
 
-            // Lien de définition du mot de passe → envoyé UNIQUEMENT par email
-            const resetLink = await admin.auth().generatePasswordResetLink(email, {
-              url: 'https://maj.stomos.net/reset-password',
-            });
+            // Lien de définition du mot de passe → envoyé UNIQUEMENT par email.
+            // SANS ActionCodeSettings : un `url:` custom exige que le domaine soit
+            // dans les « Authorized domains » de Firebase Auth (erreur « Domain not
+            // allowlisted by project »). Sans url, le lien utilise l'Action URL du
+            // template Firebase Console — déjà configurée vers
+            // https://maj.stomos.net/reset-password (cf. .claude/firebase.md).
+            const resetLink = await admin.auth().generatePasswordResetLink(email);
             const s = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'settings.json'), 'utf8'));
             if (!s.smtpHost || !s.smtpUser || !s.smtpPass) {
               console.error('SMTP non configuré sur le serveur — impossible d\'envoyer l\'invitation.');
