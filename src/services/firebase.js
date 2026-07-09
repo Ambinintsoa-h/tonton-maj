@@ -827,6 +827,81 @@ export const recordActivityAction = async (userId, date, actionType) => {
   });
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// article_time — temps ACTIF passé par éditeur sur chaque article (analyse →
+// publication). Un doc par couple article × éditeur : `{articleId}_{userId}`.
+// Alimenté par services/articleTimeTracker.js (heartbeat 1 min).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Crée le doc temps s'il n'existe pas (startedAt figé au premier passage). */
+export const ensureArticleTimeDoc = async (articleId, { userId, userName = '', userRole = '', title = '', url = '' }) => {
+  if (!db || !articleId || !userId) return;
+  const ref  = doc(db, 'article_time', `${articleId}_${userId}`);
+  const snap = await getDoc(ref);
+  if (snap.exists()) {
+    // Rafraîchir le titre/url si connus maintenant (analyse terminée)
+    const patch = {};
+    if (title && !snap.data().title) patch.title = title;
+    if (url && !snap.data().url)     patch.url = url;
+    if (Object.keys(patch).length) await updateDoc(ref, patch);
+    return;
+  }
+  await setDoc(ref, {
+    articleId, userId, userName, userRole, title, url,
+    totalActiveMinutes: 0,
+    startedAt:          Date.now(),   // lancement de la 1re session de travail
+    lastActivityAt:     Date.now(),
+    publishedAt:        null,
+  });
+};
+
+/** Crédite `minutes` de travail actif (increment atomique — pas de lecture). */
+export const recordArticleTime = async (articleId, userId, minutes = 1) => {
+  if (!db || !articleId || !userId || minutes <= 0) return;
+  await updateDoc(doc(db, 'article_time', `${articleId}_${userId}`), {
+    totalActiveMinutes: increment(minutes),
+    lastActivityAt:     Date.now(),
+  });
+};
+
+/** Horodate la publication WordPress sur le doc temps de l'éditeur. */
+export const markArticleTimePublished = async (articleId, userId) => {
+  if (!db || !articleId || !userId) return;
+  await updateDoc(doc(db, 'article_time', `${articleId}_${userId}`), {
+    publishedAt: Date.now(),
+  });
+};
+
+/** Tous les docs temps (page « Temps équipe » — super_admin). Tri client-side. */
+export const getArticleTimeAll = async () => {
+  if (!db) return [];
+  const snap = await getDocs(collection(db, 'article_time'));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Archivage des articles de l'Historique (flag sur le doc — l'article et ses
+// HTML Storage sont conservés ; seule la visibilité change).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const archiveArticle = async (id, archivedBy = '') => {
+  if (!db || !id) return;
+  await updateDoc(doc(db, 'articles', id), {
+    archived:   true,
+    archivedAt: Date.now(),
+    archivedBy,
+  });
+};
+
+export const restoreArticle = async (id) => {
+  if (!db || !id) return;
+  await updateDoc(doc(db, 'articles', id), {
+    archived:   false,
+    archivedAt: deleteField(),
+    archivedBy: deleteField(),
+  });
+};
+
 /**
  * Sessions de TOUS les utilisateurs pour aujourd'hui — pour le dashboard super_admin.
  * @deprecated Utiliser getActivitySessionsRange à la place

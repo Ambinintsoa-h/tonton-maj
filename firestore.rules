@@ -127,6 +127,19 @@ service cloud.firestore {
       allow read, write: if isAuthenticated() && request.auth.uid == userId;
     }
 
+    // ── article_time : temps actif par article et par éditeur ─────────────────
+    // Doc id = {articleId}_{userId}. Chaque membre n'écrit que ses propres docs
+    // (heartbeat du tracker). Lecture : soi-même ; liste complète : super_admin
+    // (page « Temps équipe »).
+    match /article_time/{docId} {
+      allow read: if isAuthenticated()
+        && (resource.data.userId == request.auth.uid || userRole() == 'super_admin');
+      allow list: if isAuthenticated() && userRole() == 'super_admin';
+      allow create, update: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && userRole() == 'super_admin';
+    }
+
     // ── Commentaires : cache d'analyse IA + réglages par site ────────────────
     // Même audience que la feature Commentaires (et que wordpress_sites) :
     // super_admin / manager / support. Pas cq_ia.

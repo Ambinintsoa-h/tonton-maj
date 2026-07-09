@@ -15,6 +15,7 @@
 | `ticket_comments` | Commentaires tickets |
 | `notifications` | Notifications in-app |
 | `activity_sessions` | Tracking — 1 doc par user par jour |
+| `article_time` | Temps actif par article×éditeur — doc `{articleId}_{userId}`, increment 1 min, `publishedAt` à la publication ; list réservée super_admin |
 
 ## `activity_sessions` — ID : `{userId}_{YYYY-MM-DD}`
 ```js
