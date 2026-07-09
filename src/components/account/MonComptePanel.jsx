@@ -8,6 +8,7 @@ import {
   XCircle, Eye, EyeOff, X, ChevronRight, Loader2,
 } from 'lucide-react';
 import { setProfile } from '../../store/slices/authSlice';
+import { validateImageFile } from '../../utils/uploadLimits';
 
 // ─── Avatar : photo > DiceBear kawaii > initiales colorées ──────────────────
 const AVATAR_COLORS = [
@@ -107,6 +108,7 @@ export default function MonComptePanel({ onClose }) {
   // Upload photo
   const handleAvatarUpload = async (file) => {
     if (!file) return;
+    if (!validateImageFile(file)) return;   // images > 1 Mo refusées
     const formData = new FormData();
     formData.append('avatar', file);
     try {
