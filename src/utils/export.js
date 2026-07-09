@@ -223,6 +223,20 @@ export const exportAsHtml = (content) => {
     html = html.replace(/<mark\b(?![^>]*\bstyle\s*=)[^>]*>([\s\S]*?)<\/mark>/gi, '$1');
   }
   html = html.replace(/<ins\b[^>]*class="added-content"[^>]*>([\s\S]*?)<\/ins>/gi, '$1');
+
+  // ── Anti-<br> parasites de WordPress (wpautop) ──────────────────────────────
+  // WordPress applique wpautop sur the_content : tout saut de ligne ENTRE des
+  // balises est converti en <br> au rendu → des <br> apparaissent partout (et
+  // un gros paquet au-dessus des tableaux). Comme notre HTML est déjà
+  // strictement structuré en blocs, on retire les retours à la ligne situés
+  // aux FRONTIÈRES de blocs → wpautop n'a plus rien à convertir.
+  // On ne touche PAS aux espaces/retours entre éléments INLINE (ex. </strong>
+  // <em>) : la séparation entre mots reste intacte.
+  const BLOCK = 'p|h[1-6]|ul|ol|li|table|thead|tbody|tfoot|tr|td|th|div|figure|figcaption|details|summary|section|article|blockquote|hr';
+  html = html
+    .replace(new RegExp(`(</(?:${BLOCK})>)\\s*\\n[\\s\\n]*`, 'gi'), '$1')       // après une fermeture de bloc
+    .replace(new RegExp(`\\n[\\s\\n]*(<(?:${BLOCK})[\\s>/])`, 'gi'), '$1')       // avant une ouverture de bloc
+    .replace(new RegExp(`(<(?:${BLOCK})[^>]*>)\\s*\\n[\\s\\n]*`, 'gi'), '$1');   // juste après l'ouverture (ex. <div wrap>\n<table>)
   return html;
 };
 
