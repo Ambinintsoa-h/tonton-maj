@@ -25,3 +25,48 @@ describe('exportAsHtml — retours à la ligne inter-blocs (anti wpautop)', () =
     expect(out).toContain('</strong> <em>'); // l'espace inline reste
   });
 });
+
+describe('exportAsHtml — thème inline des accordéons FAQ', () => {
+  it('enveloppe la question du <summary> dans un <h3> inline stylé', () => {
+    const src = '<h2>FAQ</h2><details><summary>Quelle durée de vie ?</summary><p>Environ 30 ans.</p></details>';
+    const out = exportAsHtml(src);
+    expect(out).toMatch(/<summary[^>]*><h3[^>]*>Quelle durée de vie \?<\/h3><\/summary>/);
+    expect(out).toMatch(/<h3[^>]*style="[^"]*display:\s*inline/);
+  });
+
+  it('conserve le heading existant du <summary> (pas de double enveloppe)', () => {
+    const src = '<details><summary><h3>Déjà un h3 ?</h3></summary><p>Oui.</p></details>';
+    const out = exportAsHtml(src);
+    expect(out.match(/<h3/g)).toHaveLength(1);
+    expect(out).toMatch(/<h3[^>]*>Déjà un h3 \?<\/h3>/);
+  });
+
+  it('applique le thème carte au <details> et au <summary> (styles inline)', () => {
+    const src = '<details><summary>Q ?</summary><p>R.</p></details>';
+    const out = exportAsHtml(src);
+    expect(out).toMatch(/<details[^>]*style="[^"]*border:\s*1px solid/);
+    expect(out).toMatch(/<details[^>]*style="[^"]*border-radius/);
+    expect(out).toMatch(/<summary[^>]*style="[^"]*cursor:\s*pointer/);
+  });
+
+  it('remplace les styles/classes parasites des details par le thème', () => {
+    const src = '<details class="wp-block" style="background:red"><summary style="color:lime">Q ?</summary><p>R.</p></details>';
+    const out = exportAsHtml(src);
+    expect(out).not.toContain('red');
+    expect(out).not.toContain('lime');
+    expect(out).not.toContain('wp-block');
+  });
+
+  it('englobe les réponses texte/inline orphelines dans un <p>', () => {
+    const src = '<details><summary>Q ?</summary>Réponse nue avec du <b>gras</b>.</details>';
+    const out = exportAsHtml(src);
+    expect(out).toMatch(/<\/summary><p[^>]*>Réponse nue avec du <b>gras<\/b>\.<\/p>/);
+  });
+
+  it('laisse intacts les blocs de réponse existants (p, ul) en les stylant', () => {
+    const src = '<details><summary>Q ?</summary><p>Un.</p><ul><li>A</li></ul></details>';
+    const out = exportAsHtml(src);
+    expect(out).toMatch(/<p[^>]*style="[^"]*padding:\s*0\.2em 1em/);
+    expect(out).toMatch(/<ul[^>]*style="[^"]*padding:\s*0\.2em 1em 0\.8em/); // dernier bloc
+  });
+});

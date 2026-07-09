@@ -88,6 +88,84 @@ const convertFaqToAccordion = (div) => {
   }
 };
 
+// ── Thème inline des accordéons FAQ pour le site de destination ───────────────
+// Reproduit en styles INLINE le design de l'éditeur TONTON (index.css,
+// .md-content details) : le HTML publié ne transporte ni classe ni feuille de
+// style, seul l'inline survit sur WordPress. Structure sémantique imposée au
+// passage : <summary><h3>Question</h3></summary> (SEO) et réponses englobées
+// dans des <p>. L'éditeur, lui, garde son HTML nu + CSS (aucun changement).
+const INLINE_TAGS = new Set(['B', 'STRONG', 'EM', 'I', 'U', 'S', 'A', 'SPAN', 'CODE', 'SMALL', 'SUB', 'SUP', 'MARK', 'ABBR', 'BR']);
+
+const applyFaqInlineTheme = (div) => {
+  div.querySelectorAll('details').forEach((details) => {
+    // Repartir de zéro : les styles/classes hérités d'anciennes publications
+    // sont remplacés par le thème (comportement historique : neutralisation).
+    details.removeAttribute('class');
+    details.removeAttribute('style');
+    details.style.border = '1px solid #e5e7eb';
+    details.style.borderRadius = '8px';
+    details.style.margin = '0.5em 0';
+    details.style.background = '#fff';
+    details.style.overflow = 'hidden';
+
+    const summary = Array.from(details.children).find(el => el.tagName === 'SUMMARY');
+    if (summary) {
+      summary.removeAttribute('class');
+      summary.removeAttribute('style');
+      summary.style.cursor = 'pointer';
+      summary.style.padding = '0.7em 1em';
+      summary.style.fontWeight = '600';
+      summary.style.color = '#1f2937';
+      // Question en heading (h3 par défaut) — inline pour rester alignée avec
+      // le marqueur natif ▶ du <summary>.
+      let h = summary.querySelector('h1, h2, h3, h4, h5, h6');
+      if (!h) {
+        h = document.createElement('h3');
+        while (summary.firstChild) h.appendChild(summary.firstChild);
+        summary.appendChild(h);
+      }
+      h.style.display = 'inline';
+      h.style.margin = '0';
+      h.style.padding = '0';
+      h.style.fontSize = '1.05em';
+      h.style.fontWeight = '600';
+    }
+
+    // Réponses : envelopper les nœuds texte / éléments inline orphelins dans
+    // des <p> (runs consécutifs regroupés dans le même paragraphe).
+    let run = [];
+    const flushRun = (before) => {
+      if (!run.length) return;
+      const hasText = run.some(n => (n.textContent || '').trim());
+      if (hasText) {
+        const p = document.createElement('p');
+        details.insertBefore(p, before);
+        run.forEach(n => p.appendChild(n));
+      } else {
+        run.forEach(n => n.remove());
+      }
+      run = [];
+    };
+    for (const node of Array.from(details.childNodes)) {
+      if (node === summary) { flushRun(node); continue; }
+      const isInlineNode =
+        node.nodeType === Node.TEXT_NODE ||
+        (node.nodeType === Node.ELEMENT_NODE && INLINE_TAGS.has(node.tagName));
+      if (isInlineNode) run.push(node);
+      else flushRun(node);
+    }
+    flushRun(null);
+
+    // Espacement des blocs de réponse (équivalent du CSS éditeur :
+    // details > *:not(summary) { padding: 0.2em 1em } + 0.8em en bas du dernier)
+    const blocks = Array.from(details.children).filter(el => el.tagName !== 'SUMMARY');
+    blocks.forEach((el, i) => {
+      el.style.margin = '0';
+      el.style.padding = i === blocks.length - 1 ? '0.2em 1em 0.8em' : '0.2em 1em';
+    });
+  });
+};
+
 export const exportAsHtml = (content) => {
   const div = document.createElement('div');
   div.innerHTML = content;
@@ -182,12 +260,10 @@ export const exportAsHtml = (content) => {
   convertFaqToAccordion(div);
 
   // FAQ en accordéon : conserver les <details>/<summary> natifs (acceptés par
-  // WordPress ≥ 5.9) mais retirer toute classe/couleur/style inline → apparence
-  // NEUTRE, gérée par le thème. Uniformise le rendu TONTON ↔ WordPress.
-  div.querySelectorAll('details, summary').forEach((el) => {
-    el.removeAttribute('class');
-    el.removeAttribute('style');
-  });
+  // WordPress ≥ 5.9) et leur appliquer le thème TONTON en styles INLINE
+  // (carte bordée arrondie, question en <h3>, réponses en <p>) → le site de
+  // destination affiche le même design que l'éditeur, sans CSS ni plugin.
+  applyFaqInlineTheme(div);
 
   // Uniformiser la typo : retirer les tailles de police parasites (0.8125rem)
   // → WordPress applique la taille du thème à tout le contenu.
