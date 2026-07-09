@@ -26,6 +26,49 @@ describe('exportAsHtml — retours à la ligne inter-blocs (anti wpautop)', () =
   });
 });
 
+describe('exportAsHtml — les diffs EN ATTENTE ne sont jamais publiés', () => {
+  it("supprime un bloc AJOUTÉ non accepté (<ins class=\"added-content\">)", () => {
+    const src = '<p>Avant.</p><ins class="added-content"><p>Résumé de l\'article ajouté par IA.</p></ins><p>Après.</p>';
+    const out = exportAsHtml(src);
+    expect(out).not.toContain('Résumé de l\'article');
+    expect(out).toContain('<p>Avant.</p>');
+    expect(out).toContain('<p>Après.</p>');
+  });
+
+  it('restaure le texte ORIGINAL pour un remplacement en attente (paire del+mark)', () => {
+    const src = '<p>Prix : <del class="deleted-content">100 EUR</del><mark class="updated-content">150 EUR</mark> posé.</p>';
+    const out = exportAsHtml(src);
+    expect(out).toContain('100 EUR');       // l'original est conservé
+    expect(out).not.toContain('150 EUR');   // le nouveau texte non accepté ne sort pas
+  });
+
+  it('conserve le texte d\'une suppression en attente (del seul)', () => {
+    const src = '<p>Texte <del class="deleted-content">encore visible</del> fin.</p>';
+    const out = exportAsHtml(src);
+    expect(out).toContain('encore visible');
+    expect(out).not.toContain('<del');
+  });
+
+  it('débalise un <mark> de diff orphelin sans perdre son texte', () => {
+    const src = '<p>Un <mark class="updated-content">texte orphelin</mark> ici.</p>';
+    const out = exportAsHtml(src);
+    expect(out).toContain('texte orphelin');
+    expect(out).not.toContain('updated-content');
+  });
+
+  it('préserve les surlignages manuels (mark.manual-highlight)', () => {
+    const src = '<p><mark class="manual-highlight" style="background-color:#fef08a">important</mark></p>';
+    const out = exportAsHtml(src);
+    expect(out).toMatch(/<mark[^>]*>important<\/mark>/);
+  });
+
+  it('supprime les résidus barrés dégénérés (span.deleted-content)', () => {
+    const src = '<p>Ok <span class="deleted-content">barré résiduel</span> fin.</p>';
+    const out = exportAsHtml(src);
+    expect(out).not.toContain('barré résiduel');
+  });
+});
+
 describe('exportAsHtml — thème inline des accordéons FAQ', () => {
   it('enveloppe la question du <summary> dans un <h3> inline stylé', () => {
     const src = '<h2>FAQ</h2><details><summary>Quelle durée de vie ?</summary><p>Environ 30 ans.</p></details>';

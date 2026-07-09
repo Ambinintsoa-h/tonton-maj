@@ -10,7 +10,7 @@ import {
   RefreshCw, ArrowRight, Link, ChevronUp,
   Clipboard, ClipboardCheck, Sparkles, Loader, ShieldCheck,
   Plus, Link2, X, Tag, Search, Image,
-  Undo2, Redo2, Scissors, Trash2, Lock,
+  Undo2, Redo2, Scissors, Trash2, Lock, CheckCheck,
 } from 'lucide-react';
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripParasiticFontSize } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
@@ -227,6 +227,9 @@ export default function ArticleResult() {
   const [wpNotFoundReason, setWpNotFoundReason] = useState(''); // raison si non trouvé
   const [hasContent, setHasContent] = useState(false);
   const [diffMode, setDiffMode] = useState(true);
+  // Dialogue « modifications en attente » au moment de publier :
+  // { site, mode, foundPost, count } | null
+  const [publishGuard, setPublishGuard] = useState(null);
 
   // Bascule « code | rendu » des blocs HTML de l'audit (délégation de clic, car le
   // contenu est injecté via dangerouslySetInnerHTML — voir enhanceCodePreviews).
@@ -371,7 +374,15 @@ export default function ArticleResult() {
   //     définit innerHTML (c'est ce qui rend la Vue diff correcte visuellement)
   //   - Les regex sur string ignorent ce contexte et laissent des <strong>
   //     non fermés → tout ce qui suit s'affiche en gras dans la Vue finale
-  const getFinalHtml = useCallback(() => {
+  // pendingChanges :
+  //   'reject' (défaut — vue finale, exports, publication, archive) : les diffs
+  //     ENCORE EN ATTENTE (ni acceptés ✓ ni rejetés ✗) ne sont PAS retenus →
+  //     le texte ORIGINAL est restauré (del débalisé, mark/ins supprimés).
+  //     Ce qui n'a pas été explicitement accepté ne sort jamais de l'éditeur.
+  //   'accept' (passe 2 IA uniquement) : comportement historique — les diffs en
+  //     attente sont considérés comme intégrés (Claude analyse l'article enrichi
+  //     et ne re-propose pas les mêmes mises à jour).
+  const getFinalHtml = useCallback(({ pendingChanges = 'reject' } = {}) => {
     // 1. Laisser le navigateur parser et normaliser le HTML
     const tmp = document.createElement('div');
     tmp.innerHTML = contentRef.current || '';
@@ -380,8 +391,25 @@ export default function ArticleResult() {
     //     d'extraire le HTML final → la vue finale et la publication restent valides.
     repairStructureEl(tmp);
 
-    // 2. Supprimer tous les blocs <del> (texte supprimé) via le DOM
-    tmp.querySelectorAll('del').forEach(el => el.remove());
+    // 2. Résoudre les diffs EN ATTENTE selon le mode
+    if (pendingChanges === 'accept') {
+      // Historique : la suppression proposée est appliquée (le <del> disparaît)
+      tmp.querySelectorAll('del').forEach(el => el.remove());
+    } else {
+      // Sécurité : un remplacement en attente = paire <del>ancien</del><mark>nouveau</mark>
+      // (insérée adjacente par applyDiff) → on restaure l'ANCIEN : le <mark> jumeau
+      // est supprimé, le <del> débalisé. Un <del> seul (suppression pure en attente)
+      // est débalisé aussi : son texte est conservé.
+      tmp.querySelectorAll('del').forEach(del => {
+        const twin = del.nextElementSibling;
+        if (twin && twin.tagName === 'MARK' && !twin.classList.contains('manual-highlight')) twin.remove();
+        const frag = document.createDocumentFragment();
+        while (del.firstChild) frag.appendChild(del.firstChild);
+        if (del.parentNode) del.parentNode.replaceChild(frag, del);
+      });
+      // Les blocs AJOUTÉS en attente ne sont pas retenus
+      tmp.querySelectorAll('ins.added-content').forEach(el => el.remove());
+    }
 
     // 2b. Filet : retirer toute SUPPRESSION résiduelle qui n'est plus un <del> —
     //     élément portant .deleted-content, balises <s>/<strike>, ou tout élément dont
@@ -443,8 +471,9 @@ export default function ArticleResult() {
       prev = html;
       html = html.replace(/<mark\b(?![^>]*manual-highlight)[^>]*>([\s\S]*?)<\/mark>/gi, '$1');
     }
-    // Débaliser tout <ins class="added-content">…</ins> résiduel
-    html = html.replace(/<ins\b[^>]*class="added-content"[^>]*>([\s\S]*?)<\/ins>/gi, '$1');
+    // <ins class="added-content"> résiduel : intégré en mode 'accept', supprimé
+    // en mode 'reject' (un ajout non accepté ne sort jamais)
+    html = html.replace(/<ins\b[^>]*class="added-content"[^>]*>([\s\S]*?)<\/ins>/gi, pendingChanges === 'accept' ? '$1' : '');
 
     // 5. Nettoyage cosmétique sur le HTML résultant
     return html
@@ -1035,8 +1064,10 @@ export default function ArticleResult() {
   // ── Logique centrale de la deuxième passe (avec ou sans sources CQ) ────────
   const runReview = async (manualSources = []) => {
     try {
-      // Article propre (sans balises <del>/<mark>) envoyé à Claude pour analyse
-      const cleanContent = getFinalHtml();
+      // Article propre (sans balises <del>/<mark>) envoyé à Claude pour analyse.
+      // 'accept' : les diffs de passe 1 encore en attente sont considérés comme
+      // intégrés — sinon Claude re-proposerait les mêmes mises à jour en passe 2.
+      const cleanContent = getFinalHtml({ pendingChanges: 'accept' });
 
       const result = await runReviewAgent({
         content: cleanContent,
@@ -1381,6 +1412,66 @@ export default function ArticleResult() {
     if (mark) mark.remove();
     afterSegEdit();
   }, [afterSegEdit]);
+
+  // Nombre de modifications ENCORE EN ATTENTE (une paire del+mark = 1, un ins = 1).
+  // Compté depuis contentRef (source de vérité) : fonctionne aussi en vue finale,
+  // quand le contentEditable est démonté.
+  const countPendingChanges = useCallback(() => {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = contentRef.current || '';
+    const seen = new Set();
+    let count = 0;
+    tmp.querySelectorAll('del.deleted-content, mark.updated-content, ins.added-content').forEach((n) => {
+      if (seen.has(n)) return;
+      const { del, mark, ins } = resolveDiffPair(n);
+      [del, mark, ins].forEach(x => x && seen.add(x));
+      count++;
+    });
+    return count;
+  }, []);
+
+  // ✓✓ / ✗✗ Tout accepter / Tout rejeter — traite d'un coup TOUS les segments en
+  // attente. Opère sur le contentEditable live si monté (vue diff), sinon sur
+  // contentRef (vue finale) — le résultat est resynchronisé et autosauvegardé,
+  // et reste annulable via Ctrl+Z (commitHistory de l'autosave).
+  const processAllSegments = useCallback((mode) => {
+    const live = articleRef.current;
+    const root = live || document.createElement('div');
+    if (!live) root.innerHTML = contentRef.current || '';
+
+    const nodes = Array.from(root.querySelectorAll('del.deleted-content, mark.updated-content, ins.added-content'));
+    if (!nodes.length) {
+      toast('Aucune modification en attente', { icon: <Info size={18} className="text-blue-500" /> });
+      return false;
+    }
+    const seen = new Set();
+    nodes.forEach((node) => {
+      if (seen.has(node)) return;
+      const { del, mark, ins } = resolveDiffPair(node);
+      [del, mark, ins].forEach(x => x && seen.add(x));
+      if (mode === 'accept') {
+        if (ins) unwrapNode(ins);
+        if (del) del.remove();
+        if (mark) unwrapNode(mark);
+      } else {
+        if (ins) ins.remove();
+        if (del) unwrapNode(del);
+        if (mark) mark.remove();
+      }
+    });
+
+    if (live) {
+      afterSegEdit();
+    } else {
+      contentRef.current = root.innerHTML;
+      humanEditRef.current = true;
+      triggerAutosave();
+    }
+    toast.success(mode === 'accept'
+      ? 'Toutes les modifications en attente ont été acceptées'
+      : 'Toutes les modifications en attente ont été rejetées — texte original restauré');
+    return true;
+  }, [afterSegEdit, triggerAutosave]);
 
   // ── Manipulation de la FAQ (bloc entier + questions/réponses) ────────────────
   // faqHover = { rect, qa: { index, count, rect } | null } — au survol de la FAQ :
@@ -1963,7 +2054,16 @@ export default function ArticleResult() {
   // foundPost (optionnel) : permet de cibler un post sans passer par le state wpFoundPost.
   // mode : 'update' → publier sur le site (statut publish) · 'updateDraft' → publier dans
   // brouillons (repasse l'article EXISTANT en brouillon, retiré du site public).
-  const handlePublish = async (site, mode = 'update', foundPost = null) => {
+  // opts.skipPendingGuard : true quand l'utilisateur a déjà tranché dans le dialogue
+  // « modifications en attente » (Tout accepter / Publier sans elles).
+  const handlePublish = async (site, mode = 'update', foundPost = null, opts = {}) => {
+    // ── Garde-fou : des modifications encore EN ATTENTE ne seront pas publiées ──
+    // (getFinalHtml les exclut). On prévient l'utilisateur au lieu de publier
+    // silencieusement un article incomplet.
+    if (!opts.skipPendingGuard) {
+      const count = countPendingChanges();
+      if (count > 0) { setPublishGuard({ site, mode, foundPost, count }); return; }
+    }
     setPublishing(true);
     const rawHtml = exportAsHtml(getFinalHtml());
 
@@ -2947,6 +3047,26 @@ export default function ArticleResult() {
                   </div>
                 )}
 
+                {/* Tout accepter / Tout rejeter (segments en attente) — annulable Ctrl+Z */}
+                {diffMode && (
+                  <div className="flex items-center gap-1 border-l border-gray-200 pl-2">
+                    <button
+                      onClick={() => processAllSegments('accept')}
+                      title="Accepter TOUTES les modifications en attente (annulable Ctrl+Z)"
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                    >
+                      <CheckCheck size={12} /> Tout accepter
+                    </button>
+                    <button
+                      onClick={() => processAllSegments('reject')}
+                      title="Rejeter TOUTES les modifications en attente — retour au texte original (annulable Ctrl+Z)"
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-gray-500 bg-white hover:bg-gray-100 border border-gray-200 transition-colors"
+                    >
+                      <X size={12} /> Tout rejeter
+                    </button>
+                  </div>
+                )}
+
                 {/* Badge vue finale */}
                 {!diffMode && (
                   <span className="text-[11px] text-gray-400 italic">
@@ -3862,6 +3982,66 @@ export default function ArticleResult() {
                 <ExternalLink size={11} /> Ouvrir dans un nouvel onglet
               </a>
             )}
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ── Garde-fou publication : des modifications encore EN ATTENTE ────────
+          Elles ne seraient pas publiées (getFinalHtml les exclut) → on demande. */}
+      {publishGuard && createPortal(
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 700 }}
+          className="bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-6"
+          onMouseDown={() => setPublishGuard(null)}
+        >
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,0.35)] w-full max-w-md p-6 text-center border-t-4 border-amber-400"
+          >
+            <div className="mx-auto w-11 h-11 rounded-2xl bg-amber-50 flex items-center justify-center mb-3">
+              <AlertTriangle size={20} className="text-amber-500" />
+            </div>
+            <h3 className="text-[15px] font-bold text-gray-900">
+              {publishGuard.count} modification{publishGuard.count > 1 ? 's' : ''} en attente
+            </h3>
+            <p className="text-[13px] text-gray-500 mt-2 leading-relaxed">
+              Les passages surlignés (vert / bleu / rouge) qui n'ont pas été acceptés
+              ne seront <span className="font-semibold text-gray-700">pas publiés</span> —
+              l'article partira avec son texte original à ces endroits.
+            </p>
+            <div className="flex flex-col gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => {
+                  const g = publishGuard;
+                  setPublishGuard(null);
+                  processAllSegments('accept');
+                  handlePublish(g.site, g.mode, g.foundPost, { skipPendingGuard: true });
+                }}
+                className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-sm flex items-center justify-center gap-2"
+              >
+                <CheckCheck size={16} /> Tout accepter puis publier
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const g = publishGuard;
+                  setPublishGuard(null);
+                  handlePublish(g.site, g.mode, g.foundPost, { skipPendingGuard: true });
+                }}
+                className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold text-gray-700 border border-gray-200 hover:bg-gray-50 transition-colors"
+              >
+                Publier sans ces modifications
+              </button>
+              <button
+                type="button"
+                onClick={() => setPublishGuard(null)}
+                className="w-full px-4 py-2 rounded-xl text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                Annuler
+              </button>
+            </div>
           </div>
         </div>,
         document.body
