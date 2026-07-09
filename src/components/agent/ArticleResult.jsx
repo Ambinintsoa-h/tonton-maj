@@ -36,6 +36,7 @@ import {
 } from '../../services/firebase';
 import { saveDraft, flushDraftRemote, onDraftStatus } from '../../services/articleDraft';
 import { renderMarkdown, emojiToIcons, unwrapProseFences, trimAuditForDisplay } from '../../utils/markdown';
+import { validateImageFile } from '../../utils/uploadLimits';
 import { useNavigate } from 'react-router-dom';
 
 const TAB_AUDIT = 'audit';
@@ -631,6 +632,7 @@ export default function ArticleResult() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = ''; // reset input pour permettre re-sélection du même fichier
+    if (!validateImageFile(file)) return;   // images > 1 Mo refusées
 
     const matchingSite = resolvedSite;
     if (!matchingSite) {
@@ -1296,20 +1298,30 @@ export default function ArticleResult() {
   const [linkHover, setLinkHover]       = useState(null); // { idx, url, anchor, rect } — lien interne PROPOSÉ
   const [anchorHover, setAnchorHover]   = useState(null); // { url, rect } — vraie ancre <a href> survolée
   const leaveTimerRef  = useRef(null);
+  const anchorTimerRef = useRef(null); // fermeture différée du tooltip d'ancre (dédié)
 
   // Survol d'une vraie ancre <a href> (lien externe existant, interne existant ou
-  // déjà appliqué) → tooltip affichant l'URL complète. Lecture seule (pas de clic).
+  // déjà appliqué) → tooltip affichant l'URL complète + bouton « Ouvrir dans un
+  // nouvel onglet ». Quand la souris quitte le lien, le tooltip reste ≥ 1 s
+  // (fermeture différée) pour laisser le temps d'aller cliquer dedans.
   const showAnchorTooltip = useCallback((e) => {
     const a = e.target.closest('a[href]');
     if (a && e.currentTarget.contains(a)) {
       clearTimeout(leaveTimerRef.current);
+      clearTimeout(anchorTimerRef.current);
+      anchorTimerRef.current = null;
       const url = a.getAttribute('href') || '';
       // Titre connu : titre HTML du lien, sinon titre d'un lien interne suggéré de même URL
       const known = (agent.internalLinks || []).find(l => l.url === url);
       const title = a.getAttribute('title') || known?.title || '';
       setAnchorHover({ url, title, rect: a.getBoundingClientRect() });
-    } else {
-      setAnchorHover(null);
+    } else if (!anchorTimerRef.current) {
+      // Pas de replanification à chaque mouvement de souris : un seul timer,
+      // sinon le tooltip ne se fermerait jamais tant que la souris bouge.
+      anchorTimerRef.current = setTimeout(() => {
+        anchorTimerRef.current = null;
+        setAnchorHover(null);
+      }, 1000);
     }
   }, [agent.internalLinks]);
 
@@ -3059,7 +3071,7 @@ export default function ArticleResult() {
                       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                       className="p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px]"
                       onMouseOver={showAnchorTooltip}
-                      onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setAnchorHover(null), 220); }}
+                      onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setAnchorHover(null), 1000); }}
                     >
                       <div
                         className="md-content"
@@ -3781,7 +3793,7 @@ export default function ArticleResult() {
             zIndex: 400,
           }}
           onMouseEnter={() => clearTimeout(leaveTimerRef.current)}
-          onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setLinkHover(null), 220); }}
+          onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setLinkHover(null), 1000); }}
         >
           <motion.button
             initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
@@ -3822,8 +3834,15 @@ export default function ArticleResult() {
             left: Math.max(8, Math.min(anchorHover.rect.left, window.innerWidth - 440)),
             zIndex: 400,
           }}
-          onMouseEnter={() => clearTimeout(leaveTimerRef.current)}
-          onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setAnchorHover(null), 220); }}
+          onMouseEnter={() => {
+            clearTimeout(leaveTimerRef.current);
+            clearTimeout(anchorTimerRef.current);
+            anchorTimerRef.current = null;
+          }}
+          onMouseLeave={() => {
+            clearTimeout(anchorTimerRef.current);
+            anchorTimerRef.current = setTimeout(() => { anchorTimerRef.current = null; setAnchorHover(null); }, 1000);
+          }}
         >
           <div className="max-w-[420px] px-2.5 py-2 rounded-lg bg-gray-900 text-white shadow-lg text-[11px] leading-snug space-y-1.5">
             {anchorHover.title && (

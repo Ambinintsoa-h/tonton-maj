@@ -20,6 +20,7 @@ import {
 } from '../services/firebase';
 import { AccountAvatar } from '../components/account/MonComptePanel';
 import tracker from '../services/activityTracker';
+import { filterValidImageFiles } from '../utils/uploadLimits';
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -636,11 +637,14 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
 
     e.preventDefault(); // on gère l'image nous-mêmes
     const pasted = extractPastedImageFiles(e);
-    if (pasted.length > 0) {
-      setFiles(prev => [...prev, ...pasted]);
-      toast.success(`${pasted.length} capture${pasted.length > 1 ? 's' : ''} ajoutée${pasted.length > 1 ? 's' : ''} aux pièces jointes`);
-    } else {
+    if (pasted.length === 0) {
       toast.error("Impossible de lire l'image collée — réessayez ou utilisez le bouton de pièce jointe");
+      return;
+    }
+    const kept = filterValidImageFiles(pasted); // images > 1 Mo refusées (toast dédié)
+    if (kept.length > 0) {
+      setFiles(prev => [...prev, ...kept]);
+      toast.success(`${kept.length} capture${kept.length > 1 ? 's' : ''} ajoutée${kept.length > 1 ? 's' : ''} aux pièces jointes`);
     }
   };
 
@@ -849,7 +853,7 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
             </button>
           </div>
           <input ref={fileRef} type="file" multiple accept="image/*,video/*" className="hidden"
-            onChange={e => setFiles(prev => [...prev, ...Array.from(e.target.files)])} />
+            onChange={e => { const kept = filterValidImageFiles(e.target.files); e.target.value = ''; if (kept.length > 0) setFiles(prev => [...prev, ...kept]); }} />
         </div>
       </div>
     </div>
@@ -1306,11 +1310,14 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
 
     e.preventDefault(); // on gère l'image nous-mêmes
     const pasted = extractPastedImageFiles(e);
-    if (pasted.length > 0) {
-      setFiles(prev => [...prev, ...pasted]);
-      toast.success(`${pasted.length} capture${pasted.length > 1 ? 's' : ''} ajoutée${pasted.length > 1 ? 's' : ''} aux pièces jointes`);
-    } else {
+    if (pasted.length === 0) {
       toast.error("Impossible de lire l'image collée — réessayez ou utilisez le bouton de pièce jointe");
+      return;
+    }
+    const kept = filterValidImageFiles(pasted); // images > 1 Mo refusées (toast dédié)
+    if (kept.length > 0) {
+      setFiles(prev => [...prev, ...kept]);
+      toast.success(`${kept.length} capture${kept.length > 1 ? 's' : ''} ajoutée${kept.length > 1 ? 's' : ''} aux pièces jointes`);
     }
   };
 
@@ -1539,7 +1546,7 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
               multiple
               accept="image/*,video/*"
               className="hidden"
-              onChange={e => setFiles(prev => [...prev, ...Array.from(e.target.files)])}
+              onChange={e => { const kept = filterValidImageFiles(e.target.files); e.target.value = ''; if (kept.length > 0) setFiles(prev => [...prev, ...kept]); }}
             />
             {files.length > 0 && (
               <div className="flex flex-wrap gap-2 mt-2 items-start">
