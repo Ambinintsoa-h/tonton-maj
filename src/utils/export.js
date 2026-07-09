@@ -184,10 +184,24 @@ export const exportAsHtml = (content) => {
     if (span.parentNode) span.parentNode.replaceChild(frag, span);
   });
 
-  // Remove deleted content entirely
-  div.querySelectorAll('.deleted-content, del').forEach(el => el.remove());
+  // ── Diffs encore EN ATTENTE : rien de non-accepté ne sort ────────────────────
+  // Un remplacement en attente = paire <del>ancien</del><mark>nouveau</mark>
+  // (insérée adjacente par applyDiff) → on restaure l'ANCIEN texte : le <mark>
+  // jumeau est supprimé, le <del> débalisé. Un <del> seul (suppression en
+  // attente) est débalisé aussi : son texte est conservé.
+  div.querySelectorAll('del').forEach(del => {
+    const twin = del.nextElementSibling;
+    if (twin && twin.tagName === 'MARK' && !twin.classList.contains('manual-highlight')) twin.remove();
+    const frag = document.createDocumentFragment();
+    while (del.firstChild) frag.appendChild(del.firstChild);
+    if (del.parentNode) del.parentNode.replaceChild(frag, del);
+  });
+  // Résidus barrés dégénérés (span.deleted-content inline-isé par Chrome…) :
+  // le barré ne doit jamais être publié.
+  div.querySelectorAll('.deleted-content').forEach(el => el.remove());
 
-  // Unwrap diff marks: keep inner HTML, discard the <mark> wrapper.
+  // <mark> de diff ORPHELINS (sans <del> jumeau) : débalisés — on ne supprime
+  // jamais du texte affiché sans son original à restaurer.
   // Les <mark class="manual-highlight"> (surlignages manuels) sont préservés pour WordPress.
   div.querySelectorAll('.updated-content, mark:not(.manual-highlight)').forEach(el => {
     const frag = document.createDocumentFragment();
@@ -195,12 +209,8 @@ export const exportAsHtml = (content) => {
     if (el.parentNode) el.parentNode.replaceChild(frag, el);
   });
 
-  // Unwrap added paragraphs: keep inner HTML, discard the <ins class="added-content"> wrapper
-  div.querySelectorAll('ins.added-content').forEach(el => {
-    const frag = document.createDocumentFragment();
-    while (el.firstChild) frag.appendChild(el.firstChild);
-    if (el.parentNode) el.parentNode.replaceChild(frag, el);
-  });
+  // Blocs AJOUTÉS non acceptés (<ins class="added-content">) : jamais publiés
+  div.querySelectorAll('ins.added-content').forEach(el => el.remove());
 
   // Nettoyer la classe interne "manual-highlight" des <mark> → sortie propre pour WordPress
   // Le <mark style="background-color:..."> nu est le format Gutenberg natif (wp_kses_post OK).
@@ -298,7 +308,8 @@ export const exportAsHtml = (content) => {
     prev = html;
     html = html.replace(/<mark\b(?![^>]*\bstyle\s*=)[^>]*>([\s\S]*?)<\/mark>/gi, '$1');
   }
-  html = html.replace(/<ins\b[^>]*class="added-content"[^>]*>([\s\S]*?)<\/ins>/gi, '$1');
+  // <ins class="added-content"> résiduel = ajout non accepté → supprimé, jamais publié
+  html = html.replace(/<ins\b[^>]*class="added-content"[^>]*>[\s\S]*?<\/ins>/gi, '');
 
   // ── Anti-<br> parasites de WordPress (wpautop) ──────────────────────────────
   // WordPress applique wpautop sur the_content : tout saut de ligne ENTRE des
