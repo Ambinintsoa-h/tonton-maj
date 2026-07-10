@@ -32,6 +32,7 @@ Injecté dans TOUS les prompts système :
 - `cutoffIso` : date J-6mois — tout contenu antérieur est "suspect"
 
 ## Règles prompt critiques
+- **Skills classiques (menu SKILLS IA)** injectés dans TOUS les modes — y compris en mode cerveau (bloc « RÈGLES D'ÉQUIPE ») : audit, génération, passe 2 et contrôle de conformité. L'équipe édite ses règles rédactionnelles dans le menu sans ré-importer le SKILL.md.
 - **Additions** interdites sans source web scrapée réelle (jamais depuis training data)
 - `"original"` = copie EXACTE mot-pour-mot du texte de l'article
 - `"updates: []"` inacceptable sauf article < 3 mois
