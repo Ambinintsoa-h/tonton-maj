@@ -178,13 +178,24 @@ const filterSourcesWithHaiku = async (articleContent, sources, apiKey) => {
   }
 };
 
-// ── Appel Claude ──────────────────────────────────────────────────────────────
-// Une erreur est REJOUABLE si la réponse n'est jamais arrivée (coupure de
-// connexion : redémarrage du serveur pendant un déploiement, reset HTTP/2,
-// réseau) ou si la passerelle a répondu 502/503/504 (Passenger en cours de
-// restart). Le timeout client (ECONNABORTED, 5 min) et les erreurs applicatives
-// (4xx/5xx avec message serveur) ne sont PAS retentés.
+// ── Appel Claude — transport job + polling ────────────────────────────────────
+// Le proxy n0c coupe les connexions HTTP/2 restées silencieuses (~30 s sans
+// octet) : l'ancien POST /api/claude qui attendait Anthropic 1-5 min se faisait
+// tuer (ERR_HTTP2_PROTOCOL_ERROR). Nouveau flux : POST /api/claude-job (réponse
+// immédiate { jobId }) puis GET /api/claude-job/:id toutes les 2 s — aucune
+// requête ne reste jamais muette. /api/claude (legacy) reste utilisé en secours
+// si la route job est absente (vieux serveur pendant un déploiement).
+const JOB_PROXY       = '/api/claude-job';
+const JOB_POLL_MS     = 2000;
+const JOB_MAX_WAIT_MS = 6 * 60 * 1000; // > timeout Anthropic côté serveur (5 min)
+
+// Une erreur est REJOUABLE si la réponse n'est jamais arrivée (coupure réseau,
+// redémarrage du serveur pendant un déploiement — y compris job perdu au restart)
+// ou si la passerelle a répondu 502/503/504. Le timeout client (ECONNABORTED) et
+// les erreurs applicatives (message renvoyé par le serveur) ne sont PAS retentés.
 const isRetryableClaudeError = (err) => {
+  if (err.message === 'JOB_LOST') return true;           // app redémarrée pendant l'analyse
+  if (err.isAppError) return false;                      // erreur applicative (message serveur)
   if (err.code === 'ECONNABORTED') return false;         // timeout client
   if (!err.response) return true;                        // coupure réseau pure
   return [502, 503, 504].includes(err.response.status);  // passerelle en restart
@@ -193,27 +204,87 @@ const isRetryableClaudeError = (err) => {
 const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
 const CLAUDE_RETRY_DELAYS_MS = [2000, 5000]; // 2 relances max, backoff court
 
+/** Extrait { text, usage } d'une réponse proxy ({ content, modelUsed, usage }). */
+const parseClaudeResponse = (data, model) => {
+  const actualModel = data.modelUsed || data.model || model;
+  return {
+    text: data.content[0].text,
+    usage: {
+      input_tokens: data.usage?.input_tokens || 0,
+      output_tokens: data.usage?.output_tokens || 0,
+      model: actualModel,
+    },
+  };
+};
+
+// Création + suivi d'un job Claude. Rejette avec :
+//   'JOB_UNSUPPORTED' → route absente (vieux serveur) — bascule sur la route legacy
+//   'JOB_LOST'        → job disparu (app redémarrée pendant l'analyse) — rejouable
+//   err.isAppError    → erreur applicative renvoyée par le serveur — non rejouable
+const callClaudeViaJob = async ({ system, messages, max_tokens, model }) => {
+  let created;
+  try {
+    created = await axios.post(
+      JOB_PROXY,
+      { model, max_tokens, system, messages },
+      { headers: { 'content-type': 'application/json' }, timeout: 30000 }
+    );
+  } catch (err) {
+    if (err.response?.status === 404) throw new Error('JOB_UNSUPPORTED');
+    throw err;
+  }
+  const jobId = created.data?.jobId;
+  if (!jobId) throw new Error('JOB_UNSUPPORTED');
+
+  const deadline = Date.now() + JOB_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    await sleepMs(JOB_POLL_MS);
+    let resp;
+    try {
+      resp = await axios.get(`${JOB_PROXY}/${jobId}`, { timeout: 15000 });
+    } catch (err) {
+      if (err.response?.status === 404) throw new Error('JOB_LOST');
+      continue; // erreur réseau/5xx transitoire sur un poll → on repollera (borné par deadline)
+    }
+    const d = resp.data || {};
+    if (d.status === 'running') continue;
+    if (d.status === 'done') return parseClaudeResponse(d, model);
+    const appErr = new Error(d.error || 'Erreur lors de l\'appel à l\'IA');
+    appErr.isAppError = true;
+    throw appErr;
+  }
+  const timeoutErr = new Error('Délai dépassé (analyse > 6 min) — réessayez, ou réduisez la taille de l\'article.');
+  timeoutErr.isAppError = true;
+  throw timeoutErr;
+};
+
+// Route legacy (réponse synchrone dans le même POST) — secours uniquement.
+const callClaudeLegacy = async ({ system, messages, max_tokens, model }) => {
+  const response = await axios.post(
+    LOCAL_PROXY,
+    { model, max_tokens, system, messages },
+    { headers: { 'content-type': 'application/json' }, timeout: 300000 }
+  );
+  return parseClaudeResponse(response.data, model);
+};
+
 const callClaude = async (_apiKey, { system, messages, max_tokens = 2048, model = MODELS.FAST }) => {
   // _apiKey ignoré — le proxy lit la clé depuis data/settings.json côté serveur.
   // La clé n'est plus jamais transmise dans le body HTTP (invisible dans DevTools).
+  let useLegacy = false;
   for (let attempt = 0; ; attempt++) {
     try {
-      const response = await axios.post(
-        LOCAL_PROXY,
-        { model, max_tokens, system, messages },
-        { headers: { 'content-type': 'application/json' }, timeout: 300000 }
-      );
-      const data = response.data;
-      const actualModel = data.modelUsed || data.model || model;
-      return {
-        text: data.content[0].text,
-        usage: {
-          input_tokens: data.usage?.input_tokens || 0,
-          output_tokens: data.usage?.output_tokens || 0,
-          model: actualModel,
-        },
-      };
+      return useLegacy
+        ? await callClaudeLegacy({ system, messages, max_tokens, model })
+        : await callClaudeViaJob({ system, messages, max_tokens, model });
     } catch (err) {
+      // Vieux serveur sans route job (fenêtre de déploiement) → bascule legacy
+      // sans consommer d'essai.
+      if (err.message === 'JOB_UNSUPPORTED' && !useLegacy) {
+        useLegacy = true;
+        attempt--;
+        continue;
+      }
       // Relance automatique sur coupure de connexion (ex. redéploiement du
       // serveur pendant une analyse) → le pipeline survit au lieu de mettre
       // l'article en « Erreur ».
@@ -221,10 +292,11 @@ const callClaude = async (_apiKey, { system, messages, max_tokens = 2048, model 
         await sleepMs(CLAUDE_RETRY_DELAYS_MS[attempt]);
         continue;
       }
+      if (err.isAppError) throw err;
       const serverMsg = err.response?.data?.error;
       if (serverMsg) throw new Error(serverMsg);
       if (err.code === 'ECONNREFUSED') throw new Error('Proxy local non joignable — relance npm start');
-      if (!err.response && err.code !== 'ECONNABORTED') {
+      if (err.message === 'JOB_LOST' || (!err.response && err.code !== 'ECONNABORTED')) {
         throw new Error('Connexion au serveur interrompue pendant l\'appel IA (déploiement ou réseau) — relancez l\'analyse');
       }
       throw err;

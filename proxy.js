@@ -1565,18 +1565,17 @@ const friendlyAiError = (rawMsg = '') => {
   return { status: 500, error: `Erreur lors de l'appel à l'IA — ${safe}` };
 };
 
-// ─── Route principale ──────────────────────────────────────────────────────────
-app.post('/api/claude', requireAuth, async (req, res) => {
-  const { system, messages, max_tokens = 4096, model } = req.body;
-  const bodyApiKey = null; // clé API jamais acceptée depuis le client — lire uniquement settings.json
-  if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
+// ─── Cœur de l'appel Claude (partagé : route directe + jobs asynchrones) ───────
+// Reprend les 3 stratégies historiques : clé API settings.json → OAuth+cascade → CLI.
+// Retourne { ok:true, data:{ content, modelUsed, usage } } ou { ok:false, status, error }.
+const executeClaudeCall = async ({ system, messages, max_tokens = 4096, model }) => {
+  if (!messages?.length) return { ok: false, status: 400, error: 'messages requis' };
 
-  // Clé Anthropic : lire depuis data/settings.json en priorité, fallback sur la clé du body.
+  // Clé Anthropic : lire uniquement depuis data/settings.json (jamais depuis le client).
   const serverSettings = readServerSettings();
-  const serverApiKey = serverSettings.anthropicKey && serverSettings.anthropicKey !== 'local'
+  const clientApiKey = serverSettings.anthropicKey && serverSettings.anthropicKey !== 'local'
     ? serverSettings.anthropicKey
     : null;
-  const clientApiKey = serverApiKey || bodyApiKey;
 
   // Prompt CLI (seulement si OAuth échoue — le CLI reçoit le tout en une chaîne)
   const systemBlock = system ? `[SYSTEM]\n${system}\n\n[USER]\n` : '';
@@ -1584,7 +1583,7 @@ app.post('/api/claude', requireAuth, async (req, res) => {
 
   const requestedModel = MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK;
 
-  // ── Stratégie 0 : clé API fournie par le client ou le serveur ─────────────
+  // ── Stratégie 0 : clé API du serveur ───────────────────────────────────────
   // Le call est fait ici côté serveur (Node.js) → la clé Anthropic ne transite
   // jamais vers api.anthropic.com depuis le navigateur (invisible dans DevTools).
   if (clientApiKey && clientApiKey !== 'local') {
@@ -1596,17 +1595,17 @@ app.post('/api/claude', requireAuth, async (req, res) => {
       for (const m of [...new Set(toTry)]) {
         try {
           const { text, modelUsed, usage } = await callAnthropicWithApiKey(clientApiKey, { model: m, max_tokens, system, messages });
-          return res.json({ content: [{ text }], modelUsed, usage });
+          return { ok: true, data: { content: [{ text }], modelUsed, usage } };
         } catch (e) {
           if (e.message === 'RATE_LIMITED') { console.log(`[proxy] Cascade clé API : ${m} → suivant`); continue; }
           throw e;
         }
       }
-      return res.status(429).json({ error: 'Limite de requêtes atteinte sur tous les modèles — patientez une minute puis réessayez.' });
+      return { ok: false, status: 429, error: 'Limite de requêtes atteinte sur tous les modèles — patientez une minute puis réessayez.' };
     } catch (e) {
       console.error('[proxy] Erreur clé API fournie :', e.message);
       const f = friendlyAiError(e.message);
-      return res.status(f.status).json({ error: f.error });
+      return { ok: false, status: f.status, error: f.error };
     }
   }
 
@@ -1621,38 +1620,94 @@ app.post('/api/claude', requireAuth, async (req, res) => {
         system,    // ← top-level system parameter (pas intégré dans user content)
         messages,  // ← messages d'origine (structure correcte)
       });
-      // Retourner la réponse avec usage pour le suivi des tokens
-      return res.json({
-        content: [{ text }],
-        modelUsed,
-        usage,  // ← { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens }
-      });
+      // usage ← { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens }
+      return { ok: true, data: { content: [{ text }], modelUsed, usage } };
     } catch (e) {
       if (e.message !== 'AUTH_REQUIRED') {
         console.error('[proxy] API OAuth échouée:', e.message);
         const f = friendlyAiError(e.message);
-        return res.status(f.status).json({ error: f.error });
+        return { ok: false, status: f.status, error: f.error };
       }
       console.log('[proxy] Token OAuth invalide, tentative CLI...');
     }
 
     // Stratégie 2 : claude.exe CLI (fallback auth uniquement)
     const text = await callClaude(cliContent);
-    return res.json({ content: [{ text }], modelUsed: 'cli-fallback', usage: {} });
+    return { ok: true, data: { content: [{ text }], modelUsed: 'cli-fallback', usage: {} } };
 
   } catch (e) {
     if (e.message === 'AUTH_REQUIRED') {
-      return res.status(401).json({
+      return {
+        ok: false, status: 401,
         error: `Claude non connecté.\n\nOuvre un terminal PowerShell et lance :\n"${CLAUDE_BIN}" login\n\nPuis relance npm start.`,
-      });
+      };
     }
     console.error('[proxy] Erreur:', e.message);
-    // Toujours retourner une réponse HTTP, ne jamais laisser Express crasher
-    if (!res.headersSent) {
-      const f = friendlyAiError(e.message);
-      res.status(f.status).json({ error: f.error });
+    const f = friendlyAiError(e.message);
+    return { ok: false, status: f.status, error: f.error };
+  }
+};
+
+// ─── Route principale (réponse synchrone — conservée pour compatibilité) ───────
+app.post('/api/claude', requireAuth, async (req, res) => {
+  const { system, messages, max_tokens = 4096, model } = req.body;
+  const r = await executeClaudeCall({ system, messages, max_tokens, model });
+  // Toujours retourner une réponse HTTP, ne jamais laisser Express crasher
+  if (!res.headersSent) {
+    if (r.ok) res.json(r.data);
+    else res.status(r.status).json({ error: r.error });
+  }
+});
+
+// ─── Jobs Claude asynchrones (job + polling) ───────────────────────────────────
+// Le proxy n0c coupe les connexions HTTP/2 restées silencieuses (~30 s sans
+// octet) : un POST /api/claude qui attend Anthropic 1-5 min se fait tuer
+// (ERR_HTTP2_PROTOCOL_ERROR côté navigateur). Solution : POST /api/claude-job
+// répond immédiatement { jobId }, l'appel Anthropic continue côté serveur, et le
+// client interroge GET /api/claude-job/:id toutes les 2 s — chaque requête dure
+// moins de 2 s, plus aucune connexion muette à couper.
+// Jobs en mémoire : perdus si l'app redémarre (le client voit 404 → retry complet).
+const claudeJobs = new Map(); // jobId → { status, createdAt, doneAt?, result?, httpStatus?, error? }
+const CLAUDE_JOB_MAX_AGE_MS   = 20 * 60 * 1000; // filet : purge tout job > 20 min
+const CLAUDE_JOB_DONE_TTL_MS  = 10 * 60 * 1000; // résultat livrable pendant 10 min (re-poll possible)
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, j] of claudeJobs) {
+    if (now - j.createdAt > CLAUDE_JOB_MAX_AGE_MS || (j.doneAt && now - j.doneAt > CLAUDE_JOB_DONE_TTL_MS)) {
+      claudeJobs.delete(id);
     }
   }
+}, 60000).unref();
+
+app.post('/api/claude-job', requireAuth, (req, res) => {
+  const { system, messages, max_tokens = 4096, model } = req.body;
+  if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
+
+  const jobId = require('crypto').randomUUID();
+  const job = { status: 'running', createdAt: Date.now() };
+  claudeJobs.set(jobId, job);
+
+  executeClaudeCall({ system, messages, max_tokens, model })
+    .then(r => {
+      if (r.ok) { job.status = 'done'; job.result = r.data; }
+      else { job.status = 'error'; job.httpStatus = r.status; job.error = r.error; }
+    })
+    .catch(e => {
+      // executeClaudeCall ne rejette jamais en théorie — filet de sécurité
+      job.status = 'error'; job.httpStatus = 500; job.error = friendlyAiError(e.message).error;
+    })
+    .finally(() => { job.doneAt = Date.now(); });
+
+  res.json({ jobId });
+});
+
+app.get('/api/claude-job/:id', requireAuth, (req, res) => {
+  const job = claudeJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'JOB_NOT_FOUND' });
+  if (job.status === 'running') return res.json({ status: 'running' });
+  // Le job reste en mémoire (purge TTL) : si la réponse se perd, un re-poll re-livre le résultat.
+  if (job.status === 'done') return res.json({ status: 'done', ...job.result });
+  return res.json({ status: 'error', httpStatus: job.httpStatus || 500, error: job.error || 'Erreur inconnue' });
 });
 
 // ─── Route streaming Claude — SSE token counter ──────────────────────────────
