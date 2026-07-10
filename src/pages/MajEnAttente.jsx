@@ -254,12 +254,13 @@ function AddManualPanel({ open, onAdd, onClose, teamMembers }) {
   const [title, setTitle] = useState('');
   const [keyword, setKeyword] = useState('');
   const [priority, setPriority] = useState('normale');
+  const [depth, setDepth] = useState(DEFAULT_DEPTH);
   const [notes, setNotes] = useState('');
   const [assigneeId, setAssigneeId] = useState('');
 
   // Reset on open
   useEffect(() => {
-    if (open) { setUrl(''); setTitle(''); setKeyword(''); setPriority('normale'); setNotes(''); setAssigneeId(''); }
+    if (open) { setUrl(''); setTitle(''); setKeyword(''); setPriority('normale'); setDepth(DEFAULT_DEPTH); setNotes(''); setAssigneeId(''); }
   }, [open]);
 
   const handleSubmit = (e) => {
@@ -267,7 +268,7 @@ function AddManualPanel({ open, onAdd, onClose, teamMembers }) {
     if (!url.trim() || !url.startsWith('http')) { toast.error('URL invalide'); return; }
     onAdd({
       id: uid(), url: url.trim(), title: title.trim() || url.trim(),
-      keyword: keyword.trim(), priority, notes: notes.trim(),
+      keyword: keyword.trim(), priority, depth, notes: notes.trim(),
       assigneeId: assigneeId || null, status: 'pending', source: 'manual',
       addedAt: Date.now(), updatedAt: Date.now(),
     });
@@ -365,6 +366,28 @@ function AddManualPanel({ open, onAdd, onClose, teamMembers }) {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* Profondeur de la MAJ */}
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">Profondeur de la MAJ</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {Object.entries(MAJ_DEPTHS).map(([key, m]) => (
+                    <button
+                      key={key} type="button"
+                      onClick={() => setDepth(key)}
+                      className={`flex flex-col items-center justify-center gap-0.5 py-2.5 rounded-xl border text-xs font-semibold transition-all ${
+                        depth === key
+                          ? 'bg-indigo-50 border-indigo-300 text-indigo-700 ring-2 ring-indigo-200'
+                          : 'border-gray-200 text-gray-500 hover:border-gray-300 bg-white'
+                      }`}
+                    >
+                      {m.label}
+                      <span className={`text-[10px] font-medium ${depth === key ? 'text-indigo-400' : 'text-gray-300'}`}>{m.hint}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-gray-400 mt-1">{depthMeta(depth).description}</p>
               </div>
 
               {/* Assigner à */}
