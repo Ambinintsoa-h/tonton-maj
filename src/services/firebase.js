@@ -836,23 +836,28 @@ export const recordActivityAction = async (userId, date, actionType) => {
 /** Crée le doc temps s'il n'existe pas (startedAt figé au premier passage). */
 export const ensureArticleTimeDoc = async (articleId, { userId, userName = '', userRole = '', title = '', url = '' }) => {
   if (!db || !articleId || !userId) return;
-  const ref  = doc(db, 'article_time', `${articleId}_${userId}`);
-  const snap = await getDoc(ref);
-  if (snap.exists()) {
-    // Rafraîchir le titre/url si connus maintenant (analyse terminée)
-    const patch = {};
-    if (title && !snap.data().title) patch.title = title;
-    if (url && !snap.data().url)     patch.url = url;
-    if (Object.keys(patch).length) await updateDoc(ref, patch);
-    return;
+  const ref = doc(db, 'article_time', `${articleId}_${userId}`);
+  // SANS lecture préalable : les règles Firestore refusaient le get d'un doc
+  // INEXISTANT aux non-admins (resource == null) → le doc n'était jamais créé
+  // et aucune minute ne s'écrivait. On tente la mise à jour des métas (doc
+  // existant) et on ne crée le doc que sur « not-found ».
+  const patch = { lastActivityAt: Date.now() };
+  if (title)    patch.title = title;
+  if (url)      patch.url = url;
+  if (userName) patch.userName = userName;
+  if (userRole) patch.userRole = userRole;
+  try {
+    await updateDoc(ref, patch);
+  } catch (e) {
+    if (e?.code !== 'not-found') throw e;
+    await setDoc(ref, {
+      articleId, userId, userName, userRole, title, url,
+      totalActiveMinutes: 0,
+      startedAt:          Date.now(),   // lancement de la 1re session de travail
+      lastActivityAt:     Date.now(),
+      publishedAt:        null,
+    });
   }
-  await setDoc(ref, {
-    articleId, userId, userName, userRole, title, url,
-    totalActiveMinutes: 0,
-    startedAt:          Date.now(),   // lancement de la 1re session de travail
-    lastActivityAt:     Date.now(),
-    publishedAt:        null,
-  });
 };
 
 /** Crédite `minutes` de travail actif (increment atomique — pas de lecture). */

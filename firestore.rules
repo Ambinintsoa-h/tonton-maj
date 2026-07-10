@@ -132,8 +132,11 @@ service cloud.firestore {
     // (heartbeat du tracker). Lecture : soi-même ; liste complète : super_admin
     // (page « Temps équipe »).
     match /article_time/{docId} {
-      allow read: if isAuthenticated()
-        && (resource.data.userId == request.auth.uid || userRole() == 'super_admin');
+      // get basé sur l'ID du doc (qui se termine par _{uid}) : fonctionne AUSSI
+      // sur un doc inexistant — avec resource.data, la règle échouait (resource
+      // null) → le tracker ne pouvait jamais créer le doc → aucun temps écrit.
+      allow get: if isAuthenticated()
+        && (docId.matches('.*_' + request.auth.uid) || userRole() == 'super_admin');
       allow list: if isAuthenticated() && userRole() == 'super_admin';
       allow create, update: if isAuthenticated()
         && request.resource.data.userId == request.auth.uid;
