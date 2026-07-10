@@ -20,6 +20,7 @@ import {
 import { deleteArticle, fetchArticleHtml, getArticles, isLockActive, archiveArticle } from '../services/firebase';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Pagination, { pageSlice } from '../components/common/Pagination';
+import ListFilters, { EMPTY_FILTERS, hasActiveFilters, buildMemberMatcher, buildDateMatcher } from '../components/common/ListFilters';
 import { useNavigate } from 'react-router-dom';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
@@ -350,7 +351,7 @@ function SeoPanel({ seoTracking, majDate }) {
 }
 
 // ── Ligne historique (read-only, même design que MAJ en attente) ──────────────
-function HistoryRow({ article, users, onView, onRequeue, onDelete, onArchive }) {
+function HistoryRow({ article, users, onView, onRequeue, onDelete, onArchive, selectable, selected, onToggleSelect }) {
   const [expanded, setExpanded] = useState(false);
 
   const domain   = extractDomain(article.url);
@@ -374,8 +375,19 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete, onArchive }) 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0, x: -16 }}
-        className={`flex items-center gap-4 px-5 py-3.5 border-b border-gray-50/80 hover:bg-gray-50/40 transition-colors border-l-[3px] ${prio.border}`}
+        className={`flex items-center gap-4 px-5 py-3.5 border-b border-gray-50/80 hover:bg-gray-50/40 transition-colors border-l-[3px] ${prio.border} ${selected ? 'bg-indigo-50/40' : ''}`}
       >
+        {/* Case de sélection multiple (archivage groupé — super_admin) */}
+        {selectable && (
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={() => onToggleSelect(article.id)}
+            className="w-4 h-4 accent-indigo-600 cursor-pointer flex-shrink-0"
+            title="Sélectionner pour archiver"
+          />
+        )}
+
         {/* Domain avatar */}
         <div className={`w-9 h-9 rounded-xl ${bgColor} flex items-center justify-center text-white text-sm font-bold flex-shrink-0 shadow-sm`}>
           {initial}
@@ -667,8 +679,13 @@ export default function Historique() {
   const authRole      = useSelector(s => s.auth.role);
   const authUid       = useSelector(s => s.auth.uid);
   const authUsername  = useSelector(s => s.auth.username);
+  const authPrenom    = useSelector(s => s.auth.prenom);
+  const authNom       = useSelector(s => s.auth.nom);
 
   const [search,        setSearch]        = useState('');
+  const [filters,       setFilters]       = useState({ ...EMPTY_FILTERS });
+  const [selectedIds,   setSelectedIds]   = useState(() => new Set());
+  const [confirmBulk,   setConfirmBulk]   = useState(false);
   const [preview,       setPreview]       = useState(null);
   const [previewTab,    setPreviewTab]    = useState('apres');
   const [previewHtml,   setPreviewHtml]   = useState({ original: '', updated: '' });
@@ -712,6 +729,10 @@ export default function Historique() {
   const suggestions = [...new Set(visibleHistory.map(a => a.title).filter(Boolean))];
 
   const q = search.toLowerCase();
+  // Filtres membre (assigné OU dernier modificateur) + période (date d'ajout)
+  const me          = { uid: authUid, username: authUsername, name: [authPrenom, authNom].filter(Boolean).join(' ') || authUsername };
+  const memberMatch = buildMemberMatcher(filters, users, me);
+  const dateMatch   = buildDateMatcher(filters, a => getArticleDate(a)?.getTime() ?? null);
   // Tri : DERNIÈRE MODIFICATION la plus récente en premier — repli sur la date
   // de synchronisation (updatedAt) puis sur la date d'ajout pour les articles
   // jamais modifiés.
@@ -724,12 +745,32 @@ export default function Historique() {
       a.url?.toLowerCase().includes(q) ||
       a.keyword?.toLowerCase().includes(q)
     )
+    .filter(a => !memberMatch || memberMatch(a))
+    .filter(a => !dateMatch || dateMatch(a))
     .sort((a, b) => sortKey(b) - sortKey(a));
 
-  // Pagination (50 max par page) — retour page 1 à chaque nouvelle recherche
+  // Pagination (50 max par page) — retour page 1 (et sélection purgée) à chaque
+  // nouvelle recherche / nouveau filtre
   const [page, setPage] = useState(1);
-  useEffect(() => { setPage(1); }, [q]);
+  useEffect(() => { setPage(1); setSelectedIds(new Set()); }, [q, filters]);
   const pageItems = pageSlice(filtered, page);
+
+  // ── Sélection multiple → archivage groupé (super_admin) ────────────────────
+  const canBulkArchive = authRole === 'super_admin';
+  const allSelected    = filtered.length > 0 && filtered.every(a => selectedIds.has(a.id));
+
+  const toggleSelect = (id) => setSelectedIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const toggleSelectAll = () => setSelectedIds(
+    allSelected ? new Set() : new Set(filtered.map(a => a.id))
+  );
+
+  // N'archive que les éléments sélectionnés ENCORE visibles dans le filtre courant
+  const bulkTargets = filtered.filter(a => selectedIds.has(a.id));
 
   // Garde-fou : la suppression d'une archive efface aussi le doc Firestore
   // (avant/après, suivi SEO) → confirmation obligatoire avant d'agir.
@@ -751,6 +792,21 @@ export default function Historique() {
     toast.success('Article archivé — retrouvez-le dans la page Archives', { icon: <Archive size={16} /> });
     if (preview?.id === article.id) setPreview(null);
     if (firebaseReady) archiveArticle(article.id, authUsername || '').catch(() => {});
+  };
+
+  // Archivage groupé de la sélection (après confirmation)
+  const confirmBulkArchival = () => {
+    const now = Date.now();
+    bulkTargets.forEach(a => {
+      dispatch(updateInHistory({ id: a.id, archived: true, archivedAt: now, archivedBy: authUsername || '' }));
+      if (firebaseReady) archiveArticle(a.id, authUsername || '').catch(() => {});
+    });
+    if (bulkTargets.some(a => a.id === preview?.id)) setPreview(null);
+    setSelectedIds(new Set());
+    toast.success(
+      `${bulkTargets.length} article${bulkTargets.length > 1 ? 's' : ''} archivé${bulkTargets.length > 1 ? 's' : ''} — page Archives`,
+      { icon: <Archive size={16} /> }
+    );
   };
 
   const handleRequeue = (article) => {
@@ -824,7 +880,7 @@ export default function Historique() {
           </h1>
           <p className="text-sm text-gray-500 mt-1">
             {visibleHistory.length} article{visibleHistory.length > 1 ? 's' : ''} traité{visibleHistory.length > 1 ? 's' : ''}
-            {search && ` · ${filtered.length} résultat${filtered.length > 1 ? 's' : ''}`}
+            {(search || hasActiveFilters(filters)) && ` · ${filtered.length} résultat${filtered.length > 1 ? 's' : ''}`}
           </p>
         </div>
       </div>
@@ -836,6 +892,11 @@ export default function Historique() {
           onChange={setSearch}
           suggestions={suggestions}
         />
+      )}
+
+      {/* ── Filtres : par moi / membre / période ── */}
+      {visibleHistory.length > 0 && (
+        <ListFilters users={users} value={filters} onChange={setFilters} />
       )}
 
       {/* ── Liste ── */}
@@ -853,13 +914,48 @@ export default function Historique() {
         </motion.div>
       ) : filtered.length === 0 ? (
         <div className="glass-card p-8 text-center">
-          <p className="text-sm text-gray-400">Aucun résultat pour «&nbsp;<strong>{search}</strong>&nbsp;»</p>
-          <button onClick={() => setSearch('')} className="mt-3 text-xs text-blue-500 hover:underline">
-            Effacer la recherche
+          <p className="text-sm text-gray-400">
+            {search
+              ? <>Aucun résultat pour «&nbsp;<strong>{search}</strong>&nbsp;»</>
+              : 'Aucun résultat pour ces filtres'}
+          </p>
+          <button
+            onClick={() => { setSearch(''); setFilters({ ...EMPTY_FILTERS }); }}
+            className="mt-3 text-xs text-blue-500 hover:underline"
+          >
+            Effacer la recherche et les filtres
           </button>
         </div>
       ) : (
         <div className="glass-card overflow-hidden rounded-2xl">
+          {/* Barre de sélection multiple → archivage groupé (super_admin) */}
+          {canBulkArchive && (
+            <div className="flex items-center gap-3 px-5 py-2.5 border-b border-gray-100 bg-gray-50/60 flex-wrap">
+              <label className="flex items-center gap-2 text-[12px] font-medium text-gray-500 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleSelectAll}
+                  className="w-4 h-4 accent-indigo-600 cursor-pointer"
+                />
+                Tout sélectionner ({filtered.length})
+              </label>
+              {selectedIds.size > 0 && (
+                <>
+                  <span className="text-[12px] text-gray-400">
+                    {bulkTargets.length} sélectionné{bulkTargets.length > 1 ? 's' : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmBulk(true)}
+                    className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
+                  >
+                    <Archive size={13} /> Archiver la sélection
+                  </button>
+                </>
+              )}
+            </div>
+          )}
           <AnimatePresence mode="popLayout">
             {pageItems.map(article => (
               <HistoryRow
@@ -870,12 +966,25 @@ export default function Historique() {
                 onRequeue={handleRequeue}
                 onDelete={handleDelete}
                 onArchive={authRole === 'super_admin' ? handleArchive : null}
+                selectable={canBulkArchive}
+                selected={selectedIds.has(article.id)}
+                onToggleSelect={toggleSelect}
               />
             ))}
           </AnimatePresence>
           <Pagination total={filtered.length} page={page} onPageChange={setPage} />
         </div>
       )}
+
+      {/* ── Confirmation d'archivage groupé ── */}
+      <ConfirmDialog
+        open={confirmBulk}
+        onClose={() => setConfirmBulk(false)}
+        onConfirm={confirmBulkArchival}
+        title={`Archiver ${bulkTargets.length} article${bulkTargets.length > 1 ? 's' : ''} ?`}
+        message="Ils quitteront l'Historique et resteront récupérables à tout moment dans la page Archives (rien n'est supprimé)."
+        confirmLabel="Archiver"
+      />
 
       {/* ── Garde-fou de suppression d'archive ── */}
       <ConfirmDialog

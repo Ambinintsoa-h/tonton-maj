@@ -8,8 +8,18 @@ import {
 import { getArticleTimeAll } from '../services/firebase';
 import { AccountAvatar } from '../components/account/MonComptePanel';
 import Pagination, { pageSlice } from '../components/common/Pagination';
+import ListFilters, { EMPTY_FILTERS, ME, memberIds, memberDisplayName, buildDateMatcher } from '../components/common/ListFilters';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+// Libellés lisibles des rôles enregistrés avec chaque suivi de temps
+const ROLE_LABELS = {
+  cq_ia:       'CQ IA',
+  manager:     'Manager',
+  super_admin: 'Super admin',
+  support:     'Support',
+};
+const roleLabel = (r) => ROLE_LABELS[r] || r || '';
 
 const fmtMinutes = (min) => {
   const m = Math.max(0, Math.round(min || 0));
@@ -92,7 +102,7 @@ function UserTimeCard({ group, users }) {
           <p className="text-[14px] font-semibold text-gray-800 truncate">{displayName}</p>
           <p className="text-[11px] text-gray-400">
             {group.articles.length} article{group.articles.length > 1 ? 's' : ''}
-            {group.userRole ? ` · ${group.userRole}` : ''}
+            {group.userRole ? ` · ${roleLabel(group.userRole)}` : ''}
           </p>
         </div>
         <div className="text-right flex-shrink-0">
@@ -125,9 +135,15 @@ function UserTimeCard({ group, users }) {
 export default function TempsEquipe() {
   const users = useSelector(s => s.users.list);
   const firebaseReady = useSelector(s => s.settings.firebaseReady);
+  const authUid       = useSelector(s => s.auth.uid);
+  const authUsername  = useSelector(s => s.auth.username);
+  const authPrenom    = useSelector(s => s.auth.prenom);
+  const authNom       = useSelector(s => s.auth.nom);
 
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [filters,    setFilters]    = useState({ ...EMPTY_FILTERS });
+  const [roleFilter, setRoleFilter] = useState('');
 
   const load = () => {
     setLoading(true);
@@ -142,10 +158,44 @@ export default function TempsEquipe() {
     load();
   }, [firebaseReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Rôles présents dans les suivis (pour le filtre par rôle)
+  const availableRoles = useMemo(
+    () => [...new Set(entries.map(e => e.userRole).filter(Boolean))].sort(),
+    [entries]
+  );
+
+  // ── Filtrage des suivis : rôle + membre + période (dernière activité) ────────
+  // Les suivis portent userId/userName (pas assigneeId) → correspondance membre
+  // faite ici avec les mêmes identifiants que ListFilters (id doc, uid, username, nom).
+  const filteredEntries = useMemo(() => {
+    let list = entries;
+    if (roleFilter) list = list.filter(e => (e.userRole || '') === roleFilter);
+    if (filters.member) {
+      let ids, names;
+      if (filters.member === ME) {
+        const self = users.find(x => memberIds(x).some(id => id === authUid || id === authUsername));
+        ids   = [...new Set([authUid, authUsername, ...(self ? memberIds(self) : [])])].filter(Boolean);
+        names = [[authPrenom, authNom].filter(Boolean).join(' '), authUsername, self ? memberDisplayName(self) : ''].filter(Boolean);
+      } else {
+        const u = users.find(x => x.id === filters.member);
+        ids   = u ? memberIds(u) : [filters.member];
+        names = u ? [memberDisplayName(u), u.username].filter(Boolean) : [];
+      }
+      const lowerNames = names.map(n => String(n).trim().toLowerCase()).filter(Boolean);
+      list = list.filter(e =>
+        (!!e.userId && ids.includes(e.userId)) ||
+        (!!e.userName && lowerNames.includes(String(e.userName).trim().toLowerCase()))
+      );
+    }
+    const dateMatch = buildDateMatcher(filters, e => e.lastActivityAt || e.startedAt || null);
+    if (dateMatch) list = list.filter(dateMatch);
+    return list;
+  }, [entries, roleFilter, filters, users, authUid, authUsername, authPrenom, authNom]);
+
   // Agrégation par éditeur : total + articles triés par temps décroissant
   const grouped = useMemo(() => {
     const byUser = new Map();
-    for (const e of entries) {
+    for (const e of filteredEntries) {
       if (!e.userId) continue;
       if (!byUser.has(e.userId)) {
         byUser.set(e.userId, { userId: e.userId, userName: e.userName || '', userRole: e.userRole || '', totalMinutes: 0, articles: [] });
@@ -158,9 +208,10 @@ export default function TempsEquipe() {
     const groups = [...byUser.values()];
     groups.forEach(g => g.articles.sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)));
     return groups.sort((a, b) => b.totalMinutes - a.totalMinutes);
-  }, [entries]);
+  }, [filteredEntries]);
 
   const totalMinutes = grouped.reduce((s, g) => s + g.totalMinutes, 0);
+  const filtersActive = !!(roleFilter || filters.member || filters.from || filters.to);
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
@@ -184,12 +235,31 @@ export default function TempsEquipe() {
         </button>
       </div>
 
+      {/* ── Filtres : rôle / par moi / membre / période (dernière activité) ── */}
+      {entries.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={roleFilter}
+            onChange={e => setRoleFilter(e.target.value)}
+            className="px-2.5 py-1.5 text-[12px] font-medium bg-white border border-gray-200 rounded-lg text-gray-600 focus:outline-none focus:ring-2 focus:ring-black/10"
+            title="Filtrer par rôle (CQ IA, Manager…)"
+          >
+            <option value="">Tous les rôles</option>
+            {availableRoles.map(r => (
+              <option key={r} value={r}>{roleLabel(r)}</option>
+            ))}
+          </select>
+          <ListFilters users={users} value={filters} onChange={setFilters} />
+        </div>
+      )}
+
       {/* Stat globale */}
       <div className="glass-card px-4 py-3 rounded-2xl flex items-center gap-3">
         <Clock size={16} className="text-gray-400" />
         <span className="text-[13px] text-gray-600">
           <span className="font-bold text-gray-900">{fmtMinutes(totalMinutes)}</span> de travail cumulé
-          sur <span className="font-bold text-gray-900">{entries.length}</span> suivi{entries.length > 1 ? 's' : ''} article×éditeur
+          sur <span className="font-bold text-gray-900">{filteredEntries.length}</span> suivi{filteredEntries.length > 1 ? 's' : ''} article×éditeur
+          {filtersActive && ` (filtré — ${entries.length} au total)`}
         </span>
       </div>
 
@@ -200,11 +270,22 @@ export default function TempsEquipe() {
         </div>
       ) : grouped.length === 0 ? (
         <div className="glass-card p-10 text-center">
-          <p className="text-sm font-semibold text-gray-500">Aucun temps enregistré pour l'instant</p>
-          <p className="text-xs text-gray-400 mt-1.5 max-w-sm mx-auto">
-            Le suivi démarre automatiquement au lancement d'une analyse et s'arrête à la
-            publication. Les données apparaîtront ici dès la première MAJ.
+          <p className="text-sm font-semibold text-gray-500">
+            {entries.length === 0 ? 'Aucun temps enregistré pour l\'instant' : 'Aucun suivi pour ces filtres'}
           </p>
+          <p className="text-xs text-gray-400 mt-1.5 max-w-sm mx-auto">
+            {entries.length === 0
+              ? 'Le suivi démarre automatiquement au lancement d\'une analyse et s\'arrête à la publication. Les données apparaîtront ici dès la première MAJ.'
+              : 'Modifiez le rôle, le membre ou la période pour retrouver des suivis.'}
+          </p>
+          {entries.length > 0 && (
+            <button
+              onClick={() => { setRoleFilter(''); setFilters({ ...EMPTY_FILTERS }); }}
+              className="mt-3 text-xs text-blue-500 hover:underline"
+            >
+              Réinitialiser les filtres
+            </button>
+          )}
         </div>
       ) : (
         grouped.map(g => <UserTimeCard key={g.userId} group={g} users={users} />)

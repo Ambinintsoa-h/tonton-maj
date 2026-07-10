@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { AnimatePresence, motion } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -9,6 +9,7 @@ import { updateInHistory, removeFromHistory } from '../store/slices/articlesSlic
 import { restoreArticle, deleteArticle } from '../services/firebase';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Pagination, { pageSlice } from '../components/common/Pagination';
+import ListFilters, { EMPTY_FILTERS, hasActiveFilters, buildMemberMatcher, buildDateMatcher } from '../components/common/ListFilters';
 
 const fmtDate = (ts) => {
   if (!ts) return '—';
@@ -34,13 +35,25 @@ export default function Archives() {
   const dispatch      = useDispatch();
   const history       = useSelector(s => s.articles.history);
   const firebaseReady = useSelector(s => s.settings.firebaseReady);
+  const users         = useSelector(s => s.users.list);
+  const authUid       = useSelector(s => s.auth.uid);
+  const authUsername  = useSelector(s => s.auth.username);
+  const authPrenom    = useSelector(s => s.auth.prenom);
+  const authNom       = useSelector(s => s.auth.nom);
 
-  const [search, setSearch] = useState('');
-  const [page, setPage]     = useState(1);
+  const [search,  setSearch]  = useState('');
+  const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
+  const [page, setPage]       = useState(1);
   const [confirmDelete, setConfirmDelete] = useState(null); // article à supprimer définitivement
+  const [selectedIds, setSelectedIds]     = useState(() => new Set());
+  const [confirmBulk, setConfirmBulk]     = useState(false);
 
   const archived = history.filter(a => a.archived);
   const q = search.toLowerCase();
+  // Filtres membre (assigné OU dernier modificateur) + période (date d'archivage)
+  const me          = { uid: authUid, username: authUsername, name: [authPrenom, authNom].filter(Boolean).join(' ') || authUsername };
+  const memberMatch = buildMemberMatcher(filters, users, me);
+  const dateMatch   = buildDateMatcher(filters, a => a.archivedAt || null);
   const filtered = archived
     .filter(a =>
       !q ||
@@ -48,14 +61,47 @@ export default function Archives() {
       a.url?.toLowerCase().includes(q) ||
       a.keyword?.toLowerCase().includes(q)
     )
+    .filter(a => !memberMatch || memberMatch(a))
+    .filter(a => !dateMatch || dateMatch(a))
     .sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0));
 
+  // Retour page 1 (et sélection purgée) à chaque nouvelle recherche / nouveau filtre
+  useEffect(() => { setPage(1); setSelectedIds(new Set()); }, [q, filters]);
   const pageItems = pageSlice(filtered, page);
+
+  // ── Sélection multiple → restauration groupée ───────────────────────────────
+  const allSelected = filtered.length > 0 && filtered.every(a => selectedIds.has(a.id));
+
+  const toggleSelect = (id) => setSelectedIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const toggleSelectAll = () => setSelectedIds(
+    allSelected ? new Set() : new Set(filtered.map(a => a.id))
+  );
+
+  // Ne restaure que les éléments sélectionnés ENCORE visibles dans le filtre courant
+  const bulkTargets = filtered.filter(a => selectedIds.has(a.id));
 
   const handleRestore = (article) => {
     dispatch(updateInHistory({ id: article.id, archived: false, archivedAt: null, archivedBy: null }));
     toast.success('Article restauré dans l\'Historique');
     if (firebaseReady) restoreArticle(article.id).catch(() => {});
+  };
+
+  // Restauration groupée de la sélection (après confirmation)
+  const confirmBulkRestore = () => {
+    bulkTargets.forEach(a => {
+      dispatch(updateInHistory({ id: a.id, archived: false, archivedAt: null, archivedBy: null }));
+      if (firebaseReady) restoreArticle(a.id).catch(() => {});
+    });
+    setSelectedIds(new Set());
+    toast.success(
+      `${bulkTargets.length} article${bulkTargets.length > 1 ? 's' : ''} restauré${bulkTargets.length > 1 ? 's' : ''} dans l'Historique`,
+      { icon: <ArchiveRestore size={16} /> }
+    );
   };
 
   const confirmDeletion = () => {
@@ -76,13 +122,14 @@ export default function Archives() {
           </h1>
           <p className="text-[12px] text-gray-400 mt-0.5">
             Articles archivés depuis l'Historique — restaurez-les ou supprimez-les définitivement.
+            {(search || hasActiveFilters(filters)) && ` · ${filtered.length} résultat${filtered.length > 1 ? 's' : ''}`}
           </p>
         </div>
         <div className="relative">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-300" />
           <input
             value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1); }}
+            onChange={e => setSearch(e.target.value)}
             placeholder="Rechercher…"
             className="pl-8 pr-8 py-1.5 text-[13px] bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-black/10 w-56"
           />
@@ -93,6 +140,11 @@ export default function Archives() {
           )}
         </div>
       </div>
+
+      {/* ── Filtres : par moi / membre / période (date d'archivage) ── */}
+      {archived.length > 0 && (
+        <ListFilters users={users} value={filters} onChange={setFilters} />
+      )}
 
       {/* Liste */}
       {filtered.length === 0 ? (
@@ -106,11 +158,45 @@ export default function Archives() {
           <p className="text-xs text-gray-400 mt-1.5 max-w-sm mx-auto">
             {archived.length === 0
               ? 'Archivez un article depuis l\'Historique (bouton Archiver) pour le retrouver ici.'
-              : 'Modifiez la recherche pour retrouver un article archivé.'}
+              : 'Modifiez la recherche ou les filtres pour retrouver un article archivé.'}
           </p>
+          {archived.length > 0 && (
+            <button
+              onClick={() => { setSearch(''); setFilters({ ...EMPTY_FILTERS }); }}
+              className="mt-3 text-xs text-blue-500 hover:underline"
+            >
+              Effacer la recherche et les filtres
+            </button>
+          )}
         </div>
       ) : (
         <div className="glass-card overflow-hidden rounded-2xl">
+          {/* Barre de sélection multiple → restauration groupée */}
+          <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-100 bg-gray-50/60 flex-wrap">
+            <label className="flex items-center gap-2 text-[12px] font-medium text-gray-500 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleSelectAll}
+                className="w-4 h-4 accent-emerald-600 cursor-pointer"
+              />
+              Tout sélectionner ({filtered.length})
+            </label>
+            {selectedIds.size > 0 && (
+              <>
+                <span className="text-[12px] text-gray-400">
+                  {bulkTargets.length} sélectionné{bulkTargets.length > 1 ? 's' : ''}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setConfirmBulk(true)}
+                  className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                >
+                  <ArchiveRestore size={13} /> Restaurer la sélection
+                </button>
+              </>
+            )}
+          </div>
           <AnimatePresence mode="popLayout">
             {pageItems.map(article => (
               <motion.div
@@ -119,8 +205,16 @@ export default function Archives() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0, x: -12 }}
-                className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0 hover:bg-gray-50/60 transition-colors"
+                className={`flex items-center gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0 hover:bg-gray-50/60 transition-colors ${selectedIds.has(article.id) ? 'bg-emerald-50/40' : ''}`}
               >
+                {/* Case de sélection multiple (restauration groupée) */}
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(article.id)}
+                  onChange={() => toggleSelect(article.id)}
+                  className="w-4 h-4 accent-emerald-600 cursor-pointer flex-shrink-0"
+                  title="Sélectionner pour restaurer"
+                />
                 <div className="flex-1 min-w-0">
                   <p className="text-[13px] font-semibold text-gray-800 truncate">
                     {displayTitle(article)}
@@ -157,6 +251,16 @@ export default function Archives() {
           <Pagination total={filtered.length} page={page} onPageChange={setPage} />
         </div>
       )}
+
+      {/* ── Confirmation de restauration groupée ── */}
+      <ConfirmDialog
+        open={confirmBulk}
+        onClose={() => setConfirmBulk(false)}
+        onConfirm={confirmBulkRestore}
+        title={`Restaurer ${bulkTargets.length} article${bulkTargets.length > 1 ? 's' : ''} ?`}
+        message="Ils quitteront les Archives et retrouveront leur place dans l'Historique."
+        confirmLabel="Restaurer"
+      />
 
       {/* Garde-fou suppression définitive */}
       <ConfirmDialog
