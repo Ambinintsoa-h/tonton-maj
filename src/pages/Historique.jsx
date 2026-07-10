@@ -700,10 +700,13 @@ export default function Historique() {
   // Les articles ARCHIVÉS quittent l'Historique (page Archives — super_admin)
   const notArchived = history.filter(a => !a.archived);
 
-  // CQ IA : uniquement ses propres articles
-  const visibleHistory = authRole === 'cq_ia'
-    ? notArchived.filter(a => a.assigneeId === authUid || a.assigneeId === authUsername)
-    : notArchived;
+  // Visibilité : LISTE BLANCHE — seuls super_admin / manager / support voient
+  // tout. Tout autre rôle (cq_ia, ou rôle pas encore hydraté au chargement) ne
+  // voit QUE ses propres articles → aucun flash des MAJ des collègues.
+  const canSeeAll = ['super_admin', 'manager', 'support'].includes(authRole);
+  const visibleHistory = canSeeAll
+    ? notArchived
+    : notArchived.filter(a => a.assigneeId === authUid || a.assigneeId === authUsername);
 
   // Suggestions autocomplete = titres uniques de l'historique visible
   const suggestions = [...new Set(visibleHistory.map(a => a.title).filter(Boolean))];
