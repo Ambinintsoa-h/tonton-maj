@@ -1034,13 +1034,14 @@ export default function MajEnAttente() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Exclure les items "done" — ils ne doivent plus apparaître ici (ils sont dans l'historique)
-  // CQ IA ne voit que ses articles assignés (par uid ou username)
+  // Visibilité : LISTE BLANCHE — seuls super_admin / manager / support voient
+  // toute la file. Tout autre rôle (cq_ia, ou rôle pas encore hydraté au
+  // chargement) ne voit QUE ses propres analyses assignées (uid ou username).
+  const canSeeAllItems = ['super_admin', 'manager', 'support'].includes(authRole);
   const activeItems = items
     .filter(i => i.status !== 'done')
-    .filter(i => {
-      if (authRole !== 'cq_ia') return true; // admin/manager voient tout
-      return i.assigneeId === authUid || i.assigneeId === authUsername;
-    });
+    .filter(i => canSeeAllItems
+      || i.assigneeId === authUid || i.assigneeId === authUsername);
 
   const counts = {
     total:       activeItems.length,

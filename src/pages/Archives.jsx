@@ -17,6 +17,19 @@ const fmtDate = (ts) => {
   } catch { return '—'; }
 };
 
+// Titre TOUJOURS lisible : le titre de l'article en priorité ; à défaut, le slug
+// de l'URL humanisé (« pose-toiture-bac-acier » → « pose toiture bac acier ») —
+// jamais une URL brute ni un id technique.
+const displayTitle = (article) => {
+  if (article.title?.trim()) return article.title.trim();
+  try {
+    const seg = decodeURIComponent(new URL(article.url).pathname.replace(/\/$/, '').split('/').pop() || '');
+    const human = seg.replace(/[-_]+/g, ' ').trim();
+    if (human) return human.charAt(0).toUpperCase() + human.slice(1);
+  } catch { /* URL absente ou invalide */ }
+  return article.url || '(Sans titre)';
+};
+
 export default function Archives() {
   const dispatch      = useDispatch();
   const history       = useSelector(s => s.articles.history);
@@ -110,7 +123,7 @@ export default function Archives() {
               >
                 <div className="flex-1 min-w-0">
                   <p className="text-[13px] font-semibold text-gray-800 truncate">
-                    {article.title || article.url || article.id}
+                    {displayTitle(article)}
                   </p>
                   <p className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     <span>Archivé le {fmtDate(article.archivedAt)}{article.archivedBy ? ` par ${article.archivedBy}` : ''}</span>
@@ -152,7 +165,7 @@ export default function Archives() {
         onConfirm={confirmDeletion}
         definitive
         title="Supprimer définitivement cet article ?"
-        message={`« ${confirmDelete?.title || confirmDelete?.url || ''} » sera supprimé de la base (avant/après, suivi SEO inclus). Cette action ne peut pas être annulée.`}
+        message={`« ${confirmDelete ? displayTitle(confirmDelete) : ''} » sera supprimé de la base (avant/après, suivi SEO inclus). Cette action ne peut pas être annulée.`}
         confirmLabel="SUPPRIMER DÉFINITIVEMENT"
       />
     </div>
