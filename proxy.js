@@ -369,6 +369,7 @@ const sendTicketEmail = async (toEmails, subject, textBody, htmlBody) => {
 // Limite générale : 60 req/min/IP. Limite auth : 10 req/min/IP (anti brute-force).
 const _rl     = new Map();
 const _rlAuth = new Map();
+const _rlPoll = new Map();
 
 const makeRateLimiter = (store, max) => (req, res, next) => {
   const key = req.ip || 'local';
@@ -383,6 +384,11 @@ const makeRateLimiter = (store, max) => (req, res, next) => {
 
 const rateLimiter     = makeRateLimiter(_rl,     60);
 const authRateLimiter = makeRateLimiter(_rlAuth, 10);
+// Polls des jobs Claude : 1 GET / 2 s PAR analyse, et toute l'équipe est derrière
+// la même IP bureau → la limite générale (60/min/IP) sature dès 2-3 analyses en
+// parallèle (429 en rafale). Limiteur dédié, large mais borné : 600/min/IP
+// (≈ 20 analyses simultanées) — la route ne fait qu'une lecture de Map, coût nul.
+const pollRateLimiter = makeRateLimiter(_rlPoll, 600);
 
 // ─── Lockout IP après échecs répétés (H2) ─────────────────────────────────────
 // Complète le rate limiter : après 5 échecs de credentials, verrouille l'IP 15 min.
@@ -411,7 +417,11 @@ const recordLoginFailure = (ip) => {
 
 const clearLoginFailure = (ip) => { _loginFailures.delete(ip); };
 
-app.use('/api/', rateLimiter);
+app.use('/api/', (req, res, next) => {
+  // GET /api/claude-job/:id (polls fréquents, très légers) → limiteur dédié
+  if (req.method === 'GET' && req.path.startsWith('/claude-job/')) return pollRateLimiter(req, res, next);
+  return rateLimiter(req, res, next);
+});
 
 // ─── Route de login (publique — pas d'auth requise) ──────────────────────────
 app.post('/api/auth/login', authRateLimiter, async (req, res) => {
