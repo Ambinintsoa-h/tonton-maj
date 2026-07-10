@@ -460,10 +460,10 @@ const extractIlCount = (skills) => {
 };
 
 /** Construit le bloc Skills pour le system prompt. */
-const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON style, ta méthode et tes contraintes rédactionnelles.\nTu DOIS les respecter intégralement dans TOUTES tes modifications.') => {
+const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON style, ta méthode et tes contraintes rédactionnelles.\nTu DOIS les respecter intégralement dans TOUTES tes modifications.', label = 'SKILLS ACTIFS — RÈGLES D\'ÉCRITURE OBLIGATOIRES') => {
   const active = skills.filter(s => s.content && isActiveEntry(s));
   if (!active.length) return '';
-  return `\n\n## ═══ SKILLS ACTIFS — RÈGLES D'ÉCRITURE OBLIGATOIRES ═══\n${intro}\n\n` +
+  return `\n\n## ═══ ${label} ═══\n${intro}\n\n` +
     active.map((s, i) => {
       const text = s.content?.trimStart().startsWith('<') ? stripHtml(s.content) : (s.content || '');
       return `### SKILL ${i + 1} — ${s.name}\n${text}`;
@@ -611,6 +611,16 @@ const buildSystemPrompt = (skills, knowledge = [], auditReport = '') => {
     skillsBlock = buildBrainBlock(brainSkills);
   } else {
     skillsBlock = buildSkillsBlock(skills);
+  }
+  // Règles d'équipe : les skills CLASSIQUES du menu SKILLS IA restent injectés
+  // EN COMPLÉMENT du skill cerveau — l'équipe peut ainsi éditer ses règles
+  // rédactionnelles dans le menu sans ré-importer le SKILL.md principal.
+  if (brainSkills.length) {
+    skillsBlock += buildSkillsBlock(
+      skills,
+      'Règles éditées par l\'équipe dans le menu SKILLS IA — complémentaires à la méthode du skill principal.\nTu DOIS les respecter intégralement dans TOUTES tes modifications.',
+      'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — OBLIGATOIRES'
+    );
   }
   const knowledgeBlock = buildKnowledgeBlock(knowledge);
 
@@ -811,6 +821,12 @@ export const runAgent = async ({
   const model3      = selectModel('update_generation');
   const modelLabel  = model3.includes('sonnet') ? 'Sonnet' : model3.includes('opus') ? 'Opus' : 'Haiku';
 
+  // Longueur & maillage comptés côté code (chiffres fiables) — utilisés par
+  // l'audit ET par l'étape de rédaction (règles de longueur des skills d'équipe).
+  const linkStats = analyzeLinks(contentHtml || content, articleUrl);
+  const rawText   = stripHtml(contentHtml || content || '').trim();
+  const wordCount = rawText ? rawText.split(/\s+/).length : 0;
+
   let auditReport = '';
   if (brainMode) {
     onStep('Audit approfondi de l\'article (méthode du skill)...');
@@ -848,10 +864,11 @@ Produis TOUTES les sections du format, sans en omettre ni les tronquer (le table
 - **Section « Éléments prêts à copier-coller » (TL;DR rédigé + FAQ avec réponses)** : NE PAS la produire dans l'audit. Recommande seulement (ex. liste des 3 questions PAA à ajouter). Le contenu rédigé (TL;DR, FAQ) est produit dans la proposition de MAJ (vue APRÈS), où il figure déjà.
 - **Section « Publication » / proposition de canal** (« mettre à jour en live ou enregistrer en brouillon ? »…) : NE PAS la produire. Le choix de publication est géré par l'interface de TONTON AI, pas par le rapport d'audit.
 
-${auditBodies}${auditResBlock}`;
-    const linkStats = analyzeLinks(contentHtml || content, articleUrl);
-    const rawText = stripHtml(contentHtml || content || '').trim();
-    const wordCount = rawText ? rawText.split(/\s+/).length : 0;
+${auditBodies}${auditResBlock}${buildSkillsBlock(
+      skills,
+      'Règles éditées par l\'équipe dans le menu SKILLS IA. Intègre-les à ton audit : vérifie chacune d\'elles et signale tout manquement dans les recommandations & actions prioritaires.',
+      'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — À AUDITER AUSSI'
+    )}`;
     const auditUser = `## ARTICLE À AUDITER\n${content}\n\n## DONNÉES FACTUELLES (comptées automatiquement — chiffres fiables, reprends-les tels quels)\n- Liens INTERNES (même site) : ${linkStats.internal}\n- Liens EXTERNES (autres sites) : ${linkStats.external}\n- Longueur article : ~${wordCount} mots (cible SEO minimale : 800-1 500 mots)\n\nProduis le rapport d'audit complet en markdown, dans le format exact imposé par le skill. IMPORTANT : analyse systématiquement la longueur de l'article. Si < 800 mots, signale-le en priorité haute et propose des H2 à ajouter. Chaque H2 suggéré doit apporter un contenu NOUVEAU et informatif (exemples concrets, normes, cas d'usage, comparatifs, données chiffrées) — JAMAIS une simple reformulation du contenu existant pour gonfler artificiellement la longueur.`;
 
     for (let attempt = 1; attempt <= 3 && !auditReport; attempt++) {
@@ -1041,14 +1058,19 @@ ${content.substring(0, 5000)}`,
     : '';
 
   // Mode cerveau : brainSkills/brainMode sont calculés en amont (bloc d'audit).
-  // Le socle + skills legacy restent court-circuités dans le system prompt.
-  const legacyActiveSkills = brainMode ? [] : skills.filter(s => s.content && isActiveEntry(s));
+  // Les skills CLASSIQUES (règles d'équipe du menu SKILLS IA) restent injectés
+  // en complément du cerveau — rappel dans tous les modes.
+  const legacyActiveSkills = skills.filter(s => s.content && isActiveEntry(s));
+  const legacyList = legacyActiveSkills.map((s, i) => `- Skill ${i + 1} : **${s.name}**`).join('\n');
   const skillsReminder = brainMode
-    ? `\n## RAPPEL — SKILL PRINCIPAL\nApplique INTÉGRALEMENT la méthode du skill « ${brainSkills.map(s => s.name).join(', ')} » (décrit dans le system prompt), puis produis le JSON d'updates demandé — jamais un rapport texte.\n`
+    ? `\n## RAPPEL — SKILL PRINCIPAL\nApplique INTÉGRALEMENT la méthode du skill « ${brainSkills.map(s => s.name).join(', ')} » (décrit dans le system prompt), puis produis le JSON d'updates demandé — jamais un rapport texte.\n` +
+      (legacyActiveSkills.length > 0
+        ? `Respecte AUSSI les ${legacyActiveSkills.length} règle(s) d'équipe du menu SKILLS IA (system prompt) :\n${legacyList}\n`
+        : '')
     : (legacyActiveSkills.length > 0
         ? `\n## RAPPEL — SKILLS ACTIFS (${legacyActiveSkills.length} règles obligatoires dans le system prompt)\n` +
           `Chaque modification DOIT respecter ces ${legacyActiveSkills.length} skill(s) :\n` +
-          legacyActiveSkills.map((s, i) => `- Skill ${i + 1} : **${s.name}**`).join('\n') + '\n'
+          legacyList + '\n'
         : '');
 
   // ── Audit déjà réalisé en amont (juste après la Phase 0, AVANT la recherche) ──
@@ -1081,7 +1103,7 @@ ${noSourcesNote}
 Retourne le JSON final avec TOUTES les modifications identifiées (issues de la base de connaissances ET des sources web).
 
 ---
-${scrapedContext ? `## CONTENU DES SOURCES RÉCENTES (${prevYear}-${year})\n${scrapedContext}\n\n---\n\n` : ''}${sourcesSnippets ? `## RÉSULTATS DE RECHERCHE WEB\n${sourcesSnippets}\n\n---\n\n` : ''}## ARTICLE À ANALYSER
+${scrapedContext ? `## CONTENU DES SOURCES RÉCENTES (${prevYear}-${year})\n${scrapedContext}\n\n---\n\n` : ''}${sourcesSnippets ? `## RÉSULTATS DE RECHERCHE WEB\n${sourcesSnippets}\n\n---\n\n` : ''}## ARTICLE À ANALYSER (~${wordCount} mots — compté côté code, chiffre fiable · cible SEO : 800-1 500 mots)
 ${content}
 
 ## Règles finales
@@ -1140,10 +1162,10 @@ ${content}
     onStep('Vérification de conformité skills et base de connaissances...');
     onProgress(90);
     try {
-      // En mode cerveau, le contrôle de conformité legacy ne porte que sur la base de
-      // connaissances (le skill SKILL.md n'a pas de `content` — sa conformité fine = lot 6).
+      // Les skills classiques (règles d'équipe) sont contrôlés dans TOUS les modes ;
+      // le skill SKILL.md n'a pas de `content` → exclu naturellement du contrôle.
       const complianceUpdates = await checkSkillsCompliance(
-        content, result.updates || [], brainMode ? [] : skills, knowledge
+        content, result.updates || [], skills, knowledge
       );
       if (complianceUpdates.length > 0) {
         result.updates = [...(result.updates || []), ...complianceUpdates];
@@ -1321,10 +1343,15 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
 const buildReviewSystemPrompt = (skills, knowledge = []) => {
   const { fr, year, prevYear } = getDateContext();
 
-  // Mode cerveau : le skill SKILL.md pilote aussi la passe 2 (sinon socle/legacy).
+  // Mode cerveau : le skill SKILL.md pilote aussi la passe 2 — les skills
+  // classiques (règles d'équipe du menu) restent injectés en complément.
   const brainSkills = getBrainSkills(skills);
   const skillsBlock = brainSkills.length
-    ? buildBrainBlock(brainSkills)
+    ? buildBrainBlock(brainSkills) + buildSkillsBlock(
+        skills,
+        'Règles éditées par l\'équipe dans le menu SKILLS IA. Vérifie que l\'article (après passe 1) respecte chacune d\'elles.',
+        'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — OBLIGATOIRES'
+      )
     : buildSkillsBlock(skills, 'Vérifie que l\'article (après passe 1) respecte chacune de ces instructions.');
   const active = knowledge.filter(k => k.content && isActiveEntry(k));
   const knowledgeBlock = buildKnowledgeBlock(
