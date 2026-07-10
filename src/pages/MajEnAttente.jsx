@@ -32,6 +32,7 @@ import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts, cr
 import store from '../store';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Pagination, { pageSlice } from '../components/common/Pagination';
+import ListFilters, { EMPTY_FILTERS, hasActiveFilters, buildMemberMatcher, buildDateMatcher } from '../components/common/ListFilters';
 import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
 import { normalizeFaqToAccordion } from '../utils/faq';
 import { makeTablesResponsive } from '../utils/blocks';
@@ -968,6 +969,8 @@ export default function MajEnAttente() {
   const authRole     = useSelector(s => s.auth.role);
   const authUid      = useSelector(s => s.auth.uid);
   const authUsername = useSelector(s => s.auth.username);
+  const authPrenom   = useSelector(s => s.auth.prenom);
+  const authNom      = useSelector(s => s.auth.nom);
 
   // Membres assignables : CQ IA + Manager uniquement (pas super_admin, pas agents IA)
   // Membres assignables : rôle cq_ia ou manager, actif ou sans statut (rétrocompatibilité)
@@ -978,8 +981,9 @@ export default function MajEnAttente() {
   const [showImport,    setShowImport]    = useState(false);
   const [showAddManual, setShowAddManual] = useState(false);
   const [filter,        setFilter]        = useState('Tous');
+  const [listFilters,   setListFilters]   = useState({ ...EMPTY_FILTERS });
   const [page,          setPage]          = useState(1);
-  useEffect(() => { setPage(1); }, [filter]); // nouveau filtre → retour page 1
+  useEffect(() => { setPage(1); }, [filter, listFilters]); // nouveau filtre → retour page 1
   // Enrichissement automatique après import : { total, done, errors }
   const [enriching, setEnriching] = useState(null);
   // Suivi des items en cours : Map<id, { step, progress }>
@@ -1050,10 +1054,17 @@ export default function MajEnAttente() {
     a_valider:   activeItems.filter(i => i.status === 'a_valider').length,
   };
 
+  // Filtres membre (assigné) + période (date d'ajout) — en plus du filtre de statut
+  const me          = { uid: authUid, username: authUsername, name: [authPrenom, authNom].filter(Boolean).join(' ') || authUsername };
+  const memberMatch = buildMemberMatcher(listFilters, allUsers, me);
+  const dateMatch   = buildDateMatcher(listFilters, i => i.addedAt || null);
+
   const filtered = activeItems.filter(i => {
-    if (filter === 'En attente') return i.status === 'pending';
-    if (filter === 'En cours')   return i.status === 'in_progress';
-    if (filter === 'À valider')  return i.status === 'a_valider';
+    if (filter === 'En attente' && i.status !== 'pending')     return false;
+    if (filter === 'En cours'   && i.status !== 'in_progress') return false;
+    if (filter === 'À valider'  && i.status !== 'a_valider')   return false;
+    if (memberMatch && !memberMatch(i)) return false;
+    if (dateMatch   && !dateMatch(i))   return false;
     return true;
   });
 
@@ -1711,6 +1722,11 @@ export default function MajEnAttente() {
         </div>
       )}
 
+      {/* ── Filtres : par moi / membre / période (date d'ajout) ── */}
+      {activeItems.length > 0 && (
+        <ListFilters users={teamMembers} value={listFilters} onChange={setListFilters} />
+      )}
+
       {/* ── Liste ── */}
       {activeItems.length === 0 ? (
         <motion.div
@@ -1737,6 +1753,14 @@ export default function MajEnAttente() {
       ) : filtered.length === 0 ? (
         <div className="glass-card p-8 text-center text-gray-400 text-sm">
           Aucun article pour ce filtre.
+          {hasActiveFilters(listFilters) && (
+            <button
+              onClick={() => setListFilters({ ...EMPTY_FILTERS })}
+              className="block mx-auto mt-3 text-xs text-blue-500 hover:underline"
+            >
+              Réinitialiser les filtres membre / période
+            </button>
+          )}
         </div>
       ) : (
         <div className="glass-card overflow-hidden rounded-2xl">
