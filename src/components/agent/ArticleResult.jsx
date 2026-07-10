@@ -2273,7 +2273,7 @@ export default function ArticleResult() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-28"> {/* pb-28 : dégage la barre d'actions épinglée en bas */}
 
       {/* ── Barre de stats ── */}
       <motion.div
@@ -2537,9 +2537,15 @@ export default function ArticleResult() {
       {/* ── Carte AVANT / APRÈS ── */}
       <div className="glass-card overflow-hidden">
 
-        {/* Tab bar + actions */}
-        <div className="flex items-center justify-between border-b border-gray-100 px-6">
-          <div className="flex items-center gap-1.5 py-3">
+        {/* Barre onglets + actions — ÉPINGLÉE EN BAS de l'écran (portal fixed) :
+            reste toujours visible pendant qu'on parcourt l'article, pour changer
+            de vue (Audit/Avant/Après) et accéder à Terminer/Exporter/Publier
+            sans remonter en haut. Décalée de la sidebar sur desktop (md:left-60).
+            Les menus Exporter/Publier s'ouvrent VERS LE HAUT (bottom-full). */}
+        {createPortal(
+        <div className="fixed bottom-0 left-0 right-0 md:left-60 z-40 bg-white/95 backdrop-blur-md border-t border-gray-200 shadow-[0_-6px_24px_rgba(0,0,0,0.10)]">
+        <div className="flex items-center justify-between gap-2 px-4 sm:px-6 flex-wrap">
+          <div className="flex items-center gap-1.5 py-2.5 flex-wrap">
             {[
               ...((auditReport || hasBrainSkill) ? [{
                 id: TAB_AUDIT, label: 'Audit', icon: ClipboardCheck,
@@ -2614,7 +2620,7 @@ export default function ArticleResult() {
                     initial={{ opacity: 0, y: 8, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 8, scale: 0.95 }}
-                    className="absolute right-0 top-full mt-1 glass-card p-1.5 z-50 w-44"
+                    className="absolute right-0 bottom-full mb-1 glass-card p-1.5 z-50 w-44"
                   >
                     {[
                       { id: 'text', label: 'Texte brut', icon: FileText },
@@ -2663,7 +2669,7 @@ export default function ArticleResult() {
                       initial={{ opacity: 0, y: 8, scale: 0.95 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 8, scale: 0.95 }}
-                      className="absolute right-0 top-full mt-1 glass-card p-2 z-50 w-80"
+                      className="absolute right-0 bottom-full mb-1 glass-card p-2 z-50 w-80 max-h-[70vh] overflow-y-auto"
                     >
                       {publishSites.map(site => (
                         <div key={site.id} className="mb-1 last:mb-0">
@@ -2789,6 +2795,8 @@ export default function ArticleResult() {
             )}
           </div>
         </div>
+        </div>,
+        document.body)}
 
         {/* Contenu des tabs */}
         <AnimatePresence mode="wait">
