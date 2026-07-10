@@ -20,8 +20,9 @@ import {
   resetAgent, setStatus, addStep, setProgress,
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
-  setWpData, setAudit,
+  setWpData, setMajDepth, setAudit,
 } from '../store/slices/agentSlice';
+import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import { addArticleStat } from '../store/slices/statsSlice';
 import { addToHistory } from '../store/slices/articlesSlice';
 import { cacheSiteFonts } from '../store/slices/wordpressSlice';
@@ -658,8 +659,26 @@ function AssigneePicker({ value, onChange, teamMembers }) {
   );
 }
 
+// ── Sélecteur de profondeur de MAJ (Légère / Standard / Refonte) ──────────────
+function DepthPicker({ value, onChange }) {
+  const current = depthMeta(value);
+  return (
+    <select
+      value={MAJ_DEPTHS[value] ? value : DEFAULT_DEPTH}
+      onChange={e => onChange(e.target.value)}
+      onClick={e => e.stopPropagation()}
+      className="px-2 py-1 rounded-lg border border-gray-200 bg-white/80 text-[11px] font-medium text-gray-600 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-black/10 leading-none cursor-pointer"
+      title={`Profondeur de la MAJ — ${current.description}`}
+    >
+      {Object.entries(MAJ_DEPTHS).map(([k, m]) => (
+        <option key={k} value={k}>{m.label} {m.hint}</option>
+      ))}
+    </select>
+  );
+}
+
 // ── Ligne article ─────────────────────────────────────────────────────────────
-function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onViewDiff, running, queuedPos = null, onDequeue, isMine = false, teamMembers }) {
+function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onDepthChange, onViewDiff, running, queuedPos = null, onDequeue, isMine = false, teamMembers }) {
   const [expanded, setExpanded] = useState(false);
   const assignee    = teamMembers.find(m => m.id === item.assigneeId) || null;
   const domain      = extractDomain(item.url);
@@ -717,6 +736,23 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onVi
             <span className={`inline-flex items-center gap-1.5 text-[11px] font-semibold border rounded-full px-2.5 py-1 whitespace-nowrap leading-none ${pMeta.badge}`}>
               <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${pMeta.dot}`} />
               {pMeta.label}
+            </span>
+          )}
+        </div>
+
+        {/* Profondeur de MAJ — picker si éditable, badge read-only sinon */}
+        <div className="flex-shrink-0">
+          {isEditable ? (
+            <DepthPicker
+              value={item.depth || DEFAULT_DEPTH}
+              onChange={v => onDepthChange(item.id, v)}
+            />
+          ) : (
+            <span
+              className="inline-flex items-center text-[11px] font-medium text-gray-500 border border-gray-200 bg-gray-50 rounded-full px-2.5 py-1 whitespace-nowrap leading-none"
+              title={`Profondeur de la MAJ — ${depthMeta(item.depth).description}`}
+            >
+              {depthMeta(item.depth).label}
             </span>
           )}
         </div>
@@ -1214,6 +1250,7 @@ export default function MajEnAttente() {
         articleUrl:   item.url || '',
         wpSites,
         modelPricing: settings.modelPricing || null,
+        depth:        item.depth || DEFAULT_DEPTH,  // profondeur choisie sur la ligne
         onStep:     (s) => { dispatch(addStep(s)); step(s); },
         onProgress: (p) => { dispatch(setProgress(p)); progress(p); },
       });
@@ -1294,6 +1331,7 @@ export default function MajEnAttente() {
           seoTracking:     capturedSeoTracking,   // transféré vers articleData à la validation
           wpData:          item._wpData || result.wpData || null,  // post cible (postId) — pour rebinder à la réouverture
           audit:           result.audit || '',     // rapport d'audit complet — onglet AUDIT
+          majDepth:        item.depth || DEFAULT_DEPTH,  // profondeur — réutilisée par la passe 2
         },
       }));
 
@@ -1453,6 +1491,7 @@ export default function MajEnAttente() {
       // reste en mémoire → publication proposée sur le mauvais site (confusion de sites).
       dispatch(setWpData(data.wpData || null));
       dispatch(setAudit(data.audit || ''));
+      dispatch(setMajDepth(data.majDepth || item.depth || DEFAULT_DEPTH));
       dispatch(setCurrentArticleId(item.id));
       dispatch(setStatus('done'));
       navigate('/');
@@ -1517,6 +1556,7 @@ export default function MajEnAttente() {
   };
   const handleAssign         = (id, assigneeId) => dispatch(updatePendingItem({ id, assigneeId }));
   const handlePriorityChange = (id, priority) => dispatch(updatePendingItem({ id, priority }));
+  const handleDepthChange    = (id, depth) => dispatch(updatePendingItem({ id, depth }));
 
   // Rouvrir la page Articles avec le résultat d'un item déjà traité.
   // Les documents pending Firestore sont ALLÉGÉS (les HTML complets dépassent
@@ -1542,6 +1582,7 @@ export default function MajEnAttente() {
           audit:           r.audit    || arch.audit    || '',
           wpData:          r.wpData   || arch.wpData   || null,
           seoTracking:     r.seoTracking || arch.seoTracking || null,
+          majDepth:        r.majDepth || arch.majDepth || null,
         };
       }
     }
@@ -1558,6 +1599,7 @@ export default function MajEnAttente() {
     // de publier sur le post d'un article ouvert précédemment (mauvaise cible).
     dispatch(setWpData(r.wpData || null));
     dispatch(setAudit(r.audit || ''));
+    dispatch(setMajDepth(r.majDepth || item.depth || DEFAULT_DEPTH));
     dispatch(setCurrentArticleId(item.id)); // marque cet item comme "en cours de review"
     dispatch(setStatus('done'));
     navigate('/');
@@ -1776,6 +1818,7 @@ export default function MajEnAttente() {
                     onRunMaj={handleRunMaj}
                     onAssign={handleAssign}
                     onPriorityChange={handlePriorityChange}
+                    onDepthChange={handleDepthChange}
                     onViewDiff={handleViewDiff}
                     running={runStates.get(item.id) || null}
                     queuedPos={queuedIds.indexOf(item.id) + 1 || null}
