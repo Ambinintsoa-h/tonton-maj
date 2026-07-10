@@ -31,6 +31,9 @@ Injecté dans TOUS les prompts système :
 - `year` : 2026, `prevYear` : 2025
 - `cutoffIso` : date J-6mois — tout contenu antérieur est "suspect"
 
+## Transport des appels Claude (job + polling)
+Le proxy n0c coupe les connexions HTTP/2 silencieuses (~30 s sans octet) → l'ancien POST `/api/claude` bloquant (1-5 min d'attente Anthropic) mourait en `ERR_HTTP2_PROTOCOL_ERROR`. `callClaude` (agent.js) passe par `POST /api/claude-job` (réponse immédiate `{jobId}`) puis `GET /api/claude-job/:id` toutes les 2 s. Jobs en mémoire serveur (perdus au restart → 404 → `JOB_LOST` → retry client). `/api/claude` legacy conservé (secours + comments.js).
+
 ## Profondeur de MAJ (depth)
 `runAgent`/`runReviewAgent` acceptent `depth` : `legere` (~30 % — corrections factuelles seules, PAS de TL;DR/FAQ/nouveaux H2), `standard` (~60 % — défaut, comportement historique, aucun bloc injecté), `refonte` (100 % — réécriture section par section). Constantes : `src/constants/majDepth.js`. Choix utilisateur : page Articles (sélecteur sous le mot-clé) et MAJ en attente (picker par ligne, champ `depth` de l'item). Transmis à la passe 2 via `agent.majDepth` (Redux) et persisté dans `majResult.majDepth` / `articleData.majDepth`.
 
