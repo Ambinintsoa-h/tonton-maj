@@ -249,9 +249,6 @@ export default function ArticleResult() {
   const [wpNotFoundReason, setWpNotFoundReason] = useState(''); // raison si non trouvé
   const [hasContent, setHasContent] = useState(false);
   const [diffMode, setDiffMode] = useState(true);
-  // Dialogue « modifications en attente » au moment de publier :
-  // { site, mode, foundPost, count } | null
-  const [publishGuard, setPublishGuard] = useState(null);
 
   // Bascule « code | rendu » des blocs HTML de l'audit (délégation de clic, car le
   // contenu est injecté via dangerouslySetInnerHTML — voir enhanceCodePreviews).
@@ -2077,16 +2074,13 @@ export default function ArticleResult() {
   // foundPost (optionnel) : permet de cibler un post sans passer par le state wpFoundPost.
   // mode : 'update' → publier sur le site (statut publish) · 'updateDraft' → publier dans
   // brouillons (repasse l'article EXISTANT en brouillon, retiré du site public).
-  // opts.skipPendingGuard : true quand l'utilisateur a déjà tranché dans le dialogue
-  // « modifications en attente » (Tout accepter / Publier sans elles).
-  const handlePublish = async (site, mode = 'update', foundPost = null, opts = {}) => {
-    // ── Garde-fou : des modifications encore EN ATTENTE ne seront pas publiées ──
-    // (getFinalHtml les exclut). On prévient l'utilisateur au lieu de publier
-    // silencieusement un article incomplet.
-    if (!opts.skipPendingGuard) {
-      const count = countPendingChanges();
-      if (count > 0) { setPublishGuard({ site, mode, foundPost, count }); return; }
-    }
+  const handlePublish = async (site, mode = 'update', foundPost = null) => {
+    // ── Modifications encore EN ATTENTE → acceptées automatiquement avant publication ──
+    // L'article part EXACTEMENT tel qu'il s'affiche dans « Après » (choix produit :
+    // plus de popup de garde-fou). Sans ça, getFinalHtml republierait le texte
+    // ORIGINAL aux endroits non acceptés. processAllSegments('accept') mute le DOM
+    // de façon SYNCHRONE → getFinalHtml() ci-dessous reflète bien l'état accepté.
+    if (countPendingChanges() > 0) processAllSegments('accept');
     setPublishing(true);
     const rawHtml = exportAsHtml(getFinalHtml());
 
@@ -4020,65 +4014,6 @@ export default function ArticleResult() {
         document.body
       )}
 
-      {/* ── Garde-fou publication : des modifications encore EN ATTENTE ────────
-          Elles ne seraient pas publiées (getFinalHtml les exclut) → on demande. */}
-      {publishGuard && createPortal(
-        <div
-          style={{ position: 'fixed', inset: 0, zIndex: 700 }}
-          className="bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-6"
-          onMouseDown={() => setPublishGuard(null)}
-        >
-          <div
-            onMouseDown={(e) => e.stopPropagation()}
-            className="bg-white rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,0.35)] w-full max-w-md p-6 text-center border-t-4 border-amber-400"
-          >
-            <div className="mx-auto w-11 h-11 rounded-2xl bg-amber-50 flex items-center justify-center mb-3">
-              <AlertTriangle size={20} className="text-amber-500" />
-            </div>
-            <h3 className="text-[15px] font-bold text-gray-900">
-              {publishGuard.count} modification{publishGuard.count > 1 ? 's' : ''} en attente
-            </h3>
-            <p className="text-[13px] text-gray-500 mt-2 leading-relaxed">
-              Les passages surlignés (vert / bleu / rouge) qui n'ont pas été acceptés
-              ne seront <span className="font-semibold text-gray-700">pas publiés</span> —
-              l'article partira avec son texte original à ces endroits.
-            </p>
-            <div className="flex flex-col gap-2 mt-5">
-              <button
-                type="button"
-                onClick={() => {
-                  const g = publishGuard;
-                  setPublishGuard(null);
-                  processAllSegments('accept');
-                  handlePublish(g.site, g.mode, g.foundPost, { skipPendingGuard: true });
-                }}
-                className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-sm flex items-center justify-center gap-2"
-              >
-                <CheckCheck size={16} /> Tout accepter puis publier
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const g = publishGuard;
-                  setPublishGuard(null);
-                  handlePublish(g.site, g.mode, g.foundPost, { skipPendingGuard: true });
-                }}
-                className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold text-gray-700 border border-gray-200 hover:bg-gray-50 transition-colors"
-              >
-                Publier sans ces modifications
-              </button>
-              <button
-                type="button"
-                onClick={() => setPublishGuard(null)}
-                className="w-full px-4 py-2 rounded-xl text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                Annuler
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
 
       {sources.length > 0 && (
         <motion.div
