@@ -1409,7 +1409,7 @@ const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, rejec
       } catch (e) { reject(new Error('Réponse API invalide')); }
     });
   });
-  const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>5min)')); }, 300000);
+  const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>10min)')); }, 600000);
   req.on('close', () => clearTimeout(timer));
   req.on('error', reject);
   req.write(payload);
@@ -1461,7 +1461,7 @@ const callAnthropicDirect = (token, bodyObj) => new Promise((resolve, reject) =>
       } catch (e) { reject(new Error('Réponse API invalide: ' + data.substring(0, 100))); }
     });
   });
-  const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>5min)')); }, 300000);
+  const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>10min)')); }, 600000);
   req.on('close', () => clearTimeout(timer));
   req.on('error', reject);
   req.write(payload);
@@ -1533,8 +1533,8 @@ const callClaude = (prompt) => new Promise((resolve, reject) => {
   const timer = setTimeout(() => {
     try { proc.kill(); } catch {}
     try { fs.unlinkSync(tmp); } catch {}
-    reject(new Error('Timeout CLI (>5min)'));
-  }, 300000);
+    reject(new Error('Timeout CLI (>10min)'));
+  }, 600000);
 
   proc.on('close', (code) => {
     clearTimeout(timer);
@@ -1568,8 +1568,8 @@ const friendlyAiError = (rawMsg = '') => {
     return { status: 413, error: "Article trop volumineux pour le modèle — réduisez le contenu (ou désactivez des skills) puis réessayez." };
   if (/overload|unavailable|bad gateway|gateway timeout|529|503|502|500/.test(low))
     return { status: 503, error: "L'IA (Anthropic) est momentanément surchargée — réessayez dans quelques instants." };
-  if (/timeout|timed out|>5min|5 min/.test(low))
-    return { status: 504, error: "Délai dépassé (analyse > 5 min) — réessayez, ou réduisez la taille de l'article." };
+  if (/timeout|timed out|>\s*\d+\s*min/.test(low))
+    return { status: 504, error: "Délai dépassé (analyse > 10 min) — réessayez, ou réduisez la taille de l'article." };
   if (/rate.?limit|tous les mod|429/.test(low))
     return { status: 429, error: 'Limite de requêtes atteinte — patientez une minute puis réessayez.' };
   return { status: 500, error: `Erreur lors de l'appel à l'IA — ${safe}` };
@@ -1847,9 +1847,9 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
 
   const timer = setTimeout(() => {
     apiReq.destroy();
-    send({ type: 'error', error: friendlyAiError('Timeout 5min dépassé').error });
+    send({ type: 'error', error: friendlyAiError('Timeout 10min dépassé').error });
     res.end();
-  }, 300000);
+  }, 600000);
 
   apiReq.on('close', () => clearTimeout(timer));
   apiReq.on('error', (e) => {

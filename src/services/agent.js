@@ -187,7 +187,10 @@ const filterSourcesWithHaiku = async (articleContent, sources, apiKey) => {
 // si la route job est absente (vieux serveur pendant un déploiement).
 const JOB_PROXY       = '/api/claude-job';
 const JOB_POLL_MS     = 2000;
-const JOB_MAX_WAIT_MS = 6 * 60 * 1000; // > timeout Anthropic côté serveur (5 min)
+// Doit rester > au timeout Anthropic côté serveur (10 min) : le client continue
+// de poller jusqu'à ce que le job passe done/error. Une génération Refonte
+// (max 32k tokens) peut approcher 8-9 min.
+const JOB_MAX_WAIT_MS = 12 * 60 * 1000;
 
 // Une erreur est REJOUABLE si la réponse n'est jamais arrivée (coupure réseau,
 // redémarrage du serveur pendant un déploiement — y compris job perdu au restart)
@@ -253,17 +256,19 @@ const callClaudeViaJob = async ({ system, messages, max_tokens, model }) => {
     appErr.isAppError = true;
     throw appErr;
   }
-  const timeoutErr = new Error('Délai dépassé (analyse > 6 min) — réessayez, ou réduisez la taille de l\'article.');
+  const timeoutErr = new Error('Délai dépassé (analyse > 12 min) — réessayez, ou réduisez la taille de l\'article.');
   timeoutErr.isAppError = true;
   throw timeoutErr;
 };
 
 // Route legacy (réponse synchrone dans le même POST) — secours uniquement.
+// Timeout aligné sur le ceiling serveur (10 min) + marge, sinon une génération
+// Refonte via ce repli serait coupée à 5 min alors que le serveur l'autorise.
 const callClaudeLegacy = async ({ system, messages, max_tokens, model }) => {
   const response = await axios.post(
     LOCAL_PROXY,
     { model, max_tokens, system, messages },
-    { headers: { 'content-type': 'application/json' }, timeout: 300000 }
+    { headers: { 'content-type': 'application/json' }, timeout: 660000 }
   );
   return parseClaudeResponse(response.data, model);
 };
@@ -690,7 +695,16 @@ L'utilisateur demande une RÉÉCRITURE EN PROFONDEUR (informations majoritaireme
 - Remanie la structure : fusionne/condense les passages redondants (type "suppression"), ajoute les sections manquantes (type "addition"), réécris les H2 peu clairs.
 - Chaque passage réécrit = prose fluide et naturelle, agréable à lire.
 - RAPPEL ABSOLU : tout lien EXTERNE présent dans un passage réécrit doit réapparaître À L'IDENTIQUE (href ET texte d'ancre) dans "updated" — le verrou technique rejette sinon l'update entière.
-- Attends-toi à produire BEAUCOUP d'updates : c'est voulu.`;
+
+### GRANULARITÉ OBLIGATOIRE (sinon les modifications ne peuvent PAS être appliquées)
+- UN update = UN paragraphe (ou UN titre, UNE liste, UN tableau). NE regroupe JAMAIS plusieurs paragraphes ou une section entière dans un seul update.
+- "original" = la copie EXACTE d'UN SEUL bloc court (une à trois phrases, ~300 caractères MAX). JAMAIS un "original" couvrant plusieurs paragraphes ou contenant du HTML de structure (<h2>, <div>, plusieurs <p>…) : le moteur ne le retrouve pas et l'update est perdue.
+- Pour réécrire une section entière : produis PLUSIEURS updates de remplacement (un par paragraphe existant) + des additions ciblées, jamais un seul énorme bloc.
+
+### HTML DE "updated" — STRICTEMENT PROPRE (sinon la mise en page casse)
+- "updated" doit être un fragment HTML AUTONOME et VALIDE : chaque balise ouverte est refermée (<p>…</p>, <ul>…</ul>, <h2>…</h2>).
+- N'utilise QUE des balises de contenu : <p>, <h2>, <h3>, <ul>/<ol>/<li>, <strong>, <em>, <a>, <table> (et, UNIQUEMENT pour la FAQ, <details>/<summary> comme défini plus bas). N'enveloppe JAMAIS ton contenu dans un <div>, <section>, <article> ou tout autre conteneur : le thème met en forme les <h2>/<p> directement. Un wrapper superflu ou une balise non refermée provoque une imbrication en cascade qui casse l'affichage.
+- Un remplacement de paragraphe renvoie UN seul <p>…</p> ; un ajout de sous-partie renvoie <h3>…</h3><p>…</p> — rien de plus.`;
 };
 
 // ── Prompt système ────────────────────────────────────────────────────────────

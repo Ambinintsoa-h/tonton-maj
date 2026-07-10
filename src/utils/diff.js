@@ -681,15 +681,42 @@ export const enforceExternalLinkPolicy = (update, articleUrl = '') => {
   };
 };
 
+/**
+ * Équilibre un fragment HTML produit par l'IA : le passe par un nœud DOM détaché
+ * puis le re-sérialise. Toute balise de bloc restée OUVERTE dans le fragment
+ * (fréquent en mode Refonte : le modèle émet des sections entières, parfois
+ * tronquées, parfois avec un <div>/<section> wrapper non refermé) est fermée
+ * DANS le fragment. Sans ça, la balise ouverte fuit dans le document au moment
+ * de l'insertion (concaténation de chaînes dans applyDiff/applyAddition) et le
+ * navigateur imbrique tout le contenu suivant → cascade d'indentation qui casse
+ * la mise en page publiée. Idempotent : un fragment déjà équilibré se
+ * re-sérialise à l'identique (mêmes round-trips DOM que le reste du pipeline).
+ * N'altère pas les liens (le verrou externe s'exécute AVANT).
+ */
+export const balanceFragment = (fragment) => {
+  if (!fragment || typeof document === 'undefined' || fragment.indexOf('<') === -1) return fragment;
+  try {
+    // <template> (et NON un <div>) : son contenu est un DocumentFragment qui
+    // préserve les fragments tabulaires (<tr>/<td> isolés) au lieu de les écarter
+    // par « foster parenting », tout en refermant les balises restées ouvertes.
+    const tpl = document.createElement('template');
+    tpl.innerHTML = fragment;
+    return tpl.innerHTML;
+  } catch { return fragment; }
+};
+
 export const applyAllDiffs = (html, updates, passNumber = 1, articleUrl = '') => {
   let updatedHtml = html;
   const withStatus = (updates || []).map((rawUpdate) => {
     // Verrou liens externes (règle absolue) — assainit ou rejette AVANT application
-    const { update, blocked } = enforceExternalLinkPolicy(rawUpdate, articleUrl);
+    const { update: policed, blocked } = enforceExternalLinkPolicy(rawUpdate, articleUrl);
     if (blocked) {
-      console.warn(`[diff p${passNumber}] Update BLOQUÉE (supprimerait un lien externe) :`, (update.original || '').substring(0, 70));
-      return { ...update, applied: false, pass: passNumber, blockedReason: 'lien-externe' };
+      console.warn(`[diff p${passNumber}] Update BLOQUÉE (supprimerait un lien externe) :`, (policed.original || '').substring(0, 70));
+      return { ...policed, applied: false, pass: passNumber, blockedReason: 'lien-externe' };
     }
+    // Sécurité structure : équilibrer le fragment inséré (updated) pour qu'aucune
+    // balise non fermée ne fuie dans le document (cascade d'imbrication en Refonte).
+    const update = policed.updated ? { ...policed, updated: balanceFragment(policed.updated) } : policed;
     // Nouveau paragraphe (enrichissement actualités)
     if (update.type === 'addition') {
       if (!update.updated) return { ...update, applied: false, pass: passNumber };
