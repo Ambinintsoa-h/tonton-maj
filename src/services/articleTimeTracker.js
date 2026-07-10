@@ -146,8 +146,14 @@ class ArticleTimeTracker {
     // Inactif depuis > 5 min → cette minute ne compte pas
     if (Date.now() - this._lastEvent > IDLE_MS) return;
     if (this._articleId) {
-      this._ensureDoc(); // filet : recrée le doc si l'ensure initial a échoué
-      recordArticleTime(this._articleId, this._user.userId, 1).catch(() => {});
+      // Filet : recrée le doc si l'ensure initial a échoué — et ATTEND qu'il
+      // existe avant de créditer la minute (sinon l'updateDoc part avant la
+      // création et la minute est perdue).
+      const articleId = this._articleId;
+      const userId    = this._user.userId;
+      this._ensureDoc()
+        .then(() => recordArticleTime(articleId, userId, 1))
+        .catch(() => {});
     } else {
       this._buffered += 1; // analyse en cours, id pas encore connu
     }
