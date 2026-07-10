@@ -118,11 +118,13 @@ const callClaudeWithProgress = async (apiKey, params, onStep, onReplace, stepLab
   let fakeTokens = 0;
   let firstTick = true;
   // Incrément aléatoire : ~90-160 tokens/700ms ≈ vitesse Sonnet réelle
+  // Guards : le flux MajEnAttente ne fournit pas onReplace → sans garde, chaque
+  // tick levait « TypeError: onReplace is not a function » (spam console).
   const timer = setInterval(() => {
     fakeTokens += Math.round(90 + Math.random() * 70);
     const text = `${stepLabel} — ~${fakeTokens.toLocaleString()} tokens`;
-    if (firstTick) { onStep(text); firstTick = false; }
-    else            { onReplace(text); }
+    if (firstTick) { if (typeof onStep === 'function') onStep(text); firstTick = false; }
+    else if (typeof onReplace === 'function') { onReplace(text); }
   }, 700);
 
   try {
@@ -176,30 +178,56 @@ const filterSourcesWithHaiku = async (articleContent, sources, apiKey) => {
 };
 
 // ── Appel Claude ──────────────────────────────────────────────────────────────
+// Une erreur est REJOUABLE si la réponse n'est jamais arrivée (coupure de
+// connexion : redémarrage du serveur pendant un déploiement, reset HTTP/2,
+// réseau) ou si la passerelle a répondu 502/503/504 (Passenger en cours de
+// restart). Le timeout client (ECONNABORTED, 5 min) et les erreurs applicatives
+// (4xx/5xx avec message serveur) ne sont PAS retentés.
+const isRetryableClaudeError = (err) => {
+  if (err.code === 'ECONNABORTED') return false;         // timeout client
+  if (!err.response) return true;                        // coupure réseau pure
+  return [502, 503, 504].includes(err.response.status);  // passerelle en restart
+};
+
+const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+const CLAUDE_RETRY_DELAYS_MS = [2000, 5000]; // 2 relances max, backoff court
+
 const callClaude = async (_apiKey, { system, messages, max_tokens = 2048, model = MODELS.FAST }) => {
   // _apiKey ignoré — le proxy lit la clé depuis data/settings.json côté serveur.
   // La clé n'est plus jamais transmise dans le body HTTP (invisible dans DevTools).
-  try {
-    const response = await axios.post(
-      LOCAL_PROXY,
-      { model, max_tokens, system, messages },
-      { headers: { 'content-type': 'application/json' }, timeout: 300000 }
-    );
-    const data = response.data;
-    const actualModel = data.modelUsed || data.model || model;
-    return {
-      text: data.content[0].text,
-      usage: {
-        input_tokens: data.usage?.input_tokens || 0,
-        output_tokens: data.usage?.output_tokens || 0,
-        model: actualModel,
-      },
-    };
-  } catch (err) {
-    const serverMsg = err.response?.data?.error;
-    if (serverMsg) throw new Error(serverMsg);
-    if (err.code === 'ECONNREFUSED') throw new Error('Proxy local non joignable — relance npm start');
-    throw err;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await axios.post(
+        LOCAL_PROXY,
+        { model, max_tokens, system, messages },
+        { headers: { 'content-type': 'application/json' }, timeout: 300000 }
+      );
+      const data = response.data;
+      const actualModel = data.modelUsed || data.model || model;
+      return {
+        text: data.content[0].text,
+        usage: {
+          input_tokens: data.usage?.input_tokens || 0,
+          output_tokens: data.usage?.output_tokens || 0,
+          model: actualModel,
+        },
+      };
+    } catch (err) {
+      // Relance automatique sur coupure de connexion (ex. redéploiement du
+      // serveur pendant une analyse) → le pipeline survit au lieu de mettre
+      // l'article en « Erreur ».
+      if (attempt < CLAUDE_RETRY_DELAYS_MS.length && isRetryableClaudeError(err)) {
+        await sleepMs(CLAUDE_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      const serverMsg = err.response?.data?.error;
+      if (serverMsg) throw new Error(serverMsg);
+      if (err.code === 'ECONNREFUSED') throw new Error('Proxy local non joignable — relance npm start');
+      if (!err.response && err.code !== 'ECONNABORTED') {
+        throw new Error('Connexion au serveur interrompue pendant l\'appel IA (déploiement ou réseau) — relancez l\'analyse');
+      }
+      throw err;
+    }
   }
 };
 
