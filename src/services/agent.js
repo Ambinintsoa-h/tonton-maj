@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { searchWeb } from './search';
 import { scrapeUrl } from './scraper';
+import { MAJ_DEPTHS, DEFAULT_DEPTH } from '../constants/majDepth';
 
 const LOCAL_PROXY    = '/api/claude';
 const WP_TOOL_PROXY  = '/api/wp-tool';
@@ -595,8 +596,33 @@ const scrapeSource = async (url) => {
   return null;
 };
 
+/**
+ * Bloc « Profondeur de MAJ » — choisie par l'utilisateur (sélecteur au lancement).
+ * « standard » (ou valeur inconnue) → chaîne vide : prompts strictement identiques
+ * au comportement historique. « legere »/« refonte » → consignes prioritaires.
+ */
+const buildDepthBlock = (depth) => {
+  if (!depth || depth === DEFAULT_DEPTH || !MAJ_DEPTHS[depth]) return '';
+  if (depth === 'legere') {
+    return `\n\n## ═══ PROFONDEUR DE MAJ : LÉGÈRE (~30 %) — CHOISIE PAR L'UTILISATEUR (PRIORITAIRE sur toute règle de complétude) ═══
+Rafraîchissement MINIMAL : corrige UNIQUEMENT les données fausses ou obsolètes (prix, chiffres, statistiques, dates, versions, noms d'entreprises/produits, faits périmés).
+- INTERDIT d'ajouter de nouvelles sections : PAS de TL;DR, PAS de FAQ, PAS de nouveau H2, PAS de tableau — MÊME si une règle plus loin les dit « obligatoires » (cette profondeur PRÉVAUT sur ces règles).
+- INTERDIT de restructurer, réorganiser ou supprimer des sections. Le type "suppression" ne sert qu'aux doublons flagrants.
+- Aucune reformulation cosmétique : chaque update doit changer une DONNÉE.
+- Vise PEU d'updates, à fort impact factuel.`;
+  }
+  // refonte
+  return `\n\n## ═══ PROFONDEUR DE MAJ : REFONTE (100 %) — CHOISIE PAR L'UTILISATEUR ═══
+L'utilisateur demande une RÉÉCRITURE EN PROFONDEUR (informations majoritairement fausses/obsolètes ou article de faible qualité) :
+- Passe TOUTES les sections en revue, une par une : remplace intégralement chaque paragraphe faible, faux ou obsolète (updates de remplacement exhaustifs — "original" reste la copie EXACTE du texte actuel).
+- Remanie la structure : fusionne/condense les passages redondants (type "suppression"), ajoute les sections manquantes (type "addition"), réécris les H2 peu clairs.
+- Chaque passage réécrit = prose fluide et naturelle, agréable à lire.
+- RAPPEL ABSOLU : tout lien EXTERNE présent dans un passage réécrit doit réapparaître À L'IDENTIQUE (href ET texte d'ancre) dans "updated" — le verrou technique rejette sinon l'update entière.
+- Attends-toi à produire BEAUCOUP d'updates : c'est voulu.`;
+};
+
 // ── Prompt système ────────────────────────────────────────────────────────────
-const buildSystemPrompt = (skills, knowledge = [], auditReport = '') => {
+const buildSystemPrompt = (skills, knowledge = [], auditReport = '', depth = DEFAULT_DEPTH) => {
   const { fr, year, prevYear, cutoffIso } = getDateContext();
 
   // Mode cerveau : si un skill SKILL.md est actif, il pilote l'agent et le socle + skills
@@ -627,7 +653,7 @@ const buildSystemPrompt = (skills, knowledge = [], auditReport = '') => {
   return `Tu es un expert SEO/GEO (Search Engine Optimization & Generative Engine Optimization) spécialisé dans la mise à jour d'articles de blog, dossiers comparatifs et actualités.
 
 **Date du jour : ${fr} (${cutoffIso} = seuil 6 mois)**
-Toute donnée antérieure au ${cutoffIso} est OBLIGATOIREMENT suspecte et doit être vérifiée ou mise à jour.${skillsBlock}${knowledgeBlock}
+Toute donnée antérieure au ${cutoffIso} est OBLIGATOIREMENT suspecte et doit être vérifiée ou mise à jour.${buildDepthBlock(depth)}${skillsBlock}${knowledgeBlock}
 
 ## ═══ RÈGLES SEO STANDARD ═══
 
@@ -759,6 +785,7 @@ export const runAgent = async ({
   wpSites        = [],
   existingWpData = null,  // déjà récupéré par Articles.jsx — évite un 2e appel MCP
   modelPricing   = null,  // tarifs depuis settings.json — null = fallback hardcodé
+  depth          = DEFAULT_DEPTH,  // profondeur de MAJ choisie par l'utilisateur (legere|standard|refonte)
   onStep,
   onReplace,
   onProgress,
@@ -1119,7 +1146,7 @@ ${content}
     try {
       const r = await callClaudeWithProgress(
         null,
-        { system: buildSystemPrompt(skills, knowledge, auditReport), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
+        { system: buildSystemPrompt(skills, knowledge, auditReport, depth), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
         onStep,
         onReplace,
         attempt === 1 ? `Génération en cours (${modelLabel})` : `Génération — nouvel essai (${attempt}/3)`
@@ -1340,7 +1367,7 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
 };
 
 // ── Prompt système — Deuxième passe ──────────────────────────────────────────
-const buildReviewSystemPrompt = (skills, knowledge = []) => {
+const buildReviewSystemPrompt = (skills, knowledge = [], depth = DEFAULT_DEPTH) => {
   const { fr, year, prevYear } = getDateContext();
 
   // Mode cerveau : le skill SKILL.md pilote aussi la passe 2 — les skills
@@ -1364,7 +1391,7 @@ const buildReviewSystemPrompt = (skills, knowledge = []) => {
 
   return `Tu es un expert SEO/GEO effectuant la DEUXIÈME PASSE d'enrichissement d'un article déjà partiellement mis à jour.
 
-**Date : ${fr}**${skillsBlock}${knowledgeBlock}
+**Date : ${fr}**${buildDepthBlock(depth)}${skillsBlock}${knowledgeBlock}
 
 ## ═══ OBJECTIFS DE LA DEUXIÈME PASSE ═══
 
@@ -1416,6 +1443,7 @@ export const runReviewAgent = async ({
   knowledge = [],
   manualSources = [],   // sources fournies manuellement par le CQ IA (déjà scrapées)
   modelPricing  = null, // tarifs depuis settings.json — null = fallback hardcodé
+  depth         = DEFAULT_DEPTH, // profondeur de MAJ (héritée de la passe 1)
   onStep,
   onProgress,
 }) => {
@@ -1559,7 +1587,7 @@ ${content}
 - Réponds UNIQUEMENT avec le JSON valide, sans markdown`;
 
   const { text: finalText, usage: u3 } = await callClaude(null, {
-    system: buildReviewSystemPrompt(skills, knowledge),
+    system: buildReviewSystemPrompt(skills, knowledge, depth),
     max_tokens: 24000,
     model: model3,
     messages: [{ role: 'user', content: userMsg }],

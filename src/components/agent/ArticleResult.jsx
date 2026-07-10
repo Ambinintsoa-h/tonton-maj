@@ -1095,6 +1095,7 @@ export default function ArticleResult() {
         content: cleanContent,
         firstPassUpdates: agent.diff || [],
         firstPassAnalysis: agent.analysis || '',
+        depth: agent.majDepth || 'standard',  // même profondeur que la passe 1
         skills,
         knowledge,
         anthropicKey: settings.anthropicKey,

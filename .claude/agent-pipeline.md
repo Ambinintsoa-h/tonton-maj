@@ -31,6 +31,9 @@ Injecté dans TOUS les prompts système :
 - `year` : 2026, `prevYear` : 2025
 - `cutoffIso` : date J-6mois — tout contenu antérieur est "suspect"
 
+## Profondeur de MAJ (depth)
+`runAgent`/`runReviewAgent` acceptent `depth` : `legere` (~30 % — corrections factuelles seules, PAS de TL;DR/FAQ/nouveaux H2), `standard` (~60 % — défaut, comportement historique, aucun bloc injecté), `refonte` (100 % — réécriture section par section). Constantes : `src/constants/majDepth.js`. Choix utilisateur : page Articles (sélecteur sous le mot-clé) et MAJ en attente (picker par ligne, champ `depth` de l'item). Transmis à la passe 2 via `agent.majDepth` (Redux) et persisté dans `majResult.majDepth` / `articleData.majDepth`.
+
 ## Règles prompt critiques
 - **Skills classiques (menu SKILLS IA)** injectés dans TOUS les modes — y compris en mode cerveau (bloc « RÈGLES D'ÉQUIPE ») : audit, génération, passe 2 et contrôle de conformité. L'équipe édite ses règles rédactionnelles dans le menu sans ré-importer le SKILL.md.
 - **Additions** interdites sans source web scrapée réelle (jamais depuis training data)

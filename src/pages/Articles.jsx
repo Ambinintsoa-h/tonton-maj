@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2 } from 'lucide-react';
-import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setAudit } from '../store/slices/agentSlice';
+import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2, Gauge } from 'lucide-react';
+import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit } from '../store/slices/agentSlice';
+import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import { addToHistory, updateInHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
 import { cacheSiteFonts } from '../store/slices/wordpressSlice';
@@ -46,6 +47,7 @@ export default function Articles() {
   const [pasteUrl, setPasteUrl] = useState('');
   const [scraping, setScraping] = useState(false);
   const [targetKeyword, setTargetKeyword] = useState('');
+  const [majDepth, setMajDepth]           = useState(DEFAULT_DEPTH); // profondeur de la MAJ (legere|standard|refonte)
   const [seoKeywords, setSeoKeywords] = useState([]);
   const [seoKwInput, setSeoKwInput] = useState('');
 
@@ -219,6 +221,7 @@ export default function Articles() {
         wpSites,
         existingWpData:  prefetchedWpData,  // évite un 2e appel WP MCP dans runAgent
         modelPricing:    settings.modelPricing || null,
+        depth:           majDepth,          // profondeur de MAJ choisie par l'utilisateur
         onStep:     (s) => dispatch(addStep(s)),
         onReplace:  (s) => dispatch(replaceLastStep(s)),
         onProgress: (p) => dispatch(setProgress(p)),
@@ -255,6 +258,7 @@ export default function Articles() {
       dispatch(setInternalLinks(result.internalLinks || []));
       dispatch(setInternalLinksInfo(result.internalLinksInfo || null));
       dispatch(setAgentTargetKeyword(targetKeyword.trim()));
+      dispatch(setAgentMajDepth(majDepth));
       dispatch(setAudit(result.audit || ''));
       dispatch(setStatus('done'));
 
@@ -279,6 +283,7 @@ export default function Articles() {
         audit: result.audit || '',   // persiste le rapport d'audit (onglet AUDIT) — dispo dès la fin de runAgent
         url: articleUrl,
         keyword: targetKeyword.trim(),  // mot-clé cible → focus keyphrase à la publication
+        majDepth,                       // profondeur choisie — réutilisée par la passe 2
         createdAt: new Date().toISOString(),
         tokenUsage: result.tokenUsage || null,
         assigneeId: authUid || authUsername || null,
@@ -516,6 +521,31 @@ export default function Articles() {
                     ? <span className="text-sage-600"><CheckCircle2 size={13} className="inline text-sage-600 shrink-0" /> L'IA optimisera l'article autour de ce mot-clé (H1/H2, intro, densité sémantique).</span>
                     : 'Requis — TONTON AI l\'utilisera pour orienter toute la MAJ SEO.'}
                 </p>
+              </div>
+
+              {/* ── Profondeur de la MAJ ──────────────────────────────────────────── */}
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
+                  <Gauge size={13} className="text-gray-400" />
+                  Profondeur de la MAJ
+                </label>
+                <div className="flex items-center gap-1 bg-gray-100/70 rounded-xl p-1 w-fit">
+                  {Object.entries(MAJ_DEPTHS).map(([key, m]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setMajDepth(key)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        majDepth === key
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {m.label} <span className={`text-[10px] ml-0.5 ${majDepth === key ? 'text-gray-400' : 'text-gray-300'}`}>{m.hint}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-gray-400">{depthMeta(majDepth).description}</p>
               </div>
 
               {!settings.anthropicKey && !settings.aiConfigured && !settings.useLocalProxy && (
