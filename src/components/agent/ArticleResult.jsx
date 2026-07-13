@@ -3137,9 +3137,9 @@ export default function ArticleResult() {
                       <Search size={16} className="shrink-0" />
                       <span className="text-[11px] font-medium text-gray-500 shrink-0">SEO Meta</span>
                       {seoGenerating && <Loader size={11} className="animate-spin text-gray-400 ml-1" />}
+                      {/* Ce badge signifie seulement « metas remplies » — le verdict SEO
+                          réel est donné par l'Analyse SEO ci-dessous (critères plugins) */}
                       {!seoGenerating && (seoTitle || seoDescription) && (
-                        {/* Ce badge signifie seulement « metas remplies » — le verdict SEO
-                            réel est donné par l'Analyse SEO ci-dessous (critères plugins) */}
                         <span className="text-[10px] font-semibold text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full flex items-center gap-1">
                           <Sparkles size={9} /> Metas générées
                         </span>
