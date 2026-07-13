@@ -274,7 +274,28 @@ export const applyAddition = (html, anchor, updated) => {
   const blockMatch = blockCloseRx.exec(tail);
   if (!blockMatch) return { html, matched: false };
 
-  const insertPos = anchorEnd + blockMatch.index + blockMatch[0].length;
+  let insertPos = anchorEnd + blockMatch.index + blockMatch[0].length;
+
+  // Un bloc <ins> ne doit JAMAIS devenir enfant direct d'une liste ou d'un
+  // tableau (enfant non-<li>/<tr> invalide → le navigateur ré-imbrique le
+  // contenu voisin : sections qui « disparaissent » ou se déplacent). Si
+  // l'anchor se termine dans un <li>/<td>/<th>, on remonte à la fermeture de
+  // la structure ENGLOBANTE (imbrications comptées) et on insère après elle.
+  const tag = blockMatch[1].toLowerCase();
+  if (tag === 'li' || tag === 'td' || tag === 'th') {
+    const containerRx = tag === 'li'
+      ? /<(\/?)(?:ul|ol)\b[^>]*>/gi
+      : /<(\/?)table\b[^>]*>/gi;
+    containerRx.lastIndex = insertPos;
+    let depth = 1;
+    let cm;
+    while ((cm = containerRx.exec(html))) {
+      depth += cm[1] ? -1 : 1;
+      if (depth === 0) { insertPos = cm.index + cm[0].length; break; }
+    }
+    // structure jamais refermée (HTML malformé) → comportement d'origine
+  }
+
   const newHtml =
     html.slice(0, insertPos) +
     `<ins class="added-content">${updated}</ins>` +
@@ -769,6 +790,17 @@ export const applyAllDiffs = (html, updates, passNumber = 1, articleUrl = '') =>
       if (matched) {
         updatedHtml = newHtml;
         return { ...update, applied: true, pass: passNumber };
+      }
+      // Anchor introuvable (le passage visé a été remanié ou a disparu depuis
+      // l'analyse) : placer le bloc au plus fort recouvrement lexical plutôt
+      // que de PERDRE l'addition — une suggestion ne doit pas pointer dans le
+      // vide. Marqué placed:'fuzzy' pour que l'UI puisse le signaler.
+      const fuzzyRef = `${update.anchor || ''} ${update.reason || ''}`.trim() || update.updated;
+      const fuzzy = insertNearClosestParagraph(updatedHtml, fuzzyRef, update.updated);
+      if (fuzzy.matched) {
+        updatedHtml = fuzzy.html;
+        console.warn(`[diff p${passNumber}] Addition placée au plus proche (anchor introuvable):`, (update.anchor || '').substring(0, 70));
+        return { ...update, applied: true, pass: passNumber, placed: 'fuzzy' };
       }
       console.warn(`[diff p${passNumber}] Addition non localisée (anchor):`, (update.anchor || '').substring(0, 70));
       return { ...update, applied: false, pass: passNumber };

@@ -1,6 +1,6 @@
 // Tests de repairStructureEl — réparation des imbrications cassées
 /* eslint-env jest */
-import { repairStructureEl, absorbOrphanDeterminers, applyAllDiffs } from './diff';
+import { repairStructureEl, absorbOrphanDeterminers, applyAllDiffs, applyAddition } from './diff';
 
 const run = (html) => {
   const div = document.createElement('div');
@@ -85,5 +85,61 @@ describe('absorbOrphanDeterminers — suppressions sans mots orphelins', () => {
     const div = document.createElement('div');
     div.innerHTML = out;
     expect(div.querySelector('del').textContent).toBe('les chats noirs');
+  });
+});
+
+describe('applyAddition — jamais d\'<ins> enfant direct de liste/tableau', () => {
+  const parse = (html) => { const d = document.createElement('div'); d.innerHTML = html; return d; };
+
+  it('anchor dans un <li> → insertion APRÈS la liste, pas dedans', () => {
+    const html = '<p>Intro.</p><ul><li>alpha beta gamma delta</li><li>autre item</li></ul><p>Suite.</p>';
+    const { html: out, matched } = applyAddition(html, 'alpha beta gamma delta', '<p>Nouveau bloc</p>');
+    expect(matched).toBe(true);
+    const div = parse(out);
+    const ins = div.querySelector('ins.added-content');
+    expect(ins).not.toBeNull();
+    expect(['UL', 'OL']).not.toContain(ins.parentElement.tagName);
+    expect(div.querySelector('ul').nextElementSibling).toBe(ins);
+    // la liste est intacte : toujours 2 items
+    expect(div.querySelector('ul').children.length).toBe(2);
+  });
+
+  it('listes imbriquées : sort au niveau valide le plus proche (jamais entre deux <li>)', () => {
+    const html = '<ul><li>parent <ul><li>enfant unique cible profonde</li></ul></li><li>frère</li></ul>';
+    const { html: out, matched } = applyAddition(html, 'enfant unique cible profonde', '<p>Bloc</p>');
+    expect(matched).toBe(true);
+    const ins = parse(out).querySelector('ins.added-content');
+    expect(ins).not.toBeNull();
+    expect(['UL', 'OL']).not.toContain(ins.parentElement.tagName);
+  });
+
+  it('anchor dans un <td> → insertion APRÈS le tableau', () => {
+    const html = '<table><tbody><tr><td>cellule avec texte cible ici</td></tr></tbody></table><p>Suite.</p>';
+    const { html: out, matched } = applyAddition(html, 'cellule avec texte cible ici', '<p>Bloc</p>');
+    expect(matched).toBe(true);
+    const div = parse(out);
+    const ins = div.querySelector('ins.added-content');
+    expect(ins).not.toBeNull();
+    expect(ins.closest('table')).toBeNull();
+    expect(div.querySelector('table').nextElementSibling).toBe(ins);
+  });
+});
+
+describe('applyAllDiffs — addition dont l\'anchor a disparu', () => {
+  it('place le bloc au plus fort recouvrement lexical au lieu de le perdre', () => {
+    const html = '<p>Les chiens aboient fort.</p><p>Les chats miaulent doucement la nuit.</p>';
+    const { html: out, updates } = applyAllDiffs(html, [{
+      type: 'addition',
+      anchor: 'passage disparu introuvable xyz',
+      updated: '<p>Les chats domestiques dorment beaucoup.</p>',
+      reason: 'chats miaulent nuit',
+    }]);
+    expect(updates[0].applied).toBe(true);
+    expect(updates[0].placed).toBe('fuzzy');
+    const div = document.createElement('div');
+    div.innerHTML = out;
+    // inséré après le paragraphe des chats (meilleur recouvrement), pas perdu
+    expect(div.children[2].tagName).toBe('INS');
+    expect(div.children[1].textContent).toContain('chats miaulent');
   });
 });
