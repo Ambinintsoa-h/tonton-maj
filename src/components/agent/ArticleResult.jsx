@@ -10,7 +10,7 @@ import {
   RefreshCw, ArrowRight, Link, ChevronUp,
   Clipboard, ClipboardCheck, Sparkles, Loader, ShieldCheck,
   Plus, Link2, X, Tag, Search, Image,
-  Undo2, Redo2, Scissors, Trash2, Lock, CheckCheck,
+  Undo2, Redo2, Scissors, Trash2, Lock, CheckCheck, Crosshair,
 } from 'lucide-react';
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripParasiticFontSize } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
@@ -19,7 +19,7 @@ import TableToolbar from './TableToolbar';
 import DocNavigator from './DocNavigator';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
-import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, moveFaqToEnd } from '../../utils/diff';
+import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, moveFaqToEnd, normalizeText } from '../../utils/diff';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
@@ -1339,7 +1339,10 @@ export default function ArticleResult() {
   const missedUpdates  = updates.filter(u => u.applied === false);
   const p2Updates = updates.filter(u => u.pass === 2);
   const sources = agent.sources || [];
-  const internalLinks = agent.internalLinks || [];
+  // useMemo : référence stable requise par les hooks qui en dépendent (tissage
+  // des liens dans les blocs insérés) — `|| []` nu créerait un tableau neuf à
+  // chaque render et invaliderait leurs deps en permanence.
+  const internalLinks = useMemo(() => agent.internalLinks || [], [agent.internalLinks]);
   const parseFailed = agent.parseFailed === true;
 
   // ── Appliquer un lien interne dans l'article ──────────────────────────────
@@ -1738,11 +1741,46 @@ export default function ArticleResult() {
       contentRef.current = newHtml;
       lockMedia(articleRef.current);
       setAppliedLinks(prev => new Set([...prev, linkIdx]));
+      humanEditRef.current = true;
+      triggerAutosave(); // action couverte par Ctrl+Z + sauvegardée comme toute édition
       toast.success(`Lien interne ajouté : "${anchor}"`);
     } else {
       toast.error(`Ancre introuvable dans l'article : "${anchor}"`);
     }
-  }, [lockMedia]);
+  }, [lockMedia, triggerAutosave]);
+
+  // ── Tisser les liens internes suggérés DANS un bloc donné ───────────────────
+  // Utilisé sur les blocs fraîchement insérés (suggestions) : chaque ancre de
+  // lien interne encore non appliquée et trouvée dans le bloc devient un vrai
+  // <a>. Liens INTERNES uniquement — le verrou liens externes n'est pas
+  // concerné. Le lien vit dans le bloc suggéré : il suit son sort
+  // (accepté/rejeté avec lui).
+  const weaveLinksInto = useCallback((el) => {
+    if (!el || !internalLinks.length) return 0;
+    let woven = 0;
+    internalLinks.forEach((link, idx) => {
+      if (appliedLinks.has(idx) || !link.anchor || !link.url) return;
+      const escaped = link.anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rx = new RegExp(escaped, 'i');
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.parentElement?.closest('a, del, [data-il-idx]')) continue;
+        const m = node.textContent.match(rx);
+        if (!m) continue;
+        const target = node.splitText(node.textContent.search(rx));
+        target.splitText(m[0].length);
+        const a = document.createElement('a');
+        a.href = link.url;
+        target.parentNode.insertBefore(a, target);
+        a.appendChild(target);
+        setAppliedLinks(prev => new Set([...prev, idx]));
+        woven++;
+        break; // une injection par lien
+      }
+    });
+    return woven;
+  }, [internalLinks, appliedLinks]);
 
   // ── Injecter les surlignages gris dans l'article dès que les liens arrivent ──
   // Utilise TreeWalker (nœuds texte) au lieu d'une regex sur innerHTML :
@@ -1884,8 +1922,24 @@ export default function ArticleResult() {
 
     // Mettre à jour le DOM
     articleRef.current.innerHTML = newHtml;
-    contentRef.current = articleRef.current.innerHTML;
     lockMedia(articleRef.current);
+
+    // Tisser les liens internes suggérés dans le bloc fraîchement inséré —
+    // identifié par son texte (le dernier ins/mark du document n'est pas
+    // forcément lui), avec repli sur le dernier inséré.
+    let woven = 0;
+    try {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = update.updated || '';
+      const uText = (tmp.textContent || '').trim().slice(0, 60);
+      const cands = Array.from(articleRef.current.querySelectorAll('ins.added-content, mark.updated-content'));
+      const freshEl = (uText && cands.find(el => (el.textContent || '').includes(uText))) || cands[cands.length - 1] || null;
+      woven = weaveLinksInto(freshEl);
+    } catch { /* tissage best-effort — l'insertion reste valide sans lien */ }
+
+    contentRef.current = articleRef.current.innerHTML;
+    humanEditRef.current = true;
+    triggerAutosave(); // action couverte par Ctrl+Z + sauvegardée comme toute édition
 
     // Marquer comme appliqué dans Redux
     const newDiff = updates.map(d =>
@@ -1905,9 +1959,11 @@ export default function ArticleResult() {
     }, 80);
 
     setAddedIdx(missedIdx);
-    toast.success('Correction ajoutée dans l\'article !');
+    toast.success(woven > 0
+      ? `Correction ajoutée + ${woven} lien${woven > 1 ? 's' : ''} interne${woven > 1 ? 's' : ''} tissé${woven > 1 ? 's' : ''} dedans !`
+      : 'Correction ajoutée dans l\'article !');
     setTimeout(() => setAddedIdx(null), 2000);
-  }, [updates, dispatch, lockMedia]);
+  }, [updates, dispatch, lockMedia, weaveLinksInto, triggerAutosave]);
 
   // « Placer » une addition : au lieu de l'insertion auto par ancre, on charge le
   // bloc dans le presse-papiers de blocs → l'utilisateur choisit OÙ le coller
@@ -1935,6 +1991,43 @@ export default function ArticleResult() {
       { duration: 6000 },
     );
   }, [updates, dispatch]);
+
+  // « Où va s'insérer cette suggestion ? » — localise le point d'ancrage dans
+  // l'article (ancre exacte, sinon bloc au plus fort recouvrement lexical),
+  // scrolle dessus et le met en évidence brièvement.
+  const locateSuggestion = useCallback((update) => {
+    const root = articleRef.current;
+    if (!root) { toast.error('Basculez en vue diff pour localiser.'); return; }
+    const strip = (h) => { const d = document.createElement('div'); d.innerHTML = h || ''; return (d.textContent || '').trim(); };
+    const needle = normalizeText(strip(update.anchor || update.original)).toLowerCase();
+    const blocks = Array.from(root.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, blockquote'));
+    let target = needle
+      ? blocks.find(b => normalizeText(b.textContent || '').toLowerCase().includes(needle)) || null
+      : null;
+    if (!target) {
+      const refWords = new Set((needle || normalizeText(strip(update.updated)).toLowerCase()).split(/\s+/).filter(w => w.length > 3));
+      let bestScore = 0;
+      for (const b of blocks) {
+        const bw = (b.textContent || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        if (!bw.length || !refWords.size) continue;
+        const score = bw.filter(w => refWords.has(w)).length / refWords.size;
+        if (score > bestScore) { bestScore = score; target = b; }
+      }
+      if (bestScore < 0.25) target = null;
+    }
+    if (!target) {
+      toast('Repère introuvable dans l\'article (contenu remanié) — utilisez « Placer… » pour choisir l\'endroit.',
+        { icon: <Info size={16} className="text-indigo-500" />, duration: 5000 });
+      return;
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const prevBg = target.style.backgroundColor;
+    target.style.transition = 'background-color 0.35s';
+    target.style.backgroundColor = '#e0e7ff';
+    setTimeout(() => { target.style.backgroundColor = prevBg; }, 1600);
+    toast('La suggestion s\'insérera après le passage surligné.',
+      { icon: <Crosshair size={16} className="text-indigo-500" /> });
+  }, []);
 
   const handleExport = async (format) => {
     const finalContent = getFinalHtml();
@@ -2586,6 +2679,22 @@ export default function ArticleResult() {
           </div>
 
           <div className="flex items-center gap-2 py-3">
+
+            {/* Annuler / Rétablir — TOUJOURS visibles (l'équivalent en tête
+                d'article sort de l'écran au scroll). Couvre frappe, accepter/
+                rejeter, suggestions insérées, liens internes appliqués. */}
+            {activeTab === TAB_APRES && diffMode && hasContent && (
+              <div className="flex items-center gap-0.5 border-r border-gray-200 pr-2 mr-1">
+                <button onClick={undo} disabled={!histState.canUndo} title="Annuler (Ctrl+Z)"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg hover:bg-black/10 text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors">
+                  <Undo2 size={15} />
+                </button>
+                <button onClick={redo} disabled={!histState.canRedo} title="Rétablir (Ctrl+Y)"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg hover:bg-black/10 text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors">
+                  <Redo2 size={15} />
+                </button>
+              </div>
+            )}
 
             {/* Bouton Terminer — CQ validation + flow normal */}
             {(cqItem || agent.currentArticleId) && (
@@ -3310,6 +3419,16 @@ export default function ArticleResult() {
                               className="flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border border-indigo-200 text-indigo-700 hover:bg-indigo-50 transition-colors whitespace-nowrap"
                             >
                               <ArrowRight size={11} /> Placer…
+                            </button>
+                          )}
+                          {/* Voir OÙ la suggestion va s'insérer (scroll + surbrillance du repère) */}
+                          {addedIdx !== i && (
+                            <button
+                              onClick={() => locateSuggestion(u)}
+                              title="Voir où la suggestion s'insérera dans l'article"
+                              className="flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-gray-500 hover:text-indigo-700 hover:bg-indigo-50 border border-transparent hover:border-indigo-200 transition-colors whitespace-nowrap"
+                            >
+                              <Crosshair size={11} /> Localiser
                             </button>
                           )}
                         </div>
