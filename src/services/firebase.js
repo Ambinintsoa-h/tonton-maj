@@ -747,11 +747,18 @@ const _localDate = () => {
  */
 export const saveActivitySession = async (data) => {
   if (!db) return;
-  const ref  = doc(db, 'activity_sessions', `${data.userId}_${data.date}`);
-  const snap = await getDoc(ref);
-
-  if (!snap.exists()) {
-    // Première connexion du jour → créer le document complet
+  const ref = doc(db, 'activity_sessions', `${data.userId}_${data.date}`);
+  // Pas de lecture préalable : un get sur un doc INEXISTANT peut être refusé
+  // par les règles (resource null) et la session du jour n'était alors JAMAIS
+  // créée (tracking mort). Reconnexion = update ; 'not-found' = première
+  // connexion du jour → création du document complet.
+  try {
+    await updateDoc(ref, {
+      lastActivityAt: data.lastActivityAt,
+      connections:    arrayUnion({ at: data.firstActivityAt }),
+    });
+  } catch (e) {
+    if (e?.code !== 'not-found') throw e;
     await setDoc(ref, {
       userId:             data.userId,
       userRole:           data.userRole,
@@ -770,12 +777,6 @@ export const saveActivitySession = async (data) => {
         ticketsResolved:  0,
         total:            0,
       },
-    });
-  } else {
-    // Reconnexion — firstActivityAt préservé, reconnexion ajoutée à l'historique
-    await updateDoc(ref, {
-      lastActivityAt: data.lastActivityAt,
-      connections:    arrayUnion({ at: data.firstActivityAt }),
     });
   }
 };
