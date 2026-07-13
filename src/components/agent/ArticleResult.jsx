@@ -569,6 +569,33 @@ export default function ArticleResult() {
       overlay.style.cssText = 'position:absolute;inset:0;cursor:pointer;z-index:1;';
       wrap.appendChild(overlay);
     });
+    // Vignettes vidéo : en production la CSP bloque les iframes (frame-src 'none')
+    // → cadre noir vide dans l'éditeur, impossible de vérifier la miniature.
+    // On pose la vraie vignette YouTube (img.youtube.com — autorisé par img-src)
+    // SOUS l'overlay de sélection. Décor éditeur uniquement : marqué
+    // data-media-overlay, donc retiré à l'export/publication comme les overlays.
+    el.querySelectorAll('[data-media-type="video"], [data-media="iframe-wrapper"]').forEach(wrap => {
+      if (wrap.querySelector(':scope > [data-media-overlay="thumb"]')) return;
+      const ifr = wrap.querySelector('iframe');
+      if (!ifr) return;
+      const src = ifr.getAttribute('src') || '';
+      const yt = src.match(/(?:youtube(?:-nocookie)?\.com\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+      if (!wrap.style.position) wrap.style.position = 'relative';
+      const thumb = document.createElement('div');
+      thumb.setAttribute('data-media-overlay', 'thumb');
+      thumb.setAttribute('contenteditable', 'false');
+      thumb.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#111;overflow:hidden;z-index:0;pointer-events:none;';
+      if (yt) {
+        thumb.innerHTML =
+          `<img src="https://img.youtube.com/vi/${yt[1]}/hqdefault.jpg" alt="" style="width:100%;height:100%;object-fit:cover;opacity:0.92;">` +
+          `<span style="position:absolute;display:flex;align-items:center;justify-content:center;width:56px;height:40px;border-radius:10px;background:rgba(0,0,0,0.72);color:#fff;font-size:17px;font-family:sans-serif;">▶</span>`;
+      } else {
+        let host = '';
+        try { host = new URL(src).hostname.replace(/^www\./, ''); } catch { /* URL relative — pas de domaine à afficher */ }
+        thumb.innerHTML = `<span style="color:#9ca3af;font-size:12px;font-family:sans-serif;">Vidéo${host ? ` — ${host}` : ''} (aperçu indisponible dans l'éditeur)</span>`;
+      }
+      wrap.appendChild(thumb);
+    });
     // Image à la une : la <figure data-featured> a line-height:0 (pour coller l'image).
     // 1) La rendre non-éditable → empêche le navigateur d'y fusionner du texte lors
     //    d'une suppression de média voisin (sinon les lignes se chevauchent).
@@ -1029,10 +1056,62 @@ export default function ArticleResult() {
 
   // Collage dans la vue diff : on retire tout style copié d'un autre site et on
   // ne garde que la structure + le style par défaut (cf. sanitizePastedHtml).
+  // Insère une image collée/déposée : téléversement dans la médiathèque WP puis
+  // <img> au point voulu (caret ou point de drop). ALT généré automatiquement,
+  // même circuit que l'insertion via la barre d'outils.
+  const insertImageFileAt = useCallback(async (file, range) => {
+    if (!resolvedSite) { toast.error('Connectez un site WordPress à l\'article pour téléverser des images.'); return; }
+    if (!validateImageFile(file)) return;   // > 1 Mo refusé (même règle que la barre)
+    const tId = toast.loading('Téléversement de l\'image…');
+    const url = await uploadMediaToWp(file);
+    toast.dismiss(tId);
+    if (!url || !articleRef.current) return;
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = '';
+    img.style.maxWidth = '100%';
+    try {
+      if (range && articleRef.current.contains(range.commonAncestorContainer)) {
+        range.collapse(false);
+        range.insertNode(img);
+      } else {
+        articleRef.current.appendChild(img);
+      }
+    } catch { articleRef.current.appendChild(img); }
+    lockMedia(articleRef.current);
+    contentRef.current = articleRef.current.innerHTML;
+    humanEditRef.current = true;
+    triggerAutosave();
+    img.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (settings.anthropicKey) {
+      generateAltText(url, settings.anthropicKey).then(altText => {
+        if (altText && img.isConnected && articleRef.current) {
+          img.alt = altText;
+          contentRef.current = articleRef.current.innerHTML;
+          toast.success('Texte ALT généré automatiquement', { duration: 2500 });
+        }
+      }).catch(() => {});
+    }
+  }, [resolvedSite, uploadMediaToWp, lockMedia, triggerAutosave, settings.anthropicKey]);
+
   const handlePaste = useCallback((e) => {
-    e.preventDefault();
     const cd = e.clipboardData || window.clipboardData;
     if (!cd) return;
+    // Image dans le presse-papiers (capture d'écran, fichier copié) → upload WP
+    // + insertion au caret, comme dans WordPress.
+    const imgFile = Array.from(cd.files || []).find(f => f.type?.startsWith('image/'))
+      || Array.from(cd.items || [])
+           .filter(i => i.kind === 'file' && i.type?.startsWith('image/'))
+           .map(i => i.getAsFile())
+           .find(Boolean);
+    if (imgFile) {
+      e.preventDefault();
+      const sel = window.getSelection();
+      const range = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+      insertImageFileAt(imgFile, range);
+      return;
+    }
+    e.preventDefault();
     const html = cd.getData('text/html');
     if (html && html.trim()) {
       const clean = sanitizePastedHtml(html);
@@ -1044,7 +1123,7 @@ export default function ArticleResult() {
       document.execCommand('insertText', false, text);
     }
     if (articleRef.current) contentRef.current = articleRef.current.innerHTML;
-  }, []);
+  }, [insertImageFileAt]);
 
   // Navigation entre les modifications dans l'article
   const jumpToChange = useCallback((dir) => {
@@ -3407,6 +3486,20 @@ export default function ArticleResult() {
                         className="article-diff-content md-content text-sm leading-loose p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px] focus:outline-none focus:ring-2 focus:ring-black/10"
                         onInput={handleInput}
                         onPaste={handlePaste}
+                        onDragOver={(e) => {
+                          // Autoriser le drop de FICHIERS (images) — le drag interne
+                          // de texte/blocs garde le comportement natif du navigateur.
+                          if (Array.from(e.dataTransfer?.types || []).includes('Files')) e.preventDefault();
+                        }}
+                        onDrop={(e) => {
+                          const file = Array.from(e.dataTransfer?.files || []).find(f => f.type?.startsWith('image/'));
+                          if (!file) return;
+                          e.preventDefault();
+                          const range = document.caretRangeFromPoint
+                            ? document.caretRangeFromPoint(e.clientX, e.clientY)
+                            : null;
+                          insertImageFileAt(file, range);
+                        }}
                         onKeyDown={(e) => {
                           // Undo/redo maison (couvre accepter/rejeter, médias… que l'undo
                           // natif ignore) → on court-circuite l'undo natif du navigateur.
