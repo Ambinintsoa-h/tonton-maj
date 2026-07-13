@@ -1000,6 +1000,41 @@ app.post('/api/tavily', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Réécriture Gemini — clé PERSONNELLE de l'utilisateur ─────────────────────
+// La clé transite par requête (HTTPS) et n'est JAMAIS stockée côté serveur ;
+// le navigateur ne parle jamais à Google directement (CSP conservée).
+app.post('/api/gemini/rewrite', requireAuth, async (req, res) => {
+  const { key, text, instruction } = req.body || {};
+  if (!key || typeof key !== 'string' || key.length > 200) {
+    return res.status(400).json({ error: 'Clé API Gemini requise' });
+  }
+  if (!text || typeof text !== 'string' || text.length > 8000) {
+    return res.status(400).json({ error: 'Texte requis (8 000 caractères max)' });
+  }
+  if (!instruction || typeof instruction !== 'string' || instruction.length > 2000) {
+    return res.status(400).json({ error: 'Instruction requise' });
+  }
+  try {
+    const resp = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,
+      {
+        contents: [{ parts: [{ text: `${instruction}\n\nTexte à réécrire :\n\n${text}` }] }],
+        generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
+      },
+      { timeout: 40000 },
+    );
+    const out = (resp.data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+    if (!out) return res.status(502).json({ error: 'Réponse Gemini vide — réessayez' });
+    res.json({ text: out });
+  } catch (e) {
+    const status = e.response?.status;
+    console.error('[gemini]', status || '', e.message);
+    if (status === 400 || status === 403) return res.status(status).json({ error: 'Clé Gemini invalide ou non autorisée' });
+    if (status === 429) return res.status(429).json({ error: 'Quota Gemini atteint — réessayez dans une minute' });
+    res.status(status || 500).json({ error: 'Erreur Gemini' });
+  }
+});
+
 // ─── Proxy SearXNG (instances tierces — requêtes passent par le serveur, pas le navigateur) ─
 const SEARXNG_INSTANCES = ['https://searx.be', 'https://search.mdosch.de', 'https://searx.fmac.xyz'];
 app.get('/api/searxng', requireAuth, async (req, res) => {

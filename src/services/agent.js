@@ -708,7 +708,17 @@ L'utilisateur demande une RÉÉCRITURE EN PROFONDEUR (informations majoritaireme
 };
 
 // ── Prompt système ────────────────────────────────────────────────────────────
-const buildSystemPrompt = (skills, knowledge = [], auditReport = '', depth = DEFAULT_DEPTH) => {
+/** Bloc « instruction de l'équipe » : consigne libre saisie dans l'éditeur,
+ *  prioritaire sur les règles générales (sauf verrou liens externes). */
+const buildInstructionBlock = (instruction) => {
+  const t = (instruction || '').trim();
+  if (!t) return '';
+  return `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══
+${t.substring(0, 1500)}
+Cette consigne s'applique à TOUTE l'analyse et à TOUTES les modifications produites. En cas de conflit avec une règle générale, elle PRIME — à l'exception du verrou liens externes, qui reste absolu.`;
+};
+
+const buildSystemPrompt = (skills, knowledge = [], auditReport = '', depth = DEFAULT_DEPTH, instruction = '') => {
   const { fr, year, prevYear, cutoffIso } = getDateContext();
 
   // Mode cerveau : si un skill SKILL.md est actif, il pilote l'agent et le socle + skills
@@ -739,7 +749,7 @@ const buildSystemPrompt = (skills, knowledge = [], auditReport = '', depth = DEF
   return `Tu es un expert SEO/GEO (Search Engine Optimization & Generative Engine Optimization) spécialisé dans la mise à jour d'articles de blog, dossiers comparatifs et actualités.
 
 **Date du jour : ${fr} (${cutoffIso} = seuil 6 mois)**
-Toute donnée antérieure au ${cutoffIso} est OBLIGATOIREMENT suspecte et doit être vérifiée ou mise à jour.${buildDepthBlock(depth)}${skillsBlock}${knowledgeBlock}
+Toute donnée antérieure au ${cutoffIso} est OBLIGATOIREMENT suspecte et doit être vérifiée ou mise à jour.${buildDepthBlock(depth)}${buildInstructionBlock(instruction)}${skillsBlock}${knowledgeBlock}
 
 ## ═══ RÈGLES SEO STANDARD ═══
 
@@ -872,6 +882,7 @@ export const runAgent = async ({
   existingWpData = null,  // déjà récupéré par Articles.jsx — évite un 2e appel MCP
   modelPricing   = null,  // tarifs depuis settings.json — null = fallback hardcodé
   depth          = DEFAULT_DEPTH,  // profondeur de MAJ choisie par l'utilisateur (legere|standard|refonte)
+  instruction    = '',    // consigne libre de l'équipe — injectée en priorité haute dans les prompts
   onStep,
   onReplace,
   onProgress,
@@ -1232,7 +1243,7 @@ ${content}
     try {
       const r = await callClaudeWithProgress(
         null,
-        { system: buildSystemPrompt(skills, knowledge, auditReport, depth), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
+        { system: buildSystemPrompt(skills, knowledge, auditReport, depth, instruction), max_tokens: 32000, model: model3, messages: [{ role: 'user', content: userMessage }] },
         onStep,
         onReplace,
         attempt === 1 ? `Génération en cours (${modelLabel})` : `Génération — nouvel essai (${attempt}/3)`
@@ -1453,7 +1464,7 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
 };
 
 // ── Prompt système — Deuxième passe ──────────────────────────────────────────
-const buildReviewSystemPrompt = (skills, knowledge = [], depth = DEFAULT_DEPTH) => {
+const buildReviewSystemPrompt = (skills, knowledge = [], depth = DEFAULT_DEPTH, instruction = '') => {
   const { fr, year, prevYear } = getDateContext();
 
   // Mode cerveau : le skill SKILL.md pilote aussi la passe 2 — les skills
@@ -1477,7 +1488,7 @@ const buildReviewSystemPrompt = (skills, knowledge = [], depth = DEFAULT_DEPTH) 
 
   return `Tu es un expert SEO/GEO effectuant la DEUXIÈME PASSE d'enrichissement d'un article déjà partiellement mis à jour.
 
-**Date : ${fr}**${buildDepthBlock(depth)}${skillsBlock}${knowledgeBlock}
+**Date : ${fr}**${buildDepthBlock(depth)}${buildInstructionBlock(instruction)}${skillsBlock}${knowledgeBlock}
 
 ## ═══ OBJECTIFS DE LA DEUXIÈME PASSE ═══
 
@@ -1530,6 +1541,7 @@ export const runReviewAgent = async ({
   manualSources = [],   // sources fournies manuellement par le CQ IA (déjà scrapées)
   modelPricing  = null, // tarifs depuis settings.json — null = fallback hardcodé
   depth         = DEFAULT_DEPTH, // profondeur de MAJ (héritée de la passe 1)
+  instruction   = '',   // consigne libre de l'équipe — injectée en priorité haute
   onStep,
   onProgress,
 }) => {
@@ -1673,7 +1685,7 @@ ${content}
 - Réponds UNIQUEMENT avec le JSON valide, sans markdown`;
 
   const { text: finalText, usage: u3 } = await callClaude(null, {
-    system: buildReviewSystemPrompt(skills, knowledge, depth),
+    system: buildReviewSystemPrompt(skills, knowledge, depth, instruction),
     max_tokens: 24000,
     model: model3,
     messages: [{ role: 'user', content: userMsg }],

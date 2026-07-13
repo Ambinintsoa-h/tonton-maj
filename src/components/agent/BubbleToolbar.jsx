@@ -21,7 +21,7 @@ import {
   Image, Film, Code2,
   Check, X, Trash2, Upload, Loader2,
   CaseSensitive, Weight, ALargeSmall,
-  GripVertical, ClipboardPaste, Copy, Scissors,
+  GripVertical, ClipboardPaste, Copy, Scissors, Sparkles,
 } from 'lucide-react';
 
 // Polices web-safe de repli si le site n'expose aucune police détectable
@@ -232,7 +232,7 @@ const Swatch = ({ color, label, onClick }) => (
 //  • onCopyBlock(range, cut) : boutons « Copier / Couper le bloc » qui mettent
 //    dans le presse-papiers le bloc top-level au point du clic droit (ou de la
 //    sélection courante).
-export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, onUploadMedia, siteFonts = [], clipboard = null, onPasteBlock, onCopyBlock }) {
+export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, onUploadMedia, siteFonts = [], clipboard = null, onPasteBlock, onCopyBlock, onGeminiRewrite }) {
   // Polices proposées : celles détectées sur le site, sinon repli web-safe
   const fontList = (Array.isArray(siteFonts) && siteFonts.length > 0) ? siteFonts : FALLBACK_FONTS;
   const [visible, setVisible]   = useState(false);
@@ -903,6 +903,29 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
                   {clipboard.mode === 'couper' ? 'coupé' : 'copié'}
                 </span>
               )}
+            </button>
+            <Sep />
+          </>
+        )}
+
+        {/* ── Réécrire la sélection avec Gemini (proposition accepter/rejeter) ── */}
+        {onGeminiRewrite && (
+          <>
+            <button
+              type="button"
+              title="Réécrire ce passage avec Gemini — la proposition s'insère en modification à accepter ✓ / rejeter ✗"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                // Sélection vivante prioritaire, sinon celle capturée au clic droit
+                const sel = window.getSelection();
+                const live = sel && sel.rangeCount && !sel.isCollapsed ? sel.getRangeAt(0).cloneRange() : null;
+                const range = live || savedRangeRef.current;
+                setVisible(false);
+                onGeminiRewrite(range);
+              }}
+              className="flex items-center gap-1.5 h-9 px-2.5 rounded-lg text-[12px] font-semibold bg-violet-500 text-white hover:bg-violet-400 transition-colors whitespace-nowrap"
+            >
+              <Sparkles size={14} /> Gemini
             </button>
             <Sep />
           </>
