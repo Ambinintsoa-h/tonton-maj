@@ -1,6 +1,6 @@
 // Tests de repairStructureEl — réparation des imbrications cassées
 /* eslint-env jest */
-import { repairStructureEl } from './diff';
+import { repairStructureEl, absorbOrphanDeterminers, applyAllDiffs } from './diff';
 
 const run = (html) => {
   const div = document.createElement('div');
@@ -34,5 +34,56 @@ describe('repairStructureEl — blocs non-<li> sortis des listes', () => {
     expect(ol.children.length).toBe(1);
     expect(ol.querySelector('table')).toBeNull();
     expect(div.querySelector('table')).not.toBeNull();
+  });
+});
+
+describe('absorbOrphanDeterminers — suppressions sans mots orphelins', () => {
+  const delText = (html) => {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    return div.querySelector('del')?.textContent;
+  };
+
+  it('absorbe le déterminant devant une suppression pure', () => {
+    const out = absorbOrphanDeterminers('<p>Voici les <del class="deleted-content">chats noirs</del>.</p>');
+    expect(delText(out)).toBe('les chats noirs');
+    expect(out).not.toMatch(/les <del/);
+  });
+
+  it('absorbe en chaîne (« et le », « de la »)', () => {
+    const out = absorbOrphanDeterminers('<p>Un chien et le <del class="deleted-content">chat</del></p>');
+    expect(delText(out)).toBe('et le chat');
+    const out2 = absorbOrphanDeterminers('<p>Le prix de la <del class="deleted-content">maison</del></p>');
+    expect(delText(out2)).toBe('de la maison');
+  });
+
+  it('absorbe une élision l’/d’ et une virgule de liste', () => {
+    const out = absorbOrphanDeterminers('<p>Le poids de l’<del class="deleted-content">armoire</del></p>');
+    expect(delText(out)).toBe('de l’armoire');
+    const out2 = absorbOrphanDeterminers('<p>rapide, <del class="deleted-content">efficace</del>, fiable</p>');
+    expect(delText(out2)).toBe(', efficace');
+  });
+
+  it('ne touche PAS aux remplacements (del suivi de mark)', () => {
+    const src = '<p>Voici le <del class="deleted-content">chat</del><mark class="updated-content">chien</mark>.</p>';
+    expect(absorbOrphanDeterminers(src)).toBe(src);
+  });
+
+  it('ne mange pas la fin d\'un mot (« Tesla », « recul »)', () => {
+    const src = '<p>La Tesla <del class="deleted-content">Model S</del></p>';
+    const out = absorbOrphanDeterminers(src);
+    expect(delText(out)).toBe('Model S');
+    expect(out).toContain('La Tesla ');
+  });
+
+  it('est branchée dans applyAllDiffs (type suppression)', () => {
+    const html = '<p>Voici les chats noirs du quartier.</p>';
+    const { html: out, updates } = applyAllDiffs(html, [
+      { type: 'suppression', original: 'chats noirs', reason: 'test' },
+    ]);
+    expect(updates[0].applied).toBe(true);
+    const div = document.createElement('div');
+    div.innerHTML = out;
+    expect(div.querySelector('del').textContent).toBe('les chats noirs');
   });
 });
