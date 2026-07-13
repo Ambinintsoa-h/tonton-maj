@@ -1433,7 +1433,20 @@ export default function Skills() {
       }
       const savedSkills = [];
       for (const s of (data.skills || [])) {
-        const entry = { name: s.name || 'Sans nom', content: s.content || '', active: s.active !== false, createdAt: s.createdAt || Date.now() };
+        // Un skill au format Claude (SKILL.md) vit dans body/resources/description,
+        // pas dans content : ces champs doivent survivre à l'aller-retour
+        // export → import, sinon le skill cerveau est recréé vide.
+        const entry = s.format === 'skillmd'
+          ? {
+              name:        s.name || 'Sans nom',
+              description: s.description || '',
+              body:        s.body || '',
+              resources:   Array.isArray(s.resources) ? s.resources : [],
+              format:      'skillmd',
+              active:      s.active !== false,
+              createdAt:   s.createdAt || Date.now(),
+            }
+          : { name: s.name || 'Sans nom', content: s.content || '', active: s.active !== false, createdAt: s.createdAt || Date.now() };
         let id = s.id;
         if (firebaseReady) { try { id = await saveSkill(entry); } catch { id = id || Date.now().toString(); } }
         else id = id || Date.now().toString();
