@@ -2,6 +2,7 @@ import axios from 'axios';
 import { searchWeb } from './search';
 import { scrapeUrl } from './scraper';
 import { MAJ_DEPTHS, DEFAULT_DEPTH } from '../constants/majDepth';
+import { filterSameSiteLinks } from '../utils/diff';
 
 const LOCAL_PROXY    = '/api/claude';
 const WP_TOOL_PROXY  = '/api/wp-tool';
@@ -1419,6 +1420,10 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
           trackCall('internal_links', linksText);
           const { links = [] } = parseJsonResponse(linksText, { links: [] }, '[internal-links]');
           let valid = links.filter(l => l.anchor && l.url && l.title);
+          // VERROU maillage : uniquement des URLs du MÊME domaine que l'article —
+          // une URL hallucinée hors de la liste fournie serait un lien EXTERNE
+          // injecté via la feature liens internes (surlignage, Appliquer, tissage).
+          valid = filterSameSiteLinks(valid, articleUrl);
           // FREINAGE : l'article a déjà ≥ IL_THROTTLE_AT liens internes → on ne
           // garde que les liens dont l'ancre tombe dans un paragraphe RÉÉCRIT
           // (texte neuf de la MAJ). Sinon aucun nouveau lien.

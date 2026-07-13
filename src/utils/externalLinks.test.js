@@ -1,6 +1,6 @@
 // Tests du VERROU LIENS EXTERNES (règle absolue) — enforceExternalLinkPolicy
 /* eslint-env jest */
-import { enforceExternalLinkPolicy, applyAllDiffs } from './diff';
+import { enforceExternalLinkPolicy, applyAllDiffs, filterSameSiteLinks } from './diff';
 
 const ARTICLE_URL = 'https://isolation-phonique.com/mon-article';
 
@@ -111,5 +111,30 @@ describe('applyAllDiffs — intégration du verrou', () => {
     expect(updates[0].applied).toBe(true);
     expect(out).toContain('href="https://ademe.fr/guide"');
     expect(out).toContain('55 euros');
+  });
+});
+
+describe('filterSameSiteLinks — verrou maillage (URLs hallucinées)', () => {
+  const links = [
+    { anchor: 'a', url: 'https://monsite.fr/guide', title: 'Guide' },
+    { anchor: 'b', url: 'https://www.monsite.fr/prix', title: 'Prix' },
+    { anchor: 'c', url: '/relatif', title: 'Relatif' },
+    { anchor: 'd', url: 'https://concurrent.com/page', title: 'Externe halluciné' },
+    { anchor: 'e', url: 'mailto:x@y.z', title: 'Mail' },
+  ];
+
+  it('ne garde que le domaine de l\'article (www ignoré) + chemins relatifs', () => {
+    const kept = filterSameSiteLinks(links, 'https://monsite.fr/article');
+    expect(kept.map(l => l.anchor)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('sans URL d\'article : seuls les chemins relatifs passent (protection max)', () => {
+    const kept = filterSameSiteLinks(links, '');
+    expect(kept.map(l => l.anchor)).toEqual(['c']);
+  });
+
+  it('liste vide / entrées invalides → rien ne casse', () => {
+    expect(filterSameSiteLinks([], 'https://monsite.fr')).toEqual([]);
+    expect(filterSameSiteLinks([{ anchor: 'x' }], 'https://monsite.fr')).toEqual([]);
   });
 });
