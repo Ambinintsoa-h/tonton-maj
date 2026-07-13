@@ -608,6 +608,25 @@ const hostOf = (href) => {
   catch { return null; }
 };
 
+/**
+ * Ne garde que les suggestions de maillage pointant vers le MÊME site que
+ * l'article. L'IA choisit ses liens dans la liste des articles du site, mais
+ * rien ne l'empêche d'halluciner une URL hors liste : appliquée telle quelle,
+ * ce serait un lien EXTERNE injecté par la feature maillage (violation de la
+ * règle absolue). Sans URL d'article connue, seuls les chemins relatifs et
+ * ancres passent — protection maximale, même philosophie que le verrou.
+ */
+export const filterSameSiteLinks = (links = [], articleUrl = '') => {
+  const articleHost = articleUrl ? hostOf(articleUrl) : null;
+  return (links || []).filter((l) => {
+    const u = String(l?.url || '').trim();
+    if (!u) return false;
+    if (!/^https?:\/\//i.test(u)) return /^[/#]/.test(u); // relatif ou ancre = même site ; mailto:/javascript: rejetés
+    const h = hostOf(u);
+    return !!articleHost && !!h && h === articleHost;
+  });
+};
+
 // Liens externes d'un fragment HTML : Map href → { text, attrs }
 const externalLinksOf = (fragmentHtml, articleHost) => {
   const map = new Map();
