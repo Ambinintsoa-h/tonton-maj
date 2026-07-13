@@ -10,7 +10,7 @@ import {
   RefreshCw, ArrowRight, Link, ChevronUp,
   Clipboard, ClipboardCheck, Sparkles, Loader, ShieldCheck,
   Plus, Link2, X, Tag, Search, Image,
-  Undo2, Redo2, Scissors, Trash2, Lock, CheckCheck, Crosshair,
+  Undo2, Redo2, Scissors, Trash2, Lock, CheckCheck, Crosshair, Gauge, XCircle,
 } from 'lucide-react';
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripParasiticFontSize } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
@@ -20,6 +20,7 @@ import DocNavigator from './DocNavigator';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, moveFaqToEnd, normalizeText } from '../../utils/diff';
+import { analyzeSeo } from '../../utils/seoCheck';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
@@ -1524,6 +1525,12 @@ export default function ArticleResult() {
   const [geminiCtx, setGeminiCtx] = useState(null);
   const geminiRangeRef = useRef(null);
 
+  // ── Analyse SEO réelle (critères Yoast/SEOPress + règles équipe) ────────────
+  // Remplace l'ancien signal trompeur (« Généré » vert = SEO ok) : verdict
+  // STRICT calculé sur le contenu FINAL + metas + mot-clé cible.
+  const [seoReport, setSeoReport]         = useState(null);
+  const [showSeoChecks, setShowSeoChecks] = useState(false);
+
   const openGeminiRewrite = useCallback((range) => {
     if (!range || range.collapsed || !articleRef.current || !articleRef.current.contains(range.commonAncestorContainer)) {
       toast.error('Sélectionnez d\'abord le passage à réécrire (un paragraphe).');
@@ -1583,6 +1590,21 @@ export default function ArticleResult() {
       toast.error('La sélection a changé pendant la réécriture — resélectionnez le passage.');
     }
   }, [geminiCtx, lockMedia, triggerAutosave]);
+
+  // Lance l'analyse SEO sur le contenu FINAL (modifications en attente acceptées,
+  // comme à la publication) — même résolution du mot-clé cible que la publication.
+  const runSeoCheck = useCallback(() => {
+    const focusKw = (agent.targetKeyword || currentArticle?.keyword || cqItem?.keyword || '').trim();
+    const report = analyzeSeo({
+      html: getFinalHtml({ pendingChanges: 'accept' }),
+      focusKeyword: focusKw,
+      metaTitle: seoTitle,
+      metaDescription: seoDescription,
+      articleUrl: agent.wpData?.postLink || currentArticle?.url || cqItem?.url || '',
+    });
+    setSeoReport(report);
+    setShowSeoChecks(true);
+  }, [agent.targetKeyword, agent.wpData, currentArticle, cqItem, seoTitle, seoDescription, getFinalHtml]);
 
   // Resynchronisation après une manipulation DOM externe (navigateur de
   // structure, barres FAQ/blocs…) : lockMedia + contentRef + autosave (qui
@@ -3115,9 +3137,11 @@ export default function ArticleResult() {
                       <Search size={16} className="shrink-0" />
                       <span className="text-[11px] font-medium text-gray-500 shrink-0">SEO Meta</span>
                       {seoGenerating && <Loader size={11} className="animate-spin text-gray-400 ml-1" />}
+                      {/* Ce badge signifie seulement « metas remplies » — le verdict SEO
+                          réel est donné par l'Analyse SEO ci-dessous (critères plugins) */}
                       {!seoGenerating && (seoTitle || seoDescription) && (
-                        <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded-full flex items-center gap-1">
-                          <Sparkles size={9} /> Généré
+                        <span className="text-[10px] font-semibold text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                          <Sparkles size={9} /> Metas générées
                         </span>
                       )}
                       <button
@@ -3200,6 +3224,59 @@ export default function ArticleResult() {
                         rows={2}
                         className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black/20 min-w-0 resize-none"
                       />
+                    </div>
+
+                    {/* ── Analyse SEO réelle — critères Yoast/SEOPress, verdict STRICT ──
+                        (remplace le faux signal « Généré » vert : ici chaque critère
+                        des plugins WP est vérifié sur le contenu final) */}
+                    <div className="border-t border-gray-100 pt-2.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Gauge size={14} className="text-gray-400 shrink-0" />
+                        <span className="text-[11px] font-medium text-gray-500 shrink-0">
+                          Analyse SEO{resolvedSite?.name ? ` — ${resolvedSite.name}` : ''}
+                        </span>
+                        {seoReport && (
+                          <button
+                            type="button"
+                            onClick={() => setShowSeoChecks(v => !v)}
+                            title="Afficher / masquer le détail des critères"
+                            className={`flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border transition-colors ${
+                              seoReport.verdict === 'green' ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                              : seoReport.verdict === 'amber' ? 'text-amber-700 bg-amber-50 border-amber-200'
+                              : 'text-red-700 bg-red-50 border-red-200'
+                            }`}
+                          >
+                            {seoReport.verdict === 'green' && <><CheckCircle2 size={10} /> Tous les critères au vert</>}
+                            {seoReport.verdict === 'amber' && <><AlertTriangle size={10} /> {seoReport.stats.ambers} critère{seoReport.stats.ambers > 1 ? 's' : ''} à améliorer</>}
+                            {seoReport.verdict === 'red' && <><XCircle size={10} /> {seoReport.stats.reds} critère{seoReport.stats.reds > 1 ? 's' : ''} au rouge</>}
+                            {showSeoChecks ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                          </button>
+                        )}
+                        <button
+                          onClick={runSeoCheck}
+                          title="Vérifier les critères Yoast/SEOPress sur le contenu final (mot-clé, metas, structure, maillage, lisibilité)"
+                          className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+                        >
+                          <Gauge size={10} /> {seoReport ? 'Réanalyser' : 'Analyser'}
+                        </button>
+                      </div>
+                      {seoReport && showSeoChecks && (
+                        <div className="mt-2 space-y-1.5">
+                          {seoReport.checks.map(c => (
+                            <div key={c.id} className="flex items-start gap-1.5 text-[11px] leading-snug">
+                              {c.status === 'green' && <CheckCircle2 size={12} className="text-emerald-500 shrink-0 mt-0.5" />}
+                              {c.status === 'amber' && <AlertTriangle size={12} className="text-amber-500 shrink-0 mt-0.5" />}
+                              {c.status === 'red'   && <XCircle size={12} className="text-red-500 shrink-0 mt-0.5" />}
+                              {c.status === 'gray'  && <Info size={12} className="text-gray-300 shrink-0 mt-0.5" />}
+                              <span className="font-medium text-gray-600 shrink-0">{c.label}</span>
+                              <span className="text-gray-400 min-w-0">{c.detail}</span>
+                            </div>
+                          ))}
+                          <p className="text-[10px] text-gray-300 pt-1">
+                            Mêmes critères que Yoast SEO / SEOPress ({seoReport.stats.words} mots analysés) — réanalysez après chaque modification importante.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </motion.div>
                 )}
