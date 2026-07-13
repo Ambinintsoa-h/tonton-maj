@@ -705,6 +705,39 @@ export const balanceFragment = (fragment) => {
   } catch { return fragment; }
 };
 
+// ── Suppressions : absorber les petits mots orphelins ─────────────────────────
+// Quand l'IA barre « chats noirs » dans « voici les chats noirs », le
+// déterminant « les » reste orphelin après acceptation (« voici les . »).
+// Cette passe étend chaque <del> de suppression PURE (sans <mark> adjacent —
+// dans un remplacement le vert prend la place, rien n'est orphelin) aux mots
+// grammaticaux qui le précèdent immédiatement : déterminants, possessifs,
+// élisions (l'/d'), conjonctions et virgule de liste. L'absorption est en
+// boucle (« et le », « de la »…). Un rejet reste sans perte : le texte absorbé
+// vit DANS le <del>, donc il est restauré à l'identique.
+const ORPHAN_BEFORE_RX = /(?:\b(?:les?|la|une?|des?|du|aux?|ce|cet|cette|ces|mon|ma|mes|ton|ta|tes|son|sa|ses|notre|nos|votre|vos|leur|leurs|et|ou)\s+|\b[ld]['’]\s*|,\s*)$/i;
+
+export const absorbOrphanDeterminers = (html) => {
+  if (typeof document === 'undefined' || !html || html.indexOf('deleted-content') === -1) return html;
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  let changed = false;
+  div.querySelectorAll('del.deleted-content').forEach((del) => {
+    const next = del.nextElementSibling;
+    if (next && next.tagName === 'MARK' && next.classList.contains('updated-content')) return;
+    const prev = del.previousSibling;
+    if (!prev || prev.nodeType !== Node.TEXT_NODE) return;
+    let m;
+    while ((m = prev.textContent.match(ORPHAN_BEFORE_RX))) {
+      const cut = prev.textContent.length - m[0].length;
+      del.insertBefore(document.createTextNode(prev.textContent.slice(cut)), del.firstChild);
+      prev.textContent = prev.textContent.slice(0, cut);
+      changed = true;
+      if (!prev.textContent) break;
+    }
+  });
+  return changed ? div.innerHTML : html;
+};
+
 export const applyAllDiffs = (html, updates, passNumber = 1, articleUrl = '') => {
   let updatedHtml = html;
   const withStatus = (updates || []).map((rawUpdate) => {
@@ -761,5 +794,6 @@ export const applyAllDiffs = (html, updates, passNumber = 1, articleUrl = '') =>
   });
   updatedHtml = cleanResiduals(updatedHtml);
   updatedHtml = liftMarksOutOfDel(updatedHtml); // le texte ajouté (vert) ne doit jamais être barré
+  updatedHtml = absorbOrphanDeterminers(updatedHtml); // suppressions : pas de « le/la/des » orphelins
   return { html: updatedHtml, updates: withStatus };
 };

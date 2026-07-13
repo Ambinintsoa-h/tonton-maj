@@ -1416,6 +1416,7 @@ export default function ArticleResult() {
   // ✓ Accepter : la modification est ENTÉRINÉE → on retire le barré (del), on
   //   débalise le surligné vert (mark) et le bloc ajouté (ins) → texte propre.
   const acceptSegment = useCallback((node) => {
+    if (!node || !node.isConnected) { setSegHover(null); return; } // ancre périmée (re-rendu) → no-op plutôt qu'agir au mauvais endroit
     const { del, mark, ins } = resolveDiffPair(node);
     if (ins) unwrapNode(ins);
     if (del) del.remove();
@@ -1426,6 +1427,7 @@ export default function ArticleResult() {
   // ✗ Rejeter : on REVIENT à l'original → on restaure le texte barré (débalise del),
   //   on supprime le surligné vert (mark) et le bloc ajouté (ins).
   const rejectSegment = useCallback((node) => {
+    if (!node || !node.isConnected) { setSegHover(null); return; } // ancre périmée (re-rendu) → no-op plutôt qu'agir au mauvais endroit
     const { del, mark, ins } = resolveDiffPair(node);
     if (ins) ins.remove();
     if (del) unwrapNode(del);
@@ -3163,7 +3165,15 @@ export default function ArticleResult() {
                           const seg = e.target.closest('del.deleted-content, mark.updated-content, ins.added-content');
                           if (seg && e.currentTarget.contains(seg)) {
                             clearTimeout(leaveTimerRef.current);
-                            setSegHover({ node: seg, rect: seg.getBoundingClientRect() });
+                            // La barre ✓/✗ s'affiche AU-DESSUS du segment ancré : en montant
+                            // vers elle, la souris peut traverser un AUTRE segment sur la
+                            // ligne du dessus. Ré-ancrer silencieusement ferait porter le
+                            // clic Accepter/Rejeter sur le mauvais segment → l'ancre est
+                            // gelée tant que la souris reste dans ce couloir.
+                            const corridor = segHover && seg !== segHover.node
+                              && e.clientY > segHover.rect.top - 44 && e.clientY < segHover.rect.top + 4
+                              && e.clientX > segHover.rect.left - 24 && e.clientX < segHover.rect.left + 280;
+                            if (!corridor) setSegHover({ node: seg, rect: seg.getBoundingClientRect() });
                             setLinkHover(null); setAnchorHover(null); setFaqHover(null); setTableHover(null);
                             return;
                           }
