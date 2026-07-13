@@ -26,7 +26,8 @@ import {
   insertFaqHtmlAtCaret, rectOfNodes, normalizeFaqToAccordion,
 } from '../../utils/faq';
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf, isDiffWrapper, normalizeTableStructure } from '../../utils/blocks';
-import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId } from '../../store/slices/agentSlice';
+import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction } from '../../store/slices/agentSlice';
+import GeminiPanel from './GeminiPanel';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
@@ -1093,6 +1094,7 @@ export default function ArticleResult() {
         firstPassUpdates: agent.diff || [],
         firstPassAnalysis: agent.analysis || '',
         depth: agent.majDepth || 'standard',  // même profondeur que la passe 1
+        instruction: agent.instruction || '', // consigne libre de l'équipe (champ « Instruction »)
         skills,
         knowledge,
         anthropicKey: settings.anthropicKey,
@@ -1511,6 +1513,73 @@ export default function ArticleResult() {
   // « Coller » (clic droit BubbleToolbar, panneau Structure : avant/après).
   const blockClipRef = useRef(null);
   const [blockClipboard, setBlockClipboard] = useState(null);
+
+  // ── Réécriture Gemini d'un passage sélectionné ──────────────────────────────
+  // geminiCtx = { originalText, originalHtml } ; le Range est gardé en ref (objet
+  // DOM vivant, pas de re-render nécessaire). Le panneau natif remplace l'iframe
+  // gemini.google.com (interdite par Google : X-Frame-Options).
+  const [geminiCtx, setGeminiCtx] = useState(null);
+  const geminiRangeRef = useRef(null);
+
+  const openGeminiRewrite = useCallback((range) => {
+    if (!range || range.collapsed || !articleRef.current || !articleRef.current.contains(range.commonAncestorContainer)) {
+      toast.error('Sélectionnez d\'abord le passage à réécrire (un paragraphe).');
+      return;
+    }
+    const frag = range.cloneContents();
+    const tmp = document.createElement('div');
+    tmp.appendChild(frag);
+    const originalText = (tmp.textContent || '').trim();
+    if (originalText.length < 20) {
+      toast.error('Sélection trop courte — sélectionnez au moins une phrase complète.');
+      return;
+    }
+    if (tmp.querySelector('a')) {
+      // Règle 8 : ne jamais risquer la disparition d'un lien dans la réécriture
+      toast.error('La sélection contient un lien — réduisez-la pour ne pas toucher aux liens.');
+      return;
+    }
+    if (tmp.querySelector('del, mark, ins')) {
+      toast.error('La sélection contient une modification en attente — acceptez-la ou rejetez-la d\'abord.');
+      return;
+    }
+    if (tmp.querySelector('h1, h2, h3, h4, h5, h6, table, ul, ol, li, figure, img, iframe, video')) {
+      toast.error('Sélectionnez un seul passage de texte (sans titre, liste, tableau ni média).');
+      return;
+    }
+    geminiRangeRef.current = range;
+    setGeminiCtx({ originalText, originalHtml: tmp.innerHTML });
+  }, []);
+
+  // « Valider » du panneau : insère une PROPOSITION del/mark (accepter ✓ /
+  // rejeter ✗) au lieu d'un remplacement brutal — cohérent avec le flux de MAJ.
+  const applyGeminiRewrite = useCallback((newText) => {
+    const range = geminiRangeRef.current;
+    const ctx = geminiCtx;
+    setGeminiCtx(null);
+    geminiRangeRef.current = null;
+    if (!newText || !range || !ctx || !articleRef.current) return;
+    try {
+      const del = document.createElement('del');
+      del.className = 'deleted-content';
+      del.innerHTML = ctx.originalHtml;
+      const mark = document.createElement('mark');
+      mark.className = 'updated-content';
+      mark.setAttribute('title', 'Réécriture Gemini');
+      mark.textContent = newText;
+      range.deleteContents();
+      range.insertNode(mark);
+      range.insertNode(del); // insertNode insère en tête du range → ordre final del, mark
+      lockMedia(articleRef.current);
+      contentRef.current = articleRef.current.innerHTML;
+      humanEditRef.current = true;
+      triggerAutosave();
+      mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      toast.success('Réécriture proposée — acceptez ✓ ou rejetez ✗ le passage surligné.');
+    } catch {
+      toast.error('La sélection a changé pendant la réécriture — resélectionnez le passage.');
+    }
+  }, [geminiCtx, lockMedia, triggerAutosave]);
 
   // Resynchronisation après une manipulation DOM externe (navigateur de
   // structure, barres FAQ/blocs…) : lockMedia + contentRef + autosave (qui
@@ -3011,6 +3080,18 @@ export default function ArticleResult() {
                         <span className="text-[10px] text-gray-400 shrink-0 w-28 text-right">date WP inchangée</span>
                       )}
                     </div>
+
+                    {/* Instruction libre pour TONTON — influence l'analyse et la MAJ (passe 2, relances) */}
+                    <div className="flex items-start gap-2 pt-1">
+                      <span className="text-[10px] font-medium text-gray-400 w-20 shrink-0 pt-2">Instruction</span>
+                      <textarea
+                        value={agent.instruction || ''}
+                        onChange={e => dispatch(setInstruction(e.target.value.substring(0, 1500)))}
+                        placeholder="Consigne pour TONTON, appliquée en priorité à la prochaine analyse (passe 2) — ex. « concentre la MAJ sur la partie prix », « ne touche pas à la section garanties »…"
+                        rows={2}
+                        className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black/20 min-w-0 resize-none"
+                      />
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -3339,6 +3420,7 @@ export default function ArticleResult() {
             clipboard={blockClipboard ? { art: blockClipboard.art, name: blockClipboard.name, mode: blockClipboard.mode } : null}
             onPasteBlock={pasteBlockAtRange}
             onCopyBlock={blockClipFromRange}
+            onGeminiRewrite={openGeminiRewrite}
             onUploadMedia={resolvedSite ? uploadMediaToWp : undefined}
             onImageInserted={settings.anthropicKey ? (url) => {
               generateAltText(url, settings.anthropicKey).then(altText => {
@@ -3351,6 +3433,14 @@ export default function ArticleResult() {
                 }
               }).catch(() => {});
             } : undefined}
+          />
+        )}
+        {/* Panneau de réécriture Gemini (sélection → clic droit → Gemini) */}
+        {geminiCtx && (
+          <GeminiPanel
+            originalText={geminiCtx.originalText}
+            onValidate={applyGeminiRewrite}
+            onClose={() => { setGeminiCtx(null); geminiRangeRef.current = null; }}
           />
         )}
         {/* Barre contextuelle d'édition de tableaux (vue diff) */}
