@@ -2094,7 +2094,8 @@ export default function ArticleResult() {
   // lien interne encore non appliquée et trouvée dans le bloc devient un vrai
   // <a>. Liens INTERNES uniquement — le verrou liens externes n'est pas
   // concerné. Le lien vit dans le bloc suggéré : il suit son sort
-  // (accepté/rejeté avec lui).
+  // (accepté/rejeté avec lui). Jamais dans un titre (h1-h6) — un lien interne
+  // doit toujours vivre dans un paragraphe (ou tout autre bloc non-titre).
   const weaveLinksInto = useCallback((el) => {
     if (!el || !internalLinks.length) return 0;
     let woven = 0;
@@ -2105,7 +2106,7 @@ export default function ArticleResult() {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
       let node;
       while ((node = walker.nextNode())) {
-        if (node.parentElement?.closest('a, del, [data-il-idx]')) continue;
+        if (node.parentElement?.closest('a, del, [data-il-idx], h1, h2, h3, h4, h5, h6')) continue;
         const m = node.textContent.match(rx);
         if (!m) continue;
         const target = node.splitText(node.textContent.search(rx));
@@ -2159,8 +2160,10 @@ export default function ArticleResult() {
 
         let node;
         while ((node = walker.nextNode())) {
-          // Ignorer le contenu supprimé (<del>) et les spans déjà surlignés
-          if (node.parentElement?.closest('del, [data-il-idx]')) continue;
+          // Ignorer le contenu supprimé (<del>), les spans déjà surlignés et les
+          // titres (h1-h6) — un lien interne doit toujours vivre dans un
+          // paragraphe, jamais dans un titre.
+          if (node.parentElement?.closest('del, [data-il-idx], h1, h2, h3, h4, h5, h6')) continue;
 
           const text  = node.textContent;
           const match = text.match(textRegex);
