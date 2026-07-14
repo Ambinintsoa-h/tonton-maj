@@ -519,11 +519,16 @@ const makeTokenTracker = () => {
   return { acc, track };
 };
 
+// Plancher absolu garanti — au moins 3 liens internes par MAJ, quoi qu'il arrive
+// (directive skill plus basse ou seuil de freinage n'y dérogent pas).
+const IL_ABSOLUTE_MIN = 3;
+
 /**
  * Lit la directive `liens_internes: N` dans les skills actifs.
  * Syntaxe tolérée : "liens_internes: 6", "liens internes : 3", etc.
- * Retourne { min, max, exact } — défaut { min:2, max:4, exact:false } si aucune directive.
+ * Retourne { min, max, exact } — défaut { min:3, max:5, exact:false } si aucune directive.
  * exact:true → le prompt dira "exactement N liens" au lieu d'une plage.
+ * N est toujours plafonné à IL_ABSOLUTE_MIN au minimum, même si la directive demande moins.
  */
 const extractIlCount = (skills) => {
   const RE = /liens[_\s-]*internes\s*:\s*(\d+)/i;
@@ -531,11 +536,11 @@ const extractIlCount = (skills) => {
     const text = s.content ? (s.content.trimStart().startsWith('<') ? stripHtml(s.content) : s.content) : '';
     const m = text.match(RE);
     if (m) {
-      const n = Math.max(1, Math.min(10, parseInt(m[1], 10)));
+      const n = Math.max(IL_ABSOLUTE_MIN, Math.min(10, parseInt(m[1], 10)));
       return { min: n, max: n, exact: true };
     }
   }
-  return { min: 3, max: 5, exact: false };
+  return { min: IL_ABSOLUTE_MIN, max: 5, exact: false };
 };
 
 /** Construit le bloc Skills pour le system prompt. */
@@ -1424,11 +1429,15 @@ Réponds UNIQUEMENT : {"links":[{"anchor":"...","url":"...","title":"...","reaso
           // une URL hallucinée hors de la liste fournie serait un lien EXTERNE
           // injecté via la feature liens internes (surlignage, Appliquer, tissage).
           valid = filterSameSiteLinks(valid, articleUrl);
-          // FREINAGE : l'article a déjà ≥ IL_THROTTLE_AT liens internes → on ne
-          // garde que les liens dont l'ancre tombe dans un paragraphe RÉÉCRIT
-          // (texte neuf de la MAJ). Sinon aucun nouveau lien.
+          // FREINAGE : l'article a déjà ≥ IL_THROTTLE_AT liens internes → on
+          // préfère ne garder que les liens dont l'ancre tombe dans un paragraphe
+          // RÉÉCRIT (texte neuf de la MAJ). MAIS le plancher absolu (IL_ABSOLUTE_MIN)
+          // prime : si ce filtrage repasse sous le plancher, on retombe sur la
+          // liste complète (toujours même domaine + pertinence validée par Claude)
+          // pour garantir au moins IL_ABSOLUTE_MIN liens internes par MAJ.
           if (ilThrottled) {
-            valid = valid.filter(l => newText.includes((l.anchor || '').toLowerCase()));
+            const inNewText = valid.filter(l => newText.includes((l.anchor || '').toLowerCase()));
+            valid = inNewText.length >= IL_ABSOLUTE_MIN ? inNewText : valid;
           }
           internalLinks = valid.slice(0, ilMax);
           if (internalLinks.length === 0) {
