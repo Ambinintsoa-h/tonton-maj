@@ -11,12 +11,13 @@
 
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import toast from 'react-hot-toast';
 import { validateImageFile } from '../../utils/uploadLimits';
 import {
   Bold, Italic, Underline, Strikethrough,
   Heading1, Heading2, Heading3, Heading4, Type,
   List, ListOrdered,
-  Palette, Highlighter,
+  Palette, Highlighter, Paintbrush,
   Link, Unlink2,
   Image, Film, Code2,
   Check, X, Trash2, Upload, Loader2,
@@ -114,6 +115,84 @@ const Btn = ({ onClick, title, active = false, children }) => (
 );
 
 const Sep = () => <div className="w-px h-4 bg-white/15 mx-0.5 flex-shrink-0" />;
+
+// ── Reproduire la mise en forme (« pinceau ») ─────────────────────────────────
+// Applique la mise en forme capturée sur une AUTRE sélection, sans passer par
+// popRange/savedRangeRef (la sélection cible est déjà la sélection LIVE au
+// moment du déclenchement — mouseup/keyup, pas selectionchange, cf. l'effet
+// dédié dans le composant). Fonctions pures, indépendantes du composant.
+//
+// Technique : range.extractContents() DÉCOUPE proprement le contenu sélectionné
+// dans un fragment ISOLÉ (le navigateur clone/scinde tout élément partiellement
+// couvert pour n'en garder QUE la portion sélectionnée) — retirer un style ou
+// déplier un <mark> à l'intérieur de ce fragment ne peut donc JAMAIS déborder
+// sur du texte hors sélection, contrairement à un balayage in-place via
+// Range.intersectsNode() (vrai dès qu'un élément touche la sélection, même
+// partiellement, ce qui ferait déborder le nettoyage sur tout l'élément).
+
+const STYLE_PROP_CSS_NAMES = { fontFamily: 'font-family', fontSize: 'font-size', color: 'color' };
+
+// Retire une propriété de style inline (font-family, font-size, color) de tout
+// le fragment (récursif) — jamais du texte hors du fragment.
+const stripStylePropInFragment = (frag, prop) => {
+  [frag, ...frag.querySelectorAll('*')].forEach((el) => {
+    if (!el.style || !el.style[prop]) return;
+    el.style.removeProperty(STYLE_PROP_CSS_NAMES[prop] || prop);
+    if (!el.getAttribute('style')?.trim()) el.removeAttribute('style');
+  });
+};
+
+// Retire tout surlignage du fragment : background-color/background inline +
+// dépliage des <mark class="manual-highlight"> (leurs enfants remontent à leur place).
+const stripHighlightInFragment = (frag) => {
+  stripStylePropInFragment(frag, 'backgroundColor');
+  [frag, ...frag.querySelectorAll('*')].forEach((el) => {
+    if (!el.style?.background) return;
+    el.style.removeProperty('background');
+    if (!el.getAttribute('style')?.trim()) el.removeAttribute('style');
+  });
+  [...frag.querySelectorAll('mark.manual-highlight')].forEach((el) => {
+    const inner = document.createDocumentFragment();
+    while (el.firstChild) inner.appendChild(el.firstChild);
+    el.parentNode?.replaceChild(inner, el);
+  });
+};
+
+// Enveloppe un nœud (fragment ou span déjà empilé par une étape précédente)
+// dans un nouveau <span style="…">.
+const wrapNodeInSpan = (node, styles) => {
+  const span = document.createElement('span');
+  Object.entries(styles).forEach(([k, v]) => { span.style[k] = v; });
+  span.appendChild(node);
+  return span;
+};
+
+// Enveloppe un nœud dans un <mark class="manual-highlight">.
+const wrapNodeInHighlight = (node, color) => {
+  const mark = document.createElement('mark');
+  mark.className = 'manual-highlight';
+  mark.style.backgroundColor = color;
+  mark.appendChild(node);
+  return mark;
+};
+
+// Extrait la sélection courante dans un fragment isolé, applique `transform`
+// (reçoit le fragment, retourne le nœud à réinsérer), réinsère et resélectionne
+// le résultat. Ne fait rien si la sélection est vide/collapsed/hors container.
+const restyleSelection = (sel, container, transform) => {
+  if (!sel || !sel.rangeCount || sel.isCollapsed || !container) return;
+  const range = sel.getRangeAt(0);
+  if (!container.contains(range.commonAncestorContainer)) return;
+  try {
+    const frag = range.extractContents();
+    const result = transform(frag) || frag;
+    range.insertNode(result);
+    sel.removeAllRanges();
+    const r = document.createRange();
+    r.selectNodeContents(result);
+    sel.addRange(r);
+  } catch { /* sélection non manipulable — ignorée */ }
+};
 
 const InputPanel = ({ placeholder, value, onChange, onConfirm, onClose, onUpload, uploading, accept }) => (
   <div className="flex items-center gap-1.5 bg-gray-900 border border-white/10 rounded-xl px-3 py-1.5 shadow-2xl">
@@ -246,6 +325,11 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
   const [, setScrollTick]       = useState(0);
   // Styles actifs de la sélection → surbrillance des boutons (gras, italique, titre…)
   const [active, setActive]     = useState({});
+  // Reproduire la mise en forme (« pinceau », façon Word) — capture de `active`
+  // au clic ; tant que non nul, chaque nouvelle sélection dans l'article (souris
+  // relâchée / clavier) reçoit automatiquement ce format. Clic à nouveau ou
+  // Échap pour arrêter.
+  const [paintedFormat, setPaintedFormat] = useState(null);
   const toolbarRef              = useRef(null);
   const savedRangeRef           = useRef(null);
   // Vrai quand la toolbar a été ouverte par clic droit (pas par sélection).
@@ -285,6 +369,114 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
       });
     } catch { setActive({}); }
   }, [articleEl]);
+
+  // ── Reproduire la mise en forme (« pinceau ») ────────────────────────────────
+
+  // Bouton pinceau : capture `active` (déjà à jour pour la sélection courante,
+  // le bouton n'est visible que quand la barre l'est, donc une sélection existe)
+  // ou désactive le mode si déjà actif. Couleur/police identiques à celles de
+  // base de l'article (aucune personnalisation détectée sur le texte source) ne
+  // sont PAS retenues comme un choix explicite à reproduire — sinon peindre du
+  // texte « par défaut » forcerait une couleur/police littérale sur la cible
+  // (et l'écraserait) au lieu de laisser la cible garder/retrouver l'héritage.
+  const toggleFormatPainter = useCallback(() => {
+    if (paintedFormat) { setPaintedFormat(null); return; }
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      toast.error('Sélectionnez d\'abord le texte dont vous voulez reproduire la mise en forme.');
+      return;
+    }
+    const captured = { ...active };
+    if (articleEl) {
+      const base = window.getComputedStyle(articleEl);
+      const baseFont = (base.fontFamily || '').split(',')[0].replace(/["']/g, '').trim().toLowerCase();
+      if (captured.color === base.color) captured.color = '';
+      if (captured.fontFamily && captured.fontFamily.toLowerCase() === baseFont) captured.fontFamily = '';
+    }
+    setPaintedFormat(captured);
+    toast('Mode pinceau actif — sélectionnez le texte à mettre en forme (Échap pour arrêter)', { icon: '🖌️', duration: 4000 });
+  }, [paintedFormat, active, articleEl]);
+
+  // Applique le format capturé à la sélection LIVE courante (déclenché par
+  // mouseup/keyup dans l'article, cf. l'effet ci-dessous — jamais via
+  // popRange/savedRangeRef : cette sélection EST la cible, pas une ancienne
+  // sélection à restaurer).
+  const applyPaintedFormat = useCallback((fmt) => {
+    if (!fmt || !articleEl) return;
+    const sel0 = window.getSelection();
+    if (!sel0 || !sel0.rangeCount || sel0.isCollapsed) return;
+    const range0 = sel0.getRangeAt(0);
+    if (!articleEl.contains(range0.commonAncestorContainer)) return;
+
+    const scrollTop = articleEl.scrollTop;
+
+    // 1) Bascules gras/italique/souligné/barré, SUR LA SÉLECTION LIVE (avant
+    // toute extraction) — le natif gère déjà correctement les imbrications
+    // existantes (bascule sur l'état RENDU, pas sur un style imbriqué à
+    // deviner) : on n'inverse que si l'état diffère de la cible.
+    [['bold', 'bold'], ['italic', 'italic'], ['underline', 'underline'], ['strike', 'strikeThrough']]
+      .forEach(([key, cmd]) => {
+        if (!!fmt[key] !== document.queryCommandState(cmd)) {
+          try { document.execCommand(cmd); } catch { /* commande indisponible */ }
+        }
+      });
+
+    // 2) Couleur/police/taille/surlignage : UNE seule extraction dans un
+    // fragment isolé (jamais de débordement sur du texte hors sélection,
+    // contrairement à un balayage in-place par intersectsNode), transformations
+    // empilées, réinsertion.
+    restyleSelection(window.getSelection(), articleEl, (frag) => {
+      stripStylePropInFragment(frag, 'color');
+      stripStylePropInFragment(frag, 'fontFamily');
+      stripStylePropInFragment(frag, 'fontSize');
+      stripHighlightInFragment(frag);
+      let node = frag;
+      if (fmt.color)      node = wrapNodeInSpan(node, { color: fmt.color });
+      if (fmt.fontFamily) node = wrapNodeInSpan(node, { fontFamily: fmt.fontFamily });
+      if (fmt.fontSize)   node = wrapNodeInSpan(node, { fontSize: `${fmt.fontSize}px` });
+      if (fmt.bg)         node = wrapNodeInHighlight(node, fmt.bg);
+      return node;
+    });
+
+    articleEl.scrollTop = scrollTop;
+    if (contentRef) contentRef.current = articleEl.innerHTML;
+    computeActive();
+  }, [articleEl, contentRef, computeActive]);
+
+  // Déclenchement de l'application : mouseup (fin de glisser-sélectionner) et
+  // keyup (fin de sélection clavier, Maj+flèches/Origine/Fin) — PAS selectionchange,
+  // pour éviter toute boucle avec les ré-sélections programmatiques que
+  // restyleSelection déclenche elle-même (elle resélectionne son résultat).
+  // Curseur en mode pinceau tant que le mode est actif ; Échap pour quitter à
+  // tout moment.
+  useEffect(() => {
+    if (!paintedFormat || !articleEl) return;
+    const tryApply = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      if (!articleEl.contains(range.commonAncestorContainer)) return;
+      applyPaintedFormat(paintedFormat);
+    };
+    // setTimeout(…, 0) : laisse le navigateur finaliser la sélection souris
+    // avant de la lire (mouseup peut précéder la mise à jour de la Selection).
+    const onMouseUp = () => setTimeout(tryApply, 0);
+    const onKeyUp = (e) => {
+      if (e.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) tryApply();
+    };
+    const onKeyDown = (e) => { if (e.key === 'Escape') setPaintedFormat(null); };
+    const prevCursor = articleEl.style.cursor;
+    articleEl.style.cursor = 'copy';
+    articleEl.addEventListener('mouseup', onMouseUp);
+    articleEl.addEventListener('keyup', onKeyUp);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      articleEl.style.cursor = prevCursor;
+      articleEl.removeEventListener('mouseup', onMouseUp);
+      articleEl.removeEventListener('keyup', onKeyUp);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [paintedFormat, articleEl, applyPaintedFormat]);
 
   // ── Positionnement ────────────────────────────────────────────────────────
 
@@ -957,6 +1149,19 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
             <Sep />
           </>
         )}
+
+        {/* Reproduire la mise en forme (« pinceau », façon Word) */}
+        <Btn
+          onClick={toggleFormatPainter}
+          title={paintedFormat
+            ? 'Mode pinceau actif — cliquez pour arrêter (Échap)'
+            : 'Reproduire la mise en forme — sélectionnez le texte modèle, cliquez ici, puis sélectionnez le texte à mettre en forme'}
+          active={!!paintedFormat}
+        >
+          <Paintbrush size={16} />
+        </Btn>
+
+        <Sep />
 
         {/* Style texte */}
         <Btn onClick={() => format('bold')}          title="Gras (Ctrl+B)"      active={active.bold}>      <Bold size={16} /></Btn>
