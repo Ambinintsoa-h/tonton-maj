@@ -47,6 +47,7 @@ export default function Articles() {
   const [pasteUrl, setPasteUrl] = useState('');
   const [scraping, setScraping] = useState(false);
   const [targetKeyword, setTargetKeyword] = useState('');
+  const [notes, setNotes]                 = useState(''); // instruction libre transmise en priorité à TONTON (passe 1)
   const [majDepth, setMajDepth]           = useState(DEFAULT_DEPTH); // profondeur de la MAJ (legere|standard|refonte)
   const [seoKeywords, setSeoKeywords] = useState([]);
   const [seoKwInput, setSeoKwInput] = useState('');
@@ -218,6 +219,7 @@ export default function Articles() {
         knowledge,
         articleUrl,
         targetKeyword:   targetKeyword.trim(),
+        instruction:     notes.trim(),       // consigne libre de l'équipe — priorité haute dans les prompts
         wpSites,
         existingWpData:  prefetchedWpData,  // évite un 2e appel WP MCP dans runAgent
         modelPricing:    settings.modelPricing || null,
@@ -521,6 +523,18 @@ export default function Articles() {
                     ? <span className="text-sage-600"><CheckCircle2 size={13} className="inline text-sage-600 shrink-0" /> L'IA optimisera l'article autour de ce mot-clé (H1/H2, intro, densité sémantique).</span>
                     : 'Requis — TONTON AI l\'utilisera pour orienter toute la MAJ SEO.'}
                 </p>
+              </div>
+
+              {/* ── Notes — instruction pour TONTON (optionnel) ──────────────────── */}
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-gray-700">Notes — instruction pour TONTON</label>
+                <textarea
+                  value={notes}
+                  onChange={e => setNotes(e.target.value)}
+                  placeholder="Consigne appliquée en priorité par l'IA pendant l'analyse — ex. « concentre la MAJ sur la partie prix », « ajoute des idées sur les nouveautés 2026 »…"
+                  rows={3}
+                  className="input-glass text-sm resize-none"
+                />
               </div>
 
               {/* ── Profondeur de la MAJ ──────────────────────────────────────────── */}
