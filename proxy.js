@@ -2894,6 +2894,36 @@ app.post('/api/wp-upload-file', requireAuth, wpMediaUpload, async (req, res) => 
   }
 });
 
+// ─── POST /api/wp-update-media — met à jour alt_text/caption d'un média déjà en médiathèque ─
+// Body : { site_id, wpSites, media_id, alt_text?, caption? }
+// Utilisé par le panneau Alt/Légende (image à la une) : contrairement à l'upload,
+// l'API REST WP n'accepte alt_text/caption que via une requête POST/PATCH dédiée
+// sur /wp/v2/media/{id} (un header à l'upload n'est pas un champ REST standard).
+app.post('/api/wp-update-media', requireAuth, async (req, res) => {
+  const { site_id, wpSites = [], media_id, alt_text, caption } = req.body;
+  const site = wpSites.find(s => s.id === site_id);
+  if (!site || !site.url || !site.username || !site.password) {
+    return res.status(400).json({ success: false, error: 'Site introuvable ou identifiants WordPress manquants' });
+  }
+  if (!media_id) return res.status(400).json({ success: false, error: 'media_id requis' });
+  try {
+    await assertSafeUrl(site.url, 'URL du site WP');
+    const auth = Buffer.from(`${site.username}:${site.password}`).toString('base64');
+    const body = {};
+    if (alt_text !== undefined) body.alt_text = alt_text;
+    if (caption  !== undefined) body.caption  = caption;
+    const resp = await axios.post(
+      `${site.url.replace(/\/$/, '')}/wp-json/wp/v2/media/${media_id}`,
+      body,
+      { headers: { 'Authorization': `Basic ${auth}` }, timeout: 20000 }
+    );
+    res.json({ success: true, media_id: resp.data.id, alt_text: resp.data.alt_text, caption: resp.data.caption?.raw || '' });
+  } catch (e) {
+    console.error('[proxy] /api/wp-update-media erreur:', e.response?.status, e.message);
+    res.status(500).json({ success: false, error: safeError(e, 'Impossible de mettre à jour le média WordPress') });
+  }
+});
+
 // ─── POST /api/claude-tools — boucle agentique Claude + outils WordPress MCP ──
 // Gère la boucle tool_use → exécution → tool_result jusqu'à end_turn.
 // Accepte les mêmes paramètres que /api/claude + { tools, wpSites }.
