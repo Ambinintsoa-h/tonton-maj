@@ -36,8 +36,13 @@ service cloud.firestore {
     // Les managers/super_admin peuvent lire toutes les sessions (dashboard équipe).
     // Écriture : uniquement sur sa propre session (heartbeat, actions).
     match /activity_sessions/{sessionId} {
-      allow read: if isAuthenticated()
-        && (resource.data.userId == request.auth.uid || isAdmin());
+      // get basé sur l'ID du doc ({uid}_{date}) : fonctionne AUSSI sur un doc
+      // inexistant — avec resource.data, la règle échouait (resource null) → le
+      // tracker ne pouvait plus créer la session du jour (tracking mort depuis
+      // la mise en service du déploiement auto des règles). Même correctif que
+      // article_time.
+      allow get: if isAuthenticated()
+        && (sessionId.matches(request.auth.uid + '_.*') || isAdmin());
       allow list: if isAuthenticated() && isAdmin();
       allow create, update: if isAuthenticated()
         && request.resource.data.userId == request.auth.uid;

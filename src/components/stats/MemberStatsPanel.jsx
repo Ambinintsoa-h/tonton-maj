@@ -8,7 +8,7 @@ import {
   FileText, MessageSquare, CheckCircle2, AlertCircle,
   Calendar, ChevronLeft, ChevronRight,
 } from 'lucide-react';
-import { getUserActivitySessions } from '../../services/firebase';
+import { getUserActivitySessions, getArticleTimeAll } from '../../services/firebase';
 import { AccountAvatar } from '../account/MonComptePanel';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -38,6 +38,11 @@ const dateLabel = (dateStr) => {
   const d = new Date(dateStr + 'T12:00:00');
   return d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
 };
+
+// Date courte depuis un timestamp (tableaux MAJ fait)
+const tsLabel = (ts) => ts
+  ? new Date(ts).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
+  : '—';
 
 const ROLE_COLORS = {
   cq_ia:   { bar: '#3b82f6', area: '#93c5fd', badge: 'bg-blue-50 text-blue-700 border border-blue-200' },
@@ -218,6 +223,41 @@ export default function MemberStatsPanel({ user, onClose }) {
       .catch(() => setSessions([]))
       .finally(() => setLoading(false));
   }, [user.id]);
+
+  // ── Onglets de la section détail : par jour | absences | MAJ faites ─────────
+  const [detailTab, setDetailTab] = useState('days'); // 'days' | 'absences' | 'majs'
+
+  // Temps par article (du clic « Lancer la MAJ » jusqu'à la publication) —
+  // docs article_time du membre. Le panel est réservé au super_admin, qui a le
+  // droit de lister la collection complète.
+  const [articleTimes, setArticleTimes] = useState(null); // null = chargement
+  useEffect(() => {
+    getArticleTimeAll()
+      .then(all => {
+        const ids = new Set([user.id, user.uid, user.username].filter(Boolean));
+        setArticleTimes(
+          all.filter(e => ids.has(e.userId))
+             .sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0))
+        );
+      })
+      .catch(() => setArticleTimes([]));
+  }, [user.id, user.uid, user.username]);
+
+  // Jours OUVRÉS (lun-ven) sans aucune session sur les 30 derniers jours.
+  // Le jour courant n'est pas compté (journée en cours).
+  const absences = (() => {
+    const have = new Set(sessions.map(s => s.date));
+    const out = [];
+    for (let i = 1; i <= 30; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dow = d.getDay();
+      if (dow === 0 || dow === 6) continue;
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!have.has(iso)) out.push(iso);
+    }
+    return out;
+  })();
 
   // Session du jour affiché (avec offset)
   const targetDate = (() => {
@@ -672,9 +712,27 @@ export default function MemberStatsPanel({ user, onClose }) {
                       </div>
                     </div>
 
-                    {/* Tableau détaillé */}
+                    {/* Section détail : Détail par jour | Liste absence | MAJ fait */}
                     <div className="space-y-2">
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Détail par jour</p>
+                      <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+                        {[
+                          { id: 'days',     label: 'Détail par jour' },
+                          { id: 'absences', label: `Liste absence${absences.length ? ` (${absences.length})` : ''}` },
+                          { id: 'majs',     label: `MAJ fait${articleTimes?.length ? ` (${articleTimes.length})` : ''}` },
+                        ].map(t => (
+                          <button
+                            key={t.id}
+                            onClick={() => setDetailTab(t.id)}
+                            className={`flex-1 px-3 py-1.5 text-xs rounded-lg font-medium transition-all ${
+                              detailTab === t.id ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
+                            }`}
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {detailTab === 'days' && (
                       <div className="overflow-x-auto -mx-1">
                         <table className="w-full text-xs">
                           <thead>
@@ -700,6 +758,73 @@ export default function MemberStatsPanel({ user, onClose }) {
                           </tbody>
                         </table>
                       </div>
+                      )}
+
+                      {/* Liste absence : jours ouvrés sans aucune session (30 derniers jours) */}
+                      {detailTab === 'absences' && (
+                        absences.length === 0 ? (
+                          <div className="flex items-center gap-2 text-xs text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3">
+                            <CheckCircle2 size={14} /> Aucun jour ouvré sans activité sur les 30 derniers jours.
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            {absences.map(dt => (
+                              <div key={dt} className="flex items-center justify-between text-xs bg-red-50/60 border border-red-100 rounded-lg px-3 py-2">
+                                <span className="font-medium text-gray-700 flex items-center gap-2">
+                                  <Calendar size={12} className="text-red-400" /> {dateLabel(dt)}
+                                </span>
+                                <span className="text-[10px] font-semibold text-red-500 uppercase tracking-wide">Aucune activité</span>
+                              </div>
+                            ))}
+                            <p className="text-[10px] text-gray-300 pt-1">
+                              Jours ouvrés (lundi-vendredi) sans aucune session d'activité sur les 30 derniers jours — week-ends exclus.
+                            </p>
+                          </div>
+                        )
+                      )}
+
+                      {/* MAJ fait : temps par article, du « Lancer la MAJ » à la publication */}
+                      {detailTab === 'majs' && (
+                        articleTimes === null ? (
+                          <p className="text-xs text-gray-400 py-3">Chargement…</p>
+                        ) : articleTimes.length === 0 ? (
+                          <p className="text-xs text-gray-400 py-3">
+                            Aucune MAJ trackée pour ce membre — le suivi démarre au clic « Lancer la MAJ » et s'arrête à la publication.
+                          </p>
+                        ) : (
+                          <div className="overflow-x-auto -mx-1">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="border-b border-gray-100">
+                                  {['Article', 'Temps actif', 'Dernière activité', 'Publié'].map(h => (
+                                    <th key={h} className="pb-2 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-left whitespace-nowrap">
+                                      {h}
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-50">
+                                {articleTimes.map(e => (
+                                  <tr key={e.id} className="hover:bg-gray-50/60 transition-colors">
+                                    <td className="py-2.5 px-2 font-medium text-gray-700 max-w-[240px]">
+                                      {e.url
+                                        ? <a href={e.url} target="_blank" rel="noreferrer" className="hover:text-blue-600 hover:underline">{e.title || e.url}</a>
+                                        : (e.title || e.articleId)}
+                                    </td>
+                                    <td className="py-2.5 px-2 font-semibold text-emerald-600 whitespace-nowrap">{fmtDuration(e.totalActiveMinutes)}</td>
+                                    <td className="py-2.5 px-2 text-gray-500 whitespace-nowrap">{tsLabel(e.lastActivityAt)}</td>
+                                    <td className="py-2.5 px-2 whitespace-nowrap">
+                                      {e.publishedAt
+                                        ? <span className="font-semibold" style={{ color: colors.bar }}>{tsLabel(e.publishedAt)}</span>
+                                        : <span className="text-gray-300">—</span>}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )
+                      )}
                     </div>
                   </>
                 )}
