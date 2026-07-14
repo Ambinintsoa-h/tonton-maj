@@ -1722,6 +1722,24 @@ ${content}
 
 // ── Génération des meta SEO (Yoast / SEOPress) ────────────────────────────────
 /**
+ * Réécriture d'un passage sélectionné dans l'éditeur (bouton « Réécrire »).
+ * Moteur Claude — clé de la plateforme, aucune configuration par membre
+ * (remplace l'ancien flux Gemini qui exigeait une clé personnelle).
+ * Retourne le texte réécrit en clair ; lève une Error à message lisible.
+ */
+export const rewriteSelection = async ({ text, instruction }) => {
+  const { text: out } = await callClaude(null, {
+    system: `Tu es un rédacteur web senior francophone. Tu réécris le passage fourni selon la consigne, en respectant STRICTEMENT : même sens et mêmes informations (chiffres, noms, faits conservés), même langue, voix active uniquement, phrases de 20 mots maximum, aucun participe présent, aucun tiret cadratin (—) ni demi-cadratin (–), aucune formule creuse (« il est important de noter »…). Réponds UNIQUEMENT avec le texte réécrit — sans commentaire, sans guillemets d'encadrement, sans balise HTML.`,
+    max_tokens: 2000,
+    model: selectModel('update_generation'),
+    messages: [{ role: 'user', content: `Consigne : ${instruction}\n\nPassage à réécrire :\n\n${text}` }],
+  });
+  const cleaned = (out || '').trim();
+  if (!cleaned) throw new Error('Réponse vide — réessayez.');
+  return cleaned;
+};
+
+/**
  * Génère un meta title (≤60 chars) et une meta description (≤155 chars) optimisés SEO
  * à partir du HTML final de l'article. Utilise Haiku (rapide, économique).
  * Retourne { seoTitle, seoDescription } — chaînes vides en cas d'échec.
