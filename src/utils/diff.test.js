@@ -1,6 +1,6 @@
 // Tests de repairStructureEl — réparation des imbrications cassées
 /* eslint-env jest */
-import { repairStructureEl, absorbOrphanDeterminers, applyAllDiffs, applyAddition } from './diff';
+import { repairStructureEl, absorbOrphanDeterminers, applyAllDiffs, applyAddition, moveFaqToEnd } from './diff';
 
 const run = (html) => {
   const div = document.createElement('div');
@@ -141,5 +141,62 @@ describe('applyAllDiffs — addition dont l\'anchor a disparu', () => {
     // inséré après le paragraphe des chats (meilleur recouvrement), pas perdu
     expect(div.children[2].tagName).toBe('INS');
     expect(div.children[1].textContent).toContain('chats miaulent');
+  });
+});
+
+describe('moveFaqToEnd — sections spéciales jamais imbriquées dans une addition', () => {
+  const parse = (html) => { const d = document.createElement('div'); d.innerHTML = html; return d; };
+
+  it('scinde une addition « section + FAQ + résumé » : chacun son ins, FAQ en fin, TL;DR après l\'intro', () => {
+    const html =
+      '<p>Intro de l\'article.</p>'
+      + '<h2>Section existante</h2><p>Texte.</p>'
+      + '<ins class="added-content">'
+      +   '<h2>Entretien et durée de vie</h2><p>Nouveau contenu.</p>'
+      +   '<h2>FAQ — Toiture</h2><p>Q/R.</p>'
+      +   '<h2>Résumé de l\'article</h2><ul><li>Point.</li></ul>'
+      + '</ins>'
+      + '<p>Fin.</p>';
+    const div = parse(moveFaqToEnd(html));
+    const inses = div.querySelectorAll('ins.added-content');
+    expect(inses.length).toBe(3); // section, FAQ et TL;DR chacun dans son propre ins
+    // FAQ = dernier élément du document
+    const last = div.lastElementChild;
+    expect(last.classList.contains('tt-faq')).toBe(true);
+    expect(last.textContent).toContain('FAQ');
+    // TL;DR remonté avant le premier H2 (après l'intro)
+    const tldr = div.querySelector('ins.tt-tldr');
+    expect(tldr).not.toBeNull();
+    expect(tldr.nextElementSibling?.textContent).toContain('Section existante');
+    // L'addition d'origine ne contient plus ni FAQ ni Résumé
+    const orig = Array.from(inses).find(i => i.textContent.includes('Entretien'));
+    expect(orig.textContent).not.toMatch(/FAQ|Résumé/);
+  });
+
+  it('une addition entièrement FAQ est marquée et envoyée en fin', () => {
+    const html = '<p>Intro.</p><ins class="added-content"><h2>FAQ</h2><p>Q/R.</p></ins><h2>Suite</h2><p>Texte.</p>';
+    const div = parse(moveFaqToEnd(html));
+    const last = div.lastElementChild;
+    expect(last.tagName).toBe('INS');
+    expect(last.textContent).toContain('FAQ');
+  });
+
+  it('FAQ en section directe (comportement historique) toujours déplacée en fin', () => {
+    const html = '<p>Intro.</p><h2>FAQ</h2><p>Q/R.</p><h2>Autre section</h2><p>Texte final.</p>';
+    const div = parse(moveFaqToEnd(html));
+    const headings = Array.from(div.querySelectorAll('h2')).map(h => h.textContent);
+    expect(headings[headings.length - 1]).toBe('FAQ');
+  });
+
+  it('TL;DR égaré en fin d\'article remonte après l\'intro', () => {
+    const html = '<p>Intro.</p><h2>Section A</h2><p>Texte.</p><h2>Résumé de l\'article</h2><ul><li>Point.</li></ul>';
+    const div = parse(moveFaqToEnd(html));
+    expect(div.children[1].tagName).toBe('H2');
+    expect(div.children[1].textContent).toContain('Résumé');
+  });
+
+  it('document déjà conforme → HTML inchangé', () => {
+    const html = '<p>Intro.</p><h2>Résumé de l\'article</h2><ul><li>x</li></ul><h2>Section</h2><p>t</p><h2>FAQ</h2><p>q</p>';
+    expect(moveFaqToEnd(html)).toBe(html);
   });
 });
