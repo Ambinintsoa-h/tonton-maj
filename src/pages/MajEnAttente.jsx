@@ -20,7 +20,7 @@ import {
   resetAgent, setStatus, addStep, setProgress,
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
-  setWpData, setMajDepth, setAudit,
+  setWpData, setMajDepth, setInstruction, setAudit,
 } from '../store/slices/agentSlice';
 import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import { addArticleStat } from '../store/slices/statsSlice';
@@ -403,12 +403,12 @@ function AddManualPanel({ open, onAdd, onClose, teamMembers }) {
                 </select>
               </div>
 
-              {/* Notes */}
+              {/* Notes — transmises à TONTON comme consigne d'analyse */}
               <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">Notes</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">Notes — instruction pour TONTON</label>
                 <textarea
                   value={notes} onChange={e => setNotes(e.target.value)}
-                  placeholder="Remarques, contexte, instructions…"
+                  placeholder="Consigne appliquée en priorité par l'IA pendant l'analyse — ex. « concentre la MAJ sur la partie prix », « ne touche pas à la section garanties »…"
                   rows={3}
                   className="input-field w-full text-sm resize-none"
                 />
@@ -1274,6 +1274,7 @@ export default function MajEnAttente() {
         wpSites,
         modelPricing: settings.modelPricing || null,
         depth:        item.depth || DEFAULT_DEPTH,  // profondeur choisie sur la ligne
+        instruction:  (item.notes || '').trim(),    // Notes de la ligne = consigne de la passe 1 (et des relances)
         onStep:     (s) => { dispatch(addStep(s)); step(s); },
         onProgress: (p) => { dispatch(setProgress(p)); progress(p); },
       });
@@ -1515,6 +1516,9 @@ export default function MajEnAttente() {
       dispatch(setWpData(data.wpData || null));
       dispatch(setAudit(data.audit || ''));
       dispatch(setMajDepth(data.majDepth || item.depth || DEFAULT_DEPTH));
+      // Les Notes de la ligne pré-remplissent le champ « Instruction » de
+      // l'éditeur → la passe 2 en hérite (modifiable par le CQ avant relance).
+      dispatch(setInstruction(item.notes || ''));
       dispatch(setCurrentArticleId(item.id));
       dispatch(setStatus('done'));
       navigate('/');
@@ -1623,6 +1627,9 @@ export default function MajEnAttente() {
     dispatch(setWpData(r.wpData || null));
     dispatch(setAudit(r.audit || ''));
     dispatch(setMajDepth(r.majDepth || item.depth || DEFAULT_DEPTH));
+    // Les Notes de la ligne pré-remplissent le champ « Instruction » de
+    // l'éditeur → la passe 2 en hérite (modifiable par le CQ avant relance).
+    dispatch(setInstruction(item.notes || ''));
     dispatch(setCurrentArticleId(item.id)); // marque cet item comme "en cours de review"
     dispatch(setStatus('done'));
     navigate('/');
