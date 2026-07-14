@@ -507,19 +507,63 @@ export const repairStructure = (html) => {
   return div.innerHTML;
 };
 
+// Titres des sections « spéciales » à emplacement imposé
+const FAQ_TITLE_RX  = /faq|questions?\s+fr[ée]quentes|foire aux questions/i;
+const TLDR_TITLE_RX = /r[ée]sum[ée] de l'article|tl\s*;?\s*dr/i;
+
 /**
- * Détecte la section FAQ dans le HTML et la déplace à la fin.
- * Supporte : class/id contenant "faq", headings contenant "faq" / "questions fréquentes".
- * Retourne le HTML réorganisé, ou l'original si aucune FAQ n'est trouvée / déjà en fin.
+ * Désimbrique une section spéciale enfouie dans une addition <ins> : le modèle
+ * groupe parfois « nouvelle section + FAQ + résumé » dans UNE seule addition →
+ * tout s'affiche imbriqué dans un seul gros bloc bleu, et la FAQ échappe au
+ * repositionnement (son heading n'est plus un enfant direct du document).
+ * On scinde : la section vit dans son PROPRE <ins> (elle reste une addition à
+ * accepter/rejeter), marqué d'une classe repère, posé après l'ins d'origine.
  */
-export const moveFaqToEnd = (html) => {
-  if (!html || typeof document === 'undefined') return html;
+const splitSpecialFromIns = (container, titleRx, markerClass) => {
+  let changed = false;
+  for (const ins of Array.from(container.querySelectorAll('ins.added-content'))) {
+    if (ins.classList.contains(markerClass)) continue;
+    const heading = Array.from(ins.querySelectorAll('h1, h2, h3, h4'))
+      .find(h => titleRx.test(h.textContent || ''));
+    if (!heading) continue;
 
-  const container = document.createElement('div');
-  container.innerHTML = html;
+    // Bloc de premier niveau DANS l'ins qui contient le heading
+    let top = heading;
+    while (top.parentNode !== ins) top = top.parentNode;
 
+    // Rien de significatif avant la section → l'ins EST la section : marquer
+    let hasBefore = false;
+    for (let n = ins.firstChild; n && n !== top; n = n.nextSibling) {
+      if ((n.textContent || '').trim() || (n.nodeType === Node.ELEMENT_NODE && n.querySelector('img, table, iframe, video'))) {
+        hasBefore = true;
+        break;
+      }
+    }
+    if (!hasBefore) {
+      ins.classList.add(markerClass);
+      changed = true;
+      continue;
+    }
+
+    // Scinder : la section (du bloc jusqu'à la fin de l'ins — les sections
+    // spéciales sont générées d'un tenant en queue d'addition) part dans son
+    // propre <ins> inséré juste après l'original.
+    const nodes = [];
+    for (let n = top; n; n = n.nextSibling) nodes.push(n);
+    const wrapper = document.createElement('ins');
+    wrapper.className = `added-content ${markerClass}`;
+    nodes.forEach(n => wrapper.appendChild(n));
+    ins.parentNode.insertBefore(wrapper, ins.nextSibling);
+    if (!ins.textContent.trim() && !ins.querySelector('img, table, iframe, video')) ins.remove();
+    changed = true;
+  }
+  return changed;
+};
+
+/** Déplace le bloc FAQ en fin de document. Retourne true si le DOM a changé. */
+const moveFaqBlockToEnd = (container) => {
   // Stratégie 1 : enfant direct avec classe/id contenant "faq"
-  // Ex: <div class="schema-faq">, <section id="faq">, <div class="wp-block-yoast-faq-block">
+  // Ex: <div class="schema-faq">, <section id="faq">, <ins class="added-content tt-faq">
   for (const child of Array.from(container.children)) {
     const cls = (child.className || '').toLowerCase();
     const id  = (child.id || '').toLowerCase();
@@ -531,20 +575,14 @@ export const moveFaqToEnd = (html) => {
 
       const alreadyLast = child === container.lastElementChild;
       if (!alreadyLast) container.appendChild(child);
-      return (insertions.length || !alreadyLast) ? container.innerHTML : html;
+      return !!(insertions.length || !alreadyLast);
     }
   }
 
   // Stratégie 2 : heading direct (h1-h4) contenant "faq" ou "questions fréquentes"
   for (const h of Array.from(container.querySelectorAll('h1, h2, h3, h4'))) {
     if (h.parentNode !== container) continue;          // pas un enfant direct → skip
-    const text = h.textContent.toLowerCase().trim();
-    if (
-      !text.includes('faq') &&
-      !text.includes('questions fréquentes') &&
-      !text.includes('questions frequentes') &&
-      !text.includes('foire aux questions')
-    ) continue;
+    if (!FAQ_TITLE_RX.test(h.textContent || '')) continue;
 
     const headingLevel = parseInt(h.tagName[1], 10);
 
@@ -574,13 +612,75 @@ export const moveFaqToEnd = (html) => {
     for (const ins of insertions) container.insertBefore(ins, h);
 
     const alreadyAtEnd = faqNodes[faqNodes.length - 1] === container.lastChild;
-    if (alreadyAtEnd && !insertions.length) return html;
+    if (alreadyAtEnd && !insertions.length) return false;
 
     for (const n of faqNodes) container.appendChild(n);
-    return container.innerHTML;
+    return true;
   }
 
-  return html;
+  return false;
+};
+
+/**
+ * Repositionne le TL;DR (« Résumé de l'article ») juste avant le premier H2 du
+ * document (= après l'intro) quand il a atterri ailleurs — typiquement en fin
+ * d'article quand le modèle l'a groupé dans une addition avec la FAQ.
+ */
+const moveTldrAfterIntro = (container) => {
+  // Bloc TL;DR : ins marqué par la désimbrication, ou section directe du document
+  let nodes = null;
+  const marked = container.querySelector(':scope > ins.tt-tldr');
+  if (marked) {
+    nodes = [marked];
+  } else {
+    const h = Array.from(container.querySelectorAll('h1, h2, h3, h4'))
+      .find(x => x.parentNode === container && TLDR_TITLE_RX.test(x.textContent || ''));
+    if (!h) return false;
+    const lvl = parseInt(h.tagName[1], 10);
+    nodes = [h];
+    for (let n = h.nextSibling; n; n = n.nextSibling) {
+      if (n.nodeType === Node.ELEMENT_NODE && /^H[1-6]$/.test(n.tagName) && parseInt(n.tagName[1], 10) <= lvl) break;
+      nodes.push(n);
+    }
+  }
+
+  // Cible : premier H2 du document HORS bloc TL;DR (début de la 1re section)
+  const firstH2 = Array.from(container.querySelectorAll('h2'))
+    .find(h2 => !nodes.some(n => n === h2 || (n.nodeType === Node.ELEMENT_NODE && n.contains(h2))));
+  if (!firstH2) return false;
+  let anchor = firstH2;
+  while (anchor.parentNode !== container) anchor = anchor.parentNode;
+
+  // Déjà en place (le bloc précède immédiatement l'ancre) → rien à faire
+  let after = nodes[nodes.length - 1].nextSibling;
+  while (after && after.nodeType === Node.TEXT_NODE && !(after.textContent || '').trim()) after = after.nextSibling;
+  if (after === anchor) return false;
+
+  for (const n of nodes) container.insertBefore(n, anchor);
+  return true;
+};
+
+/**
+ * Normalise l'emplacement des sections spéciales après application des diffs :
+ *   1. FAQ et TL;DR enfouis dans une addition <ins> → désimbriqués chacun dans
+ *      leur propre <ins> (jamais « section + FAQ + résumé » dans un seul bloc) ;
+ *   2. FAQ déplacée en fin de document (class/id "faq" ou heading FAQ) ;
+ *   3. TL;DR repositionné après l'intro (avant le premier H2).
+ * Retourne le HTML réorganisé, ou l'original si rien n'a changé.
+ */
+export const moveFaqToEnd = (html) => {
+  if (!html || typeof document === 'undefined') return html;
+
+  const container = document.createElement('div');
+  container.innerHTML = html;
+
+  let changed = false;
+  changed = splitSpecialFromIns(container, FAQ_TITLE_RX, 'tt-faq') || changed;
+  changed = splitSpecialFromIns(container, TLDR_TITLE_RX, 'tt-tldr') || changed;
+  changed = moveFaqBlockToEnd(container) || changed;
+  changed = moveTldrAfterIntro(container) || changed;
+
+  return changed ? container.innerHTML : html;
 };
 
 /**
