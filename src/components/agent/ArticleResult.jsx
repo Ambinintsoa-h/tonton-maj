@@ -28,7 +28,7 @@ import {
 } from '../../utils/faq';
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf, isDiffWrapper, normalizeTableStructure } from '../../utils/blocks';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction } from '../../store/slices/agentSlice';
-import GeminiPanel from './GeminiPanel';
+import RewritePanel from './RewritePanel';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
@@ -45,6 +45,17 @@ import { useNavigate } from 'react-router-dom';
 const TAB_AUDIT = 'audit';
 const TAB_AVANT = 'avant';
 const TAB_APRES = 'apres';
+
+// Ajoute un paramètre anti-cache à l'URL de l'article publié : la fenêtre
+// ouverte après publication montre la version fraîche, jamais celle du cache
+// WordPress/CDN (l'équipe croyait la MAJ non appliquée).
+const withNoCache = (url) => {
+  try {
+    const u = new URL(url);
+    u.searchParams.set('nocache', String(Date.now()));
+    return u.toString();
+  } catch { return url; }
+};
 
 // ── Nettoyage du contenu collé dans la vue diff ──────────────────────────────
 // Règle : aucun style collé. On conserve la STRUCTURE (paragraphes, titres,
@@ -1597,12 +1608,11 @@ export default function ArticleResult() {
   const blockClipRef = useRef(null);
   const [blockClipboard, setBlockClipboard] = useState(null);
 
-  // ── Réécriture Gemini d'un passage sélectionné ──────────────────────────────
-  // geminiCtx = { originalText, originalHtml } ; le Range est gardé en ref (objet
-  // DOM vivant, pas de re-render nécessaire). Le panneau natif remplace l'iframe
-  // gemini.google.com (interdite par Google : X-Frame-Options).
-  const [geminiCtx, setGeminiCtx] = useState(null);
-  const geminiRangeRef = useRef(null);
+  // ── Réécriture d'un passage sélectionné (moteur Claude) ─────────────────────
+  // rewriteCtx = { originalText, originalHtml } ; le Range est gardé en ref
+  // (objet DOM vivant, pas de re-render nécessaire).
+  const [rewriteCtx, setRewriteCtx] = useState(null);
+  const rewriteRangeRef = useRef(null);
 
   // ── Analyse SEO réelle (critères Yoast/SEOPress + règles équipe) ────────────
   // Remplace l'ancien signal trompeur (« Généré » vert = SEO ok) : verdict
@@ -1610,7 +1620,7 @@ export default function ArticleResult() {
   const [seoReport, setSeoReport]         = useState(null);
   const [showSeoChecks, setShowSeoChecks] = useState(false);
 
-  const openGeminiRewrite = useCallback((range) => {
+  const openRewritePanel = useCallback((range) => {
     if (!range || range.collapsed || !articleRef.current || !articleRef.current.contains(range.commonAncestorContainer)) {
       toast.error('Sélectionnez d\'abord le passage à réécrire (un paragraphe).');
       return;
@@ -1636,17 +1646,17 @@ export default function ArticleResult() {
       toast.error('Sélectionnez un seul passage de texte (sans titre, liste, tableau ni média).');
       return;
     }
-    geminiRangeRef.current = range;
-    setGeminiCtx({ originalText, originalHtml: tmp.innerHTML });
+    rewriteRangeRef.current = range;
+    setRewriteCtx({ originalText, originalHtml: tmp.innerHTML });
   }, []);
 
   // « Valider » du panneau : insère une PROPOSITION del/mark (accepter ✓ /
   // rejeter ✗) au lieu d'un remplacement brutal — cohérent avec le flux de MAJ.
-  const applyGeminiRewrite = useCallback((newText) => {
-    const range = geminiRangeRef.current;
-    const ctx = geminiCtx;
-    setGeminiCtx(null);
-    geminiRangeRef.current = null;
+  const applyRewrite = useCallback((newText) => {
+    const range = rewriteRangeRef.current;
+    const ctx = rewriteCtx;
+    setRewriteCtx(null);
+    rewriteRangeRef.current = null;
     if (!newText || !range || !ctx || !articleRef.current) return;
     try {
       const del = document.createElement('del');
@@ -1654,7 +1664,7 @@ export default function ArticleResult() {
       del.innerHTML = ctx.originalHtml;
       const mark = document.createElement('mark');
       mark.className = 'updated-content';
-      mark.setAttribute('title', 'Réécriture Gemini');
+      mark.setAttribute('title', 'Réécriture IA');
       mark.textContent = newText;
       range.deleteContents();
       range.insertNode(mark);
@@ -1668,7 +1678,7 @@ export default function ArticleResult() {
     } catch {
       toast.error('La sélection a changé pendant la réécriture — resélectionnez le passage.');
     }
-  }, [geminiCtx, lockMedia, triggerAutosave]);
+  }, [rewriteCtx, lockMedia, triggerAutosave]);
 
   // Lance l'analyse SEO sur le contenu FINAL (modifications en attente acceptées,
   // comme à la publication) — même résolution du mot-clé cible que la publication.
@@ -2433,8 +2443,10 @@ export default function ArticleResult() {
         if (wantDraft) {
           toast.success(`« ${postLabel} » repassé en brouillon sur ${site.name} — retiré du site public jusqu'à republication.`, { duration: 7000 });
         } else {
-          toast.success(`Article mis à jour sur ${site.name} ! Si la page semble inchangée, videz le cache WordPress/CDN.`, { duration: 6000 });
-          if (result.link) window.open(result.link, '_blank');
+          toast.success(`Article mis à jour sur ${site.name} !`, { duration: 6000 });
+          // ?nocache systématique : la page ouverte est la version FRAÎCHE, pas
+          // celle du cache WordPress/CDN (l'équipe croyait la MAJ non appliquée).
+          if (result.link) window.open(withNoCache(result.link), '_blank');
         }
       }
     } else {
@@ -3709,7 +3721,7 @@ export default function ArticleResult() {
             clipboard={blockClipboard ? { art: blockClipboard.art, name: blockClipboard.name, mode: blockClipboard.mode } : null}
             onPasteBlock={pasteBlockAtRange}
             onCopyBlock={blockClipFromRange}
-            onGeminiRewrite={openGeminiRewrite}
+            onRewrite={openRewritePanel}
             onUploadMedia={resolvedSite ? uploadMediaToWp : undefined}
             onImageInserted={settings.anthropicKey ? (url) => {
               generateAltText(url, settings.anthropicKey).then(altText => {
@@ -3724,12 +3736,12 @@ export default function ArticleResult() {
             } : undefined}
           />
         )}
-        {/* Panneau de réécriture Gemini (sélection → clic droit → Gemini) */}
-        {geminiCtx && (
-          <GeminiPanel
-            originalText={geminiCtx.originalText}
-            onValidate={applyGeminiRewrite}
-            onClose={() => { setGeminiCtx(null); geminiRangeRef.current = null; }}
+        {/* Panneau de réécriture (sélection → clic droit → Réécrire) */}
+        {rewriteCtx && (
+          <RewritePanel
+            originalText={rewriteCtx.originalText}
+            onValidate={applyRewrite}
+            onClose={() => { setRewriteCtx(null); rewriteRangeRef.current = null; }}
           />
         )}
         {/* Barre contextuelle d'édition de tableaux (vue diff) */}
