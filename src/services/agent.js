@@ -337,6 +337,40 @@ export const generateAltText = async (imageUrl, apiKey) => {
   }
 };
 
+/**
+ * Génère une suggestion ALT + légende pour une image (panneau d'édition manuelle,
+ * image à la une ou image du corps de l'article). Même moteur que generateAltText
+ * (Claude Vision, Haiku) mais retourne aussi une légende (texte affiché sous
+ * l'image, plus descriptif/éditorial que l'ALT). Semi-automatique : la suggestion
+ * pré-remplit les champs, l'équipe reste libre de la modifier avant de valider.
+ * Retourne { alt: '', caption: '' } en cas d'échec (pas d'interruption de l'UI).
+ */
+export const generateImageMeta = async (imageUrl, apiKey) => {
+  const empty = { alt: '', caption: '' };
+  if (!imageUrl || !apiKey) return empty;
+  try {
+    const { text } = await callClaude(apiKey, {
+      system: 'Tu génères des métadonnées SEO pour une image web. Réponds UNIQUEMENT avec un JSON valide, sans commentaire ni balise markdown.',
+      model: MODELS.FAST,
+      max_tokens: 200,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'url', url: imageUrl } },
+          { type: 'text', text: 'Génère pour cette image, en français : un texte ALT SEO concis (max 125 caractères, descriptif, sans guillemets) et une légende éditoriale courte (max 140 caractères, une phrase qui pourrait être affichée sous la photo). Réponds UNIQUEMENT : {"alt":"...","caption":"..."}' },
+        ],
+      }],
+    });
+    const parsed = parseJsonResponse(text, empty, '[image-alt-caption]');
+    return {
+      alt:     (parsed.alt || '').trim().replace(/^["']|["']$/g, ''),
+      caption: (parsed.caption || '').trim().replace(/^["']|["']$/g, ''),
+    };
+  } catch {
+    return empty;
+  }
+};
+
 // ── Vérification de cohérence (Haiku) ────────────────────────────────────────
 /**
  * Passe de validation automatique : vérifie que chaque update proposé est cohérent.

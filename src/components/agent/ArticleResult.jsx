@@ -29,6 +29,7 @@ import {
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf, isDiffWrapper, normalizeTableStructure } from '../../utils/blocks';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction } from '../../store/slices/agentSlice';
 import RewritePanel from './RewritePanel';
+import ImageAltCaptionPanel from './ImageAltCaptionPanel';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
@@ -388,6 +389,10 @@ export default function ArticleResult() {
   // ── Image à la une — remplacement inline ──────────────────────────────────────
   const [featuredImgUrl, setFeaturedImgUrl] = useState('');
   const [showImgReplace, setShowImgReplace] = useState(false);
+  // Alt/légende de l'image à la une — mémorisés côté session (la légende n'est
+  // jamais affichée dans le corps : c'est la caption WP de la médiathèque).
+  const [featuredImgMeta, setFeaturedImgMeta] = useState({ alt: '', caption: '' });
+  const [showFeaturedImgPanel, setShowFeaturedImgPanel] = useState(false);
   const [newImgInput, setNewImgInput] = useState('');
   const articleRef = useRef(null);      // pointe sur le div contentEditable
   const contentRef = useRef('');        // stocke le HTML édité SANS re-render React
@@ -714,6 +719,33 @@ export default function ArticleResult() {
       }).catch(() => {});
     }
   }, [newImgInput, wpMcpData, resolvedSite, dispatch, settings.anthropicKey]);
+
+  // « Valider » du panneau Alt/Légende de l'image à la une : alt appliqué en
+  // local (preview) + poussé sur le média WP (featured_media_id) si l'image a
+  // déjà été téléversée dans la médiathèque — sinon avertissement (preview seule).
+  // La légende ici est la caption WP (jamais affichée dans le corps de l'article,
+  // contrairement à la légende d'une image du corps → figcaption visible).
+  const applyFeaturedImgMeta = useCallback(async ({ alt, caption }) => {
+    setFeaturedImgMeta({ alt, caption });
+    if (articleRef.current) {
+      const img = articleRef.current.querySelector('figure[data-featured] img');
+      if (img) { img.alt = alt; contentRef.current = articleRef.current.innerHTML; }
+    }
+    const mediaId = wpMcpData?.featuredMediaId;
+    if (!mediaId || !wpMcpData?.siteId) {
+      toast('Alt/légende enregistrés dans l\'aperçu — image pas encore dans la médiathèque WP, ils ne seront pas publiés.', { icon: '⚠️', duration: 7000 });
+      return;
+    }
+    try {
+      const resp = await axios.post('/api/wp-update-media', {
+        site_id: wpMcpData.siteId, wpSites, media_id: mediaId, alt_text: alt, caption,
+      });
+      if (resp.data.success) toast.success('Alt / légende enregistrés sur la médiathèque WordPress.');
+      else toast.error('Alt / légende NON enregistrés côté WordPress : ' + (resp.data.error || 'erreur inconnue'));
+    } catch (e) {
+      toast.error('Alt / légende NON enregistrés côté WordPress : ' + (e.response?.data?.error || e.message));
+    }
+  }, [wpMcpData, wpSites]);
 
   // Upload fichier local → médiathèque WP → met à jour featured_media
   const handleFileUpload = useCallback(async (e) => {
@@ -1601,6 +1633,10 @@ export default function ArticleResult() {
   // même expérience que la FAQ : cadre pointillé + barre au-dessus du tableau.
   const [tableHover, setTableHover] = useState(null); // { el, rect } — el = bloc top-level
 
+  // ── Survol d'une IMAGE du corps (hors image à la une) → barre « Alt / Légende » ──
+  const [imgHover, setImgHover] = useState(null);       // { img, rect }
+  const [imgPanelCtx, setImgPanelCtx] = useState(null); // { img } — image en édition dans le panneau
+
   // ── Presse-papiers interne de BLOCS (FAQ, tableau, titre, image, liste…) ────
   // blockClipRef = { html, meta } — contenu coupé/copié · blockClipboard =
   // { mode:'couper'|'copier', name, art, fem } | null → snackbar + boutons
@@ -1706,6 +1742,55 @@ export default function ArticleResult() {
       triggerAutosave();
     }
   }, [lockMedia, triggerAutosave]);
+
+  // « Valider » du panneau Alt/Légende — édite l'image en place (pas un diff à
+  // accepter/rejeter, c'est une métadonnée). La légende est un <figcaption>
+  // visible sous l'image publiée : on enveloppe l'image dans un <figure> si
+  // nécessaire, on la déplie si la légende est vidée (retour au <img> nu).
+  const applyImageMeta = useCallback((img, { alt, caption }) => {
+    if (!img || !articleRef.current || !articleRef.current.contains(img)) return;
+    img.alt = alt || '';
+    const trimmedCaption = (caption || '').trim();
+    const currentFigure = img.parentElement?.tagName === 'FIGURE' && !img.parentElement.hasAttribute('data-featured')
+      ? img.parentElement : null;
+    if (trimmedCaption) {
+      let figure = currentFigure;
+      if (!figure) {
+        figure = document.createElement('figure');
+        // <figure> n'est PAS autorisé comme enfant de <p> (contenu phrasant
+        // uniquement) — <p><figure>…</figure></p> serait invalide et un
+        // rechargement du brouillon (innerHTML → re-parsé par le navigateur)
+        // casserait la structure. Si l'image est dans un <p>, la figure est
+        // insérée comme bloc frère juste après ; le <p> est retiré s'il ne
+        // contenait que l'image.
+        const parentP = img.parentElement?.tagName === 'P' ? img.parentElement : null;
+        if (parentP) {
+          parentP.parentNode.insertBefore(figure, parentP.nextSibling);
+          figure.appendChild(img);
+          if (!parentP.querySelector('img, iframe, video') && !(parentP.textContent || '').trim()) parentP.remove();
+        } else {
+          img.parentNode.insertBefore(figure, img);
+          figure.appendChild(img);
+        }
+      }
+      let figcaption = figure.querySelector(':scope > figcaption');
+      if (!figcaption) {
+        figcaption = document.createElement('figcaption');
+        figure.appendChild(figcaption);
+      }
+      figcaption.textContent = trimmedCaption;
+    } else if (currentFigure) {
+      const figcaption = currentFigure.querySelector(':scope > figcaption');
+      if (figcaption) figcaption.remove();
+      // Plus rien d'autre dans la figure que l'image → on la déplie (retour au <img> nu)
+      if (currentFigure.childElementCount === 1 && currentFigure.firstElementChild === img) {
+        currentFigure.parentNode.insertBefore(img, currentFigure);
+        currentFigure.remove();
+      }
+    }
+    afterDomEdit();
+    toast.success('Alt / légende mis à jour.');
+  }, [afterDomEdit]);
 
   // Même contrat + masque les barres flottantes (FAQ, tableau)
   const afterFaqEdit = useCallback(() => {
@@ -3183,6 +3268,16 @@ export default function ArticleResult() {
                         >
                           <Link2 size={11} /> Lien
                         </button>
+                        {featuredImgUrl && (
+                          <button
+                            onClick={() => setShowFeaturedImgPanel(true)}
+                            disabled={uploadingImg}
+                            title="Éditer le texte ALT et la légende de l'image à la une"
+                            className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-black/5 hover:bg-black/10 text-gray-700 rounded-lg transition-colors font-medium disabled:opacity-40"
+                          >
+                            <Image size={11} /> Alt / Légende
+                          </button>
+                        )}
                         {resolvedSite && (
                           <button
                             onClick={() => fileImgInputRef.current?.click()}
@@ -3530,6 +3625,7 @@ export default function ArticleResult() {
                               setAnchorHover(null);
                               setFaqHover(null);
                               setTableHover(null);
+                              setImgHover(null);
                               return;
                             }
                           }
@@ -3546,7 +3642,7 @@ export default function ArticleResult() {
                               && e.clientY > segHover.rect.top - 44 && e.clientY < segHover.rect.top + 4
                               && e.clientX > segHover.rect.left - 24 && e.clientX < segHover.rect.left + 280;
                             if (!corridor) setSegHover({ node: seg, rect: seg.getBoundingClientRect() });
-                            setLinkHover(null); setAnchorHover(null); setFaqHover(null); setTableHover(null);
+                            setLinkHover(null); setAnchorHover(null); setFaqHover(null); setTableHover(null); setImgHover(null);
                             return;
                           }
                           // 3) Section FAQ → barres flottantes (bloc entier / Q-R survolée)
@@ -3556,6 +3652,7 @@ export default function ArticleResult() {
                             setFaqHover(fq);
                             setLinkHover(null);
                             setTableHover(null);
+                            setImgHover(null);
                             showAnchorTooltip(e); // les tooltips de liens restent actifs dans la FAQ
                             return;
                           }
@@ -3566,6 +3663,18 @@ export default function ArticleResult() {
                             clearTimeout(leaveTimerRef.current);
                             setTableHover({ el: top, rect: top.getBoundingClientRect() });
                             setLinkHover(null);
+                            setImgHover(null);
+                            showAnchorTooltip(e);
+                            return;
+                          }
+                          // 3ter) Image (hors image à la une, gérée par sa propre barre dédiée)
+                          // → barre « Alt / Légende »
+                          const imgTarget = e.target.tagName === 'IMG' ? e.target : e.target.closest('figure')?.querySelector('img');
+                          if (imgTarget && e.currentTarget.contains(imgTarget) && !imgTarget.closest('figure[data-featured]')) {
+                            clearTimeout(leaveTimerRef.current);
+                            setImgHover({ img: imgTarget, rect: imgTarget.getBoundingClientRect() });
+                            setLinkHover(null);
+                            setTableHover(null);
                             showAnchorTooltip(e);
                             return;
                           }
@@ -3575,9 +3684,9 @@ export default function ArticleResult() {
                           // → planifier le masquage des mini-boutons ✓/✗ (la souris sur le
                           // segment OU sur la barre flottante annule ce timer). Évite qu'ils
                           // restent affichés en glissant la souris sur le texte voisin.
-                          if (segHover || linkHover || faqHover || tableHover) {
+                          if (segHover || linkHover || faqHover || tableHover || imgHover) {
                             clearTimeout(leaveTimerRef.current);
-                            leaveTimerRef.current = setTimeout(() => { setSegHover(null); setLinkHover(null); setFaqHover(null); setTableHover(null); }, 1200);
+                            leaveTimerRef.current = setTimeout(() => { setSegHover(null); setLinkHover(null); setFaqHover(null); setTableHover(null); setImgHover(null); }, 1200);
                           }
                         }}
                         onMouseLeave={() => {
@@ -3742,6 +3851,29 @@ export default function ArticleResult() {
             originalText={rewriteCtx.originalText}
             onValidate={applyRewrite}
             onClose={() => { setRewriteCtx(null); rewriteRangeRef.current = null; }}
+          />
+        )}
+        {/* Panneau Alt/Légende d'une image du corps (survol → « Alt / Légende ») */}
+        {imgPanelCtx && (
+          <ImageAltCaptionPanel
+            imageUrl={imgPanelCtx.img.getAttribute('src') || ''}
+            initialAlt={imgPanelCtx.img.getAttribute('alt') || ''}
+            initialCaption={imgPanelCtx.img.parentElement?.tagName === 'FIGURE' ? (imgPanelCtx.img.parentElement.querySelector(':scope > figcaption')?.textContent || '') : ''}
+            apiKey={settings.anthropicKey}
+            onValidate={({ alt, caption }) => { applyImageMeta(imgPanelCtx.img, { alt, caption }); setImgPanelCtx(null); setImgHover(null); }}
+            onClose={() => setImgPanelCtx(null)}
+          />
+        )}
+        {/* Panneau Alt/Légende de l'image à la une (bouton dédié de la barre) */}
+        {showFeaturedImgPanel && (
+          <ImageAltCaptionPanel
+            imageUrl={featuredImgUrl}
+            initialAlt={articleRef.current?.querySelector('figure[data-featured] img')?.getAttribute('alt') || featuredImgMeta.alt}
+            initialCaption={featuredImgMeta.caption}
+            apiKey={settings.anthropicKey}
+            captionIsVisible={false}
+            onValidate={(meta) => { applyFeaturedImgMeta(meta); setShowFeaturedImgPanel(false); }}
+            onClose={() => setShowFeaturedImgPanel(false)}
           />
         )}
         {/* Barre contextuelle d'édition de tableaux (vue diff) */}
@@ -4329,6 +4461,26 @@ export default function ArticleResult() {
             </button>
           </div>
         </>,
+        document.body,
+      )}
+
+      {imgHover && createPortal(
+        <div
+          style={{ position: 'fixed', top: Math.max(6, imgHover.rect.top - 34), left: imgHover.rect.left, zIndex: 401 }}
+          onMouseEnter={() => clearTimeout(leaveTimerRef.current)}
+          onMouseLeave={() => { leaveTimerRef.current = setTimeout(() => setImgHover(null), 220); }}
+          className="flex items-center gap-1 bg-gray-900 rounded-lg px-1.5 py-1 shadow-[0_6px_24px_rgba(0,0,0,0.4)]"
+        >
+          <span className="px-1.5 text-[10px] font-bold uppercase tracking-wide text-violet-300 select-none">Image</span>
+          <button
+            type="button"
+            title="Éditer le texte ALT et la légende de cette image"
+            onMouseDown={(e) => { e.preventDefault(); setImgPanelCtx({ img: imgHover.img }); }}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-white/90 hover:bg-white/15 transition-colors"
+          >
+            <Image size={13} /> Alt / Légende
+          </button>
+        </div>,
         document.body,
       )}
 
