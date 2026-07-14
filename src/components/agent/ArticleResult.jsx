@@ -19,7 +19,7 @@ import TableToolbar from './TableToolbar';
 import DocNavigator from './DocNavigator';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
-import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, moveFaqToEnd, normalizeText } from '../../utils/diff';
+import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment } from '../../utils/diff';
 import { analyzeSeo } from '../../utils/seoCheck';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
@@ -30,6 +30,7 @@ import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive,
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction } from '../../store/slices/agentSlice';
 import RewritePanel from './RewritePanel';
 import ImageAltCaptionPanel from './ImageAltCaptionPanel';
+import SectionRewritePanel from './SectionRewritePanel';
 import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice';
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
@@ -1650,6 +1651,13 @@ export default function ArticleResult() {
   const [rewriteCtx, setRewriteCtx] = useState(null);
   const rewriteRangeRef = useRef(null);
 
+  // ── Réécriture d'une SECTION entière (clic sur un titre H2/H3/H4) ───────────
+  // sectionHover = { el, rect } — titre cliqué, barre flottante « Réécrire cette
+  // section ». sectionRewriteCtx = { originalHtml, level } ; Range en ref.
+  const [sectionHover, setSectionHover] = useState(null);
+  const [sectionRewriteCtx, setSectionRewriteCtx] = useState(null);
+  const sectionRangeRef = useRef(null);
+
   // ── Analyse SEO réelle (critères Yoast/SEOPress + règles équipe) ────────────
   // Remplace l'ancien signal trompeur (« Généré » vert = SEO ok) : verdict
   // STRICT calculé sur le contenu FINAL + metas + mot-clé cible.
@@ -1715,6 +1723,73 @@ export default function ArticleResult() {
       toast.error('La sélection a changé pendant la réécriture — resélectionnez le passage.');
     }
   }, [rewriteCtx, lockMedia, triggerAutosave]);
+
+  // Clic sur un titre H2/H3/H4 → prépare la section (titre + tout son contenu
+  // jusqu'au prochain titre de même niveau ou supérieur) pour la réécriture bloc.
+  const openSectionRewrite = useCallback((headingEl) => {
+    if (!headingEl || !articleRef.current || !articleRef.current.contains(headingEl)) return;
+    const level = parseInt(headingEl.tagName.slice(1), 10);
+    const collected = [headingEl];
+    let sib = headingEl.nextElementSibling;
+    while (sib) {
+      const m = sib.tagName.match(/^H([1-6])$/);
+      if (m && parseInt(m[1], 10) <= level) break;
+      collected.push(sib);
+      sib = sib.nextElementSibling;
+    }
+    const hasPending = collected.some(el =>
+      el.matches?.('del.deleted-content, mark.updated-content, ins.added-content')
+      || el.querySelector?.('del.deleted-content, mark.updated-content, ins.added-content'));
+    if (hasPending) {
+      toast.error('Cette section contient une modification en attente — acceptez-la ou rejetez-la d\'abord.');
+      return;
+    }
+    const range = document.createRange();
+    range.setStartBefore(collected[0]);
+    range.setEndAfter(collected[collected.length - 1]);
+    const frag = range.cloneContents();
+    const tmp = document.createElement('div');
+    tmp.appendChild(frag);
+    sectionRangeRef.current = range;
+    setSectionRewriteCtx({ originalHtml: tmp.innerHTML, level });
+    setSectionHover(null);
+  }, []);
+
+  // « Valider » du panneau section : REMPLACE directement le titre + son contenu
+  // (pas de del/mark — une section entière avec titres imbriqués/listes ne se
+  // prête pas à un surlignage inline ; l'undo maison (Ctrl+Z) reste disponible,
+  // même contrat que les éditions de blocs FAQ/tableau). Le verrou liens
+  // externes (règle 8) s'applique en filet de sécurité avant application.
+  const applySectionRewrite = useCallback((newHtml) => {
+    const range = sectionRangeRef.current;
+    const ctx = sectionRewriteCtx;
+    setSectionRewriteCtx(null);
+    sectionRangeRef.current = null;
+    if (!newHtml || !range || !ctx || !articleRef.current) return;
+    try {
+      const articleUrl = agent.wpData?.postLink || currentArticle?.url || cqItem?.url || '';
+      const { update: policed, blocked } = enforceExternalLinkPolicy(
+        { type: 'remplacement', original: ctx.originalHtml, updated: newHtml },
+        articleUrl,
+      );
+      if (blocked) {
+        toast.error('Réécriture refusée : un lien externe de la section serait perdu. Réessayez ou ajustez la consigne.');
+        return;
+      }
+      const finalHtml = balanceFragment(policed.updated || newHtml);
+      const parseRange = document.createRange();
+      const newFrag = parseRange.createContextualFragment(finalHtml);
+      range.deleteContents();
+      range.insertNode(newFrag);
+      lockMedia(articleRef.current);
+      contentRef.current = articleRef.current.innerHTML;
+      humanEditRef.current = true;
+      triggerAutosave();
+      toast.success('Section réécrite — Ctrl+Z pour annuler.');
+    } catch {
+      toast.error('La section a changé pendant la réécriture — réessayez.');
+    }
+  }, [sectionRewriteCtx, agent.wpData, currentArticle, cqItem, lockMedia, triggerAutosave]);
 
   // Lance l'analyse SEO sur le contenu FINAL (modifications en attente acceptées,
   // comme à la publication) — même résolution du mot-clé cible que la publication.
@@ -3614,6 +3689,19 @@ export default function ArticleResult() {
                           if ((e.ctrlKey || e.metaKey) && k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
                           else if ((e.ctrlKey || e.metaKey) && (k === 'y' || (k === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
                         }}
+                        onClick={(e) => {
+                          // Clic sur un titre H2/H3/H4 → barre « Réécrire cette section »
+                          // (n'empêche pas le placement normal du curseur pour éditer le
+                          // titre à la main — c'est un complément, pas un remplacement).
+                          const heading = e.target.closest('h2, h3, h4');
+                          if (heading && articleRef.current?.contains(heading)
+                              && !heading.closest('del.deleted-content, mark.updated-content, ins.added-content')) {
+                            clearTimeout(leaveTimerRef.current);
+                            setSectionHover({ el: heading, rect: heading.getBoundingClientRect() });
+                            return;
+                          }
+                          setSectionHover(null);
+                        }}
                         onMouseOver={(e) => {
                           // 1) Lien interne PROPOSÉ (span non encore appliqué) → popup "Appliquer"
                           const il = e.target.closest('[data-il-idx]');
@@ -3874,6 +3962,14 @@ export default function ArticleResult() {
             captionIsVisible={false}
             onValidate={(meta) => { applyFeaturedImgMeta(meta); setShowFeaturedImgPanel(false); }}
             onClose={() => setShowFeaturedImgPanel(false)}
+          />
+        )}
+        {/* Panneau de réécriture de section (clic sur un titre H2/H3/H4) */}
+        {sectionRewriteCtx && (
+          <SectionRewritePanel
+            originalHtml={sectionRewriteCtx.originalHtml}
+            onValidate={applySectionRewrite}
+            onClose={() => { setSectionRewriteCtx(null); sectionRangeRef.current = null; }}
           />
         )}
         {/* Barre contextuelle d'édition de tableaux (vue diff) */}
@@ -4479,6 +4575,31 @@ export default function ArticleResult() {
             className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-white/90 hover:bg-white/15 transition-colors"
           >
             <Image size={13} /> Alt / Légende
+          </button>
+        </div>,
+        document.body,
+      )}
+
+      {sectionHover && createPortal(
+        <div
+          style={{ position: 'fixed', top: Math.max(6, sectionHover.rect.top - 34), left: sectionHover.rect.left, zIndex: 401 }}
+          className="flex items-center gap-1 bg-gray-900 rounded-lg px-1.5 py-1 shadow-[0_6px_24px_rgba(0,0,0,0.4)]"
+        >
+          <span className="px-1.5 text-[10px] font-bold uppercase tracking-wide text-amber-300 select-none">{sectionHover.el.tagName}</span>
+          <button
+            type="button"
+            title="Réécrire ce titre et tout son contenu (IA)"
+            onClick={(e) => {
+              // stopPropagation : le clic (portail React, bulle via l'arbre React)
+              // remonterait sinon jusqu'à l'onClick du contentEditable et fermerait
+              // sectionHover juste après son ouverture.
+              e.stopPropagation();
+              e.preventDefault();
+              openSectionRewrite(sectionHover.el);
+            }}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-white/90 hover:bg-white/15 transition-colors"
+          >
+            <Sparkles size={13} /> Réécrire cette section
           </button>
         </div>,
         document.body,

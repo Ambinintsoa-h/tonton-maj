@@ -1783,6 +1783,37 @@ export const rewriteSelection = async ({ text, instruction }) => {
 };
 
 /**
+ * Réécriture d'une SECTION ENTIÈRE (un titre H2/H3/H4 cliqué + tout son contenu,
+ * jusqu'au prochain titre de même niveau ou supérieur — bouton « Réécrire cette
+ * section »). Contrairement à rewriteSelection (texte brut, un passage), ici
+ * l'entrée ET la sortie sont du HTML : la structure existante (titres, <p>,
+ * <strong>, listes…) doit être conservée, seul le texte à l'intérieur de
+ * chaque balise est reformulé. Les liens <a href> doivent être conservés à
+ * l'identique (même règle que la passe 1/2 — enforceExternalLinkPolicy
+ * s'applique ensuite côté appelant comme filet de sécurité).
+ * Retourne le HTML réécrit ; lève une Error à message lisible.
+ */
+export const rewriteSection = async ({ html, instruction }) => {
+  const { text: out } = await callClaude(null, {
+    system: `Tu es un rédacteur web senior francophone. Tu réécris la section HTML fournie (un titre et tout son contenu) selon la consigne, en respectant STRICTEMENT :
+- Même sens et mêmes informations (chiffres, noms, faits conservés), même langue
+- Voix active uniquement, phrases de 20 mots maximum, aucun participe présent, aucun tiret cadratin (—) ni demi-cadratin (–), aucune formule creuse (« il est important de noter »…)
+- La STRUCTURE HTML existante : mêmes balises et même imbrication (titres hn, paragraphes p, listes ul/ol/li, gras strong, italique em…) — tu reformules le texte À L'INTÉRIEUR des balises, tu ne changes ni le nombre de titres/paragraphes/éléments de liste ni leur ordre
+- TOUS les liens <a href="..."> présents DOIVENT être conservés À L'IDENTIQUE (même href, même texte d'ancre, même position relative) — ne les supprime jamais, ne les déplace pas, n'en ajoute aucun nouveau
+Réponds UNIQUEMENT avec le HTML réécrit (mêmes balises racines que l'entrée), sans commentaire, sans balise <html>/<body>, sans bloc de code markdown.`,
+    max_tokens: 4000,
+    model: selectModel('update_generation'),
+    messages: [{ role: 'user', content: `Consigne : ${instruction}\n\nSection HTML à réécrire :\n\n${html}` }],
+  });
+  const cleaned = (out || '').trim()
+    .replace(/^```(?:html)?\s*\n?/i, '')
+    .replace(/\n?```\s*$/, '')
+    .trim();
+  if (!cleaned) throw new Error('Réponse vide — réessayez.');
+  return cleaned;
+};
+
+/**
  * Génère un meta title (≤60 chars) et une meta description (≤155 chars) optimisés SEO
  * à partir du HTML final de l'article. Utilise Haiku (rapide, économique).
  * Retourne { seoTitle, seoDescription } — chaînes vides en cas d'échec.
