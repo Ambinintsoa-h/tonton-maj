@@ -1448,7 +1448,7 @@ RÈGLE DE PERTINENCE ABSOLUE — l'ancre et l'article lié doivent porter sur le
 - Mieux vaut une ancre un peu plus générale qui correspond à un article que deux sujets précis mal appariés.
 
 Pour chaque lien :
-- "anchor" : une expression COURTE (2-5 mots) présente EXACTEMENT mot-pour-mot dans l'article, riche en mots-clés, et dont le SUJET correspond à l'article lié. Choisis une expression simple et certaine d'exister, pas une longue phrase.
+- "anchor" : une expression COURTE (2-5 mots) présente EXACTEMENT mot-pour-mot dans l'article, riche en mots-clés, et dont le SUJET correspond à l'article lié. Choisis une expression simple et certaine d'exister, pas une longue phrase. Choisis-la OBLIGATOIREMENT dans un paragraphe de texte courant — JAMAIS dans un titre (H1-H6) : un lien interne ne doit jamais se retrouver dans un titre.
 - "url" : l'URL de l'article lié
 - "title" : le titre de l'article lié
 - "reason" : en quoi l'article lié approfondit précisément le sujet de l'ancre (1 phrase)
