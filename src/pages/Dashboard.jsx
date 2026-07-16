@@ -574,9 +574,15 @@ const TeamActivityWidget = ({ delay = 0 }) => {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {rows.map((r, idx) => {
-                    const roleCls = r.userRole === 'cq_ia'
-                      ? 'bg-blue-50 text-blue-600'
-                      : 'bg-purple-50 text-purple-600';
+                    // Tous les rôles sont trackés désormais — badge fidèle au rôle réel
+                    const roleCls = {
+                      cq_ia:       'bg-blue-50 text-blue-600',
+                      manager:     'bg-purple-50 text-purple-600',
+                      support:     'bg-emerald-50 text-emerald-600',
+                      super_admin: 'bg-amber-50 text-amber-600',
+                    }[r.userRole] || 'bg-gray-100 text-gray-500';
+                    const roleLabel = { cq_ia: 'CQ IA', manager: 'Manager', support: 'Support', super_admin: 'Admin' }[r.userRole]
+                      || r.userRole || '—';
                     const ticketsTotal = r.ticketsCreated + r.ticketsCommented + r.ticketsResolved;
                     return (
                       <tr key={r.userId} className="hover:bg-gray-50/60 transition-colors">
@@ -589,7 +595,7 @@ const TeamActivityWidget = ({ delay = 0 }) => {
                             <div className="min-w-0">
                               <p className="font-semibold text-gray-800 truncate max-w-[120px]">{r.userName}</p>
                               <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${roleCls}`}>
-                                {r.userRole === 'cq_ia' ? 'CQ IA' : 'Manager'}
+                                {roleLabel}
                               </span>
                             </div>
                           </div>

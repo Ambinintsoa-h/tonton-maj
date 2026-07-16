@@ -750,8 +750,9 @@ export default function Equipe() {
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 onDelete={handleDelete}
-                onViewStats={authRole === 'super_admin' && ['cq_ia', 'manager'].includes(user.role)
-                  ? setStatsUser : null}
+                // Stats consultables pour TOUS les membres (le tracking couvre
+                // désormais tous les rôles, plus seulement cq_ia/manager)
+                onViewStats={authRole === 'super_admin' ? setStatsUser : null}
               />
             ))}
           </AnimatePresence>
