@@ -4,6 +4,7 @@ import {
   makeTablesResponsive, TABLE_WRAP_ATTR,
   blockMeta, accord, insertBlockHtml, topLevelBlockOf, blockAtRange,
   isDiffWrapper, unwrapDiffWrapper, normalizeTableStructure,
+  isDiffDel, isDiffMark, diffClusterOf, cleanBlocksHtml,
 } from './blocks';
 
 const TABLE = '<table><tbody><tr><td>Prix</td><td>120 €</td></tr></tbody></table>';
@@ -149,6 +150,61 @@ describe('blockMeta / accord', () => {
 
     // un élément normal n'est pas un wrapper
     expect(isDiffWrapper(el('<p>x</p>'))).toBe(false);
+  });
+});
+
+describe('diffClusterOf / cleanBlocksHtml (modifications en attente)', () => {
+  // Article avec une modification en attente (paire del+mark), un ajout (ins)
+  // et des blocs normaux — la forme exacte produite par applyDiff.
+  const setup = () => {
+    const c = document.createElement('div');
+    c.innerHTML =
+      '<p>Intro</p>'
+      + '<del class="deleted-content"><h2>Ancien titre</h2></del>'
+      + '<mark class="updated-content"><h2>Nouveau titre</h2></mark>'
+      + '<ins class="added-content"><p>Bloc ajouté</p></ins>'
+      + '<del class="deleted-content"><p>Suppression seule</p></del>'
+      + '<p>Fin</p>';
+    return c;
+  };
+
+  it('résout la paire complète depuis le <mark> OU le <del>', () => {
+    const c = setup();
+    const [, del, mark] = c.children;
+    expect(isDiffDel(del)).toBe(true);
+    expect(isDiffMark(mark)).toBe(true);
+    expect(diffClusterOf(mark)).toEqual([del, mark]);
+    expect(diffClusterOf(del)).toEqual([del, mark]);
+  });
+
+  it('un <ins>, un <del> orphelin ou un bloc normal restent seuls', () => {
+    const c = setup();
+    const ins = c.children[3];
+    const delAlone = c.children[4];
+    expect(diffClusterOf(ins)).toEqual([ins]);
+    expect(diffClusterOf(delAlone)).toEqual([delAlone]);
+    expect(diffClusterOf(c.firstElementChild)).toEqual([c.firstElementChild]);
+  });
+
+  it('cleanBlocksHtml garde la version proposée sans marqueurs', () => {
+    const c = setup();
+    const html = cleanBlocksHtml(c.childNodes);
+    expect(html).toBe('<p>Intro</p><h2>Nouveau titre</h2><p>Bloc ajouté</p><p>Suppression seule</p><p>Fin</p>');
+  });
+
+  it('insertBlockHtml ne colle JAMAIS entre le <del> et le <mark> d\'une paire', () => {
+    // before sur le <mark> → avant le <del> ; after sur le <del> → après le <mark>
+    const c1 = setup();
+    insertBlockHtml(c1, '<p>X</p>', c1.children[2], 'before'); // ref = mark
+    expect(c1.children[1].textContent).toBe('X');
+    expect(c1.children[2].tagName).toBe('DEL');
+    expect(c1.children[3].tagName).toBe('MARK');
+
+    const c2 = setup();
+    insertBlockHtml(c2, '<p>Y</p>', c2.children[1], 'after'); // ref = del
+    expect(c2.children[1].tagName).toBe('DEL');
+    expect(c2.children[2].tagName).toBe('MARK');
+    expect(c2.children[3].textContent).toBe('Y');
   });
 });
 

@@ -23,7 +23,7 @@ import {
   Film, HelpCircle, Quote, Box, PanelRight, Scissors, ClipboardPaste, CopyPlus,
   FoldVertical, UnfoldVertical, ArrowUp, ArrowDown,
 } from 'lucide-react';
-import { unwrapDiffWrapper } from '../../utils/blocks';
+import { unwrapDiffWrapper, isDiffWrapper, isDiffDel, isDiffMark } from '../../utils/blocks';
 
 // ── Description d'un bloc top-level ──────────────────────────────────────────
 const excerpt = (s, n = 48) => {
@@ -82,8 +82,9 @@ const describe = (rawEl) => {
 // Presse-papiers de blocs (ArticleResult) :
 //  clipboard ({ name, art } | null) — contenu actuel du presse-papiers interne
 //  onCopyBlock(el) / onCutBlock(el) — copier/couper un bloc depuis le panneau
+//  onCopySection(els, cut) — copier/couper une section H2 entière (tous ses nœuds)
 //  onPasteRelative(el, 'before'|'after') — coller le presse-papiers autour d'un bloc
-export default function DocNavigator({ articleEl, onEdited, clipboard = null, onCopyBlock, onCutBlock, onPasteRelative }) {
+export default function DocNavigator({ articleEl, onEdited, clipboard = null, onCopyBlock, onCutBlock, onCopySection, onPasteRelative }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);      // [{ el, Icon, kind, label, … }]
   const [dragIdx, setDragIdx] = useState(null);
@@ -111,11 +112,26 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
   }, [articleEl]);
 
   // ── Construction de la liste depuis les enfants top-level de l'article ─────
+  // Une modification EN ATTENTE (paire adjacente <del>+<mark> insérée par
+  // applyDiff) devient UN SEUL item — représenté par le <mark> (nouvelle
+  // version) — et TOUTES les actions (déplacer, glisser, dupliquer, supprimer,
+  // couper) emportent les deux nœuds via `nodes` : les séparer casserait les
+  // boutons Accepter/Rejeter, qui reposent sur leur adjacence.
   const refresh = useCallback(() => {
     if (!articleEl) { setItems([]); return; }
-    const list = Array.from(articleEl.children)
-      .filter(el => !['SCRIPT', 'STYLE', 'BR'].includes(el.tagName))
-      .map(el => ({ el, ...describe(el) }));
+    const kids = Array.from(articleEl.children)
+      .filter(el => !['SCRIPT', 'STYLE', 'BR'].includes(el.tagName));
+    const list = [];
+    for (let i = 0; i < kids.length; i++) {
+      const el = kids[i];
+      // Même critère d'adjacence DOM que resolveDiffPair (ArticleResult)
+      if (isDiffDel(el) && isDiffMark(el.nextElementSibling) && kids[i + 1] === el.nextElementSibling) {
+        list.push({ el: kids[i + 1], nodes: [el, kids[i + 1]], pending: true, ...describe(kids[i + 1]) });
+        i++;
+        continue;
+      }
+      list.push({ el, nodes: [el], pending: isDiffWrapper(el), ...describe(el) });
+    }
     setItems(list);
     setCtxMenu(null); // les index changent → menu contextuel périmé
   }, [articleEl]);
@@ -186,30 +202,39 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
   }, [onEdited, refresh]);
 
   // ── Actions bloc ────────────────────────────────────────────────────────────
+  // Toutes opèrent sur `nodes` (paire <del>+<mark> complète pour une
+  // modification en attente) — jamais sur un demi-cluster.
   const moveItem = useCallback((idx, dir) => {
-    const el = items[idx]?.el;
-    const target = items[idx + dir]?.el;
-    if (!el || !target || !el.parentNode) return;
-    if (dir < 0) el.parentNode.insertBefore(el, target);
-    else el.parentNode.insertBefore(el, target.nextSibling);
+    const item = items[idx];
+    const target = items[idx + dir];
+    if (!item || !target || !item.el.parentNode) return;
+    const parent = item.el.parentNode;
+    const ref = dir < 0 ? target.nodes[0] : target.nodes[target.nodes.length - 1].nextSibling;
+    item.nodes.forEach(n => parent.insertBefore(n, ref));
     commit();
-    scrollToEl(el);
+    scrollToEl(item.el);
   }, [items, commit, scrollToEl]);
 
   const duplicateItem = useCallback((idx) => {
-    const el = items[idx]?.el;
-    if (!el || !el.parentNode) return;
-    const clone = el.cloneNode(true);
-    el.parentNode.insertBefore(clone, el.nextSibling);
+    const item = items[idx];
+    if (!item || !item.el.parentNode) return;
+    const parent = item.el.parentNode;
+    const ref = item.nodes[item.nodes.length - 1].nextSibling;
+    let firstClone = null;
+    item.nodes.forEach((n) => {
+      const clone = n.cloneNode(true);
+      if (!firstClone) firstClone = clone;
+      parent.insertBefore(clone, ref);
+    });
     commit();
-    scrollToEl(clone);
+    scrollToEl(firstClone);
     toast.success('Bloc dupliqué');
   }, [items, commit, scrollToEl]);
 
   const deleteItem = useCallback((idx) => {
-    const el = items[idx]?.el;
-    if (!el) return;
-    el.remove();
+    const item = items[idx];
+    if (!item) return;
+    item.nodes.forEach(n => n.remove());
     commit();
     toast('Bloc supprimé — Ctrl+Z pour annuler', { icon: '🗑️' });
   }, [items, commit]);
@@ -217,13 +242,15 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
   // ── Drag & drop (réordonner depuis le panneau) ─────────────────────────────
   const handleDrop = useCallback(() => {
     if (dragIdx == null || !dropPos) { setDragIdx(null); setDropPos(null); return; }
-    const el = items[dragIdx]?.el;
-    const target = items[dropPos.idx]?.el;
+    const item = items[dragIdx];
+    const target = items[dropPos.idx];
     setDragIdx(null); setDropPos(null);
-    if (!el || !target || el === target || !el.parentNode) return;
-    el.parentNode.insertBefore(el, dropPos.after ? target.nextSibling : target);
+    if (!item || !target || item === target || !item.el.parentNode) return;
+    const parent = item.el.parentNode;
+    const ref = dropPos.after ? target.nodes[target.nodes.length - 1].nextSibling : target.nodes[0];
+    item.nodes.forEach(n => parent.insertBefore(n, ref));
     commit();
-    scrollToEl(el);
+    scrollToEl(item.el);
   }, [dragIdx, dropPos, items, commit, scrollToEl]);
 
   // ── Regroupement par section H2 ─────────────────────────────────────────────
@@ -259,11 +286,12 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
     const parent = g.members[0].el.parentNode;
     if (!parent) return;
     if (dir < 0) {
-      const ref = target.members[0].el; // insérer avant le 1er élément de la section précédente
-      g.members.forEach(m => parent.insertBefore(m.el, ref));
+      const ref = target.members[0].nodes[0]; // avant le 1er nœud de la section précédente
+      g.members.forEach(m => m.nodes.forEach(n => parent.insertBefore(n, ref)));
     } else {
-      const ref = target.members[target.members.length - 1].el.nextSibling; // après le dernier de la suivante
-      g.members.forEach(m => parent.insertBefore(m.el, ref));
+      const lastM = target.members[target.members.length - 1];
+      const ref = lastM.nodes[lastM.nodes.length - 1].nextSibling; // après le dernier de la suivante
+      g.members.forEach(m => m.nodes.forEach(n => parent.insertBefore(n, ref)));
     }
     commit();
     scrollToEl(g.members[0].el);
@@ -357,7 +385,7 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
                       <span className="flex-1 min-w-0 truncate text-[11.5px] font-semibold text-gray-800">{g.title}</span>
                       <span className="text-[10px] text-gray-400 shrink-0">{g.members.length}</span>
                     </button>
-                    {/* Déplacer la SECTION entière */}
+                    {/* Déplacer / copier / couper la SECTION entière */}
                     <span className="hidden group-hover/sec:flex items-center gap-0.5 shrink-0">
                       <button type="button" title="Monter la section entière" disabled={gIdx === 0}
                         onClick={() => moveSection(groups, gIdx, -1)}
@@ -369,6 +397,20 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
                         className="p-0.5 rounded hover:bg-indigo-100 text-gray-400 hover:text-indigo-700 disabled:opacity-20">
                         <ArrowDown size={12} />
                       </button>
+                      {onCopySection && (
+                        <>
+                          <button type="button" title="Copier la section entière (H2 + contenu) — coller ensuite au clic droit"
+                            onClick={() => onCopySection(g.members.flatMap(m => m.nodes), false)}
+                            className="p-0.5 rounded hover:bg-indigo-100 text-gray-400 hover:text-indigo-700">
+                            <Copy size={12} />
+                          </button>
+                          <button type="button" title="Couper la section entière (H2 + contenu) — coller ensuite au clic droit"
+                            onClick={() => onCopySection(g.members.flatMap(m => m.nodes), true)}
+                            className="p-0.5 rounded hover:bg-amber-100 text-gray-400 hover:text-amber-600">
+                            <Scissors size={12} />
+                          </button>
+                        </>
+                      )}
                     </span>
                   </div>
 
@@ -404,6 +446,12 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
                         >
                           <GripVertical size={12} className="text-gray-300 group-hover:text-gray-400 shrink-0 cursor-grab" />
                           <it.Icon size={13} className={`shrink-0 ${it.strong ? 'text-indigo-600' : 'text-gray-400'}`} />
+                          {it.pending && (
+                            <span
+                              title="Modification en attente (Accepter/Rejeter dans l'éditeur) — le bloc reste manipulable : déplacer, dupliquer, couper, supprimer"
+                              className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"
+                            />
+                          )}
                           <span className={[
                             'flex-1 min-w-0 truncate text-[11.5px] leading-tight',
                             it.strong ? 'font-semibold text-gray-800' : 'text-gray-600',
@@ -447,7 +495,7 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
 
           <div className="px-3.5 py-2 border-t border-gray-100 bg-gray-50/60">
             <p className="text-[10px] text-gray-400 leading-snug">
-              Sections H2 pliables · <ArrowUp size={9} className="inline -mt-0.5" /><ArrowDown size={9} className="inline -mt-0.5" /> déplace la section entière · Clic droit : copier/couper/coller avant-après
+              Sections H2 pliables · <ArrowUp size={9} className="inline -mt-0.5" /><ArrowDown size={9} className="inline -mt-0.5" /> déplace, ⧉/✂ copie ou coupe la section entière · Clic droit sur un bloc : copier/couper/coller avant-après · Point orange = modification en attente (manipulable quand même)
             </p>
           </div>
         </div>

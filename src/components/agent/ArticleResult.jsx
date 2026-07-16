@@ -26,7 +26,7 @@ import {
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
   insertFaqHtmlAtCaret, rectOfNodes, normalizeFaqToAccordion,
 } from '../../utils/faq';
-import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf, isDiffWrapper, normalizeTableStructure } from '../../utils/blocks';
+import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction } from '../../store/slices/agentSlice';
 import RewritePanel from './RewritePanel';
 import ImageAltCaptionPanel from './ImageAltCaptionPanel';
@@ -1928,20 +1928,54 @@ export default function ArticleResult() {
 
   // Copier/couper N'IMPORTE QUEL bloc (élément top-level : tableau, titre,
   // paragraphe, image…) — depuis le panneau Structure ou le clic droit.
+  // Une modification EN ATTENTE (paire <del>+<mark> adjacente, ou <ins>) est
+  // traitée comme UN SEUL bloc : COUPER emporte les marqueurs (on peut encore
+  // Accepter/Rejeter après collage), COPIER produit une copie PROPRE de la
+  // version proposée (sans marqueurs).
   const blockClipFromEl = useCallback((el, cut) => {
     if (!el || !articleRef.current || el.parentNode !== articleRef.current) {
       toast.error('Aucun bloc identifié à cet endroit');
       return;
     }
-    const meta = blockMeta(el);
-    // Bloc AJOUTÉ (enveloppé dans <ins>/<mark> de diff) → on copie le contenu
-    // PROPRE (sans le marqueur), pour qu'il se colle comme un bloc normal.
-    blockClipRef.current = { html: isDiffWrapper(el) ? el.innerHTML : el.outerHTML, meta };
-    if (cut) el.remove();
+    const cluster = diffClusterOf(el);
+    const main = cluster[cluster.length - 1]; // pour une paire : le <mark> (nouvelle version)
+    const meta = blockMeta(main);
+    const html = cut
+      ? cluster.map(n => n.outerHTML).join('')
+      : cleanBlocksHtml(cluster);
+    if (!html || !html.trim()) {
+      toast.error(`${meta.name} vide — rien à ${cut ? 'couper' : 'copier'}`);
+      return;
+    }
+    blockClipRef.current = { html, meta };
+    if (cut) cluster.forEach(n => n.remove());
     setBlockClipboard({ mode: cut ? 'couper' : 'copier', ...meta });
     if (cut) afterFaqEdit(); else setFaqHover(null);
     toast.success(
       `${meta.name} ${accord(meta, cut ? 'coupé' : 'copié')} — CLIC DROIT à l'endroit voulu puis « Coller ${meta.art} »`,
+      { duration: 6000 },
+    );
+  }, [afterFaqEdit]);
+
+  // Copier/couper une SECTION ENTIÈRE (H2 + tout son contenu) depuis le panneau
+  // Structure. Les modifications en attente voyagent avec la section (couper) ;
+  // la copie est PROPRE (version proposée, sans marqueurs).
+  const sectionClip = useCallback((els, cut) => {
+    const container = articleRef.current;
+    const nodes = (els || []).filter(n => n && n.parentNode === container);
+    if (!container || !nodes.length) {
+      toast.error('Section introuvable dans l\'éditeur');
+      return;
+    }
+    const meta = { name: 'Section', art: 'la section', fem: true };
+    const html = cut ? nodes.map(n => n.outerHTML).join('') : cleanBlocksHtml(nodes);
+    if (!html.trim()) { toast.error('Section vide — rien à ' + (cut ? 'couper' : 'copier')); return; }
+    blockClipRef.current = { html, meta };
+    if (cut) nodes.forEach(n => n.remove());
+    setBlockClipboard({ mode: cut ? 'couper' : 'copier', ...meta });
+    if (cut) afterFaqEdit();
+    toast.success(
+      `Section ${cut ? 'coupée' : 'copiée'} — CLIC DROIT à l'endroit voulu puis « Coller la section »`,
       { duration: 6000 },
     );
   }, [afterFaqEdit]);
@@ -1967,16 +2001,32 @@ export default function ArticleResult() {
   }, [blockClipFromEl, faqCopyOrCut]);
 
   // Colle le presse-papiers au CARET courant (bloc top-level le plus proche),
-  // sinon en fin d'article.
+  // sinon en fin d'article. Plus JAMAIS d'échec silencieux : chaque cas
+  // impossible est expliqué à l'utilisateur.
   const blockPaste = useCallback(() => {
     const clip = blockClipRef.current;
-    if (!clip?.html || !articleRef.current) return;
+    if (!clip?.html) {
+      toast.error('Presse-papiers vide — coupez ou copiez d\'abord un bloc');
+      setBlockClipboard(null); // resynchronise le bandeau si l'état a divergé
+      return;
+    }
+    if (!articleRef.current) {
+      toast.error('Éditeur indisponible — repassez en Vue diff pour coller');
+      return;
+    }
+    // Caret dans l'article ? Sinon le collage retombe en FIN d'article — on le dit.
+    const sel = window.getSelection();
+    const caretInside = !!(sel && sel.rangeCount && articleRef.current.contains(sel.getRangeAt(0).startContainer));
     const first = insertFaqHtmlAtCaret(articleRef.current, clip.html);
-    if (!first) { toast.error('Collage impossible'); return; }
+    if (!first) { toast.error('Collage impossible — cliquez dans l\'article puis réessayez'); return; }
     setBlockClipboard(null);
     afterFaqEdit();
     scrollToFaqNode(first);
-    toast.success(`${clip.meta.name} ${accord(clip.meta, 'collé')}`);
+    toast.success(
+      `${clip.meta.name} ${accord(clip.meta, 'collé')}`
+      + (caretInside ? '' : ' en fin d\'article (posez le curseur dans le texte pour choisir l\'endroit)'),
+      { duration: caretInside ? 4000 : 6000 },
+    );
   }, [afterFaqEdit, scrollToFaqNode]);
 
   // Collage au point du CLIC DROIT : la barre d'outils (BubbleToolbar) fournit
@@ -1997,7 +2047,15 @@ export default function ArticleResult() {
   const pasteBlockRelative = useCallback((refEl, where) => {
     const clip = blockClipRef.current;
     const container = articleRef.current;
-    if (!clip?.html || !container) return;
+    if (!clip?.html) {
+      toast.error('Presse-papiers vide — coupez ou copiez d\'abord un bloc');
+      setBlockClipboard(null); // resynchronise le bandeau si l'état a divergé
+      return;
+    }
+    if (!container) {
+      toast.error('Éditeur indisponible — repassez en Vue diff pour coller');
+      return;
+    }
     const first = insertBlockHtml(container, clip.html, refEl, where);
     if (!first) { toast.error('Collage impossible'); return; }
     setBlockClipboard(null);
@@ -3985,6 +4043,7 @@ export default function ArticleResult() {
             clipboard={blockClipboard ? { name: blockClipboard.name, art: blockClipboard.art } : null}
             onCopyBlock={(el) => blockClipFromEl(el, false)}
             onCutBlock={(el) => blockClipFromEl(el, true)}
+            onCopySection={(els, cut) => sectionClip(els, cut)}
             onPasteRelative={pasteBlockRelative}
           />
         )}
