@@ -42,7 +42,9 @@
 ## Ticketing
 → Voir `.claude/tickets.md` pour le détail complet
 
-## Tracking activité (manager/cq_ia uniquement)
+## Tracking activité (tous les rôles)
+- Tous les rôles trackés (cq_ia, manager, support, super_admin) — sauf le super_admin de SECOURS (login local settings.json, sans session Firebase : écritures Firestore refusées silencieusement)
+- Historique : tracking mort du ~16 juin au 13 juillet 2026 (bug règles Firestore, réparé par 1e5498d) → trou de données sur cette période pour tout le monde
 - `activityTracker.js` — singleton, heartbeat 2 min, pause après 10 min sans activité
 - `closes[]` dans Firestore : enregistré via `beforeunload`/`pagehide` + localStorage backup
 - KPI "Absent" = `sessionWindowMin - totalActiveMinutes`

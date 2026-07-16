@@ -45,9 +45,13 @@ const tsLabel = (ts) => ts
   : '—';
 
 const ROLE_COLORS = {
-  cq_ia:   { bar: '#3b82f6', area: '#93c5fd', badge: 'bg-blue-50 text-blue-700 border border-blue-200' },
-  manager: { bar: '#8b5cf6', area: '#c4b5fd', badge: 'bg-purple-50 text-purple-700 border border-purple-200' },
+  cq_ia:       { bar: '#3b82f6', area: '#93c5fd', badge: 'bg-blue-50 text-blue-700 border border-blue-200' },
+  manager:     { bar: '#8b5cf6', area: '#c4b5fd', badge: 'bg-purple-50 text-purple-700 border border-purple-200' },
+  support:     { bar: '#10b981', area: '#6ee7b7', badge: 'bg-emerald-50 text-emerald-700 border border-emerald-200' },
+  super_admin: { bar: '#f59e0b', area: '#fcd34d', badge: 'bg-amber-50 text-amber-700 border border-amber-200' },
 };
+
+const ROLE_LABELS = { cq_ia: 'CQ IA', manager: 'Manager', support: 'Support', super_admin: 'Admin' };
 
 // ── Tooltip custom Recharts ───────────────────────────────────────────────────
 const ChartTooltip = ({ active, payload, label }) => {
@@ -348,7 +352,7 @@ export default function MemberStatsPanel({ user, onClose }) {
                     || 'Membre'}
                 </h2>
                 <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${colors.badge}`}>
-                  {user.role === 'cq_ia' ? 'CQ IA' : 'Manager'}
+                  {ROLE_LABELS[user.role] || user.role || 'Membre'}
                 </span>
                 {isActiveNow && (
                   <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex-shrink-0">

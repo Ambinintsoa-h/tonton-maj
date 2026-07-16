@@ -17,7 +17,10 @@ const localDate = () => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ActivityTracker — singleton invisible, uniquement pour manager / cq_ia
+// ActivityTracker — singleton invisible, pour TOUS les rôles authentifiés
+// (cq_ia, manager, support, super_admin). Toutes les écritures Firestore sont
+// best-effort (.catch silencieux) : un compte sans session Firebase (super_admin
+// local de secours) ne casse rien, il n'est simplement pas tracké.
 // ─────────────────────────────────────────────────────────────────────────────
 class ActivityTracker {
   constructor() {
@@ -83,7 +86,7 @@ class ActivityTracker {
   /**
    * Enregistre une action métier (articles, tickets…).
    * Importé et appelé depuis Articles.jsx et Tickets.jsx.
-   * No-op si le tracker n'est pas initialisé (super_admin).
+   * No-op si le tracker n'est pas initialisé (non connecté).
    */
   trackAction(type) {
     if (!this._uid || !this._ready) return;

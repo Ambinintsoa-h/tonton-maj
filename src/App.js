@@ -380,7 +380,10 @@ function LocalStorageSync() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tracking invisible — manager / cq_ia uniquement, totalement transparent
+// Tracking invisible — TOUS les rôles (cq_ia, manager, support, super_admin),
+// totalement transparent. Le super_admin de SECOURS (login local settings.json,
+// sans session Firebase) ne peut pas écrire dans Firestore côté client : ses
+// écritures échouent en silence (règles) — seul ce compte-là n'est pas tracké.
 // ─────────────────────────────────────────────────────────────────────────────
 function ActivityTrackerInit() {
   const isAuthenticated = useSelector(s => s.auth.isAuthenticated);
@@ -391,7 +394,7 @@ function ActivityTrackerInit() {
   const nom      = useSelector(s => s.auth.nom);
 
   useEffect(() => {
-    if (!isAuthenticated || !['manager', 'cq_ia'].includes(role)) return;
+    if (!isAuthenticated || !role) return;
     const userId = uid || username;
     const name   = [prenom, nom].filter(Boolean).join(' ') || username || userId;
     tracker.init(userId, role, name);
