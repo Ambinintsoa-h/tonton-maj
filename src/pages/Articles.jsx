@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2, Gauge } from 'lucide-react';
-import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit } from '../store/slices/agentSlice';
+import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta } from '../store/slices/agentSlice';
 import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import { addToHistory, updateInHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
@@ -73,7 +73,12 @@ export default function Articles() {
         dispatch(setAudit(d.audit || ''));
         dispatch(setCurrentArticleId(d.currentArticleId || null));
         if (d.tokenUsage) dispatch(setTokenUsage(d.tokenUsage));
+        if (d.instruction) dispatch(setAgentInstruction(d.instruction));
       }
+      // Métadonnées d'édition (titre édité, SEO Meta, date MAJ, image à la une,
+      // catégories) : rehydratées par ArticleResult — AUSSI au retour SPA
+      // (full=false), car ses états locaux sont perdus au démontage.
+      if (d.editorMeta) dispatch(setEditorMeta(d.editorMeta));
       dispatch(setUpdatedContent(d.html));
       dispatch(setStatus('done'));
     };
@@ -84,8 +89,9 @@ export default function Articles() {
       applyDraft(local, true);
     } else if (agent.status === 'done' && local?.html
         && local.currentArticleId === agent.currentArticleId
-        && local.html !== agent.updatedContent) {
-      // Retour SPA : récupérer les éditions manuelles (contentRef) non reflétées dans Redux
+        && (local.html !== agent.updatedContent || local.editorMeta)) {
+      // Retour SPA : récupérer les éditions manuelles (contentRef) non reflétées
+      // dans Redux — HTML édité ET métadonnées (titre, SEO, date, image, catégories)
       applyDraft(local, false);
     }
 

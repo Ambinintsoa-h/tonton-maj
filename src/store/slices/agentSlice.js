@@ -23,6 +23,10 @@ const agentSlice = createSlice({
     majDepth: 'standard',  // profondeur de MAJ (legere|standard|refonte) — transmise à la passe 2
     instruction: '',  // consigne libre de l'équipe → injectée dans les prompts (analyse + MAJ, passe 2)
     audit: '',  // rapport d'audit complet (markdown) produit par le skill SKILL.md — onglet AUDIT
+    // Métadonnées d'édition restaurées depuis le brouillon autosave (titre édité,
+    // SEO Meta, date MAJ, image à la une, catégories) — consommées une fois par
+    // ArticleResult pour rehydrater ses états locaux après un rechargement.
+    editorMeta: null,
     draftStatus: 'idle',   // idle | saving | saved | local — état de l'autosave (indicateur header)
     draftSavedAt: null,    // timestamp du dernier enregistrement réussi
   },
@@ -48,6 +52,7 @@ const agentSlice = createSlice({
       state.majDepth = 'standard';
       state.instruction = '';
       state.audit = '';
+      state.editorMeta = null;
       state.draftStatus = 'idle';
       state.draftSavedAt = null;
     },
@@ -83,6 +88,7 @@ const agentSlice = createSlice({
     setMajDepth: (state, action) => { state.majDepth = action.payload || 'standard'; },
     setInstruction: (state, action) => { state.instruction = action.payload || ''; },
     setAudit: (state, action) => { state.audit = action.payload || ''; },
+    setEditorMeta: (state, action) => { state.editorMeta = action.payload || null; },
     setDraftStatus: (state, action) => {
       // payload : { status, savedAt? }
       state.draftStatus = action.payload?.status ?? 'idle';
@@ -95,6 +101,6 @@ export const {
   resetAgent, setStatus, addStep, replaceLastStep, setProgress,
   setOriginalContent, setUpdatedContent, setDiff, setSources,
   setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
-  setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword, setMajDepth, setInstruction, setAudit, setDraftStatus,
+  setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword, setMajDepth, setInstruction, setAudit, setEditorMeta, setDraftStatus,
 } = agentSlice.actions;
 export default agentSlice.reducer;
