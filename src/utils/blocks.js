@@ -37,19 +37,64 @@ export const blockAtRange = (container, range) => {
 
 // ── Traversée des marqueurs de diff ──────────────────────────────────────────
 // Un bloc AJOUTÉ par l'agent (accepté ou encore en vert) est enveloppé dans
-// <ins class="added-content"> (remplacement → <mark class="updated-content">).
-// Pour le typage, l'étiquette, le groupement H2 et le copier/déplacer, on
-// regarde À TRAVERS ce wrapper : s'il n'enveloppe qu'un seul élément de bloc,
-// on le représente par cet élément → il se comporte comme n'importe quel bloc.
+// <ins class="added-content"> (remplacement → <del class="deleted-content"> +
+// <mark class="updated-content">). Pour le typage, l'étiquette, le groupement
+// H2 et le copier/déplacer, on regarde À TRAVERS ce wrapper : s'il n'enveloppe
+// qu'un seul élément de bloc, on le représente par cet élément → il se comporte
+// comme n'importe quel bloc.
 export const isDiffWrapper = (el) =>
   !!el && el.nodeType === Node.ELEMENT_NODE
-  && (el.tagName === 'INS' || el.tagName === 'MARK')
-  && typeof el.className === 'string' && /(added|updated)-content/.test(el.className);
+  && (el.tagName === 'INS' || el.tagName === 'MARK' || el.tagName === 'DEL')
+  && typeof el.className === 'string' && /(added|updated|deleted)-content/.test(el.className);
 
 export const unwrapDiffWrapper = (el) => {
   if (!isDiffWrapper(el)) return el;
   const kids = Array.from(el.children);
   return kids.length === 1 ? kids[0] : el;
+};
+
+// ── Cluster de diff : les nœuds top-level d'UNE modification en attente ──────
+// applyDiff insère un remplacement sous forme de paire ADJACENTE
+// <del class="deleted-content">…</del><mark class="updated-content">…</mark>,
+// et un ajout sous forme d'<ins class="added-content"> seul. Les boutons
+// Accepter/Rejeter (resolveDiffPair) reposent sur cette adjacence : toute
+// manipulation de bloc (couper, déplacer, dupliquer, supprimer, coller à côté)
+// doit traiter la paire comme UN SEUL bloc — la séparer casse l'accept/reject.
+export const isDiffDel = (el) =>
+  !!el && el.nodeType === Node.ELEMENT_NODE && el.tagName === 'DEL'
+  && typeof el.className === 'string' && el.className.includes('deleted-content');
+
+export const isDiffMark = (el) =>
+  !!el && el.nodeType === Node.ELEMENT_NODE && el.tagName === 'MARK'
+  && typeof el.className === 'string' && el.className.includes('updated-content');
+
+// Tous les nœuds du cluster contenant el, dans l'ordre du document :
+// [del, mark] pour une paire, sinon [el].
+export const diffClusterOf = (el) => {
+  if (isDiffDel(el)) {
+    const next = el.nextElementSibling;
+    return isDiffMark(next) ? [el, next] : [el];
+  }
+  if (isDiffMark(el)) {
+    const prev = el.previousElementSibling;
+    return isDiffDel(prev) ? [prev, el] : [el];
+  }
+  return [el];
+};
+
+// HTML PROPRE (sans marqueurs de diff) d'une suite de nœuds top-level : chaque
+// modification en attente est représentée par sa VERSION COURANTE proposée —
+// contenu du <mark>/<ins> ; le <del> d'une paire est ignoré, un <del> seul
+// (suppression en attente) garde son contenu (il est encore dans l'article).
+export const cleanBlocksHtml = (nodes) => {
+  let html = '';
+  Array.from(nodes).forEach((n) => {
+    if (!n) return;
+    if (n.nodeType !== Node.ELEMENT_NODE) { html += n.textContent || ''; return; }
+    if (isDiffDel(n) && isDiffMark(n.nextElementSibling)) return; // ancienne version d'une paire
+    html += isDiffWrapper(n) ? n.innerHTML : n.outerHTML;
+  });
+  return html;
 };
 
 // ── Métadonnées d'affichage d'un bloc ────────────────────────────────────────
@@ -98,7 +143,9 @@ export const insertBlockHtml = (container, html, refEl, where = 'after') => {
   if (!nodes.length) return null;
   let anchor = null; // insertBefore(x, null) = append
   if (refEl && refEl.parentNode === container) {
-    anchor = where === 'before' ? refEl : refEl.nextSibling;
+    // Ne jamais s'insérer ENTRE le <del> et le <mark> d'une paire de diff
+    const cluster = diffClusterOf(refEl);
+    anchor = where === 'before' ? cluster[0] : cluster[cluster.length - 1].nextSibling;
   }
   nodes.forEach(n => container.insertBefore(n, anchor));
   return nodes.find(n => n.nodeType === Node.ELEMENT_NODE) || nodes[0];

@@ -1,6 +1,7 @@
-// Tests de la normalisation FAQ → accordéon (normalizeFaqToAccordion)
-// et de la détection des formats dans l'éditeur (getQAGroups).
-import { normalizeFaqToAccordion, findFaqBlock, getQAGroups } from './faq';
+// Tests de la normalisation FAQ → accordéon (normalizeFaqToAccordion),
+// de la détection des formats dans l'éditeur (getQAGroups) et du collage
+// au caret (insertFaqHtmlAtCaret — presse-papiers de blocs).
+import { normalizeFaqToAccordion, findFaqBlock, getQAGroups, insertFaqHtmlAtCaret } from './faq';
 
 // Ancien format WordPress : <p><b>Question ?</b></p><br><p>réponse</p>
 const OLD_FORMAT = `<p>Intro article</p><h2>FAQ toit en bac acier</h2><br><p><b>Quelle est la durée de vie moyenne d’une toiture en bac acier ?</b></p><br><p>La durée de vie varie selon le type de matériau.</p><br><p><b>Combien coûte une toiture en bac acier en 2026 ?</b></p><br><p>En 2026, le coût d’installation se situe entre 5,50 et 16,50 EUR par m².</p><br><p><b>Le bac acier nécessite-t-il un entretien particulier ?</b></p><br><p>Non, très peu exigeante en entretien.</p>`;
@@ -97,5 +98,54 @@ describe('getQAGroups — détection dans l’éditeur', () => {
     const qa = getQAGroups(block);
     expect(qa.format).toBe('details');
     expect(qa.groups.length).toBe(2); // slice(0) : la 1re question n'est pas avalée comme « titre »
+  });
+});
+
+describe('insertFaqHtmlAtCaret — collage au caret', () => {
+  // Paire de diff en attente : le collage ne doit JAMAIS s'insérer entre le
+  // <del> et le <mark> (leur adjacence porte les boutons Accepter/Rejeter).
+  const setup = () => {
+    const c = document.createElement('div');
+    c.innerHTML =
+      '<p>Intro</p>'
+      + '<del class="deleted-content"><h2>Ancien</h2></del>'
+      + '<mark class="updated-content"><h2>Nouveau</h2></mark>'
+      + '<p>Fin</p>';
+    document.body.appendChild(c);
+    return c;
+  };
+  const setCaret = (node, offset) => {
+    const r = document.createRange();
+    r.setStart(node, offset);
+    r.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  };
+
+  afterEach(() => { document.body.innerHTML = ''; window.getSelection().removeAllRanges(); });
+
+  test('caret dans le <del> d\'une paire → collé APRÈS la paire entière', () => {
+    const c = setup();
+    setCaret(c.children[1].querySelector('h2').firstChild, 2); // dans « Ancien »
+    insertFaqHtmlAtCaret(c, '<p>X</p>');
+    expect(Array.from(c.children).map(e => e.tagName)).toEqual(['P', 'DEL', 'MARK', 'P', 'P']);
+    expect(c.children[3].textContent).toBe('X');
+  });
+
+  test('caret entre les deux moitiés de la paire → collé AVANT la paire entière', () => {
+    const c = setup();
+    setCaret(c, 2); // offset 2 = entre <del> et <mark>
+    insertFaqHtmlAtCaret(c, '<p>Y</p>');
+    expect(Array.from(c.children).map(e => e.tagName)).toEqual(['P', 'P', 'DEL', 'MARK', 'P']);
+    expect(c.children[1].textContent).toBe('Y');
+  });
+
+  test('sans caret dans l\'article → collé en fin d\'article', () => {
+    const c = setup();
+    window.getSelection().removeAllRanges();
+    const first = insertFaqHtmlAtCaret(c, '<p>Z</p>');
+    expect(c.lastElementChild.textContent).toBe('Z');
+    expect(first).toBe(c.lastElementChild);
   });
 });

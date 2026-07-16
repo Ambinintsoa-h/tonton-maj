@@ -8,6 +8,8 @@
 //      contient pas les mots-clés — reformulé par l'agent — ou a été coupé) ;
 //      le heading immédiatement précédent, quel que soit son texte, sert de titre
 
+import { diffClusterOf } from './blocks';
+
 const isFaqTitle = (text) => {
   const t = (text || '').toLowerCase().trim();
   return (
@@ -366,8 +368,14 @@ export const insertFaqHtmlAtCaret = (container, html) => {
     const range = sel.getRangeAt(0);
     let n = range.startContainer;
     if (n === container) {
-      // Caret directement entre deux blocs : insérer à cet endroit précis
-      const after = container.childNodes[range.startOffset] || null;
+      // Caret directement entre deux blocs : insérer à cet endroit précis —
+      // sauf entre le <del> et le <mark> d'une paire de diff (adjacence requise
+      // par Accepter/Rejeter) → on remonte AVANT la paire entière.
+      let after = container.childNodes[range.startOffset] || null;
+      if (after && after.nodeType === Node.ELEMENT_NODE) {
+        const cluster = diffClusterOf(after);
+        if (cluster[0] !== after) after = cluster[0];
+      }
       nodes.forEach(x => container.insertBefore(x, after));
       return nodes.find(x => x.nodeType === Node.ELEMENT_NODE) || nodes[0];
     }
@@ -378,7 +386,10 @@ export const insertFaqHtmlAtCaret = (container, html) => {
   }
 
   if (ref) {
-    let after = ref.nextSibling;
+    // Caret dans le <del> d'une paire de diff → insérer APRÈS la paire entière
+    // (jamais entre le <del> et son <mark>).
+    const cluster = diffClusterOf(ref);
+    let after = cluster[cluster.length - 1].nextSibling;
     nodes.forEach(n => container.insertBefore(n, after));
   } else {
     nodes.forEach(n => container.appendChild(n));
