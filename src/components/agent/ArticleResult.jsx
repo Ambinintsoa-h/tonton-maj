@@ -10,7 +10,7 @@ import {
   RefreshCw, ArrowRight, Link, ChevronUp,
   Clipboard, ClipboardCheck, Sparkles, Loader, ShieldCheck,
   Plus, Link2, X, Tag, Search, Image,
-  Undo2, Redo2, Scissors, Trash2, Lock, CheckCheck, Crosshair, Gauge, XCircle,
+  Undo2, Redo2, Scissors, Trash2, Lock, CheckCheck, Crosshair, Gauge, XCircle, Save,
 } from 'lucide-react';
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripParasiticFontSize } from '../../utils/export';
 import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
@@ -395,6 +395,37 @@ export default function ArticleResult() {
   const [featuredImgMeta, setFeaturedImgMeta] = useState({ alt: '', caption: '' });
   const [showFeaturedImgPanel, setShowFeaturedImgPanel] = useState(false);
   const [newImgInput, setNewImgInput] = useState('');
+
+  // ── Réhydratation des métadonnées d'édition depuis le brouillon autosave ─────
+  // Après un rechargement, applyDraft (Articles.jsx) restaure le brouillon dans
+  // Redux, y compris editorMeta (titre édité, SEO Meta, date MAJ, image à la
+  // une, catégories) — états LOCAUX de ce composant, perdus au démontage.
+  // Déclaré APRÈS les effets d'initialisation/reset ci-dessus pour être appliqué
+  // en dernier dans le même commit React (l'ordre de déclaration fait foi).
+  const editorMetaAppliedRef = useRef(null);
+  useEffect(() => {
+    const m = agent.editorMeta;
+    if (!m || editorMetaAppliedRef.current === m) return;
+    editorMetaAppliedRef.current = m;
+    if (m.editedTitle) { setEditedTitle(m.editedTitle); setTitleDirty(!!m.titleDirty); }
+    if (m.seoTitle || m.seoDescription) {
+      // Valeurs restaurées (potentiellement retouchées à la main) → ne pas les
+      // écraser par la régénération SEO automatique
+      seoGeneratedRef.current = true;
+      if (m.seoTitle)       setSeoTitle(m.seoTitle);
+      if (m.seoDescription) setSeoDescription(m.seoDescription);
+    }
+    if (m.publishDate) setPublishDate(m.publishDate);
+    // featuredImgUrl : PAS restauré ici — toujours re-dérivé du HTML restauré /
+    // wpData par l'effet dédié (déclaré plus bas, il gagnerait de toute façon)
+    if (m.featuredImgMeta && (m.featuredImgMeta.alt || m.featuredImgMeta.caption)) {
+      setFeaturedImgMeta({ alt: m.featuredImgMeta.alt || '', caption: m.featuredImgMeta.caption || '' });
+    }
+    if (Array.isArray(m.selectedCategories) && m.selectedCategories.length) {
+      setSelectedCategories(m.selectedCategories);
+      setCatsDirty(!!m.catsDirty);
+    }
+  }, [agent.editorMeta]);
   const articleRef = useRef(null);      // pointe sur le div contentEditable
   const contentRef = useRef('');        // stocke le HTML édité SANS re-render React
   const changeIdxRef = useRef(-1);
@@ -870,6 +901,16 @@ export default function ArticleResult() {
       audit:           agent.audit || '',
       currentArticleId: agent.currentArticleId || null,
       tokenUsage:      agent.tokenUsage || null,
+      instruction:     agent.instruction || '',
+      // Métadonnées d'édition (états locaux du composant) : perdues au
+      // rechargement sans ça — restaurées via agent.editorMeta (applyDraft).
+      editorMeta: {
+        editedTitle, titleDirty,
+        seoTitle, seoDescription,
+        publishDate,
+        featuredImgMeta,
+        selectedCategories, catsDirty,
+      },
     }),
   };
 
@@ -1015,11 +1056,14 @@ export default function ArticleResult() {
     triggerAutosave(true);
   }, [triggerAutosave]);
 
-  // Autosave sur changements d'état non clavier (image à la une, diff, liens, sources)
+  // Autosave sur changements d'état non clavier (image à la une, diff, liens,
+  // sources) et sur les métadonnées d'édition (titre, SEO Meta, date MAJ,
+  // instruction, alt/légende de l'image à la une, catégories)
   useEffect(() => {
     if (!hasContent) return;
     triggerAutosave();
-  }, [agent.wpData, agent.diff, agent.sources, agent.internalLinks, featuredImgUrl, hasContent, triggerAutosave]);
+  }, [agent.wpData, agent.diff, agent.sources, agent.internalLinks, featuredImgUrl, hasContent, triggerAutosave,
+      editedTitle, seoTitle, seoDescription, publishDate, agent.instruction, featuredImgMeta, selectedCategories]);
 
   // Flush au démontage (navigation vers Tickets, etc.) → ne rien perdre
   useEffect(() => {
@@ -1370,6 +1414,34 @@ export default function ArticleResult() {
   };
 
   const [terminant, setTerminant] = useState(false);
+  const [enregistrant, setEnregistrant] = useState(false);
+
+  // ── Enregistrer SANS quitter (complément manuel de l'autosave) ──────────────
+  // Pousse immédiatement TOUT l'état de travail : HTML en cours (marqueurs de
+  // diff inclus), titre édité, SEO Meta, date MAJ, instruction, image à la une,
+  // catégories — brouillon local + Firestore + entrée Historique. L'utilisateur
+  // reste dans l'éditeur.
+  const handleEnregistrer = () => {
+    setEnregistrant(true);
+    try {
+      doSave(); // brouillon localStorage + updateInHistory immédiats
+      const { userId, build } = draftDataRef.current;
+      const d = build ? build() : null;
+      if (d && d.html) flushDraftRemote(userId, d); // écriture Firestore sans attendre l'idle
+      // Trace de modification humaine dans le doc article (si déjà archivé en base)
+      if (firebaseReady && agent.currentArticleId && contentRef.current) {
+        updateArticleHtml(agent.currentArticleId, contentRef.current, reallyEdited(contentRef.current)
+          ? { lastModifiedAt: Date.now(), lastModifiedBy: editorNameRef.current }
+          : null).catch(() => {});
+      }
+      toast.success('Travail enregistré — vous pouvez continuer ou revenir plus tard', {
+        icon: <CheckCircle2 size={18} className="text-green-600" />,
+      });
+    } finally {
+      // petit délai visuel : l'enregistrement local est synchrone
+      setTimeout(() => setEnregistrant(false), 400);
+    }
+  };
 
   const handleTerminer = async () => {
     setTerminant(true);
@@ -1393,6 +1465,12 @@ export default function ArticleResult() {
         assigneeId:      cqItem.assigneeId || null,
         createdAt:       new Date().toISOString(),
         tokenUsage:      agent.tokenUsage  || null,
+        // Métadonnées d'édition saisies dans l'éditeur — persistées avec l'article
+        // (avant : perdues au Terminer, cf. capture « SEO Meta vides »)
+        ...(editedTitle && titleDirty ? { editedTitle } : {}),
+        ...(seoTitle || seoDescription ? { seoMeta: { seoTitle, seoDescription } } : {}),
+        ...(publishDate ? { publishDate } : {}),
+        ...(agent.instruction ? { instruction: agent.instruction } : {}),
         // « Terminer » = action humaine → trace de dernière modification (Historique)
         lastModifiedAt:  Date.now(),
         lastModifiedBy:  editorNameRef.current,
@@ -1443,6 +1521,10 @@ export default function ArticleResult() {
         updates:        agent.diff    || [],
         sources:        agent.sources || [],
         finishedAt:     new Date().toISOString(),
+        // Métadonnées d'édition — persistées avec l'article au Terminer
+        ...(seoTitle || seoDescription ? { seoMeta: { seoTitle, seoDescription } } : {}),
+        ...(publishDate ? { publishDate } : {}),
+        ...(agent.instruction ? { instruction: agent.instruction } : {}),
         ...lastMod,
       }));
       // Persiste le HTML final + la trace de modification côté base (non bloquant :
@@ -3099,19 +3181,35 @@ export default function ArticleResult() {
               </div>
             )}
 
-            {/* Bouton Terminer — CQ validation + flow normal */}
+            {/* Enregistrer (sans quitter) + Terminer (enregistre, archive et quitte) —
+                deux actions distinctes : avant, « Terminer » cumulait les deux rôles */}
             {(cqItem || agent.currentArticleId) && (
-              <button
-                onClick={handleTerminer}
-                disabled={terminant}
-                className="btn-primary text-xs bg-gray-900 hover:bg-gray-700"
-              >
-                {terminant
-                  ? <Loader size={13} className="animate-spin" />
-                  : <ShieldCheck size={13} />
-                }
-                Terminer
-              </button>
+              <>
+                <button
+                  onClick={handleEnregistrer}
+                  disabled={enregistrant || terminant}
+                  title="Enregistre tout le travail en cours (texte, titre, SEO Meta, date, instruction, image à la une) — vous restez dans l'éditeur"
+                  className="btn-secondary text-xs"
+                >
+                  {enregistrant
+                    ? <Loader size={13} className="animate-spin" />
+                    : <Save size={13} />
+                  }
+                  Enregistrer
+                </button>
+                <button
+                  onClick={handleTerminer}
+                  disabled={terminant || enregistrant}
+                  title="Enregistre, archive l'article dans l'Historique et quitte l'éditeur"
+                  className="btn-primary text-xs bg-gray-900 hover:bg-gray-700"
+                >
+                  {terminant
+                    ? <Loader size={13} className="animate-spin" />
+                    : <ShieldCheck size={13} />
+                  }
+                  Terminer
+                </button>
+              </>
             )}
 
             <div className="relative">
