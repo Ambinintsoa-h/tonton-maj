@@ -8,6 +8,16 @@ let db = null;
 let storage = null;
 let auth = null;
 
+// ── Firebase Storage DÉSACTIVÉ (décision équipe, 2026-07-17) ──────────────────
+// Le projet est sur le forfait Spark (gratuit) : Google exige le forfait Blaze
+// pour créer un bucket Storage → le bucket n'existe pas, chaque appel échouait
+// en CORS/404. Le HTML des articles vit dans Firestore (fallback inline de
+// saveArticle/updateArticleHtml, limite 800 000 caractères) — suffisant pour
+// l'usage actuel. Si le projet passe un jour en Blaze : créer le bucket dans
+// la console (Storage → Get started + règles authentifiées) puis remettre
+// cette constante à true — les uploads reprennent sans autre changement.
+const STORAGE_ENABLED = false;
+
 export const initFirebase = (config) => {
   try {
     // Réutiliser l'instance existante si déjà initialisée (évite l'erreur HMR/double-init)
@@ -33,7 +43,9 @@ export const initFirebase = (config) => {
     } catch {
       db = getFirestore(app);
     }
-    storage = getStorage(app);
+    // storage reste null tant que STORAGE_ENABLED est false → uploadHtml et le
+    // nettoyage de deleteArticle se replient sans AUCUN appel réseau Storage.
+    storage = STORAGE_ENABLED ? getStorage(app) : null;
     auth = getAuth(app);
     return true;
   } catch (e) {
