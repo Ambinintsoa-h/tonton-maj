@@ -173,6 +173,10 @@ app.use(helmet({
         'https://firestore.googleapis.com',
         'https://identitytoolkit.googleapis.com',
         'https://securetoken.googleapis.com',
+        // Firebase STORAGE (HTML des articles, avatars) : sans cette entrée,
+        // saveArticle/updateArticleHtml (Terminer, Enregistrer, synchro
+        // autosave) sont bloqués par le navigateur en prod.
+        'https://firebasestorage.googleapis.com',
       ],
       fontSrc:     ["'self'", 'data:'],
       objectSrc:   ["'none'"],
