@@ -363,9 +363,18 @@ export default function ArticleResult() {
   // Auto-génération SEO dès que la MAJ est prête (une seule fois par analyse)
   useEffect(() => {
     if (!agent.updatedContent || seoGeneratedRef.current) return;
+    // Des métas RESTAURÉES (brouillon autosave / archive via « MAJ en attente »)
+    // arrivent dans le même lot Redux que le contenu : ne JAMAIS les écraser
+    // par une régénération automatique — c'est le travail déjà validé de
+    // l'équipe. Le bouton « Régénérer » reste disponible pour forcer.
+    const m = agent.editorMeta;
+    if (m && (m.seoTitle || m.seoDescription)) {
+      seoGeneratedRef.current = true;
+      return;
+    }
     seoGeneratedRef.current = true;
     runSeoGeneration();
-  }, [agent.updatedContent, runSeoGeneration]);
+  }, [agent.updatedContent, agent.editorMeta, runSeoGeneration]);
 
   // ── Catégories WordPress ──────────────────────────────────────────────────────
   const [wpCategories, setWpCategories]       = useState([]);
@@ -1094,17 +1103,24 @@ export default function ArticleResult() {
   // draftStatus passe à 'saved' après l'écriture Firestore du brouillon (throttlée ≥12 s).
   // On profite de ce signal pour mettre à jour updatedContent dans la collection articles.
   const lastSyncedHtmlRef = useRef(null);
+  const lastSyncedMetaRef = useRef('');
   useEffect(() => {
     if (agent.draftStatus !== 'saved') return;
     const articleId = agent.currentArticleId;
     if (!articleId) return;
     const html = contentRef.current || '';
-    if (!html || html === lastSyncedHtmlRef.current) return;
+    const metaFields = articleMetaRef.current();
+    const metaJson = JSON.stringify(metaFields);
+    // HTML inchangé ET métas inchangées → rien à pousser. (Avant : seul le HTML
+    // était comparé → une édition des SEULES métas — Meta Title/Desc, date,
+    // instruction — n'était JAMAIS écrite dans le doc article.)
+    if (!html || (html === lastSyncedHtmlRef.current && metaJson === lastSyncedMetaRef.current)) return;
     lastSyncedHtmlRef.current = html;
+    lastSyncedMetaRef.current = metaJson;
     updateArticleHtml(articleId, html, reallyEdited(html)
       ? { lastModifiedAt: Date.now(), lastModifiedBy: editorNameRef.current }
-      : null, articleMetaRef.current()).catch(() => {});
-  }, [agent.draftStatus, agent.currentArticleId]); // eslint-disable-line react-hooks/exhaustive-deps
+      : null, metaFields).catch(() => {});
+  }, [agent.draftStatus, agent.currentArticleId, agent.draftSavedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Verrou d'édition collaboratif (façon WordPress « Prendre la main ») ─────
   // Un seul membre à la fois sur un article : à l'ouverture on tente de prendre
