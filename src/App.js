@@ -316,6 +316,12 @@ function ProxyDetector() {
     if (window.__tontonProxyDetected) return;
     window.__tontonProxyDetected = true;
 
+    // Détection réservée au POSTE DE DEV (CRA sur localhost) : en prod
+    // (maj.stomos.net), ce ping vers localhost:3001 échouait de toute façon
+    // (mixed content + CSP connect-src) en polluant la console — on ne le
+    // tente plus, le comportement prod reste identique (mode aiConfigured).
+    if (!['localhost', '127.0.0.1'].includes(window.location.hostname)) return;
+
     // Timeout 5000ms (au lieu de 2000ms) : le health check proxy répond maintenant
     // instantanément, mais 5s de marge évite tout faux timeout sur machine lente.
     axios.get('http://localhost:3001/health', { timeout: 5000 })

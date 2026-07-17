@@ -914,6 +914,18 @@ export default function ArticleResult() {
     }),
   };
 
+  // Métadonnées persistées AVEC l'article (doc articles/{id} + Historique
+  // Redux) : contrairement au brouillon (privé, un seul par membre), elles
+  // survivent à la réouverture depuis « MAJ en attente » sur n'importe quel
+  // poste et par n'importe quel membre (handleViewDiff les restaure).
+  const articleMetaRef = useRef(() => ({}));
+  articleMetaRef.current = () => ({
+    ...(seoTitle || seoDescription ? { seoMeta: { seoTitle, seoDescription } } : {}),
+    ...(publishDate ? { publishDate } : {}),
+    ...(agent.instruction ? { instruction: agent.instruction } : {}),
+    ...(titleDirty && editedTitle ? { editedTitle } : {}),
+  });
+
   // Abonnement au statut d'enregistrement → reflété dans le header (Enregistrement…/Enregistré)
   useEffect(() => {
     onDraftStatus((status, at) => dispatch(setDraftStatus({ status, savedAt: at || undefined })));
@@ -944,6 +956,9 @@ export default function ArticleResult() {
         id: draft.currentArticleId,
         updatedContent: draft.html,
         updatedAt: Date.now(),
+        // Métadonnées d'édition (SEO Meta, date MAJ, instruction, titre) —
+        // suivent l'article dans l'Historique pour la réouverture en session
+        ...articleMetaRef.current(),
         // Dernière modification HUMAINE (affichée + triée dans l'Historique) —
         // uniquement si le contenu diffère vraiment de l'état d'ouverture
         ...(reallyEdited(draft.html)
@@ -1088,7 +1103,7 @@ export default function ArticleResult() {
     lastSyncedHtmlRef.current = html;
     updateArticleHtml(articleId, html, reallyEdited(html)
       ? { lastModifiedAt: Date.now(), lastModifiedBy: editorNameRef.current }
-      : null).catch(() => {});
+      : null, articleMetaRef.current()).catch(() => {});
   }, [agent.draftStatus, agent.currentArticleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Verrou d'édition collaboratif (façon WordPress « Prendre la main ») ─────
@@ -1428,11 +1443,11 @@ export default function ArticleResult() {
       const { userId, build } = draftDataRef.current;
       const d = build ? build() : null;
       if (d && d.html) flushDraftRemote(userId, d); // écriture Firestore sans attendre l'idle
-      // Trace de modification humaine dans le doc article (si déjà archivé en base)
+      // Trace de modification humaine + métadonnées dans le doc article (si déjà archivé)
       if (firebaseReady && agent.currentArticleId && contentRef.current) {
         updateArticleHtml(agent.currentArticleId, contentRef.current, reallyEdited(contentRef.current)
           ? { lastModifiedAt: Date.now(), lastModifiedBy: editorNameRef.current }
-          : null).catch(() => {});
+          : null, articleMetaRef.current()).catch(() => {});
       }
       toast.success('Travail enregistré — vous pouvez continuer ou revenir plus tard', {
         icon: <CheckCircle2 size={18} className="text-green-600" />,
@@ -1527,10 +1542,11 @@ export default function ArticleResult() {
         ...(agent.instruction ? { instruction: agent.instruction } : {}),
         ...lastMod,
       }));
-      // Persiste le HTML final + la trace de modification côté base (non bloquant :
-      // l'autosave throttlé peut ne pas avoir eu le temps de pousser les derniers changements)
+      // Persiste le HTML final + la trace de modification + les métadonnées côté
+      // base (non bloquant : l'autosave throttlé peut ne pas avoir eu le temps
+      // de pousser les derniers changements)
       if (firebaseReady && finalHtml) {
-        updateArticleHtml(agent.currentArticleId, finalHtml, lastMod).catch(() => {});
+        updateArticleHtml(agent.currentArticleId, finalHtml, lastMod, articleMetaRef.current()).catch(() => {});
       }
       dispatch(resetAgent());
       toast.success('Article archivé dans l\'historique !', { icon: <CheckCircle2 size={18} className="text-green-600" /> });
