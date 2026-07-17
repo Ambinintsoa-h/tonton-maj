@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, initializeFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query, onSnapshot, where, limit, increment, arrayUnion, deleteField } from 'firebase/firestore';
+import { getFirestore, initializeFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc, getDoc, orderBy, query, onSnapshot, where, limit, increment, arrayUnion, deleteField, documentId } from 'firebase/firestore';
 import { getStorage, ref as storageRef, uploadString, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { getAuth, signInWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
 
@@ -780,15 +780,24 @@ export const saveActivitySession = async (data) => {
   const ref = doc(db, 'activity_sessions', `${data.userId}_${data.date}`);
   // Pas de lecture préalable : un get sur un doc INEXISTANT peut être refusé
   // par les règles (resource null) et la session du jour n'était alors JAMAIS
-  // créée (tracking mort). Reconnexion = update ; 'not-found' = première
+  // créée (tracking mort). Reconnexion = update ; doc absent = première
   // connexion du jour → création du document complet.
+  //
+  // ⚠️ PIÈGE (tracking mort du 10/07 au 17/07) : sur un doc INEXISTANT, la
+  // règle `request.resource.data.userId == request.auth.uid` évalue le patch
+  // SEUL (rien à fusionner) — sans userId dedans, Firestore renvoie
+  // 'permission-denied' (jamais 'not-found', l'existence est masquée) et le
+  // repli setDoc ne s'exécutait pas. D'où : userId TOUJOURS dans le patch
+  // (la règle passe → un doc absent renvoie le vrai 'not-found'), et le
+  // repli accepte les deux codes par ceinture de sécurité.
   try {
     await updateDoc(ref, {
+      userId:         data.userId,
       lastActivityAt: data.lastActivityAt,
       connections:    arrayUnion({ at: data.firstActivityAt }),
     });
   } catch (e) {
-    if (e?.code !== 'not-found') throw e;
+    if (e?.code !== 'not-found' && e?.code !== 'permission-denied') throw e;
     await setDoc(ref, {
       userId:             data.userId,
       userRole:           data.userRole,
@@ -871,8 +880,13 @@ export const ensureArticleTimeDoc = async (articleId, { userId, userName = '', u
   // SANS lecture préalable : les règles Firestore refusaient le get d'un doc
   // INEXISTANT aux non-admins (resource == null) → le doc n'était jamais créé
   // et aucune minute ne s'écrivait. On tente la mise à jour des métas (doc
-  // existant) et on ne crée le doc que sur « not-found ».
-  const patch = { lastActivityAt: Date.now() };
+  // existant) et on ne crée le doc que s'il est absent.
+  // ⚠️ Même piège que saveActivitySession : sur un doc INEXISTANT, un patch
+  // SANS userId fait échouer la règle (request.resource.data.userId) →
+  // 'permission-denied', jamais 'not-found' → le repli setDoc ne tournait
+  // jamais (temps par article mort depuis le 13/07). userId TOUJOURS dans le
+  // patch + repli tolérant aux deux codes.
+  const patch = { userId, lastActivityAt: Date.now() };
   if (title)    patch.title = title;
   if (url)      patch.url = url;
   if (userName) patch.userName = userName;
@@ -880,7 +894,7 @@ export const ensureArticleTimeDoc = async (articleId, { userId, userName = '', u
   try {
     await updateDoc(ref, patch);
   } catch (e) {
-    if (e?.code !== 'not-found') throw e;
+    if (e?.code !== 'not-found' && e?.code !== 'permission-denied') throw e;
     await setDoc(ref, {
       articleId, userId, userName, userRole, title, url,
       totalActiveMinutes: 0,
@@ -963,11 +977,21 @@ export const getActivitySessionsRange = async (startDate, endDate) => {
 
 /**
  * Sessions récentes d'un utilisateur — pour la fiche membre.
+ * orderBy(documentId(), 'desc') : les ids sont `{uid}_{YYYY-MM-DD}` → ordre
+ * chronologique inversé = les PLUS RÉCENTES d'abord. Sans ce tri, limit()
+ * renvoyait les N plus ANCIENNES (ordre par défaut = id croissant) : dès
+ * qu'un membre dépassait `days + 3` sessions, les récentes disparaissaient.
+ * (Équalité sur userId + tri sur __name__ : aucun index composite requis.)
  */
 export const getUserActivitySessions = async (userId, days = 7) => {
   if (!db) return [];
   const snap = await getDocs(
-    query(collection(db, 'activity_sessions'), where('userId', '==', userId), limit(days + 3))
+    query(
+      collection(db, 'activity_sessions'),
+      where('userId', '==', userId),
+      orderBy(documentId(), 'desc'),
+      limit(days + 3)
+    )
   );
   return snap.docs
     .map(d => ({ id: d.id, ...d.data() }))
