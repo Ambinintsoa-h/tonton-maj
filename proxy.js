@@ -162,7 +162,10 @@ app.use(helmet({
       // CRA produit des chunks JS séparés → 'unsafe-inline' non requis en prod.
       // Si une régression CSP survient, vérifier avec INLINE_RUNTIME_CHUNK=false dans .env.
       scriptSrc:   ["'self'"],
-      styleSrc:    ["'self'", "'unsafe-inline'"],  // requis par Tailwind/inline styles
+      // Tailwind/inline styles + Google Fonts (Inter via index.css, Plus Jakarta
+      // Sans sur Login/ResetPassword) — la CSS vient de fonts.googleapis.com,
+      // les fichiers de police de fonts.gstatic.com (cf. fontSrc).
+      styleSrc:    ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       imgSrc:      ["'self'", 'data:', 'https:', 'blob:'],
       connectSrc:  [
         "'self'",
@@ -178,7 +181,7 @@ app.use(helmet({
         // autosave) sont bloqués par le navigateur en prod.
         'https://firebasestorage.googleapis.com',
       ],
-      fontSrc:     ["'self'", 'data:'],
+      fontSrc:     ["'self'", 'data:', 'https://fonts.gstatic.com'],
       objectSrc:   ["'none'"],
       frameSrc:    ["'none'"],
       upgradeInsecureRequests: [],
