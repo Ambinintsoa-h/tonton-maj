@@ -44,7 +44,7 @@
 
 ## Tracking activité (tous les rôles)
 - Tous les rôles trackés (cq_ia, manager, support, super_admin) — sauf le super_admin de SECOURS (login local settings.json, sans session Firebase : écritures Firestore refusées silencieusement)
-- Historique : tracking mort du ~16 juin au 13 juillet 2026 (bug règles Firestore, réparé par 1e5498d) → trou de données sur cette période pour tout le monde
+- Historique : tracking mort du 16 juin au 17 juillet 2026 → trou de données définitif. Deux bugs successifs : (1) règles du 16/06 — get refusé sur doc inexistant → cq_ia morts, managers survivants via isAdmin() ; (2) « réparation » du 13/07 — updateDoc sans userId dans le patch → 'permission-denied' (jamais 'not-found') sur doc inexistant → repli setDoc jamais exécuté → PERSONNE tracké. Corrigé le 17/07 : userId toujours dans le patch + repli tolérant aux deux codes (même correctif pour article_time / ensureArticleTimeDoc)
 - `activityTracker.js` — singleton, heartbeat 2 min, pause après 10 min sans activité
 - `closes[]` dans Firestore : enregistré via `beforeunload`/`pagehide` + localStorage backup
 - KPI "Absent" = `sessionWindowMin - totalActiveMinutes`
