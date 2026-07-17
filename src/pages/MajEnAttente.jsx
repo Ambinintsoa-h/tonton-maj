@@ -703,6 +703,7 @@ function DepthPicker({ value, onChange }) {
 // ── Ligne article ─────────────────────────────────────────────────────────────
 function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onDepthChange, onViewDiff, running, queuedPos = null, onDequeue, isMine = false, teamMembers }) {
   const [expanded, setExpanded] = useState(false);
+  const [showSynthese, setShowSynthese] = useState(false); // Synthèse TONTON AI — repliée par défaut
   const assignee    = teamMembers.find(m => m.id === item.assigneeId) || null;
   const domain      = extractDomain(item.url);
   const initial     = domain[0]?.toUpperCase() || '?';
@@ -913,14 +914,31 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onDe
               {/* Résultat MAJ — visible uniquement si à valider */}
               {isAValider && item.majResult && (
                 <div className="space-y-3">
-                  {/* Analyse IA */}
+                  {/* Analyse IA — repliée par défaut (souvent longue) */}
                   {item.majResult.analysis && (
                     <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-100 rounded-xl px-4 py-3">
-                      <p className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wide mb-2">Synthèse TONTON AI</p>
-                      <div
-                        className="md-content text-indigo-900 text-xs"
-                        dangerouslySetInnerHTML={{ __html: renderMarkdown(item.majResult.analysis) }}
-                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowSynthese(v => !v)}
+                        className="w-full flex items-center gap-2 text-left"
+                        title={showSynthese ? 'Replier la synthèse' : 'Déplier la synthèse'}
+                      >
+                        <p className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wide">Synthèse TONTON AI</p>
+                        {showSynthese
+                          ? <ChevronUp size={12} className="text-indigo-300 shrink-0" />
+                          : <ChevronDown size={12} className="text-indigo-300 shrink-0" />}
+                        {!showSynthese && (
+                          <span className="flex-1 min-w-0 truncate text-[11px] text-indigo-300">
+                            {String(item.majResult.analysis).replace(/[#*_`>]/g, '').slice(0, 80)}…
+                          </span>
+                        )}
+                      </button>
+                      {showSynthese && (
+                        <div
+                          className="md-content text-indigo-900 text-xs mt-2"
+                          dangerouslySetInnerHTML={{ __html: renderMarkdown(item.majResult.analysis) }}
+                        />
+                      )}
                     </div>
                   )}
 

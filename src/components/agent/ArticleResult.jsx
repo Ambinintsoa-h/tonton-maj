@@ -287,6 +287,7 @@ export default function ArticleResult() {
   const [showDetails, setShowDetails] = useState(false);  // Détail des modifications
   const [showSources, setShowSources] = useState(false);  // Sources vérifiées
   const [showAnalysis, setShowAnalysis] = useState(false); // Synthèse de l'agent — repliée : les onglets Audit/Avant/Après restent visibles directement
+  const [showCatsBlock, setShowCatsBlock] = useState(false); // Catégories WordPress — repliées par défaut (bloc volumineux, rarement modifié)
   // Titre éditable de l'article
   const [editedTitle, setEditedTitle] = useState('');
   // titleDirty = true uniquement si l'utilisateur a tapé dans le champ
@@ -3085,26 +3086,40 @@ export default function ArticleResult() {
           animate={{ opacity: 1, y: 0 }}
           className="glass-card px-5 py-4 space-y-3"
         >
-          <div className="flex items-center justify-between gap-3">
+          {/* En-tête cliquable — bloc replié par défaut */}
+          <div
+            className="flex items-center justify-between gap-3 cursor-pointer"
+            onClick={() => setShowCatsBlock(v => !v)}
+          >
             <div className="flex items-center gap-2">
               <Tag size={14} className="text-indigo-500 flex-shrink-0" />
               <span className="text-sm font-semibold text-gray-800">Catégories WordPress</span>
+              {showCatsBlock
+                ? <ChevronUp size={14} className="text-gray-400" />
+                : <ChevronDown size={14} className="text-gray-400" />}
               {catLoading && <Loader size={12} className="animate-spin text-gray-400" />}
             </div>
-            {/* Barre de recherche */}
-            <div className="relative w-44">
-              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-              <input
-                value={catSearch}
-                onChange={e => setCatSearch(e.target.value)}
-                placeholder="Filtrer…"
-                className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-300 bg-white"
-              />
-            </div>
+            {/* Replié : rappel de la sélection · Déplié : barre de recherche */}
+            {!showCatsBlock && selectedCategories.length > 0 && (
+              <span className="text-[11px] text-indigo-500 font-medium">
+                {selectedCategories.length} sélectionnée{selectedCategories.length > 1 ? 's' : ''}
+              </span>
+            )}
+            {showCatsBlock && (
+              <div className="relative w-44" onClick={(e) => e.stopPropagation()}>
+                <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                <input
+                  value={catSearch}
+                  onChange={e => setCatSearch(e.target.value)}
+                  placeholder="Filtrer…"
+                  className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-300 bg-white"
+                />
+              </div>
+            )}
           </div>
 
           {/* Catégories */}
-          {wpCategories.length > 0 && (
+          {showCatsBlock && wpCategories.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {wpCategories
                 .filter(c => !catSearch || decodeHtml(c.name).toLowerCase().includes(catSearch.toLowerCase()))
@@ -3133,7 +3148,7 @@ export default function ArticleResult() {
           )}
 
           {/* Résumé sélection */}
-          {selectedCategories.length > 0 && (
+          {showCatsBlock && selectedCategories.length > 0 && (
             <p className="text-[11px] text-indigo-600 font-medium">
               <CheckCircle2 size={13} className="inline text-emerald-600 shrink-0" /> {selectedCategories.length} catégorie{selectedCategories.length > 1 ? 's' : ''} sélectionnée{selectedCategories.length > 1 ? 's' : ''} — appliquée{selectedCategories.length > 1 ? 's' : ''} à la publication
             </p>
