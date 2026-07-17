@@ -233,7 +233,10 @@ export const saveArticle = async (article) => {
 // editorMeta (optionnel) : { lastModifiedAt, lastModifiedBy } — trace de la
 // DERNIÈRE MODIFICATION HUMAINE (affichée + triée dans l'Historique). Non
 // renseignée pour les synchronisations automatiques (fin d'analyse).
-export const updateArticleHtml = async (articleId, updatedContent, editorMeta = null) => {
+// extraFields (optionnel) : champs additionnels à persister dans le doc article
+// (seoMeta, publishDate, instruction, editedTitle…) — restaurés à la réouverture
+// depuis « MAJ en attente » (handleViewDiff), quel que soit le poste/membre.
+export const updateArticleHtml = async (articleId, updatedContent, editorMeta = null, extraFields = null) => {
   if (!db || !articleId || !updatedContent) return;
   const docRef = doc(db, 'articles', articleId);
   let updatedContentUrl = null;
@@ -243,6 +246,7 @@ export const updateArticleHtml = async (articleId, updatedContent, editorMeta = 
     patch.lastModifiedAt = editorMeta.lastModifiedAt;
     patch.lastModifiedBy = editorMeta.lastModifiedBy || '';
   }
+  if (extraFields && typeof extraFields === 'object') Object.assign(patch, extraFields);
   if (updatedContentUrl) {
     patch.updatedContentUrl = updatedContentUrl;
   } else if (updatedContent.length <= 800_000) {

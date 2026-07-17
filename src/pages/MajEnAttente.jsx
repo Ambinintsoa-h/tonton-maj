@@ -20,7 +20,7 @@ import {
   resetAgent, setStatus, addStep, setProgress,
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
-  setWpData, setMajDepth, setInstruction, setAudit,
+  setWpData, setMajDepth, setInstruction, setAudit, setEditorMeta,
 } from '../store/slices/agentSlice';
 import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import { addArticleStat } from '../store/slices/statsSlice';
@@ -1592,8 +1592,11 @@ export default function MajEnAttente() {
   // créée automatiquement à la fin de l'analyse, HTML dans Storage).
   const handleViewDiff = async (item) => {
     let r = item.majResult || {};
+    // L'archive Historique (même id, créée en fin d'analyse) sert DEUX usages :
+    // recharger les HTML allégés ET restaurer les métadonnées d'édition
+    // (SEO Meta, date MAJ, instruction, titre) → recherchée systématiquement.
+    const arch = store.getState().articles.history.find(a => a.id === item.id) || null;
     if (!r.originalContent || !r.updatedContent) {
-      const arch = store.getState().articles.history.find(a => a.id === item.id);
       if (arch) {
         const [orig, updated] = await Promise.all([
           arch.originalContent || fetchArticleHtml(arch.originalContentUrl),
@@ -1627,9 +1630,20 @@ export default function MajEnAttente() {
     dispatch(setWpData(r.wpData || null));
     dispatch(setAudit(r.audit || ''));
     dispatch(setMajDepth(r.majDepth || item.depth || DEFAULT_DEPTH));
-    // Les Notes de la ligne pré-remplissent le champ « Instruction » de
-    // l'éditeur → la passe 2 en hérite (modifiable par le CQ avant relance).
-    dispatch(setInstruction(item.notes || ''));
+    // Métadonnées d'édition persistées avec l'article (autosave/Enregistrer) →
+    // rehydratées par ArticleResult. Priorité à l'archive (à jour au fil de
+    // l'édition), repli sur majResult (Terminer CQ les y écrit aussi).
+    const metaSrc = (arch && (arch.seoMeta || arch.publishDate || arch.editedTitle || arch.instruction)) ? arch : r;
+    dispatch(setEditorMeta({
+      editedTitle:    metaSrc.editedTitle || '',
+      titleDirty:     !!metaSrc.editedTitle,
+      seoTitle:       metaSrc.seoMeta?.seoTitle       || '',
+      seoDescription: metaSrc.seoMeta?.seoDescription || '',
+      publishDate:    metaSrc.publishDate || '',
+    }));
+    // Instruction : celle saisie dans l'éditeur (persistée) prime ; sinon les
+    // Notes de la ligne pré-remplissent le champ → la passe 2 en hérite.
+    dispatch(setInstruction(metaSrc.instruction || item.notes || ''));
     dispatch(setCurrentArticleId(item.id)); // marque cet item comme "en cours de review"
     dispatch(setStatus('done'));
     navigate('/');

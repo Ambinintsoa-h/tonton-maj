@@ -79,9 +79,12 @@ export default function Parametres() {
   const handleTestProxy = async () => {
     setCheckingProxy(true);
     try {
-      await axios.get('http://localhost:3001/health', { timeout: 3000 });
+      // URL relative : en dev CRA la redirige vers localhost:3001 (champ "proxy"
+      // de package.json), en prod elle teste le serveur même — aucune violation
+      // CSP/mixed content contrairement à l'ancien http://localhost:3001/health.
+      await axios.get('/health', { timeout: 3000 });
       setProxyStatus('ok');
-      toast.success('Proxy local actif !');
+      toast.success('Proxy actif !');
     } catch {
       setProxyStatus('error');
       toast.error('Proxy non joignable — lance d\'abord : node proxy.js');
@@ -146,8 +149,11 @@ export default function Parametres() {
     toast.success('Paramètres enregistrés pour toute l\'équipe !');
   };
 
-  // Détection automatique du proxy au chargement
+  // Détection automatique du proxy au chargement — POSTE DE DEV uniquement
+  // (en prod le ping localhost échouait en polluant la console : CSP + mixed
+  // content ; le comportement prod reste inchangé — mode aiConfigured).
   useEffect(() => {
+    if (!['localhost', '127.0.0.1'].includes(window.location.hostname)) return;
     axios.get('http://localhost:3001/health', { timeout: 2000 })
       .then(() => {
         setProxyStatus('ok');
