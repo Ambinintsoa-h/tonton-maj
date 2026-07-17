@@ -101,10 +101,21 @@ export const deleteSkill = async (id) => {
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
 
+// Disjoncteur Storage : le bucket du projet n'a jamais été activé (console
+// Firebase) — chaque upload échoue en CORS/404 et pollue la console à CHAQUE
+// autosave, en retardant l'enregistrement de 25 s de timeout. Après un échec,
+// on cesse de tenter pendant STORAGE_RETRY_MS : le fallback HTML inline
+// Firestore (saveArticle/updateArticleHtml) prend le relais immédiatement.
+// Dès que le bucket existera, les uploads reprendront d'eux-mêmes au plus
+// tard après ce délai (ou au prochain rechargement de page).
+let storageDownUntil = 0;
+const STORAGE_RETRY_MS = 10 * 60 * 1000;
+
 // Upload d'un fichier HTML vers Firebase Storage.
 // Retourne l'URL de téléchargement, ou null si Storage indisponible / erreur.
 const uploadHtml = async (path, html) => {
   if (!storage || !html) return null;
+  if (Date.now() < storageDownUntil) return null; // disjoncté → fallback inline direct
   try {
     const r = storageRef(storage, path);
     const timeoutMs = 25000;
@@ -117,6 +128,9 @@ const uploadHtml = async (path, html) => {
     ]);
     return await getDownloadURL(r);
   } catch {
+    // Bucket absent, règles, réseau ou timeout : pause des tentatives — un
+    // souci transitoire coûte au pire 10 min de fallback inline (sans perte).
+    storageDownUntil = Date.now() + STORAGE_RETRY_MS;
     return null;
   }
 };
