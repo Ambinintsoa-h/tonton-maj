@@ -134,6 +134,15 @@ describe('blockMeta / accord', () => {
     expect(accord({ fem: false }, 'collé')).toBe('collé');
   });
 
+  it('identifie une SECTION entière en attente (wrapper multi-blocs commençant par un titre)', () => {
+    const section = el('<ins class="added-content"><h2>Entretien</h2><p>Contenu…</p></ins>');
+    expect(blockMeta(section)).toEqual({ name: 'Section (titre + contenu)', art: 'la section', fem: true });
+    expect(accord(blockMeta(section), 'coupé')).toBe('coupée');
+    // wrapper multi-blocs SANS titre en tête → reste un bloc générique
+    const noTitle = el('<ins class="added-content"><p>a</p><p>b</p></ins>');
+    expect(blockMeta(noTitle).name).toBe('Bloc');
+  });
+
   it('voit à travers les marqueurs de diff <ins>/<mark> (bloc ajouté)', () => {
     const ins = el('<ins class="added-content"><h2>Nouvelle section</h2></ins>');
     expect(isDiffWrapper(ins)).toBe(true);

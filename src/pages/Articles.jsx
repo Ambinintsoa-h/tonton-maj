@@ -113,6 +113,12 @@ export default function Articles() {
       toast.error('Clé API Anthropic manquante — vérifiez les Paramètres');
       return;
     }
+    // Verrou : une analyse tourne déjà (ici ou lancée en interactif depuis la
+    // file) → un nouveau lancement écraserait sa progression ET son résultat.
+    if (agent.status === 'running') {
+      toast.error('Une analyse est déjà en cours — attendez la fin avant d\'en lancer une nouvelle');
+      return;
+    }
 
     // Nouvelle MAJ → on abandonne tout brouillon précédent
     clearDraft(authUid || authUsername || null);

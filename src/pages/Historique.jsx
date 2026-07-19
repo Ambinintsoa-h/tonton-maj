@@ -375,7 +375,7 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete, onArchive, se
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0, x: -16 }}
-        className={`flex items-center gap-4 px-5 py-3.5 border-b border-gray-50/80 hover:bg-gray-50/40 transition-colors border-l-[3px] ${prio.border} ${selected ? 'bg-indigo-50/40' : ''}`}
+        className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 px-5 py-3.5 border-b border-gray-50/80 hover:bg-gray-50/40 transition-colors border-l-[3px] ${prio.border} ${selected ? 'bg-indigo-50/40' : ''}`}
       >
         {/* Case de sélection multiple (archivage groupé — super_admin) */}
         {selectable && (
@@ -393,8 +393,10 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete, onArchive, se
           {initial}
         </div>
 
-        {/* Titre + domaine + mot-clé */}
-        <div className="flex-1 min-w-0">
+        {/* Titre + domaine + mot-clé — min-w : sur un écran étroit, les badges
+            (tous flex-shrink-0) écrasaient le titre à largeur nulle ; avec
+            flex-wrap sur la ligne, ils passent dessous et le titre reste lisible */}
+        <div className="flex-1 min-w-[160px]">
           <p className="text-sm font-semibold text-gray-900 truncate leading-snug" title={article.title}>
             {article.title || article.url}
           </p>

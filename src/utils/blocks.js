@@ -103,6 +103,15 @@ export const cleanBlocksHtml = (nodes) => {
 export const blockMeta = (rawEl) => {
   const el = unwrapDiffWrapper(rawEl); // voir à travers <ins>/<mark>
   if (!el || el.nodeType !== Node.ELEMENT_NODE) return { name: 'Bloc', art: 'le bloc', fem: false };
+  // Wrapper de diff multi-blocs commençant par un titre = SECTION ENTIÈRE
+  // ajoutée/réécrite encore en attente → libellé parlant pour les toasts et
+  // le bandeau de collage (avant : « Bloc » générique).
+  if (el === rawEl && isDiffWrapper(rawEl)) {
+    const first = rawEl.firstElementChild;
+    if (first && /^H[1-6]$/.test(first.tagName)) {
+      return { name: 'Section (titre + contenu)', art: 'la section', fem: true };
+    }
+  }
   const tag = el.tagName;
   if (tag === 'TABLE' || el.hasAttribute?.(TABLE_WRAP_ATTR)) return { name: 'Tableau', art: 'le tableau', fem: false };
   const hMatch = tag.match(/^H([1-6])$/);
