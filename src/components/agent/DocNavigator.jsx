@@ -35,6 +35,19 @@ const describe = (rawEl) => {
   // Voir à travers les marqueurs de diff (<ins>/<mark>) : un bloc AJOUTÉ doit
   // s'afficher avec son vrai type (H2, tableau…), pas comme un « ins » générique.
   const el = unwrapDiffWrapper(rawEl);
+  // Section ENTIÈRE ajoutée/réécrite encore EN ATTENTE : wrapper <ins>/<mark>
+  // multi-blocs dont le premier élément est un titre → présentée comme un vrai
+  // titre de section (et buildGroups ouvre une section dessus, dès le début —
+  // avant, ces blocs bleus restaient noyés dans la section précédente).
+  if (el === rawEl && isDiffWrapper(rawEl)) {
+    const first = rawEl.firstElementChild;
+    const hm = first && first.tagName ? first.tagName.match(/^H([1-6])$/) : null;
+    if (hm) {
+      const lvl = parseInt(hm[1], 10);
+      const Icon = [Heading1, Heading2, Heading3, Heading4][Math.min(lvl, 4) - 1];
+      return { Icon, kind: `Section H${lvl}`, label: excerpt(first.textContent, 56), strong: lvl <= 2, sectionLevel: lvl };
+    }
+  }
   const tag = el.tagName;
   const m = tag.match(/^H([1-6])$/);
   if (m) {
@@ -261,8 +274,10 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
     const groups = [];
     let cur = null;
     list.forEach((it, idx) => {
-      // Voir à travers <ins>/<mark> : un H2 AJOUTÉ ouvre bien une nouvelle section
-      if (unwrapDiffWrapper(it.el).tagName === 'H2') {
+      // Voir à travers <ins>/<mark> : un H2 AJOUTÉ ouvre bien une nouvelle
+      // section — y compris une section ENTIÈRE encore en attente (wrapper
+      // multi-blocs commençant par un H2, détectée par describe → sectionLevel).
+      if (unwrapDiffWrapper(it.el).tagName === 'H2' || it.sectionLevel === 2) {
         cur = { title: it.label || 'Section', isPreamble: false, members: [] };
         groups.push(cur);
       } else if (!cur) {
@@ -273,7 +288,12 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
     });
     // clé stable (titre + rang parmi les titres identiques) pour l'état plié/déplié
     const seen = {};
-    groups.forEach(g => { const n = (seen[g.title] = (seen[g.title] || 0) + 1); g.key = `${g.title}#${n}`; });
+    groups.forEach(g => {
+      const n = (seen[g.title] = (seen[g.title] || 0) + 1);
+      g.key = `${g.title}#${n}`;
+      // Point orange sur l'en-tête : la section contient des modifications en attente
+      g.pending = g.members.some(m => m.pending);
+    });
     return groups;
   };
 
@@ -382,6 +402,12 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
                       {g.isPreamble
                         ? <Type size={12} className="text-gray-400 shrink-0" />
                         : <Heading2 size={12} className="text-indigo-600 shrink-0" />}
+                      {g.pending && (
+                        <span
+                          title="Cette section contient des modifications en attente (Accepter/Rejeter dans l'éditeur)"
+                          className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"
+                        />
+                      )}
                       <span className="flex-1 min-w-0 truncate text-[11.5px] font-semibold text-gray-800">{g.title}</span>
                       <span className="text-[10px] text-gray-400 shrink-0">{g.members.length}</span>
                     </button>

@@ -1210,7 +1210,11 @@ export default function MajEnAttente() {
   };
 
   // ── Traitement core d'un article (sans navigation, sans reset global) ────────
-  const processItem = async (item) => {
+  // mirrorGlobal : ne refléter la progression/les erreurs dans l'état GLOBAL de
+  // l'agent (page « Faire une MAJ ») que si CETTE analyse en est propriétaire —
+  // une analyse de fond (file, ou lancement pendant qu'une autre review tourne)
+  // ne doit jamais écraser l'affichage ni la session d'un collègue/autre onglet.
+  const processItem = async (item, { mirrorGlobal = true } = {}) => {
     const step     = (s) => updateRunState(item.id, { step: s });
     const progress = (p) => updateRunState(item.id, { progress: p });
 
@@ -1293,8 +1297,8 @@ export default function MajEnAttente() {
         modelPricing: settings.modelPricing || null,
         depth:        item.depth || DEFAULT_DEPTH,  // profondeur choisie sur la ligne
         instruction:  (item.notes || '').trim(),    // Notes de la ligne = consigne de la passe 1 (et des relances)
-        onStep:     (s) => { dispatch(addStep(s)); step(s); },
-        onProgress: (p) => { dispatch(setProgress(p)); progress(p); },
+        onStep:     (s) => { if (mirrorGlobal) dispatch(addStep(s)); step(s); },
+        onProgress: (p) => { if (mirrorGlobal) dispatch(setProgress(p)); progress(p); },
       });
 
       // ── Étape 3 : Application des diffs ───────────────────────────────────
@@ -1473,7 +1477,7 @@ export default function MajEnAttente() {
     } catch (e) {
       console.error('[maj]', e);
       toast.error('Erreur : ' + e.message);
-      dispatch(setError(e.message));
+      if (mirrorGlobal) dispatch(setError(e.message)); // ne pas basculer la session d'un autre flux en « error »
       dispatch(updatePendingItem({ id: item.id, status: 'error', errorMsg: e.message, startedBy: null, startedAt: null }));
       return null;
     } finally {
@@ -1499,14 +1503,27 @@ export default function MajEnAttente() {
       await new Promise(r => setTimeout(r, others * SLOT_STAGGER_MS));
     }
 
-    if (interactive) {
+    // Propriété de l'affichage global : un lancement interactif prend la main
+    // sur la page « Faire une MAJ »… SAUF si une analyse y tourne déjà — avant,
+    // le resetAgent() ci-dessous EFFAÇAIT la session en cours (analyse ou review
+    // d'un autre article) et les deux progressions se mélangeaient à l'écran.
+    // Dans ce cas l'analyse bascule en arrière-plan : résultat dans « À valider ».
+    let ownsGlobal = interactive;
+    if (interactive && store.getState().agent.status === 'running') {
+      ownsGlobal = false;
+      toast(
+        `Une analyse est déjà en cours sur « Faire une MAJ » — « ${item.title || item.url} » tourne en arrière-plan et son résultat attendra dans À valider`,
+        { icon: '⏳', duration: 7000 },
+      );
+    }
+    if (ownsGlobal) {
       dispatch(resetAgent());
       dispatch(setStatus('running'));
     }
 
     let data = null;
     try {
-      data = await processItem(item);
+      data = await processItem(item, { mirrorGlobal: ownsGlobal });
     } finally {
       liveRuns.delete(item.id);
       pumpQueue(); // un créneau se libère → démarrer l'analyse suivante en file
@@ -1516,7 +1533,7 @@ export default function MajEnAttente() {
     // seul (pas d'autres analyses actives ni en file) ET si l'utilisateur est
     // toujours sur la page de la file — sinon le résultat attend sagement dans
     // « À valider » (+ notification à l'assigné).
-    const canNavigate = interactive
+    const canNavigate = ownsGlobal
       && data
       && liveRuns.size === 0
       && launchQueue.length === 0
@@ -1540,9 +1557,11 @@ export default function MajEnAttente() {
       dispatch(setCurrentArticleId(item.id));
       dispatch(setStatus('done'));
       navigate('/');
-    } else if (store.getState().agent.status === 'running' && liveRuns.size === 0) {
+    } else if (ownsGlobal && store.getState().agent.status === 'running' && liveRuns.size === 0) {
       // Plus rien ne tourne et personne n'a ouvert de review entre-temps :
-      // libérer l'écran « analyse en cours » de la page Faire une MAJ
+      // libérer l'écran « analyse en cours » de la page Faire une MAJ.
+      // (ownsGlobal : une analyse de FOND ne doit jamais éteindre l'écran
+      // d'une analyse « Faire une MAJ » encore en cours.)
       dispatch(setStatus('idle'));
     }
   };
