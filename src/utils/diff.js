@@ -507,6 +507,62 @@ export const repairStructure = (html) => {
   return div.innerHTML;
 };
 
+/**
+ * Enveloppe en <p> les nœuds texte / inline « lâches » à la racine du conteneur.
+ *
+ * Cas visé : article importé en TEXTE BRUT. Le pipeline de diff travaille alors
+ * sur des nœuds texte nus — une fois les marqueurs résolus (vue finale, export,
+ * publication), les passages originaux restent du texte sans AUCUNE structure de
+ * blocs : les sauts de ligne disparaissent au rendu HTML et tout s'affiche en un
+ * seul pavé. Ici, chaque saut de ligne d'un nœud texte lâche redevient un
+ * séparateur de paragraphe (même granularité que la vue « Avant »).
+ *
+ * Les blocs existants (<p>, <h2>, <table>…) ne sont pas touchés : pour un
+ * article déjà structuré en HTML, la fonction est un no-op.
+ */
+export const wrapLooseTextIntoParagraphs = (el) => {
+  if (!el) return;
+  const BLOCK_RX = /^(P|H[1-6]|UL|OL|TABLE|BLOCKQUOTE|FIGURE|PRE|HR|DIV|SECTION|ARTICLE|ASIDE|HEADER|FOOTER|NAV|IFRAME|VIDEO|DETAILS|FORM|ADDRESS|MAIN)$/;
+  const isBlock = (n) => n.nodeType === 1 && BLOCK_RX.test(n.tagName);
+  const doc = el.ownerDocument || document;
+
+  let run = []; // nœuds texte/inline consécutifs, à envelopper au prochain bloc
+  const flush = (before) => {
+    if (!run.length) return;
+    let p = null;
+    const ensureP = () => {
+      if (!p) { p = doc.createElement('p'); el.insertBefore(p, before); }
+      return p;
+    };
+    run.forEach((n) => {
+      if (n.nodeType === 3 && n.nodeValue.includes('\n')) {
+        // Un \n dans un texte lâche = fin de paragraphe
+        n.nodeValue.split('\n').forEach((part, i) => {
+          if (i > 0) p = null;
+          if (part.trim()) ensureP().appendChild(doc.createTextNode(part));
+        });
+        n.remove();
+      } else if (n.nodeType === 3 && !n.nodeValue.trim()) {
+        n.remove(); // blanc pur (indentation entre blocs)
+      } else {
+        ensureP().appendChild(n); // inline (<a>, <strong>…) ou texte sans \n
+      }
+    });
+    run = [];
+  };
+
+  Array.from(el.childNodes).forEach((n) => {
+    if (isBlock(n)) flush(n);
+    else run.push(n);
+  });
+  flush(null);
+
+  // Purge des <p> vides créés par des lignes blanches consécutives
+  el.querySelectorAll(':scope > p').forEach((p) => {
+    if (!p.textContent.trim() && !p.querySelector('img, br, iframe, video')) p.remove();
+  });
+};
+
 // Titres des sections « spéciales » à emplacement imposé
 const FAQ_TITLE_RX  = /faq|questions?\s+fr[ée]quentes|foire aux questions/i;
 const TLDR_TITLE_RX = /r[ée]sum[ée] de l'article|tl\s*;?\s*dr/i;

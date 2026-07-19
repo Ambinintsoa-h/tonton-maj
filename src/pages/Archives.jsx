@@ -19,7 +19,8 @@ const fmtDate = (ts) => {
 };
 
 // Titre TOUJOURS lisible : le titre de l'article en priorité ; à défaut, le slug
-// de l'URL humanisé (« pose-toiture-bac-acier » → « pose toiture bac acier ») —
+// de l'URL humanisé (« pose-toiture-bac-acier » → « pose toiture bac acier ») ;
+// à défaut (article collé en texte brut, sans URL), la première ligne du contenu —
 // jamais une URL brute ni un id technique.
 const displayTitle = (article) => {
   if (article.title?.trim()) return article.title.trim();
@@ -28,6 +29,10 @@ const displayTitle = (article) => {
     const human = seg.replace(/[-_]+/g, ' ').trim();
     if (human) return human.charAt(0).toUpperCase() + human.slice(1);
   } catch { /* URL absente ou invalide */ }
+  // Anciennes archives sans titre ni URL : première ligne du texte original
+  const raw = (article.originalContent || '').replace(/<[^>]+>/g, '\n');
+  const line = raw.split('\n').map(l => l.trim()).find(Boolean) || '';
+  if (line) return line.length <= 90 ? line : `${line.slice(0, 90).replace(/\s+\S*$/, '')}…`;
   return article.url || '(Sans titre)';
 };
 

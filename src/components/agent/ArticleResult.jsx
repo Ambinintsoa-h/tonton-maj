@@ -19,7 +19,7 @@ import TableToolbar from './TableToolbar';
 import DocNavigator from './DocNavigator';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
-import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment } from '../../utils/diff';
+import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, wrapLooseTextIntoParagraphs, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment } from '../../utils/diff';
 import { analyzeSeo } from '../../utils/seoCheck';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
@@ -314,6 +314,21 @@ export default function ArticleResult() {
     } catch { return ''; }
   };
 
+  // Priorité 3 : article collé en TEXTE BRUT (aucun H1, pas de titre WP) — la
+  // première ligne non vide du texte fait office de titre (tronquée à 90 car.
+  // sur un mot). Sans ce repli, le champ Titre restait vide et l'article
+  // finissait « (Sans titre) » dans l'Historique et les Archives.
+  const firstLineAsTitle = (content) => {
+    if (!content) return '';
+    try {
+      const div = document.createElement('div');
+      div.innerHTML = content;
+      const line = (div.textContent || '').split('\n').map(l => l.trim()).find(Boolean) || '';
+      if (line.length <= 90) return line;
+      return `${line.slice(0, 90).replace(/\s+\S*$/, '')}…`;
+    } catch { return ''; }
+  };
+
   useEffect(() => {
     setTitleDirty(false);
     // Priorité 1 : titre WP réel (API REST) — source la plus fiable
@@ -321,8 +336,9 @@ export default function ArticleResult() {
     if (wpTitle) { setEditedTitle(wpTitle); return; }
     // Priorité 2 : H1 de l'article original — jamais le slug d'URL
     const h1 = extractH1FromHtml(agent.originalContent);
-    setEditedTitle(h1 || '');
-  }, [wpMcpData?.wpTitle, agent.originalContent]);
+    // Priorité 3 : première ligne du texte brut collé (aucun H1)
+    setEditedTitle(h1 || firstLineAsTitle(agent.originalContent));
+  }, [wpMcpData?.wpTitle, agent.originalContent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset SEO fields + état catégories quand on passe à un nouvel article.
   // Réinitialiser catsDirty/selectedCategories/catSuggestedRef évite d'hériter d'un
@@ -533,6 +549,13 @@ export default function ArticleResult() {
         if (!el.getAttribute('style')?.trim()) el.removeAttribute('style');
       }
     });
+
+    // 3c. Article importé en TEXTE BRUT : une fois les diffs résolus, les passages
+    //     originaux sont des nœuds texte nus → sans ce passage, la vue finale (et
+    //     l'export/publication) perd les sauts de ligne et affiche un seul pavé.
+    //     Chaque ligne redevient un <p>, à l'identique de la vue « Avant ».
+    //     No-op pour un article déjà structuré en HTML.
+    wrapLooseTextIntoParagraphs(tmp);
 
     // 4. Filet de sécurité regex — capture les <del>/<mark>/<ins> résiduels que le DOM
     //    n'aurait pas rattrapés (ex: balises cassées par une édition dans contentEditable,
@@ -1695,6 +1718,16 @@ export default function ArticleResult() {
     });
     return count;
   }, []);
+
+  // Modifications en attente affichées par le badge de la Vue finale : la vue
+  // finale EXCLUT tout ce qui n'est pas accepté (getFinalHtml, 'reject') — sans
+  // ce compteur, copier depuis la Vue finale avec des diffs en attente exporte
+  // silencieusement le texte ORIGINAL. Recalculé au basculement diff/finale et
+  // à chaque commit d'historique (accepter/rejeter/undo passent par histState).
+  const pendingInFinal = useMemo(
+    () => (diffMode ? 0 : countPendingChanges()),
+    [diffMode, histState, countPendingChanges] // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   // ✓✓ / ✗✗ Tout accepter / Tout rejeter — traite d'un coup TOUS les segments en
   // attente. Opère sur le contentEditable live si monté (vue diff), sinon sur
@@ -2894,10 +2927,13 @@ export default function ArticleResult() {
           <span className="text-sm font-semibold text-gray-800">Analyse terminée</span>
         </div>
         <div className="h-4 w-px bg-gray-200 hidden sm:block" />
-        {/* Modifications appliquées dans l'article */}
+        {/* Modifications proposées dans l'article — « proposées » et non « appliquées » :
+            chacune reste à accepter ✓ ou rejeter ✗ en Vue diff avant de sortir de l'éditeur
+            (getFinalHtml, pendingChanges='reject'). L'ancien libellé laissait croire que la
+            Vue finale les contenait déjà. */}
         <div className="text-sm text-gray-600">
           <span className="font-bold text-gray-900">{appliedUpdates.length}</span>
-          {' '}modification{appliedUpdates.length !== 1 ? 's' : ''} appliquée{appliedUpdates.length !== 1 ? 's' : ''}
+          {' '}modification{appliedUpdates.length !== 1 ? 's' : ''} proposée{appliedUpdates.length !== 1 ? 's' : ''}
           {' '}dans l'article
         </div>
         {/* Modifications non localisées */}
@@ -3830,12 +3866,17 @@ export default function ArticleResult() {
                   </div>
                 )}
 
-                {/* Badge vue finale */}
-                {!diffMode && (
+                {/* Badge vue finale — avertit si des modifications en attente sont EXCLUES */}
+                {!diffMode && (pendingInFinal > 0 ? (
+                  <span className="flex items-center gap-1 text-[11px] font-medium text-amber-600">
+                    <AlertTriangle size={12} />
+                    {pendingInFinal} modification{pendingInFinal > 1 ? 's' : ''} en attente non incluse{pendingInFinal > 1 ? 's' : ''} — acceptez-les en Vue diff avant de copier/publier
+                  </span>
+                ) : (
                   <span className="text-[11px] text-gray-400 italic">
                     Article final sans marquages — prêt à copier/publier
                   </span>
-                )}
+                ))}
 
                 {/* Navigation entre changements (diff uniquement) */}
                 {diffMode && appliedUpdates.length > 0 && (
