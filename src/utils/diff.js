@@ -243,6 +243,27 @@ export const liftMarksOutOfDel = (html) => {
  * Utilisé pour les updates de type "addition" (nouveaux paragraphes).
  * @returns {{ html: string, matched: boolean }}
  */
+/**
+ * Si `pos` tombe À L'INTÉRIEUR d'un ou plusieurs <ins> (cas : l'anchor d'une
+ * addition est du texte AJOUTÉ par une addition précédente → son </p> de bloc
+ * est dans le <ins> voisin), renvoie la position juste APRÈS le(s) <ins>
+ * englobant(s). Garantit que les additions restent SŒURS et ne s'imbriquent
+ * jamais (source du bug 20/07 : poupées russes d'<ins>). No-op au niveau racine.
+ */
+const escapeEnclosingIns = (html, pos) => {
+  const pre = html.slice(0, pos);
+  let depth = (pre.match(/<ins\b/gi) || []).length - (pre.match(/<\/ins>/gi) || []).length;
+  if (depth <= 0) return pos;
+  const tokenRx = /<ins\b|<\/ins>/gi;
+  tokenRx.lastIndex = pos;
+  let m;
+  while ((m = tokenRx.exec(html))) {
+    depth += m[0][1] === '/' ? -1 : 1;
+    if (depth === 0) return m.index + m[0].length;
+  }
+  return pos;
+};
+
 export const applyAddition = (html, anchor, updated) => {
   if (!anchor || !updated) return { html, matched: false };
 
@@ -296,6 +317,9 @@ export const applyAddition = (html, anchor, updated) => {
     // structure jamais refermée (HTML malformé) → comportement d'origine
   }
 
+  // Ne jamais insérer une addition DANS une autre addition <ins> → ressortir
+  insertPos = escapeEnclosingIns(html, insertPos);
+
   const newHtml =
     html.slice(0, insertPos) +
     `<ins class="added-content">${updated}</ins>` +
@@ -316,11 +340,11 @@ export const insertAfterIntro = (html, updated) => {
   if (!updated) return { html, matched: false };
   const block = `<ins class="added-content">${updated}</ins>`;
   const h2 = /<h2\b/i.exec(html);
-  if (h2) return { html: html.slice(0, h2.index) + block + html.slice(h2.index), matched: true };
+  if (h2) { const pos = escapeEnclosingIns(html, h2.index); return { html: html.slice(0, pos) + block + html.slice(pos), matched: true }; }
   const p = /<\/p>/i.exec(html);
-  if (p) { const pos = p.index + p[0].length; return { html: html.slice(0, pos) + block + html.slice(pos), matched: true }; }
+  if (p) { const pos = escapeEnclosingIns(html, p.index + p[0].length); return { html: html.slice(0, pos) + block + html.slice(pos), matched: true }; }
   const fig = /<\/figure>/i.exec(html);
-  if (fig) { const pos = fig.index + fig[0].length; return { html: html.slice(0, pos) + block + html.slice(pos), matched: true }; }
+  if (fig) { const pos = escapeEnclosingIns(html, fig.index + fig[0].length); return { html: html.slice(0, pos) + block + html.slice(pos), matched: true }; }
   return { html: block + html, matched: true };
 };
 
@@ -349,11 +373,13 @@ export const insertAfterNthH2 = (html, updated, n = 2) => {
 
   if (!ends.length) {
     const p = /<\/p>/i.exec(html);
-    if (p) { const pos = p.index + p[0].length; return { html: html.slice(0, pos) + block + html.slice(pos), matched: true }; }
+    if (p) { const pos = escapeEnclosingIns(html, p.index + p[0].length); return { html: html.slice(0, pos) + block + html.slice(pos), matched: true }; }
     return { html: html + block, matched: true };
   }
-  // n-ième H2 si disponible, sinon le dernier
-  const pos = ends[Math.min(n, ends.length) - 1];
+  // n-ième H2 si disponible, sinon le dernier — jamais À L'INTÉRIEUR d'un <ins>
+  // (ex. le seul H2 présent est le titre du TL;DR : insérer après son </h2>
+  // couperait le TL;DR de ses puces → on ressort de l'addition).
+  const pos = escapeEnclosingIns(html, ends[Math.min(n, ends.length) - 1]);
   return { html: html.slice(0, pos) + block + html.slice(pos), matched: true };
 };
 
@@ -401,7 +427,10 @@ export const insertNearClosestParagraph = (html, referenceText, newContent) => {
   const ins = document.createElement('ins');
   ins.className = 'added-content';
   ins.innerHTML = newContent;
-  bestBlock.insertAdjacentElement('afterend', ins);
+  // Ne jamais nicher l'addition dans une autre : si le bloc cible est dans un
+  // <ins.added-content>, insérer après CET <ins> (addition sœur, pas enfant).
+  const enclosingIns = bestBlock.closest('ins.added-content');
+  (enclosingIns || bestBlock).insertAdjacentElement('afterend', ins);
   return { html: div.innerHTML, matched: true };
 };
 
@@ -579,50 +608,123 @@ const looksLikeRealFaq = (el) =>
   Array.from(el.querySelectorAll('h1, h2, h3, h4')).some(h => FAQ_TITLE_RX.test(h.textContent || ''));
 
 /**
- * Désimbrique une section spéciale enfouie dans une addition <ins> : le modèle
- * groupe parfois « nouvelle section + FAQ + résumé » dans UNE seule addition →
- * tout s'affiche imbriqué dans un seul gros bloc bleu, et la FAQ échappe au
- * repositionnement (son heading n'est plus un enfant direct du document).
- * On scinde : la section vit dans son PROPRE <ins> (elle reste une addition à
- * accepter/rejeter), marqué d'une classe repère, posé après l'ins d'origine.
+ * Aplatit les additions <ins> IMBRIQUÉES. `applyAllDiffs` peut nicher une
+ * addition dans une autre quand elle est ancrée sur du texte AJOUTÉ par une
+ * addition précédente (ex. « Aides » ancré sur une phrase de « Normes ») →
+ * structure en poupées russes `<ins>A<ins>B<ins>C…</ins></ins></ins>`. Sans
+ * aplatissement, la désimbrication des sections spéciales part en vrille
+ * (tableau marqué FAQ, TL;DR séparé de ses puces, <ins> vides — bug 20/07).
+ * On désenveloppe chaque <ins.added-content> niché DANS son parent, sur place
+ * → une séquence de blocs à plat, dans l'ordre de lecture.
  */
-const splitSpecialFromIns = (container, titleRx, markerClass) => {
+const flattenNestedAdditions = (container) => {
   let changed = false;
-  for (const ins of Array.from(container.querySelectorAll('ins.added-content'))) {
-    if (ins.classList.contains(markerClass)) continue;
-    const heading = Array.from(ins.querySelectorAll('h1, h2, h3, h4'))
-      .find(h => titleRx.test(h.textContent || ''));
-    if (!heading) continue;
-
-    // Bloc de premier niveau DANS l'ins qui contient le heading
-    let top = heading;
-    while (top.parentNode !== ins) top = top.parentNode;
-
-    // Rien de significatif avant la section → l'ins EST la section : marquer
-    let hasBefore = false;
-    for (let n = ins.firstChild; n && n !== top; n = n.nextSibling) {
-      if ((n.textContent || '').trim() || (n.nodeType === Node.ELEMENT_NODE && n.querySelector('img, table, iframe, video'))) {
-        hasBefore = true;
-        break;
-      }
-    }
-    if (!hasBefore) {
-      ins.classList.add(markerClass);
-      changed = true;
-      continue;
-    }
-
-    // Scinder : la section (du bloc jusqu'à la fin de l'ins — les sections
-    // spéciales sont générées d'un tenant en queue d'addition) part dans son
-    // propre <ins> inséré juste après l'original.
-    const nodes = [];
-    for (let n = top; n; n = n.nextSibling) nodes.push(n);
-    const wrapper = document.createElement('ins');
-    wrapper.className = `added-content ${markerClass}`;
-    nodes.forEach(n => wrapper.appendChild(n));
-    ins.parentNode.insertBefore(wrapper, ins.nextSibling);
-    if (!ins.textContent.trim() && !ins.querySelector('img, table, iframe, video')) ins.remove();
+  let guard = 0;
+  while (guard++ < 500) {
+    const nested = container.querySelector('ins.added-content ins.added-content');
+    if (!nested) break;
+    const frag = document.createDocumentFragment();
+    while (nested.firstChild) frag.appendChild(nested.firstChild);
+    nested.parentNode.replaceChild(frag, nested);
     changed = true;
+  }
+  return changed;
+};
+
+/** Niveau d'un heading (1-6) ou null si le nœud n'est pas un titre. */
+const headingLvl = (n) =>
+  (n && n.nodeType === Node.ELEMENT_NODE && /^H[1-6]$/.test(n.tagName)) ? parseInt(n.tagName[1], 10) : null;
+
+/** Contenu significatif (texte non vide ou média) dans un nœud. */
+const isSignificantNode = (n) =>
+  (n.textContent || '').trim() || (n.nodeType === Node.ELEMENT_NODE && n.querySelector('img, table, iframe, video'));
+
+/**
+ * Désimbrique une section spéciale enfouie dans une addition <ins>. Le modèle
+ * groupe parfois PLUSIEURS sections dans UNE seule addition (tableau + résumé +
+ * autres H2 + FAQ), pas forcément avec la section spéciale en queue. Il faut
+ * alors extraire UNIQUEMENT la section spéciale (titre + son contenu, jusqu'au
+ * prochain titre qui la clôt) dans son propre <ins> marqué, et laisser tout ce
+ * qui la précède ET la suit dans des additions normales, à leur place.
+ *
+ * L'ancienne version coupait « du titre jusqu'à la fin de l'ins », ce qui, quand
+ * la section n'était pas en dernier, emportait les blocs suivants, séparait un
+ * TL;DR de ses puces et marquait à tort le tableau/les blocs voisins (bug 20/07).
+ *
+ * @param titleRx        motif du titre de la section (FAQ / TL;DR)
+ * @param markerClass    classe repère posée sur le <ins> extrait (tt-faq / tt-tldr)
+ * @param stopAtAnyHeading  true : la section s'arrête au PROCHAIN titre quel que
+ *   soit son niveau (TL;DR = titre + puces, jamais de sous-titre) ; false : elle
+ *   s'arrête au prochain titre de niveau ≤ (FAQ à l'ancien format peut contenir
+ *   des sous-titres de questions).
+ */
+const splitSpecialFromIns = (container, titleRx, markerClass, stopAtAnyHeading = false) => {
+  let changed = false;
+  let guard = 0;
+  let again = true;
+  // Re-scan après chaque extraction : l'addition résiduelle « après » peut à son
+  // tour contenir une autre occurrence de la même section spéciale.
+  while (again && guard++ < 50) {
+    again = false;
+    for (const ins of Array.from(container.querySelectorAll('ins.added-content'))) {
+      if (ins.classList.contains(markerClass)) continue;
+      const heading = Array.from(ins.querySelectorAll('h1, h2, h3, h4'))
+        .find(h => titleRx.test(h.textContent || ''));
+      if (!heading) continue;
+
+      // Bloc top-level de l'ins contenant le titre
+      let top = heading;
+      while (top.parentNode !== ins) top = top.parentNode;
+      const lvl = headingLvl(top) || headingLvl(heading) || 2;
+
+      // Section = le titre + ses frères suivants jusqu'au titre qui la clôt
+      const sectionNodes = [top];
+      for (let n = top.nextSibling; n; n = n.nextSibling) {
+        const hl = headingLvl(n);
+        if (hl && (stopAtAnyHeading || hl <= lvl)) break;
+        sectionNodes.push(n);
+      }
+      const lastSection = sectionNodes[sectionNodes.length - 1];
+
+      // Groupes avant / après la section (références capturées AVANT tout déplacement)
+      const beforeNodes = [];
+      for (let n = ins.firstChild; n && n !== top; n = n.nextSibling) beforeNodes.push(n);
+      const afterNodes = [];
+      for (let n = lastSection.nextSibling; n; n = n.nextSibling) afterNodes.push(n);
+
+      const hasBefore = beforeNodes.some(isSignificantNode);
+      const hasAfter  = afterNodes.some(isSignificantNode);
+
+      // L'ins EST déjà exactement la section → marquer sur place
+      if (!hasBefore && !hasAfter) {
+        ins.classList.add(markerClass);
+        changed = true;
+        continue;
+      }
+
+      // Extraire la section dans son propre <ins> marqué
+      const wrapper = document.createElement('ins');
+      wrapper.className = `added-content ${markerClass}`;
+      sectionNodes.forEach(n => wrapper.appendChild(n));
+      ins.parentNode.insertBefore(wrapper, ins.nextSibling);
+
+      // Nœuds APRÈS la section → nouvelle addition normale (ordre du document préservé)
+      if (hasAfter) {
+        const afterIns = document.createElement('ins');
+        afterIns.className = 'added-content';
+        afterNodes.forEach(n => afterIns.appendChild(n));
+        ins.parentNode.insertBefore(afterIns, wrapper.nextSibling);
+      } else {
+        afterNodes.forEach(n => n.parentNode && n.remove()); // résidus vides
+      }
+
+      // L'ins d'origine ne garde que le « avant » ; le supprimer s'il devient vide
+      if (!ins.textContent.trim() && !ins.querySelector('img, table, iframe, video')) ins.remove();
+
+      changed = true;
+      again = true; // re-scan pour d'éventuelles sections restantes
+      break;
+    }
   }
   return changed;
 };
@@ -747,13 +849,32 @@ export const moveFaqToEnd = (html) => {
   container.innerHTML = html;
 
   let changed = false;
+  // Aplatir d'abord les additions imbriquées (poupées russes) — sinon la
+  // désimbrication des sections spéciales produit tableau-marqué-FAQ, TL;DR
+  // séparé de ses puces et <ins> vides.
+  changed = flattenNestedAdditions(container) || changed;
   changed = splitSpecialFromIns(container, FAQ_TITLE_RX, 'tt-faq') || changed;
-  changed = splitSpecialFromIns(container, TLDR_TITLE_RX, 'tt-tldr') || changed;
-  // Auto-nettoyage : retirer un marqueur tt-faq resté sur un bloc qui ne
-  // contient plus de FAQ réelle (répare aussi les brouillons déjà touchés).
-  for (const ins of Array.from(container.querySelectorAll(':scope > ins.tt-faq'))) {
-    if (!looksLikeRealFaq(ins)) { ins.classList.remove('tt-faq'); changed = true; }
+  changed = splitSpecialFromIns(container, TLDR_TITLE_RX, 'tt-tldr', true) || changed;
+
+  // Nettoyage défensif — quoi qu'il arrive en amont, aucun marqueur ne doit
+  // rester sur un bloc qui ne correspond pas à sa section, et aucun <ins>
+  // spécial vide ne doit subsister :
+  for (const ins of Array.from(container.querySelectorAll('ins.tt-faq, ins.tt-tldr'))) {
+    // 1) <ins> spécial vide (résidu de découpe) → supprimé
+    if (!ins.textContent.trim() && !ins.querySelector('img, table, iframe, video')) {
+      ins.remove(); changed = true; continue;
+    }
+    // 2) marqueur tt-faq sur un bloc sans vraie FAQ → retiré
+    if (ins.classList.contains('tt-faq') && !looksLikeRealFaq(ins)) {
+      ins.classList.remove('tt-faq'); changed = true;
+    }
+    // 3) marqueur tt-tldr sur un bloc sans titre TL;DR → retiré
+    if (ins.classList.contains('tt-tldr')
+        && !Array.from(ins.querySelectorAll('h1, h2, h3, h4')).some(h => TLDR_TITLE_RX.test(h.textContent || ''))) {
+      ins.classList.remove('tt-tldr'); changed = true;
+    }
   }
+
   changed = moveFaqBlockToEnd(container) || changed;
   changed = moveTldrAfterIntro(container) || changed;
 
