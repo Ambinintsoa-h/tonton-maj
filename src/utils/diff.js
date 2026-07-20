@@ -568,6 +568,17 @@ const FAQ_TITLE_RX  = /faq|questions?\s+fr[ée]quentes|foire aux questions/i;
 const TLDR_TITLE_RX = /r[ée]sum[ée] de l'article|tl\s*;?\s*dr/i;
 
 /**
+ * Un élément contient-il une VRAIE FAQ ? (accordéon <details> ou heading FAQ).
+ * Nécessaire car un <ins> marqué `tt-faq` peut ne plus contenir la FAQ après
+ * les désimbrications successives (cas observé : les puces du TL;DR restées
+ * seules dans l'ins) — le traiter comme FAQ enverrait le TL;DR en fin de
+ * document et détournerait la barre FAQ de l'éditeur.
+ */
+const looksLikeRealFaq = (el) =>
+  !!el.querySelector('details') ||
+  Array.from(el.querySelectorAll('h1, h2, h3, h4')).some(h => FAQ_TITLE_RX.test(h.textContent || ''));
+
+/**
  * Désimbrique une section spéciale enfouie dans une addition <ins> : le modèle
  * groupe parfois « nouvelle section + FAQ + résumé » dans UNE seule addition →
  * tout s'affiche imbriqué dans un seul gros bloc bleu, et la FAQ échappe au
@@ -623,6 +634,11 @@ const moveFaqBlockToEnd = (container) => {
   for (const child of Array.from(container.children)) {
     const cls = (child.className || '').toLowerCase();
     const id  = (child.id || '').toLowerCase();
+    // Un <ins> du pipeline n'est retenu que s'il contient une VRAIE FAQ — un
+    // marqueur tt-faq résiduel sur un autre contenu (puces TL;DR) ne doit pas
+    // l'envoyer en fin de document. Les conteneurs d'auteur (div.schema-faq,
+    // section#faq) gardent le comportement historique.
+    if (child.tagName === 'INS' && !looksLikeRealFaq(child)) continue;
     if (cls.includes('faq') || id.includes('faq') || id === 'foire-aux-questions') {
       // Extraire les <ins class="added-content"> qui ont atterri à l'intérieur du bloc FAQ
       // (cas : passe 2 a ancré sur du texte à l'intérieur du FAQ → insertion enfouie dedans)
@@ -733,6 +749,11 @@ export const moveFaqToEnd = (html) => {
   let changed = false;
   changed = splitSpecialFromIns(container, FAQ_TITLE_RX, 'tt-faq') || changed;
   changed = splitSpecialFromIns(container, TLDR_TITLE_RX, 'tt-tldr') || changed;
+  // Auto-nettoyage : retirer un marqueur tt-faq resté sur un bloc qui ne
+  // contient plus de FAQ réelle (répare aussi les brouillons déjà touchés).
+  for (const ins of Array.from(container.querySelectorAll(':scope > ins.tt-faq'))) {
+    if (!looksLikeRealFaq(ins)) { ins.classList.remove('tt-faq'); changed = true; }
+  }
   changed = moveFaqBlockToEnd(container) || changed;
   changed = moveTldrAfterIntro(container) || changed;
 

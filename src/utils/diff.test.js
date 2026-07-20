@@ -200,3 +200,43 @@ describe('moveFaqToEnd — sections spéciales jamais imbriquées dans une addit
     expect(moveFaqToEnd(html)).toBe(html);
   });
 });
+
+describe('moveFaqToEnd — marqueur tt-faq résiduel sur un bloc qui n\'est pas une FAQ', () => {
+  const parse = (html) => { const d = document.createElement('div'); d.innerHTML = html; return d; };
+
+  it('un ins.tt-faq ne contenant que des puces (TL;DR) n\'est PAS envoyé en fin — marqueur retiré, la vraie FAQ part en fin', () => {
+    // Cas observé en prod (20/07/2026) : après désimbrication, les puces du
+    // TL;DR restaient seules dans l'ins marqué tt-faq → expédiées en fin de
+    // document à la place de la FAQ, et barre FAQ de l'éditeur détournée.
+    const html =
+      '<p>Intro.</p>'
+      + '<ins class="added-content tt-faq"><ul><li>Prix 2026 : 400-1 000 €</li><li>Déclaration dès 5 m²</li></ul></ins>'
+      + '<h2>Section A</h2><p>Texte.</p>'
+      + '<h2>FAQ</h2><p>Q/R.</p>'
+      + '<h2>Entretien</h2><p>Fin.</p>';
+    const div = parse(moveFaqToEnd(html));
+    // La VRAIE FAQ (heading) est en fin de document
+    const headings = Array.from(div.querySelectorAll('h2')).map(h => h.textContent);
+    expect(headings[headings.length - 1]).toBe('FAQ');
+    // Les puces TL;DR ne sont PAS le dernier élément et perdent le marqueur
+    const ins = div.querySelector('ins.added-content');
+    expect(ins.classList.contains('tt-faq')).toBe(false);
+    expect(div.lastElementChild.contains(ins)).toBe(false);
+  });
+
+  it('un ins.tt-faq avec un accordéon <details> reste traité comme FAQ (envoyé en fin)', () => {
+    const html =
+      '<p>Intro.</p>'
+      + '<ins class="added-content tt-faq"><h2>Vos questions</h2><details><summary>Q1</summary><p>R1</p></details></ins>'
+      + '<h2>Suite</h2><p>Texte.</p>';
+    const div = parse(moveFaqToEnd(html));
+    expect(div.lastElementChild.classList.contains('tt-faq')).toBe(true);
+    expect(div.lastElementChild.querySelector('details')).not.toBeNull();
+  });
+
+  it('un conteneur d\'auteur div.schema-faq garde le comportement historique (déplacé en fin sans exigence de contenu)', () => {
+    const html = '<p>Intro.</p><div class="schema-faq"><p>Q : a ? R : b.</p></div><h2>Suite</h2><p>t.</p>';
+    const div = parse(moveFaqToEnd(html));
+    expect(div.lastElementChild.className).toBe('schema-faq');
+  });
+});
