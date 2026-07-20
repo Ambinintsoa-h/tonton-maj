@@ -13,12 +13,25 @@ export const normalizeText = (str) =>
 export const escRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
+ * Échappe une chaîne pour un ATTRIBUT HTML (title="…"). Le `reason` généré par
+ * l'IA peut contenir <, >, & (ex. « score < 3/10 », « balise <table> ») : sans
+ * échappement il fuit brut dans l'attribut, ce qui peut malformer le HTML et
+ * fausser les comptages de balises basés sur regex (escapeEnclosingIns). On
+ * échappe & en premier pour ne pas ré-échapper les entités produites ensuite.
+ */
+export const escapeAttr = (s) => (s || "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;");
+
+/**
  * Tente de localiser `original` dans `html` et l'entoure des balises diff.
  * 4 stratégies par ordre de précision décroissante.
  * @returns {{ html: string, matched: boolean }}
  */
 export const applyDiff = (html, original, updated, reason, deleteOnly = false) => {
-  const safeReason = (reason || "").replace(/"/g, "'");
+  const safeReason = escapeAttr(reason);
   const replacement = (matched) =>
     deleteOnly
       ? `<del class="deleted-content" title="${safeReason}">${matched}</del>`
@@ -470,7 +483,7 @@ export const applyReplacementFuzzy = (html, original, updated, reason) => {
   // Seuil de prudence : au moins ~40 % des mots significatifs présents dans le bloc
   if (!best || bestScore < 0.4) return { html, matched: false };
 
-  const safeReason = (reason || '').replace(/"/g, "'");
+  const safeReason = escapeAttr(reason);
   // 1) tenter le diff exact à l'intérieur du bloc (barre le segment précis)
   const scoped = applyDiff(best.innerHTML, original, updated, reason);
   if (scoped.matched) {
