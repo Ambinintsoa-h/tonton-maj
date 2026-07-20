@@ -3,6 +3,7 @@ import { searchWeb } from './search';
 import { scrapeUrl } from './scraper';
 import { MAJ_DEPTHS, DEFAULT_DEPTH } from '../constants/majDepth';
 import { filterSameSiteLinks } from '../utils/diff';
+import { applyStyleGuards, stripForbiddenDashes, stripForbiddenDashesText } from '../utils/textRules';
 
 const LOCAL_PROXY    = '/api/claude';
 const WP_TOOL_PROXY  = '/api/wp-tool';
@@ -445,15 +446,20 @@ const checkSkillsCompliance = async (articleContent, updates, skills, knowledge)
     }))
   );
 
+  // Texte COMPLET des skills (dans la limite du budget par entrée : 1 500 car.
+  // skill / 1 000 car. BDC — cf. utils/skillsLint BUDGET). L'ancienne troncature
+  // à 600 car. faisait vérifier la conformité sur le DÉBUT des règles seulement :
+  // les règles de style en fin de fiche (phrases longues, verbes mous, tirets…)
+  // n'étaient jamais contrôlées.
   const skillsList = activeSkills.map((s, i) => {
     const text = s.content?.trimStart().startsWith('<') ? stripHtml(s.content) : (s.content || '');
-    return `### SKILL ${i + 1} — ${s.name}\n${text.substring(0, 600)}`;
+    return `### SKILL ${i + 1} — ${s.name}\n${text.substring(0, 1500)}`;
   }).join('\n\n');
 
   const docsList = activeDocs.map((k, i) => {
     const isHtml = k.isHtml || k.source === 'manual' || k.content?.trimStart().startsWith('<');
     const text   = isHtml ? stripHtml(k.content) : (k.content || '');
-    return `### DOCUMENT ${i + 1} — ${k.name}\n${text.substring(0, 600)}`;
+    return `### DOCUMENT ${i + 1} — ${k.name}\n${text.substring(0, 1000)}`;
   }).join('\n\n');
 
   const { text } = await callClaude(null, {
@@ -1273,6 +1279,7 @@ ${content}
 ## Règles finales
 - Tout ce qui date d'avant ${cutoffIso || prevYear} est OBLIGATOIREMENT suspect
 - "original" = copie EXACTE mot-pour-mot du texte de l'article
+- LONGUEUR FINALE : l'article après application de TOUTES tes modifications doit rester entre 800 et 1 500 mots. PLAFOND STRICT : ne dépasse JAMAIS 1 500 mots au total — dimensionne tes additions en conséquence (article actuel : ~${wordCount} mots)
 - Réponds UNIQUEMENT avec le JSON valide, sans markdown ni texte autour`;
 
   // Génération avec compteur de tokens simulé (feedback visuel temps réel).
@@ -1350,6 +1357,11 @@ ${content}
       console.warn('[coherence] Échec de la vérification :', e.message);
     }
   }
+
+  // ── Garde-fou de style déterministe (règle d'équipe absolue) ─────────────────
+  // Aucun tiret cadratin/demi-cadratin dans le texte GÉNÉRÉ (titres exclus,
+  // plages numériques préservées) — le modèle en laisse parfois passer.
+  result.updates = applyStyleGuards(result.updates);
 
   onProgress(100);
   onStep('Analyse terminée !');
@@ -1749,6 +1761,9 @@ ${content}
     '[review] JSON parse failed:'
   );
 
+  // Garde-fou de style : mêmes règles qu'en passe 1 (tirets interdits dans le généré)
+  result.updates = applyStyleGuards(result.updates);
+
   onProgress(100);
   onStep('Deuxième passe terminée !');
 
@@ -1779,7 +1794,9 @@ export const rewriteSelection = async ({ text, instruction }) => {
   });
   const cleaned = (out || '').trim();
   if (!cleaned) throw new Error('Réponse vide — réessayez.');
-  return cleaned;
+  // Garde-fou déterministe : la consigne interdit déjà les tirets cadratins,
+  // le nettoyage rattrape ceux qui passent quand même.
+  return stripForbiddenDashesText(cleaned);
 };
 
 /**
@@ -1810,7 +1827,8 @@ Réponds UNIQUEMENT avec le HTML réécrit (mêmes balises racines que l'entrée
     .replace(/\n?```\s*$/, '')
     .trim();
   if (!cleaned) throw new Error('Réponse vide — réessayez.');
-  return cleaned;
+  // Garde-fou déterministe (titres h1-h6 exclus — conventions « FAQ — » intactes)
+  return stripForbiddenDashes(cleaned);
 };
 
 /**

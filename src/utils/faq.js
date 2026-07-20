@@ -27,6 +27,31 @@ const headingLevel = (node) => {
 };
 
 /**
+ * Déduplique un titre FAQ redondant — ex. « FAQ — Questions fréquentes (FAQ) » :
+ * quand le modèle reformule un titre qui commence déjà par « FAQ », il ajoute
+ * parfois « (FAQ) » en fin → mention doublée à la publication. On retire la
+ * parenthèse finale UNIQUEMENT si « FAQ » apparaît déjà avant elle.
+ * Opère sur les h1-h4 du conteneur ; ne touche à rien d'autre.
+ */
+export const dedupeFaqHeading = (container) => {
+  if (!container) return;
+  container.querySelectorAll('h1, h2, h3, h4').forEach((h) => {
+    const t = h.textContent || '';
+    const PAREN_RX = /\s*\(\s*f\.?a\.?q\.?\s*\)\s*$/i;
+    if (!PAREN_RX.test(t)) return;
+    if (!/faq|questions?\s+fr[ée]quentes|foire aux questions/i.test(t.replace(PAREN_RX, ''))) return;
+    // Retirer la parenthèse dans le DERNIER nœud texte qui la contient
+    // (préserve les balises internes du titre : del/mark de diff, strong…)
+    const walker = document.createTreeWalker(h, NodeFilter.SHOW_TEXT);
+    let last = null;
+    while (walker.nextNode()) {
+      if (/\(\s*f\.?a\.?q\.?\s*\)/i.test(walker.currentNode.nodeValue)) last = walker.currentNode;
+    }
+    if (last) last.nodeValue = last.nodeValue.replace(/\s*\(\s*f\.?a\.?q\.?\s*\)\s*/i, '').replace(/\s+$/, '');
+  });
+};
+
+/**
  * Détecte le bloc FAQ parmi les enfants directs du container (le div contentEditable).
  * Retourne null si aucune FAQ, sinon :
  *   { kind: 'container', nodes: [root], root, heading, level }

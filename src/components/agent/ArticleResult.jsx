@@ -24,7 +24,7 @@ import { analyzeSeo } from '../../utils/seoCheck';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
-  insertFaqHtmlAtCaret, rectOfNodes, normalizeFaqToAccordion,
+  insertFaqHtmlAtCaret, rectOfNodes, normalizeFaqToAccordion, dedupeFaqHeading,
 } from '../../utils/faq';
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction } from '../../store/slices/agentSlice';
@@ -556,6 +556,10 @@ export default function ArticleResult() {
     //     Chaque ligne redevient un <p>, à l'identique de la vue « Avant ».
     //     No-op pour un article déjà structuré en HTML.
     wrapLooseTextIntoParagraphs(tmp);
+
+    // 3d. Titre FAQ redondant (« FAQ — Questions fréquentes (FAQ) ») : la mention
+    //     doublée ne sort jamais de l'éditeur (vue finale, export, publication).
+    dedupeFaqHeading(tmp);
 
     // 4. Filet de sécurité regex — capture les <del>/<mark>/<ins> résiduels que le DOM
     //    n'aurait pas rattrapés (ex: balises cassées par une édition dans contentEditable,
