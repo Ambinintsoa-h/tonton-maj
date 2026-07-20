@@ -40,6 +40,16 @@ export const findFaqBlock = (container) => {
   for (const child of Array.from(container.children)) {
     const cls = (typeof child.className === 'string' ? child.className : '').toLowerCase();
     const id = (child.id || '').toLowerCase();
+    // Un <ins> du pipeline n'est retenu que s'il contient une VRAIE FAQ
+    // (<details> ou heading FAQ) : un marqueur tt-faq résiduel sur un autre
+    // contenu (ex. puces du TL;DR) détournerait la barre FAQ et ses actions
+    // (couper/coller/déplacer) vers le mauvais bloc. Les conteneurs d'auteur
+    // (div.schema-faq, section#faq) gardent le comportement historique.
+    if (child.tagName === 'INS'
+        && !child.querySelector('details')
+        && !Array.from(child.querySelectorAll('h1, h2, h3, h4')).some(h => isFaqTitle(h.textContent))) {
+      continue;
+    }
     if (cls.includes('faq') || id.includes('faq') || id === 'foire-aux-questions') {
       const heading = child.querySelector('h1, h2, h3, h4');
       return { kind: 'container', nodes: [child], root: child, heading, level: headingLevel(heading) || 2 };
