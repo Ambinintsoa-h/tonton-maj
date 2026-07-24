@@ -33,6 +33,9 @@ firebase-service-account*.json
 # Anciennes copies locales
 proddddd/
 
+# Export Firestore de migration (données réelles + jetons WP — jamais committé)
+migration/export/
+
 # Paramètres serveur (clés API — ne jamais committer)
 data/
 .claude/MEMORY.md
