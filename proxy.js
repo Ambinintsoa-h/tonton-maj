@@ -196,6 +196,11 @@ app.use(helmet({
 // Défaut 'firestore'. Bascule vers 'mysql' via DATA_BACKEND en .env + redémarrage.
 app.get('/api/backend', (_req, res) => res.json({ backend: DATA_BACKEND }));
 
+// ─── API données MySQL (montée sous /api/data) ────────────────────────────────
+// Inerte tant que DATA_BACKEND=firestore : les routes existent mais le client ne
+// les appelle pas, et le pool MySQL n'est créé qu'à la 1re requête réelle.
+app.use('/api/data', require('./data-api')({ requireAuth, requireRole }));
+
 // ─── Protection SSRF : bloque les IPs internes / loopback / link-local ────────
 // Sans cette validation, /api/scrape et /api/wordpress permettent de faire fetcher
 // au proxy n'importe quelle URL interne (127.x, 192.168.x, 169.254.x, AWS metadata…).
