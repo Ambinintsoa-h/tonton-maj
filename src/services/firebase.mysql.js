@@ -73,6 +73,34 @@ export const saveArticleDraftRemote = (userId, draft) => api('PUT', '/article-dr
 export const getArticleDraftRemote = () => api('GET', '/article-drafts');
 export const deleteArticleDraftRemote = () => api('DELETE', '/article-drafts');
 
+// ── articles (+ verrou d'édition + SEO) ───────────────────────────────────────
+// getArticles renvoie le contenu inline + editingLock/seoTracking greffés
+// (l'Historique lit ces sous-objets sur chaque article). saveArticle retourne
+// { id, originalContentUrl, updatedContentUrl } (URLs null : pas de Storage).
+export const getArticles = () => api('GET', '/articles');
+export const saveArticle = (article) => api('POST', '/articles', article);
+export const updateArticleHtml = (articleId, updatedContent, editorMeta = null, extraFields = null) =>
+  api('PUT', '/articles/' + enc(articleId) + '/html', { updatedContent, editorMeta, extraFields });
+export const deleteArticle = (id) => api('DELETE', '/articles/' + enc(id));
+export const archiveArticle = (id, archivedBy = '') => api('POST', '/articles/' + enc(id) + '/archive', { archivedBy });
+export const restoreArticle = (id) => api('POST', '/articles/' + enc(id) + '/restore');
+
+// Verrou d'édition collaboratif (décision atomique côté serveur).
+export const acquireEditLock = (articleId, { uid, name }, { force = false } = {}) =>
+  api('POST', '/articles/' + enc(articleId) + '/lock', { uid, name, force });
+export const heartbeatEditLock = (articleId, uid) =>
+  api('POST', '/articles/' + enc(articleId) + '/lock/heartbeat', { uid });
+export const releaseEditLock = (articleId, uid) =>
+  api('DELETE', '/articles/' + enc(articleId) + '/lock', { uid });
+
+// SEO Haloscan (tracking J+0 / J+7 / J+30).
+export const initArticleSeoTracking = (articleId, { keywords, articleUrl }) =>
+  api('POST', '/articles/' + enc(articleId) + '/seo/init', { keywords, articleUrl });
+export const saveSeoSnapshot = (articleId, snapshot) =>
+  api('POST', '/articles/' + enc(articleId) + '/seo/snapshot', snapshot);
+export const getArticleSeoTracking = (articleId) =>
+  api('GET', '/articles/' + enc(articleId) + '/seo');
+
 // Déconnexion : pas de session Firebase à fermer en mode MySQL.
 export const firebaseLogout = async () => {};
 
@@ -84,13 +112,6 @@ export const subscribeToNotifications = () => () => {};
 
 // ── À porter (étape 3, domaine par domaine) ───────────────────────────────────
 export const loginWithUsernameOrEmail = async () => NI('loginWithUsernameOrEmail');
-export const getArticles = async () => NI('getArticles');
-export const saveArticle = async () => NI('saveArticle');
-export const updateArticleHtml = async () => NI('updateArticleHtml');
-export const acquireEditLock = async () => NI('acquireEditLock');
-export const heartbeatEditLock = async () => NI('heartbeatEditLock');
-export const releaseEditLock = async () => NI('releaseEditLock');
-export const deleteArticle = async () => NI('deleteArticle');
 export const getUsers = async () => NI('getUsers');
 export const getPendingItems = async () => NI('getPendingItems');
 export const savePendingList = async () => NI('savePendingList');
@@ -114,11 +135,6 @@ export const ensureArticleTimeDoc = async () => NI('ensureArticleTimeDoc');
 export const recordArticleTime = async () => NI('recordArticleTime');
 export const markArticleTimePublished = async () => NI('markArticleTimePublished');
 export const getArticleTimeAll = async () => NI('getArticleTimeAll');
-export const archiveArticle = async () => NI('archiveArticle');
-export const restoreArticle = async () => NI('restoreArticle');
 export const getTodayActivitySessions = async () => NI('getTodayActivitySessions');
 export const getActivitySessionsRange = async () => NI('getActivitySessionsRange');
 export const getUserActivitySessions = async () => NI('getUserActivitySessions');
-export const initArticleSeoTracking = async () => NI('initArticleSeoTracking');
-export const saveSeoSnapshot = async () => NI('saveSeoSnapshot');
-export const getArticleSeoTracking = async () => NI('getArticleSeoTracking');
