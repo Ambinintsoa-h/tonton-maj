@@ -14,11 +14,13 @@
 --   ci-dessous (articles.created_at ISO/ms, tickets.level numérique, etc.).
 -- =====================================================================
 
--- La base est en latin1 : on la bascule en utf8mb4 (on a ALL PRIVILEGES).
--- La connexion Node (mysql2) DOIT aussi être en charset:'utf8mb4'.
-ALTER DATABASE `eufcarqxft_stomos`
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
+-- ⚠ Charset : chaque table force utf8mb4 explicitement (ci-dessous) et la
+-- connexion Node (mysql2) est en charset:'utf8mb4'. La BASE doit être créée en
+-- utf8mb4 AVANT ce script (portable, quel que soit son nom) :
+--   CREATE DATABASE <base> CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- Base EXISTANTE en latin1 (ex. prod n0c) — optionnel, sans impact car les
+-- tables sont déjà utf8mb4 :
+--   ALTER DATABASE <base> CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- =====================================================================
@@ -99,7 +101,7 @@ CREATE TABLE articles (
   -- Reproduit le tri client getArticles = max(lastModifiedAt,updatedAt,createdAt)
   sort_at          BIGINT AS (GREATEST(COALESCE(last_modified_at,0),
                                        COALESCE(updated_at,0),
-                                       COALESCE(created_at,0))) PERSISTENT,
+                                       COALESCE(created_at,0))) STORED,
   PRIMARY KEY (id),
   KEY idx_articles_sort (sort_at),
   KEY idx_articles_archived (archived),

@@ -31,9 +31,43 @@ node migration/export-firestore.js
 > Application Passwords WordPress). Il est gitignoré : ne jamais le committer,
 > ne jamais le sortir du poste/serveur.
 
-## Étapes suivantes (à venir)
-2. Import MySQL (normalisation des timestamps, éclatement des tableaux en tables
-   filles, préservation des IDs/uid, reset des mots de passe par email).
+## Étape 2 — Schéma + import MariaDB
+
+### Variables `.env` (racine — gitignoré, jamais committé)
+```
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=eufcarqxft_stomos
+DB_PASSWORD=********
+DB_NAME=eufcarqxft_stomos
+DB_POOL=10
+# Clé de chiffrement des Application Passwords WP (32 octets base64) :
+#   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+APP_ENCRYPTION_KEY=********
+```
+> Pour la **répétition sur staging**, pointez `DB_NAME`/`DB_USER` vers une 2ᵉ base
+> (cPanel) ou un MariaDB local — jamais la prod tant que tout n'est pas validé.
+
+### Lancer (dans l'ordre)
+```bash
+npm install                                   # ajoute mysql2
+mysql -u USER -p BASE < migration/schema-mysql-v1.sql   # 1. crée les ~25 tables
+node migration/import-mysql.js                # 2. charge les données (npm run migrate:import)
+```
+
+`import-mysql.js` est **idempotent** (TRUNCATE + INSERT) : rejouable autant de
+fois que voulu sur staging. Il :
+- normalise les timestamps (ISO → ms), caste les IDs numériques ;
+- éclate les `arrayUnion` (connections/pauses/closes/snapshots) en tables filles ;
+- extrait `editingLock` / `seoTracking` dans leurs tables ;
+- **chiffre** les Application Passwords WP (AES-256-GCM, `APP_ENCRYPTION_KEY`) ;
+- **n'importe PAS** les mots de passe (`password_hash` NULL — reset forcé à la bascule) ;
+- **supprime** `firebaseConfig` de `settings`.
+
+Modules partagés (racine, réutilisés par `proxy.js` en Phase 2) :
+`db.js` (pool mysql2 utf8mb4) · `crypto-util.js` (AES-256-GCM).
+
+## Étapes suivantes
 3. Couche REST du proxy (endpoints + autorisation par rôle serveur-side).
 4. Réécriture de la façade `src/services/firebase.js` (mêmes signatures).
-5. Répétition sur base de staging puis bascule prod.
+5. Répétition sur base de staging puis bascule prod (emails de reset).
