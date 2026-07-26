@@ -39,6 +39,7 @@ import {
   getPendingItems, getStats, savePendingList, saveStats, getKnowledge,
   subscribeToNotifications, subscribeToPending,
 } from './services/firebase';
+import { setBackend, getBackend } from './services/backendMode';
 import tracker from './services/activityTracker';
 import { setNotifications } from './store/slices/notificationsSlice';
 import toast from 'react-hot-toast';
@@ -99,18 +100,28 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
 
   if (Object.keys(parsed).length > 0) dispatch(setSettings(parsed));
 
+  // Backend de données : Firestore (défaut) ou MySQL, piloté par DATA_BACKEND
+  // côté proxy. Lu UNE fois au bootstrap ; défaut firestore si le fetch échoue.
+  try {
+    const r = await fetch('/api/backend');
+    if (r.ok) { const d = await r.json(); if (d && d.backend) setBackend(d.backend); }
+  } catch { /* défaut firestore — comportement historique */ }
+
   // Config Firebase : localStorage en priorité, sinon config par défaut
   const fbConfig = (parsed.firebaseConfig?.apiKey)
     ? parsed.firebaseConfig
     : DEFAULT_FIREBASE_CONFIG;
 
-
-  const ok = initFirebase(fbConfig);
-  dispatch(setFirebaseReady(ok));
-
-  if (!ok) {
-    console.error('[firebase] Échec de l\'initialisation');
-    return;
+  if (getBackend() === 'firestore') {
+    const ok = initFirebase(fbConfig);
+    dispatch(setFirebaseReady(ok));
+    if (!ok) {
+      console.error('[firebase] Échec de l\'initialisation');
+      return;
+    }
+  } else {
+    // Mode MySQL : pas d'init Firebase ; tout l'accès données passe par le proxy.
+    dispatch(setFirebaseReady(true));
   }
 
 
