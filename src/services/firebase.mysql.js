@@ -6,10 +6,10 @@
 // une erreur claire (NI) — un flip vers mysql avant qu'un domaine soit prêt échoue
 // fort, pas en silence.
 //
-// ⚠️ MAINTENUE À LA MAIN (le générateur scratchpad ne sert qu'aux stubs initiaux).
-// Doit exporter EXACTEMENT les 65 fonctions aiguillées par firebase.js.
+// ⚠️ MAINTENUE À LA MAIN. Doit exporter EXACTEMENT les 65 fonctions aiguillées.
 //
-// Étape 3 — domaines portés : skills, knowledge, settings, stats.
+// Étape 3 — domaines portés : skills, knowledge, settings, stats,
+//   wordpress_sites, comment_ai, comment_settings, article_drafts.
 // ─────────────────────────────────────────────────────────────────────────────
 
 'use strict';
@@ -34,17 +34,19 @@ const api = async (method, path, body) => {
   return ct.includes('application/json') ? res.json() : null;
 };
 
+const enc = encodeURIComponent;
+
 // ── Domaines portés ───────────────────────────────────────────────────────────
 
 // skills
 export const getSkills = () => api('GET', '/skills');
 export const saveSkill = (skill) => api('POST', '/skills', skill).then((r) => r.id);
-export const deleteSkill = (id) => api('DELETE', '/skills/' + id);
+export const deleteSkill = (id) => api('DELETE', '/skills/' + enc(id));
 
 // knowledge
 export const getKnowledge = () => api('GET', '/knowledge');
 export const saveKnowledge = (item) => api('POST', '/knowledge', item).then((r) => r.id);
-export const deleteKnowledge = (id) => api('DELETE', '/knowledge/' + id);
+export const deleteKnowledge = (id) => api('DELETE', '/knowledge/' + enc(id));
 
 // settings (singleton)
 export const getSettings = () => api('GET', '/settings');
@@ -53,6 +55,23 @@ export const saveSettings = (settings) => api('PUT', '/settings', settings);
 // stats (singleton)
 export const getStats = () => api('GET', '/stats');
 export const saveStats = (stats) => api('PUT', '/stats', stats);
+
+// wordpress_sites (le champ `password` = jeton WP, déchiffré côté serveur à la lecture)
+export const getWordPressSites = () => api('GET', '/wordpress-sites');
+export const saveWordPressSite = (site) => api('POST', '/wordpress-sites', site).then((r) => r.id);
+export const deleteWordPressSite = (id) => api('DELETE', '/wordpress-sites/' + enc(id));
+export const saveSiteFonts = (siteId, fonts) => api('PUT', '/wordpress-sites/' + enc(siteId) + '/fonts', { fonts });
+
+// comment_ai / comment_settings
+export const getCommentAi = (siteId) => api('GET', '/comment-ai?siteId=' + enc(siteId));
+export const saveCommentAi = (siteId, commentId, data) => api('POST', '/comment-ai', { siteId, commentId, ...data });
+export const getCommentSettings = (siteId) => api('GET', '/comment-settings/' + enc(siteId));
+export const saveCommentSettings = (siteId, data) => api('PUT', '/comment-settings/' + enc(siteId), data);
+
+// article_drafts (clé = uid du JWT côté serveur ; le userId passé est ignoré)
+export const saveArticleDraftRemote = (userId, draft) => api('PUT', '/article-drafts', draft);
+export const getArticleDraftRemote = () => api('GET', '/article-drafts');
+export const deleteArticleDraftRemote = () => api('DELETE', '/article-drafts');
 
 // Déconnexion : pas de session Firebase à fermer en mode MySQL.
 export const firebaseLogout = async () => {};
@@ -72,17 +91,6 @@ export const acquireEditLock = async () => NI('acquireEditLock');
 export const heartbeatEditLock = async () => NI('heartbeatEditLock');
 export const releaseEditLock = async () => NI('releaseEditLock');
 export const deleteArticle = async () => NI('deleteArticle');
-export const getWordPressSites = async () => NI('getWordPressSites');
-export const saveWordPressSite = async () => NI('saveWordPressSite');
-export const deleteWordPressSite = async () => NI('deleteWordPressSite');
-export const saveSiteFonts = async () => NI('saveSiteFonts');
-export const saveArticleDraftRemote = async () => NI('saveArticleDraftRemote');
-export const getArticleDraftRemote = async () => NI('getArticleDraftRemote');
-export const deleteArticleDraftRemote = async () => NI('deleteArticleDraftRemote');
-export const getCommentAi = async () => NI('getCommentAi');
-export const saveCommentAi = async () => NI('saveCommentAi');
-export const getCommentSettings = async () => NI('getCommentSettings');
-export const saveCommentSettings = async () => NI('saveCommentSettings');
 export const getUsers = async () => NI('getUsers');
 export const getPendingItems = async () => NI('getPendingItems');
 export const savePendingList = async () => NI('savePendingList');
