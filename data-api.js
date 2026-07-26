@@ -280,6 +280,337 @@ module.exports = ({ requireAuth, requireRole }) => {
     res.json({ ok: true });
   }));
 
+  // ── articles (+ verrou d'édition + SEO, tables filles) ────────────────────────
+  // Règle Firestore : lecture ET écriture pour TOUT membre authentifié
+  // (firestore.rules autorisait déjà l'écriture articles à tout membre connecté ;
+  // le verrou d'édition est APPLICATIF). Donc requireAuth seul, aucun rôle.
+  //
+  // Modèle hybride : colonnes réelles (title/url/contenu/archivage/tri) + `data`
+  // JSON (updates/audit/analysis/seoMeta/instruction/editedTitle/publishDate/…).
+  // editingLock et seoTracking, sous-objets du doc Firestore, deviennent des
+  // tables SÉPARÉES : un heartbeat (30 s) ou un snapshot SEO ne réécrit donc pas
+  // l'article de ~200 Ko, et saveArticle (merge) ne peut plus les écraser.
+  const LOCK_STALE_MS = 90_000;             // = LOCK_STALE_MS côté client (isLockActive)
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const MAX_INLINE = 800_000;               // filet taille HTML inline (idem firebase.js)
+
+  // camelCase (métadonnée article) → colonne réelle. Le reste va dans `data`.
+  const ART_COL = {
+    title: 'title', url: 'url', archived: 'archived', archivedAt: 'archived_at',
+    archivedBy: 'archived_by', lastModifiedAt: 'last_modified_at',
+    lastModifiedBy: 'last_modified_by', assigneeId: 'assignee_id',
+  };
+  // Clés jamais rangées dans `data` (colonnes, contenu, horloge serveur, sous-tables,
+  // vestiges Storage). id/createdAt/updatedAt gérés à part ; editingLock/seoTracking
+  // vivent dans leurs propres tables ; *ContentUrl n'existent pas en mode MySQL.
+  const ART_DATA_SKIP = [
+    'id', 'title', 'url', 'originalContent', 'updatedContent', 'archived', 'archivedAt',
+    'archivedBy', 'lastModifiedAt', 'lastModifiedBy', 'assigneeId', 'createdAt', 'updatedAt',
+    'editingLock', 'seoTracking', 'originalContentUrl', 'updatedContentUrl',
+  ];
+
+  const lockToObj = (l) => ({ uid: l.uid, name: l.name || '', since: l.since, heartbeat: l.heartbeat });
+
+  // Reconstitue le sous-objet seoTracking (forme Firestore) depuis la ligne
+  // seo_tracking + ses snapshots (chaque snapshot = { type, capturedAt, ...data }).
+  const seoTrackingToObj = (t, snaps) => ({
+    enabled: !!t.enabled,
+    keywords: parseJson(t.keywords, null),
+    articleUrl: t.article_url || '',
+    completed: !!t.completed,
+    nextSnapshotType: t.next_snapshot_type,
+    nextSnapshotAt: t.next_snapshot_at,
+    ...(t.last_snapshot_at != null ? { lastSnapshotAt: t.last_snapshot_at } : {}),
+    createdAt: t.created_at,
+    snapshots: (snaps || []).map((s) => ({ type: s.type, capturedAt: s.captured_at, ...parseJson(s.data, {}) })),
+  });
+
+  // Reconstitue un article (forme Firestore camelCase). editingLock/seoTracking
+  // sont greffés par l'appelant (getArticles) depuis leurs tables.
+  const articleToObj = (r) => ({
+    id: r.id,
+    ...parseJson(r.data, {}),
+    ...(r.title != null ? { title: r.title } : {}),
+    ...(r.url != null ? { url: r.url } : {}),
+    ...(r.original_content != null ? { originalContent: r.original_content } : {}),
+    ...(r.updated_content != null ? { updatedContent: r.updated_content } : {}),
+    archived: !!r.archived,
+    ...(r.archived_at != null ? { archivedAt: r.archived_at } : {}),
+    ...(r.archived_by != null ? { archivedBy: r.archived_by } : {}),
+    ...(r.last_modified_at != null ? { lastModifiedAt: r.last_modified_at } : {}),
+    ...(r.last_modified_by != null ? { lastModifiedBy: r.last_modified_by } : {}),
+    ...(r.assignee_id != null ? { assigneeId: r.assignee_id } : {}),
+    ...(r.created_at != null ? { createdAt: r.created_at } : {}),
+    ...(r.updated_at != null ? { updatedAt: r.updated_at } : {}),
+  });
+
+  // GET /articles — équivaut à getDocs(collection('articles')) + tri client
+  // max(lastModifiedAt,updatedAt,createdAt) desc (colonne générée sort_at).
+  // Renvoie le contenu HTML inline (iso Firestore : les docs le portent déjà).
+  // editingLock et seoTracking sont recollés pour que l'Historique retrouve les
+  // badges verrou/SEO exactement comme avant (il les lit sur chaque article).
+  router.get('/articles', requireAuth, wrap(async (_req, res) => {
+    const [arts] = await q('SELECT * FROM articles ORDER BY sort_at DESC');
+    const [locks] = await q('SELECT * FROM article_editing_locks');
+    const [tracks] = await q('SELECT * FROM seo_tracking');
+    const [snaps] = await q('SELECT * FROM seo_snapshots ORDER BY captured_at ASC');
+    const lockBy = new Map(locks.map((l) => [l.article_id, l]));
+    const trackBy = new Map(tracks.map((t) => [t.article_id, t]));
+    const snapsBy = new Map();
+    for (const s of snaps) {
+      if (!snapsBy.has(s.article_id)) snapsBy.set(s.article_id, []);
+      snapsBy.get(s.article_id).push(s);
+    }
+    res.json(arts.map((r) => {
+      const o = articleToObj(r);
+      const l = lockBy.get(r.id);
+      if (l) o.editingLock = lockToObj(l);
+      const t = trackBy.get(r.id);
+      if (t) o.seoTracking = seoTrackingToObj(t, snapsBy.get(r.id));
+      return o;
+    }));
+  }));
+
+  // POST /articles — saveArticle. id fourni ⟹ upsert MERGE (préserve les champs
+  // non transmis, ex. extraFields écrits par updateArticleHtml ; seoTracking/
+  // editingLock sont hors table donc intouchables) + updated_at serveur. Sans id
+  // ⟹ création avec created_at serveur. Retour { id, *ContentUrl:null } (pas de
+  // Storage en MySQL — déjà null en prod Firestore Storage-off).
+  router.post('/articles', requireAuth, wrap(async (req, res) => {
+    const b = req.body || {};
+    const now = Date.now();
+    const { originalContent, updatedContent } = b;
+    const origInline = originalContent != null ? String(originalContent) : null;
+    const updInline = updatedContent != null ? String(updatedContent) : null;
+    const colVal = (k) => {
+      if (k === 'archived') return b.archived == null ? undefined : (b.archived ? 1 : 0);
+      return k in b ? (b[k] != null ? (k === 'lastModifiedAt' || k === 'archivedAt' ? b[k] : String(b[k])) : null) : undefined;
+    };
+
+    if (b.id) {
+      const id = String(b.id);
+      const [rows] = await q('SELECT * FROM articles WHERE id=?', [id]);
+      const existing = rows[0] || null;
+      const existingData = existing ? parseJson(existing.data, {}) : {};
+      const mergedData = { ...existingData, ...omit(b, ART_DATA_SKIP) };
+      // Colonnes : valeur transmise sinon existant (sémantique merge).
+      const sets = ['data=?', 'updated_at=?'];
+      const args = [asJson(mergedData), now];
+      for (const [k, col] of Object.entries(ART_COL)) {
+        const v = colVal(k);
+        if (v !== undefined) { sets.push(`${col}=?`); args.push(v); }
+      }
+      if (origInline != null) { sets.push('original_content=?'); args.push(origInline); }
+      if (updInline != null) { sets.push('updated_content=?'); args.push(updInline); }
+      if (existing) {
+        args.push(id);
+        await q(`UPDATE articles SET ${sets.join(', ')} WHERE id=?`, args);
+      } else {
+        // id fourni mais article absent (flux CQ : id issu du pending) → création.
+        await q(
+          `INSERT INTO articles (id, title, url, original_content, updated_content, archived,
+             archived_at, archived_by, last_modified_at, last_modified_by, assignee_id, updated_at, data)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [id, colVal('title') ?? null, colVal('url') ?? null, origInline, updInline,
+           colVal('archived') ?? 0, colVal('archivedAt') ?? null, colVal('archivedBy') ?? null,
+           colVal('lastModifiedAt') ?? null, colVal('lastModifiedBy') ?? null,
+           colVal('assigneeId') ?? null, now, asJson(mergedData)]);
+      }
+      return res.json({ id, originalContentUrl: null, updatedContentUrl: null });
+    }
+
+    // Sans id → nouvel article, created_at serveur.
+    const id = genId();
+    await q(
+      `INSERT INTO articles (id, title, url, original_content, updated_content, archived,
+         archived_at, archived_by, last_modified_at, last_modified_by, assignee_id, created_at, data)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, colVal('title') ?? null, colVal('url') ?? null, origInline, updInline,
+       colVal('archived') ?? 0, colVal('archivedAt') ?? null, colVal('archivedBy') ?? null,
+       colVal('lastModifiedAt') ?? null, colVal('lastModifiedBy') ?? null,
+       colVal('assigneeId') ?? null, now, asJson(omit(b, ART_DATA_SKIP))]);
+    res.json({ id, originalContentUrl: null, updatedContentUrl: null });
+  }));
+
+  // PUT /articles/:id/html — updateArticleHtml (autosave throttlé). Met à jour
+  // updated_content + updated_at ; editorMeta → last_modified_* ; extraFields
+  // (seoMeta/publishDate/instruction/editedTitle…) fusionnés dans les colonnes
+  // connues sinon dans `data`. No-op silencieux si l'article n'existe pas
+  // (best-effort ; localStorage reste le filet).
+  router.put('/articles/:id/html', requireAuth, wrap(async (req, res) => {
+    const id = req.params.id;
+    const { updatedContent, editorMeta, extraFields } = req.body || {};
+    if (!updatedContent) return res.json({ ok: true });
+    const [rows] = await q('SELECT data FROM articles WHERE id=?', [id]);
+    if (!rows.length) return res.json({ ok: true }); // updateDoc n'existe pas → no-op
+    const sets = ['updated_at=?'];
+    const args = [Date.now()];
+    if (editorMeta && editorMeta.lastModifiedAt) {
+      sets.push('last_modified_at=?', 'last_modified_by=?');
+      args.push(editorMeta.lastModifiedAt, editorMeta.lastModifiedBy || '');
+    }
+    if (String(updatedContent).length <= MAX_INLINE) {
+      sets.push('updated_content=?'); args.push(String(updatedContent));
+    }
+    if (extraFields && typeof extraFields === 'object') {
+      const dataExtra = {};
+      for (const [k, v] of Object.entries(extraFields)) {
+        if (ART_COL[k]) {
+          const col = ART_COL[k];
+          sets.push(`${col}=?`);
+          args.push(k === 'archived' ? (v ? 1 : 0) : (v != null ? v : null));
+        } else {
+          dataExtra[k] = v;
+        }
+      }
+      if (Object.keys(dataExtra).length) {
+        const merged = { ...parseJson(rows[0].data, {}), ...dataExtra };
+        sets.push('data=?'); args.push(asJson(merged));
+      }
+    }
+    args.push(id);
+    await q(`UPDATE articles SET ${sets.join(', ')} WHERE id=?`, args);
+    res.json({ ok: true });
+  }));
+
+  // DELETE /articles/:id — supprime l'article ET ses sous-tables (le doc Firestore
+  // portait editingLock/seoTracking en sous-champs). article_time reste (collection
+  // séparée, conservée comme sous Firestore).
+  router.delete('/articles/:id', requireAuth, wrap(async (req, res) => {
+    const id = req.params.id;
+    await q('DELETE FROM article_editing_locks WHERE article_id=?', [id]);
+    await q('DELETE FROM seo_snapshots WHERE article_id=?', [id]);
+    await q('DELETE FROM seo_tracking WHERE article_id=?', [id]);
+    await q('DELETE FROM articles WHERE id=?', [id]);
+    res.json({ ok: true });
+  }));
+
+  // POST /articles/:id/archive — flag d'archivage (article conservé).
+  router.post('/articles/:id/archive', requireAuth, wrap(async (req, res) => {
+    await q('UPDATE articles SET archived=1, archived_at=?, archived_by=? WHERE id=?',
+      [Date.now(), (req.body && req.body.archivedBy) || '', req.params.id]);
+    res.json({ ok: true });
+  }));
+
+  // POST /articles/:id/restore — annule l'archivage (deleteField → NULL).
+  router.post('/articles/:id/restore', requireAuth, wrap(async (req, res) => {
+    await q('UPDATE articles SET archived=0, archived_at=NULL, archived_by=NULL WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  }));
+
+  // ── Verrou d'édition collaboratif ─────────────────────────────────────────────
+  // POST /articles/:id/lock — acquireEditLock. Décision atomique par transaction
+  // (SELECT … FOR UPDATE sérialise les acquéreurs concurrents), fidèle au read-
+  // decide-write de Firestore : verrou pris si libre, périmé, déjà à moi, ou force.
+  router.post('/articles/:id/lock', requireAuth, wrap(async (req, res) => {
+    const id = req.params.id;
+    const { uid, name, force } = req.body || {};
+    if (!uid) return res.json({ ok: true, offline: true });
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      const [artRows] = await conn.query('SELECT 1 FROM articles WHERE id=? LIMIT 1', [id]);
+      if (!artRows.length) { await conn.commit(); return res.json({ ok: true, missing: true }); }
+      const [lockRows] = await conn.query('SELECT * FROM article_editing_locks WHERE article_id=? FOR UPDATE', [id]);
+      const now = Date.now();
+      const lock = lockRows[0] || null;
+      const active = !!(lock && now - lock.heartbeat < LOCK_STALE_MS);
+      if (active && lock.uid !== uid && !force) {
+        await conn.commit();
+        return res.json({ ok: false, lock: lockToObj(lock) });
+      }
+      const since = active && lock.uid === uid ? lock.since : now;
+      await conn.query(
+        `INSERT INTO article_editing_locks (article_id, uid, name, since, heartbeat) VALUES (?,?,?,?,?)
+         ON DUPLICATE KEY UPDATE uid=VALUES(uid), name=VALUES(name), since=VALUES(since), heartbeat=VALUES(heartbeat)`,
+        [id, uid, name || '', since, now]);
+      await conn.commit();
+      res.json({ ok: true });
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }));
+
+  // POST /articles/:id/lock/heartbeat — prolonge SI le verrou est encore à moi.
+  router.post('/articles/:id/lock/heartbeat', requireAuth, wrap(async (req, res) => {
+    const { uid } = req.body || {};
+    if (uid) await q('UPDATE article_editing_locks SET heartbeat=? WHERE article_id=? AND uid=?',
+      [Date.now(), req.params.id, uid]);
+    res.json({ ok: true });
+  }));
+
+  // DELETE /articles/:id/lock — releaseEditLock (uniquement si à moi).
+  router.delete('/articles/:id/lock', requireAuth, wrap(async (req, res) => {
+    const { uid } = req.body || {};
+    if (uid) await q('DELETE FROM article_editing_locks WHERE article_id=? AND uid=?', [req.params.id, uid]);
+    res.json({ ok: true });
+  }));
+
+  // ── SEO (Haloscan) ────────────────────────────────────────────────────────────
+  // POST /articles/:id/seo/init — initArticleSeoTracking. setDoc merge côté
+  // Firestore crée le doc article s'il manque (item MAJ en attente J+0) → on
+  // garantit une ligne articles (INSERT IGNORE) pour que getArticles le retrouve.
+  router.post('/articles/:id/seo/init', requireAuth, wrap(async (req, res) => {
+    const id = req.params.id;
+    const { keywords, articleUrl } = req.body || {};
+    const now = Date.now();
+    await q('INSERT IGNORE INTO articles (id) VALUES (?)', [id]);
+    await q(
+      `INSERT INTO seo_tracking (article_id, enabled, keywords, article_url, completed,
+         next_snapshot_type, next_snapshot_at, last_snapshot_at, created_at)
+       VALUES (?,1,?,?,0,'after_7d',?,NULL,?)
+       ON DUPLICATE KEY UPDATE enabled=VALUES(enabled), keywords=VALUES(keywords),
+         article_url=VALUES(article_url), completed=VALUES(completed),
+         next_snapshot_type=VALUES(next_snapshot_type), next_snapshot_at=VALUES(next_snapshot_at),
+         created_at=VALUES(created_at)`,
+      [id, asJson(keywords || null), articleUrl || '', now + 7 * DAY_MS, now]);
+    res.json({ ok: true });
+  }));
+
+  // POST /articles/:id/seo/snapshot — saveSeoSnapshot. arrayUnion(snapshot) →
+  // 1 ligne seo_snapshots (PK article_id+type) + maj de l'échéance suivante.
+  router.post('/articles/:id/seo/snapshot', requireAuth, wrap(async (req, res) => {
+    const id = req.params.id;
+    const snapshot = req.body || {};
+    const now = Date.now();
+    const type = snapshot.type;
+    const isLast = type === 'after_30d';
+    const nextType = type === 'before' ? 'after_7d' : type === 'after_7d' ? 'after_30d' : null;
+    const nextAt = type === 'before' ? now + 7 * DAY_MS
+      : type === 'after_7d' ? now + 23 * DAY_MS
+        : Number.MAX_SAFE_INTEGER;
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(
+        `INSERT INTO seo_snapshots (article_id, type, captured_at, data) VALUES (?,?,?,?)
+         ON DUPLICATE KEY UPDATE captured_at=VALUES(captured_at), data=VALUES(data)`,
+        [id, String(type), snapshot.capturedAt || now, asJson(omit(snapshot, ['type', 'capturedAt']))]);
+      await conn.query(
+        `UPDATE seo_tracking SET last_snapshot_at=?, completed=?, next_snapshot_type=?, next_snapshot_at=? WHERE article_id=?`,
+        [snapshot.capturedAt || now, isLast ? 1 : 0, nextType, nextAt, id]);
+      await conn.commit();
+      res.json({ ok: true });
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }));
+
+  // GET /articles/:id/seo — getArticleSeoTracking (ou null).
+  router.get('/articles/:id/seo', requireAuth, wrap(async (req, res) => {
+    const id = req.params.id;
+    const [rows] = await q('SELECT * FROM seo_tracking WHERE article_id=?', [id]);
+    if (!rows.length) return res.json(null);
+    const [snaps] = await q('SELECT * FROM seo_snapshots WHERE article_id=? ORDER BY captured_at ASC', [id]);
+    res.json(seoTrackingToObj(rows[0], snaps));
+  }));
+
   // ── article_drafts (privé : clé = uid du JWT, jamais un id fourni par le client) ─
   router.get('/article-drafts', requireAuth, wrap(async (req, res) => {
     const [rows] = await q('SELECT draft FROM article_drafts WHERE user_id=?', [req.user.uid]);
