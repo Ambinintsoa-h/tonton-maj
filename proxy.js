@@ -48,6 +48,9 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'tonton-dev-secret-change-me-in-production';
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
+// Backend de données actif, piloté par l'env et exposé au client (/api/backend).
+// 'firestore' (défaut) ou 'mysql'. Changement = éditer .env + redémarrer le proxy.
+const DATA_BACKEND = (process.env.DATA_BACKEND === 'mysql') ? 'mysql' : 'firestore';
 
 // ─── Blacklist JWT (M2) ───────────────────────────────────────────────────────
 // Permet la révocation immédiate d'un token avant son expiration.
@@ -188,6 +191,10 @@ app.use(helmet({
     },
   } : false,
 }));
+
+// ─── Backend de données actif (public) — lu par le client au bootstrap ───────
+// Défaut 'firestore'. Bascule vers 'mysql' via DATA_BACKEND en .env + redémarrage.
+app.get('/api/backend', (_req, res) => res.json({ backend: DATA_BACKEND }));
 
 // ─── Protection SSRF : bloque les IPs internes / loopback / link-local ────────
 // Sans cette validation, /api/scrape et /api/wordpress permettent de faire fetcher
