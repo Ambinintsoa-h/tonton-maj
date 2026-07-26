@@ -1,15 +1,70 @@
-// ⚠️ GÉNÉRÉ — impl. MySQL de la façade (étape 3 à venir).
-// Le flag de backend vaut 'firestore' par défaut : ces stubs ne sont PAS appelés
-// tant que l'impl. n'est pas prête. Un flip prématuré vers 'mysql' échoue fort
-// (erreur claire) plutôt qu'en silence.
+// ─────────────────────────────────────────────────────────────────────────────
+// firebase.mysql.js — impl. MySQL de la façade (via endpoints proxy /api/data)
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilisée UNIQUEMENT quand DATA_BACKEND=mysql (voir firebase.js / backendMode.js).
+// Mêmes signatures que l'impl. Firestore ; les fonctions non encore portées lèvent
+// une erreur claire (NI) — un flip vers mysql avant qu'un domaine soit prêt échoue
+// fort, pas en silence.
+//
+// ⚠️ MAINTENUE À LA MAIN (le générateur scratchpad ne sert qu'aux stubs initiaux).
+// Doit exporter EXACTEMENT les 65 fonctions aiguillées par firebase.js.
+//
+// Étape 3 — domaines portés : skills, knowledge, settings, stats.
+// ─────────────────────────────────────────────────────────────────────────────
+
 'use strict';
 
 const NI = (name) => { throw new Error(`[mysql] ${name} — endpoint pas encore implémenté (backend MySQL en construction)`); };
 
+const authToken = () => sessionStorage.getItem('tonton_auth_token');
+
+// Appel générique aux endpoints /api/data (JWT interne en Authorization).
+const api = async (method, path, body) => {
+  const res = await fetch('/api/data' + path, {
+    method,
+    headers: {
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...(authToken() ? { Authorization: `Bearer ${authToken()}` } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`[mysql] ${method} ${path} → HTTP ${res.status}`);
+  if (res.status === 204) return null;
+  const ct = res.headers.get('content-type') || '';
+  return ct.includes('application/json') ? res.json() : null;
+};
+
+// ── Domaines portés ───────────────────────────────────────────────────────────
+
+// skills
+export const getSkills = () => api('GET', '/skills');
+export const saveSkill = (skill) => api('POST', '/skills', skill).then((r) => r.id);
+export const deleteSkill = (id) => api('DELETE', '/skills/' + id);
+
+// knowledge
+export const getKnowledge = () => api('GET', '/knowledge');
+export const saveKnowledge = (item) => api('POST', '/knowledge', item).then((r) => r.id);
+export const deleteKnowledge = (id) => api('DELETE', '/knowledge/' + id);
+
+// settings (singleton)
+export const getSettings = () => api('GET', '/settings');
+export const saveSettings = (settings) => api('PUT', '/settings', settings);
+
+// stats (singleton)
+export const getStats = () => api('GET', '/stats');
+export const saveStats = (stats) => api('PUT', '/stats', stats);
+
+// Déconnexion : pas de session Firebase à fermer en mode MySQL.
+export const firebaseLogout = async () => {};
+
+// Abonnements temps réel → deviendront du polling (domaines à venir). Stub = unsub no-op.
+export const watchEditLock = () => () => {};
+export const subscribeToPending = () => () => {};
+export const subscribeToComments = () => () => {};
+export const subscribeToNotifications = () => () => {};
+
+// ── À porter (étape 3, domaine par domaine) ───────────────────────────────────
 export const loginWithUsernameOrEmail = async () => NI('loginWithUsernameOrEmail');
-export const getSkills = async () => NI('getSkills');
-export const saveSkill = async () => NI('saveSkill');
-export const deleteSkill = async () => NI('deleteSkill');
 export const getArticles = async () => NI('getArticles');
 export const saveArticle = async () => NI('saveArticle');
 export const updateArticleHtml = async () => NI('updateArticleHtml');
@@ -24,20 +79,13 @@ export const saveSiteFonts = async () => NI('saveSiteFonts');
 export const saveArticleDraftRemote = async () => NI('saveArticleDraftRemote');
 export const getArticleDraftRemote = async () => NI('getArticleDraftRemote');
 export const deleteArticleDraftRemote = async () => NI('deleteArticleDraftRemote');
-export const getKnowledge = async () => NI('getKnowledge');
-export const saveKnowledge = async () => NI('saveKnowledge');
-export const deleteKnowledge = async () => NI('deleteKnowledge');
 export const getCommentAi = async () => NI('getCommentAi');
 export const saveCommentAi = async () => NI('saveCommentAi');
 export const getCommentSettings = async () => NI('getCommentSettings');
 export const saveCommentSettings = async () => NI('saveCommentSettings');
-export const getSettings = async () => NI('getSettings');
-export const saveSettings = async () => NI('saveSettings');
 export const getUsers = async () => NI('getUsers');
 export const getPendingItems = async () => NI('getPendingItems');
 export const savePendingList = async () => NI('savePendingList');
-export const getStats = async () => NI('getStats');
-export const saveStats = async () => NI('saveStats');
 export const getTickets = async () => NI('getTickets');
 export const createTicket = async () => NI('createTicket');
 export const updateTicketDoc = async () => NI('updateTicketDoc');
@@ -66,12 +114,3 @@ export const getUserActivitySessions = async () => NI('getUserActivitySessions')
 export const initArticleSeoTracking = async () => NI('initArticleSeoTracking');
 export const saveSeoSnapshot = async () => NI('saveSeoSnapshot');
 export const getArticleSeoTracking = async () => NI('getArticleSeoTracking');
-
-// Déconnexion : pas de session Firebase à fermer en mode MySQL.
-export const firebaseLogout = async () => {};
-
-// Abonnements temps réel : deviendront du polling (étape 3). Stub = unsub no-op.
-export const watchEditLock = () => () => {};
-export const subscribeToPending = () => () => {};
-export const subscribeToComments = () => () => {};
-export const subscribeToNotifications = () => () => {};
