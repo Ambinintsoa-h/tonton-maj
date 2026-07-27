@@ -47,7 +47,12 @@ class ActivityTracker {
    * Si déjà initialisé, no-op.
    */
   init(uid, role, name) {
-    if (this._uid) return;
+    // Sans uid, aucune écriture d'activité n'est possible : le serveur exige
+    // body.userId === req.user.uid, or le compte de secours super_admin du .env n'a
+    // pas d'uid (il n'a pas de fiche users). On n'arme donc RIEN — ni écouteurs, ni
+    // intervalle, ni création de session — plutôt que d'émettre un POST voué au 403
+    // à chaque battement. Les membres, qui ont un uid, ne sont pas concernés.
+    if (!uid || this._uid) return;
     this._uid   = uid;
     this._role  = role;
     this._name  = name;
