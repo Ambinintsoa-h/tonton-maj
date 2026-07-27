@@ -61,14 +61,18 @@ CREATE TABLE password_reset_tokens (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE two_factor (
+  -- Clé = uid de la ligne users ; `env:<username>` pour le super_admin break-glass
+  -- du .env, qui n'a pas de fiche users (cf. tfaKey dans proxy.js).
   user_id              VARCHAR(64) NOT NULL,     -- (ancien: clé par username en fichier)
   enabled              TINYINT(1)  NOT NULL DEFAULT 0,
   method               ENUM('none','totp','email') NOT NULL DEFAULT 'none',
-  totp_secret          VARCHAR(64) NULL,         -- base32 speakeasy (chiffrement au repos conseillé)
+  -- Secrets TOTP CHIFFRÉS au repos (AES-256-GCM, crypto-util.js) : format
+  -- "iv:tag:ct" en base64, ~86 car. pour un secret base32 → VARCHAR(255).
+  totp_secret          VARCHAR(255) NULL,
   email                VARCHAR(255) NULL,
   email_code_hash      CHAR(64)    NULL,         -- HMAC-SHA256
   email_code_expiry    BIGINT      NULL,
-  pending_totp_secret  VARCHAR(64) NULL,
+  pending_totp_secret  VARCHAR(255) NULL,
   pending_email        VARCHAR(255) NULL,
   pending_email_code   CHAR(64)    NULL,
   pending_email_expiry BIGINT      NULL,

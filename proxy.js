@@ -260,10 +260,69 @@ if (IS_PROD) {
   app.use(express.static(path.join(__dirname, 'build')));
 }
 
-// ─── 2FA — stockage local dans data/2fa/{username}.json ─────────────────────
+// ─── 2FA — fichiers data/2fa/{username}.json (firestore) ou table two_factor (mysql) ──
+// Lot 7b-2 : les accesseurs deviennent ASYNCHRONES (SQL) et sont renommés
+// read2fa/write2fa → get2fa/set2fa À DESSEIN : un appel oublié lève une
+// ReferenceError bruyante au lieu de renvoyer une Promise dont `.enabled` serait
+// `undefined` — ce qui aurait désactivé la 2FA en silence.
 const TFA_DIR = path.join(__dirname, 'data', '2fa');
-const read2fa  = (u) => { try { return JSON.parse(fs.readFileSync(path.join(TFA_DIR, `${path.basename(u)}.json`), 'utf8')); } catch { return {}; } };
-const write2fa = (u, d) => { if (!fs.existsSync(TFA_DIR)) fs.mkdirSync(TFA_DIR, { recursive: true }); fs.writeFileSync(path.join(TFA_DIR, `${path.basename(u)}.json`), JSON.stringify(d, null, 2), 'utf8'); };
+const _read2faFile  = (u) => { try { return JSON.parse(fs.readFileSync(path.join(TFA_DIR, `${path.basename(u)}.json`), 'utf8')); } catch { return {}; } };
+const _write2faFile = (u, d) => { if (!fs.existsSync(TFA_DIR)) fs.mkdirSync(TFA_DIR, { recursive: true }); fs.writeFileSync(path.join(TFA_DIR, `${path.basename(u)}.json`), JSON.stringify(d, null, 2), 'utf8'); };
+
+// Clé de stockage. Mode firestore → USERNAME, impérativement : les fichiers
+// existants sont nommés d'après le username, changer de clé rendrait la 2FA en
+// place invisible (= désactivée sans le dire). Mode mysql → uid (PK de
+// two_factor) ; le super_admin break-glass (.env) n'a pas d'uid dans son JWT
+// et n'a pas de ligne users → clé conventionnelle `env:<username>`.
+const tfaKey = (u) => (DATA_BACKEND === 'mysql' ? (u.uid || `env:${u.username}`) : u.username);
+
+// Secrets TOTP chiffrés au repos (AES-256-GCM, comme les jetons WP). Tolérant à
+// une valeur en clair (le format chiffré est "iv:tag:ct", jamais produit par
+// base32) pour ne jamais verrouiller un compte sur un souci de format.
+const _encSecret = (v) => (v ? require('./crypto-util').encrypt(v) : null);
+const _decSecret = (v) => {
+  if (!v) return undefined;
+  if (String(v).split(':').length !== 3) return String(v); // legacy en clair
+  try { return require('./crypto-util').decrypt(v); }
+  catch (e) { console.error('[2fa] déchiffrement du secret impossible :', e.message); return undefined; }
+};
+
+const get2fa = async (key) => {
+  if (DATA_BACKEND !== 'mysql') return _read2faFile(key);
+  const { getPool } = require('./db');
+  const [rows] = await getPool().query('SELECT * FROM two_factor WHERE user_id=? LIMIT 1', [key]);
+  const r = rows[0];
+  if (!r) return {};
+  const num = (v) => (v == null ? undefined : Number(v));
+  return {
+    enabled:            !!r.enabled,
+    method:             r.method || 'none',
+    totpSecret:         _decSecret(r.totp_secret),
+    email:              r.email || undefined,
+    emailCode:          r.email_code_hash || undefined,
+    emailCodeExpiry:    num(r.email_code_expiry),
+    pendingTotpSecret:  _decSecret(r.pending_totp_secret),
+    pendingEmail:       r.pending_email || undefined,
+    pendingEmailCode:   r.pending_email_code || undefined,
+    pendingEmailExpiry: num(r.pending_email_expiry),
+  };
+};
+
+// REMPLACEMENT COMPLET, comme l'écriture du fichier JSON : un champ absent de `d`
+// devient NULL. C'est ce qui purge les champs `pending*` à l'activation — le
+// reproduire à l'identique est indispensable (iso-comportement).
+const set2fa = async (key, d) => {
+  if (DATA_BACKEND !== 'mysql') return _write2faFile(key, d);
+  const { getPool } = require('./db');
+  const cols = ['enabled', 'method', 'totp_secret', 'email', 'email_code_hash', 'email_code_expiry',
+    'pending_totp_secret', 'pending_email', 'pending_email_code', 'pending_email_expiry'];
+  await getPool().query(
+    `INSERT INTO two_factor (user_id, ${cols.join(', ')}) VALUES (${Array(cols.length + 1).fill('?').join(', ')})
+     ON DUPLICATE KEY UPDATE ${cols.map(c => `${c}=VALUES(${c})`).join(', ')}`,
+    [key, d.enabled ? 1 : 0, d.method || 'none', _encSecret(d.totpSecret), d.email || null,
+      d.emailCode || null, d.emailCodeExpiry || null, _encSecret(d.pendingTotpSecret),
+      d.pendingEmail || null, d.pendingEmailCode || null, d.pendingEmailExpiry || null]);
+};
 
 // ─── Profil utilisateur — data/profiles/{username}.json ─────────────────────
 const PROFILES_DIR = path.join(__dirname, 'data', 'profiles');
@@ -524,7 +583,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     let decoded;
     try { decoded = jwt.verify(tempToken, JWT_SECRET); } catch { return res.status(401).json({ error: 'Session 2FA expirée — reconnectez-vous' }); }
     if (decoded.type !== 'tfa_pending') return res.status(401).json({ error: 'Token invalide' });
-    const tfa = read2fa(decoded.username);
+    const tfa = await get2fa(tfaKey(decoded));
     let valid = false;
     if (tfa.method === 'totp') {
       valid = speakeasy.totp.verify({ secret: tfa.totpSecret, encoding: 'base32', token: twoFaCode.replace(/\s/g, ''), window: 1 });
@@ -549,7 +608,8 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   }
 
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-    const tfa = read2fa(username);
+    // Break-glass .env : pas d'uid, pas de ligne users → clé `env:<username>` en mysql.
+    const tfa = await get2fa(tfaKey({ username }));
     if (tfa.enabled) {
       // Email OTP : générer et envoyer le code
       if (tfa.method === 'email') {
@@ -557,7 +617,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
         const email = profile.email || tfa.email;
         if (!email) return res.status(400).json({ error: 'Aucune adresse email configurée pour la 2FA' });
         const code = Math.floor(100000 + Math.random() * 900000).toString();
-        write2fa(username, { ...tfa, emailCode: hashOtp(code), emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
+        await set2fa(tfaKey({ username }), { ...tfa, emailCode: hashOtp(code), emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
         try { await sendEmailOtp(email, code); } catch (e) { return res.status(500).json({ error: `Échec envoi email : ${e.message}` }); }
       }
       const tempToken = jwt.sign({ username, role: 'super_admin', type: 'tfa_pending' }, JWT_SECRET, { expiresIn: '5m' });
@@ -602,14 +662,14 @@ app.post('/api/auth/mysql-login', authRateLimiter, async (req, res) => {
     }
     clearLoginFailure(clientIp);
     const role = VALID_ROLES.has(user.role) ? user.role : 'cq_ia';
-    const tfa = read2fa(user.username);
+    const tfa = await get2fa(tfaKey(user));
     if (tfa.enabled) {
       if (tfa.method === 'email') {
-        const profile = readProfile(user.username);
-        const email = profile.email || tfa.email || user.email;
+        // En mysql, l'email de la 2FA vient de two_factor.email ou de la ligne users.
+        const email = tfa.email || user.email || readProfile(user.username).email;
         if (!email) return res.status(400).json({ error: 'Aucune adresse email configurée pour la 2FA' });
         const code = Math.floor(100000 + Math.random() * 900000).toString();
-        write2fa(user.username, { ...tfa, emailCode: hashOtp(code), emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
+        await set2fa(tfaKey(user), { ...tfa, emailCode: hashOtp(code), emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
         try { await sendEmailOtp(email, code); } catch (e) { return res.status(500).json({ error: `Échec envoi email : ${e.message}` }); }
       }
       // tempToken au format attendu par l'étape 2 de /api/auth/login (backend-agnostique).
@@ -754,7 +814,7 @@ app.post('/api/auth/firebase-login', authRateLimiter, async (req, res) => {
     let decoded;
     try { decoded = jwt.verify(tempToken, JWT_SECRET); } catch { return res.status(401).json({ error: 'Session 2FA expirée — reconnectez-vous' }); }
     if (decoded.type !== 'tfa_pending') return res.status(401).json({ error: 'Token invalide' });
-    const tfa = read2fa(decoded.username);
+    const tfa = await get2fa(tfaKey(decoded));
     let valid = false;
     if (tfa.method === 'totp') {
       valid = speakeasy.totp.verify({ secret: tfa.totpSecret, encoding: 'base32', token: twoFaCode.replace(/\s/g, ''), window: 1 });
@@ -774,14 +834,14 @@ app.post('/api/auth/firebase-login', authRateLimiter, async (req, res) => {
     const username = fbDecoded.username || fbDecoded.email?.split('@')[0] || fbDecoded.uid;
 
     // Vérifier si la 2FA est activée pour cet utilisateur
-    const tfa = read2fa(username);
+    const tfa = await get2fa(tfaKey({ uid: fbDecoded.uid, username }));
     if (tfa.enabled) {
       if (tfa.method === 'email') {
         const profile = readProfile(username);
         const email   = profile.email || tfa.email;
         if (!email) return res.status(400).json({ error: 'Aucune adresse email configurée pour la 2FA' });
         const code = Math.floor(100000 + Math.random() * 900000).toString();
-        write2fa(username, { ...tfa, emailCode: hashOtp(code), emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
+        await set2fa(tfaKey({ uid: fbDecoded.uid, username }), { ...tfa, emailCode: hashOtp(code), emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
         try { await sendEmailOtp(email, code); } catch (e) { return res.status(500).json({ error: `Échec envoi email : ${e.message}` }); }
       }
       const tfaTempToken = jwt.sign({ uid: fbDecoded.uid, username, role, type: 'tfa_pending' }, JWT_SECRET, { expiresIn: '5m' });
@@ -960,7 +1020,7 @@ const writeServerSettings = (payload) => {
 // on lit firstName/lastName/email/avatarUrl depuis la collection users.
 app.get('/api/account', requireAuth, async (req, res) => {
   const profile = readProfile(req.user.username);
-  const tfa     = read2fa(req.user.username);
+  const tfa     = await get2fa(tfaKey(req.user));
 
   let fb = {};
   const profileIsEmpty = !profile.nom && !profile.prenom && !profile.email;
@@ -1038,11 +1098,10 @@ app.post('/api/account/avatar', requireAuth, avatarUpload.single('avatar'), (req
 // POST /api/2fa/setup-totp — génère un secret TOTP + QR code (non activé)
 app.post('/api/2fa/setup-totp', requireAuth, async (req, res) => {
   const username = req.user.username;
-  const profile  = readProfile(username);
   const secret   = speakeasy.generateSecret({ name: `TONTON AI (${username})`, length: 20 });
-  const tfa = read2fa(username);
+  const tfa = await get2fa(tfaKey(req.user));
   // Stocker le secret en attente (pas encore activé)
-  write2fa(username, { ...tfa, pendingTotpSecret: secret.base32 });
+  await set2fa(tfaKey(req.user), { ...tfa, pendingTotpSecret: secret.base32 });
   try {
     const qrDataUrl = await QRCode.toDataURL(secret.otpauth_url);
     res.json({ success: true, secret: secret.base32, qrCode: qrDataUrl });
@@ -1052,14 +1111,13 @@ app.post('/api/2fa/setup-totp', requireAuth, async (req, res) => {
 });
 
 // POST /api/2fa/enable-totp — vérifie le code TOTP et active
-app.post('/api/2fa/enable-totp', requireAuth, (req, res) => {
+app.post('/api/2fa/enable-totp', requireAuth, async (req, res) => {
   const { code } = req.body || {};
-  const username = req.user.username;
-  const tfa = read2fa(username);
+  const tfa = await get2fa(tfaKey(req.user));
   if (!tfa.pendingTotpSecret) return res.status(400).json({ error: 'Aucun secret TOTP en attente — relancez la configuration' });
   const valid = speakeasy.totp.verify({ secret: tfa.pendingTotpSecret, encoding: 'base32', token: (code || '').replace(/\s/g, ''), window: 1 });
   if (!valid) return res.status(400).json({ error: 'Code incorrect — vérifiez votre application authenticator' });
-  write2fa(username, { enabled: true, method: 'totp', totpSecret: tfa.pendingTotpSecret });
+  await set2fa(tfaKey(req.user), { enabled: true, method: 'totp', totpSecret: tfa.pendingTotpSecret });
   res.json({ success: true });
 });
 
@@ -1068,9 +1126,8 @@ app.post('/api/2fa/setup-email', requireAuth, async (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: 'Email requis' });
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const username = req.user.username;
-  const tfa = read2fa(username);
-  write2fa(username, { ...tfa, pendingEmail: email, pendingEmailCode: hashOtp(code), pendingEmailExpiry: Date.now() + 10 * 60 * 1000 });
+  const tfa = await get2fa(tfaKey(req.user));
+  await set2fa(tfaKey(req.user), { ...tfa, pendingEmail: email, pendingEmailCode: hashOtp(code), pendingEmailExpiry: Date.now() + 10 * 60 * 1000 });
   try {
     await sendEmailOtp(email, code);
     res.json({ success: true });
@@ -1080,23 +1137,27 @@ app.post('/api/2fa/setup-email', requireAuth, async (req, res) => {
 });
 
 // POST /api/2fa/enable-email — vérifie le code email et active
-app.post('/api/2fa/enable-email', requireAuth, (req, res) => {
+app.post('/api/2fa/enable-email', requireAuth, async (req, res) => {
   const { code } = req.body || {};
   const username = req.user.username;
-  const tfa = read2fa(username);
+  const tfa = await get2fa(tfaKey(req.user));
   if (!tfa.pendingEmailCode) return res.status(400).json({ error: 'Aucun code en attente — relancez la configuration' });
   if (hashOtp(code) !== tfa.pendingEmailCode || Date.now() > (tfa.pendingEmailExpiry || 0)) {
     return res.status(400).json({ error: 'Code incorrect ou expiré' });
   }
-  const profile = readProfile(username);
-  writeProfile(username, { ...profile, email: tfa.pendingEmail });
-  write2fa(username, { enabled: true, method: 'email', email: tfa.pendingEmail });
+  // En mysql, l'adresse validée vit dans two_factor.email (écrit juste après) ; on
+  // ne touche PAS users.email, qui est l'identité de connexion.
+  if (DATA_BACKEND !== 'mysql') {
+    const profile = readProfile(username);
+    writeProfile(username, { ...profile, email: tfa.pendingEmail });
+  }
+  await set2fa(tfaKey(req.user), { enabled: true, method: 'email', email: tfa.pendingEmail });
   res.json({ success: true });
 });
 
 // DELETE /api/2fa — désactiver la 2FA
-app.delete('/api/2fa', requireAuth, (req, res) => {
-  write2fa(req.user.username, { enabled: false, method: 'none' });
+app.delete('/api/2fa', requireAuth, async (req, res) => {
+  await set2fa(tfaKey(req.user), { enabled: false, method: 'none' });
   res.json({ success: true });
 });
 
