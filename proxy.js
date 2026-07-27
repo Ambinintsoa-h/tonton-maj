@@ -940,6 +940,32 @@ app.post('/api/auth/firebase-login', authRateLimiter, async (req, res) => {
   } catch (e) { return res.status(401).json({ error: 'Erreur d\'authentification' }); }
 });
 
+// ─── Rôle ACTUEL d'un compte visé (pour l'autorisation des managers) ─────────
+// Les gardes ne regardaient que le rôle envoyé dans le CORPS de la requête, jamais
+// celui du compte visé : un manager pouvait donc modifier — et même supprimer — un
+// super_admin, simplement en n'envoyant pas de champ `role`. Il faut lire le rôle
+// réellement en base avant de décider. Renvoie null si le compte n'existe pas
+// (l'appelant laisse alors le flux normal répondre 404 ou réussir).
+const getTargetRole = async (uid) => {
+  if (DATA_BACKEND === 'mysql') {
+    const { getPool } = require('./db');
+    const [rows] = await getPool().query('SELECT role FROM users WHERE uid=? LIMIT 1', [uid]);
+    return rows[0] ? rows[0].role : null;
+  }
+  if (!firebaseAdmin) return null;
+  const doc = await firebaseAdmin.firestore().collection('users').doc(uid).get();
+  return doc.exists ? (doc.data().role || null) : null;
+};
+
+// Un manager n'a la main que sur les comptes cq_ia. Renvoie un message d'erreur si
+// l'opération doit être refusée, sinon null.
+const refusSiCibleHorsPerimetre = async (user, uid) => {
+  if (user.role !== 'manager') return null;
+  const cible = await getTargetRole(uid);
+  if (cible && cible !== 'cq_ia') return 'Un manager ne peut gérer que des comptes CQ IA';
+  return null;
+};
+
 // ─── Créer un compte membre (admin ou manager) ────────────────────────────────
 app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
   const { firstName, lastName, email, username, role, password } = req.body || {};
@@ -1038,9 +1064,14 @@ app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager')
 app.put('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
   const { uid } = req.params;
   const { firstName, lastName, email, role, status, note, password } = req.body || {};
+  // Deux contrôles distincts et tous deux nécessaires : le rôle DEMANDÉ (un manager
+  // ne peut pas promouvoir quelqu'un) et le rôle ACTUEL du compte visé (un manager
+  // ne touche pas à un manager ni à un super_admin, même sans envoyer de `role`).
   if (req.user.role === 'manager' && role && role !== 'cq_ia') {
     return res.status(403).json({ error: 'Un manager ne peut gérer que des comptes CQ IA' });
   }
+  const refus = await refusSiCibleHorsPerimetre(req.user, uid);
+  if (refus) return res.status(403).json({ error: refus });
   if (role && !VALID_ROLES.has(role)) return res.status(400).json({ error: 'Rôle invalide' });
   if (password && password.length < 6) return res.status(400).json({ error: 'Mot de passe trop court (6 caractères min)' });
 
@@ -1112,6 +1143,11 @@ app.put('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager'), a
 // ─── Supprimer un compte membre (Auth + Firestore) ────────────────────────────
 app.delete('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
   const { uid } = req.params;
+
+  // Aucun contrôle n'existait ici : un manager pouvait supprimer n'importe quel
+  // compte, super_admin compris. Il ne peut désormais supprimer que des cq_ia.
+  const refus = await refusSiCibleHorsPerimetre(req.user, uid);
+  if (refus) return res.status(403).json({ error: refus });
 
   // ── Voie MySQL (lot 7b-4) ───────────────────────────────────────────────────
   // Pas de FK dures en v1 → cascade EN CODE, limitée aux artefacts d'AUTH (2FA,
