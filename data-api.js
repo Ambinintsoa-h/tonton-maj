@@ -1112,9 +1112,12 @@ module.exports = ({ requireAuth, requireRole }) => {
   // résolution des noms d'auteurs). ⚠ password_hash/password_algo JAMAIS renvoyés
   // (SELECT explicite). La gestion des comptes (create/update/delete) + reset + 2FA
   // suivront en lot 7b (restent sur Firebase/fichiers pour l'instant).
+  // `profileEmail` (email de contact saisi dans Mon Compte, cf. setProfile dans
+  // proxy.js) est délibérément RETIRÉ : c'est une donnée privée du membre, que la
+  // liste d'équipe n'a jamais exposée du temps des fichiers profils.
   const userToObj = (r) => ({
     id: r.uid,
-    ...parseJson(r.data, {}),
+    ...omit(parseJson(r.data, {}), ['profileEmail']),
     uid: r.uid,
     username: r.username,
     email: r.email,

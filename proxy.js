@@ -324,10 +324,64 @@ const set2fa = async (key, d) => {
       d.pendingEmail || null, d.pendingEmailCode || null, d.pendingEmailExpiry || null]);
 };
 
-// ─── Profil utilisateur — data/profiles/{username}.json ─────────────────────
+// ─── Profil utilisateur — fichiers data/profiles/{username}.json (firestore) ──
+// ou colonnes de la fiche users (mysql) ───────────────────────────────────────
+// Lot 7b-3 : readProfile/writeProfile → getProfile/setProfile ASYNCHRONES, même
+// renommage volontaire que pour la 2FA (un appel non `await` doit casser fort).
 const PROFILES_DIR = path.join(__dirname, 'data', 'profiles');
-const readProfile  = (u) => { try { return JSON.parse(fs.readFileSync(path.join(PROFILES_DIR, `${path.basename(u)}.json`), 'utf8')); } catch { return {}; } };
-const writeProfile = (u, d) => { if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true }); fs.writeFileSync(path.join(PROFILES_DIR, `${path.basename(u)}.json`), JSON.stringify(d, null, 2), 'utf8'); };
+const _readProfileFile  = (u) => { try { return JSON.parse(fs.readFileSync(path.join(PROFILES_DIR, `${path.basename(u)}.json`), 'utf8')); } catch { return {}; } };
+const _writeProfileFile = (u, d) => { if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true }); fs.writeFileSync(path.join(PROFILES_DIR, `${path.basename(u)}.json`), JSON.stringify(d, null, 2), 'utf8'); };
+
+// En mysql, la fiche users EST le profil. Résolution par uid ; à défaut par
+// username, ce qui couvre le super_admin break-glass (.env) dont le JWT n'a pas
+// d'uid mais qui possède une ligne users portant le même identifiant.
+const _profileWhere = (u) => (u.uid ? ['uid=?', u.uid] : ['username=?', u.username]);
+const _parseData = (v) => { try { return v ? (typeof v === 'string' ? JSON.parse(v) : v) : {}; } catch { return {}; } };
+
+const getProfile = async (u) => {
+  if (DATA_BACKEND !== 'mysql') return _readProfileFile(u.username);
+  const { getPool } = require('./db');
+  const [where, val] = _profileWhere(u);
+  const [rows] = await getPool().query(
+    `SELECT first_name, last_name, email, avatar_url, data FROM users WHERE ${where} LIMIT 1`, [val]);
+  const r = rows[0];
+  if (!r) return {};
+  const extra = _parseData(r.data);
+  return {
+    nom:       r.last_name  || '',
+    prenom:    r.first_name || '',
+    // `profileEmail` = email de contact / 2FA saisi par le membre dans Mon Compte.
+    // DISTINCT de users.email, qui est l'identité de connexion (clé unique) : le
+    // panneau Mon Compte n'a jamais pu changer l'email de login, et ne le peut
+    // toujours pas. users.email ne sert que de valeur d'affichage par défaut.
+    email:     extra.profileEmail || r.email || '',
+    avatarUrl: r.avatar_url || '',
+  };
+};
+
+// Renvoie false si aucune fiche users ne correspond (l'appelant décide quoi en
+// faire) — jamais d'écriture silencieuse dans le vide.
+const setProfile = async (u, d) => {
+  if (DATA_BACKEND !== 'mysql') { _writeProfileFile(u.username, d); return true; }
+  const { getPool } = require('./db');
+  const [where, val] = _profileWhere(u);
+  const [rows] = await getPool().query(`SELECT uid, data FROM users WHERE ${where} LIMIT 1`, [val]);
+  const r = rows[0];
+  if (!r) return false;
+  // Mise à jour PARTIELLE : un champ absent (undefined) n'est pas touché, ce qui
+  // reproduit JSON.stringify côté fichier (les clés undefined y disparaissent).
+  const sets = ['updated_at=?'];
+  const vals = [Date.now()];
+  if (d.prenom    !== undefined) { sets.push('first_name=?'); vals.push(d.prenom || ''); }
+  if (d.nom       !== undefined) { sets.push('last_name=?');  vals.push(d.nom || ''); }
+  if (d.avatarUrl !== undefined) { sets.push('avatar_url=?'); vals.push(d.avatarUrl || null); }
+  if (d.email     !== undefined) {
+    sets.push('data=?');
+    vals.push(JSON.stringify({ ..._parseData(r.data), profileEmail: d.email || '' }));
+  }
+  await getPool().query(`UPDATE users SET ${sets.join(', ')} WHERE uid=?`, [...vals, r.uid]);
+  return true;
+};
 
 // Hashage HMAC-SHA256 des codes OTP email avant stockage (jamais en clair sur disque)
 const hashOtp = (code) => require('crypto').createHmac('sha256', JWT_SECRET).update(String(code)).digest('hex');
@@ -613,7 +667,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     if (tfa.enabled) {
       // Email OTP : générer et envoyer le code
       if (tfa.method === 'email') {
-        const profile = readProfile(username);
+        const profile = await getProfile({ username });
         const email = profile.email || tfa.email;
         if (!email) return res.status(400).json({ error: 'Aucune adresse email configurée pour la 2FA' });
         const code = Math.floor(100000 + Math.random() * 900000).toString();
@@ -665,8 +719,9 @@ app.post('/api/auth/mysql-login', authRateLimiter, async (req, res) => {
     const tfa = await get2fa(tfaKey(user));
     if (tfa.enabled) {
       if (tfa.method === 'email') {
-        // En mysql, l'email de la 2FA vient de two_factor.email ou de la ligne users.
-        const email = tfa.email || user.email || readProfile(user.username).email;
+        // En mysql, l'email de la 2FA vient de two_factor.email, du profil (fiche
+        // users) ou à défaut de l'email de connexion.
+        const email = tfa.email || (await getProfile(user)).email || user.email;
         if (!email) return res.status(400).json({ error: 'Aucune adresse email configurée pour la 2FA' });
         const code = Math.floor(100000 + Math.random() * 900000).toString();
         await set2fa(tfaKey(user), { ...tfa, emailCode: hashOtp(code), emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
@@ -837,7 +892,7 @@ app.post('/api/auth/firebase-login', authRateLimiter, async (req, res) => {
     const tfa = await get2fa(tfaKey({ uid: fbDecoded.uid, username }));
     if (tfa.enabled) {
       if (tfa.method === 'email') {
-        const profile = readProfile(username);
+        const profile = await getProfile({ uid: fbDecoded.uid, username });
         const email   = profile.email || tfa.email;
         if (!email) return res.status(400).json({ error: 'Aucune adresse email configurée pour la 2FA' });
         const code = Math.floor(100000 + Math.random() * 900000).toString();
@@ -1016,22 +1071,23 @@ const writeServerSettings = (payload) => {
 
 // ─── Compte utilisateur ───────────────────────────────────────────────────────
 // GET  /api/account — profil du compte connecté
-// Fallback Firestore : si le profil local est vide (nouveau compte Firebase),
-// on lit firstName/lastName/email/avatarUrl depuis la collection users.
+// Fallback Firestore (mode firestore uniquement) : si le profil local est vide
+// (nouveau compte Firebase), on lit firstName/lastName/email/avatarUrl depuis la
+// collection users. En mysql, la fiche users EST déjà la source → aucun fallback.
 app.get('/api/account', requireAuth, async (req, res) => {
-  const profile = readProfile(req.user.username);
+  const profile = await getProfile(req.user);
   const tfa     = await get2fa(tfaKey(req.user));
 
   let fb = {};
   const profileIsEmpty = !profile.nom && !profile.prenom && !profile.email;
-  if (profileIsEmpty && firebaseAdmin && req.user.uid) {
+  if (DATA_BACKEND !== 'mysql' && profileIsEmpty && firebaseAdmin && req.user.uid) {
     try {
       const doc = await firebaseAdmin.firestore().collection('users').doc(req.user.uid).get();
       if (doc.exists) {
         const d = doc.data();
         fb = { nom: d.lastName || '', prenom: d.firstName || '', email: d.email || '', avatarUrl: d.avatarUrl || '' };
         // Persister en local pour les prochains appels (évite un aller-retour Firestore à chaque fois)
-        writeProfile(req.user.username, { ...fb, updatedAt: Date.now() });
+        await setProfile(req.user, { ...fb, updatedAt: Date.now() });
       }
     } catch (e) { console.warn('[account] Firestore fallback :', e.message); }
   }
@@ -1050,17 +1106,23 @@ app.get('/api/account', requireAuth, async (req, res) => {
 
 // PUT  /api/account — mettre à jour nom, prénom, email, avatarUrl
 // Sync Firestore : l'avatarUrl est répercuté dans la collection users
-// pour que la page Équipe affiche la vraie photo des membres.
+// pour que la page Équipe affiche la vraie photo des membres. En mysql, écrire
+// la fiche users EST cette synchronisation (la page Équipe lit getUsers).
 app.put('/api/account', requireAuth, async (req, res) => {
   const { nom, prenom, email, avatarUrl } = req.body || {};
   if (avatarUrl && !avatarUrl.startsWith('https://') && !avatarUrl.startsWith('data:image/')) {
     return res.status(400).json({ error: 'avatarUrl invalide — doit commencer par https:// ou data:image/' });
   }
-  const existing = readProfile(req.user.username);
-  writeProfile(req.user.username, { ...existing, nom, prenom, email, avatarUrl, updatedAt: Date.now() });
+  const existing = await getProfile(req.user);
+  const saved = await setProfile(req.user, { ...existing, nom, prenom, email, avatarUrl, updatedAt: Date.now() });
+  if (!saved) {
+    // mysql : aucune fiche users pour ce compte (cas du break-glass .env s'il n'a
+    // pas de ligne). On refuse explicitement plutôt que de perdre la saisie.
+    return res.status(400).json({ error: 'Aucune fiche utilisateur associée à ce compte — profil non modifiable' });
+  }
 
   // Sync vers Firestore (non bloquant) — page Équipe lit avatarUrl depuis la collection users
-  if (firebaseAdmin && req.user.uid) {
+  if (DATA_BACKEND !== 'mysql' && firebaseAdmin && req.user.uid) {
     const update = {};
     if (nom       !== undefined) update.lastName  = nom       || '';
     if (prenom    !== undefined) update.firstName = prenom    || '';
@@ -1139,18 +1201,15 @@ app.post('/api/2fa/setup-email', requireAuth, async (req, res) => {
 // POST /api/2fa/enable-email — vérifie le code email et active
 app.post('/api/2fa/enable-email', requireAuth, async (req, res) => {
   const { code } = req.body || {};
-  const username = req.user.username;
   const tfa = await get2fa(tfaKey(req.user));
   if (!tfa.pendingEmailCode) return res.status(400).json({ error: 'Aucun code en attente — relancez la configuration' });
   if (hashOtp(code) !== tfa.pendingEmailCode || Date.now() > (tfa.pendingEmailExpiry || 0)) {
     return res.status(400).json({ error: 'Code incorrect ou expiré' });
   }
-  // En mysql, l'adresse validée vit dans two_factor.email (écrit juste après) ; on
-  // ne touche PAS users.email, qui est l'identité de connexion.
-  if (DATA_BACKEND !== 'mysql') {
-    const profile = readProfile(username);
-    writeProfile(username, { ...profile, email: tfa.pendingEmail });
-  }
+  // L'adresse validée devient aussi l'email de contact du profil — en mysql cela
+  // écrit data.profileEmail, JAMAIS users.email (identité de connexion).
+  const profile = await getProfile(req.user);
+  await setProfile(req.user, { ...profile, email: tfa.pendingEmail });
   await set2fa(tfaKey(req.user), { enabled: true, method: 'email', email: tfa.pendingEmail });
   res.json({ success: true });
 });
