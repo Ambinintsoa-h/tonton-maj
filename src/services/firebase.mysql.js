@@ -101,6 +101,20 @@ export const saveSeoSnapshot = (articleId, snapshot) =>
 export const getArticleSeoTracking = (articleId) =>
   api('GET', '/articles/' + enc(articleId) + '/seo');
 
+// ── tickets + ticket_comments ─────────────────────────────────────────────────
+// getTickets : le serveur filtre par rôle (JWT) — les args userId/role sont
+// ignorés côté serveur (jamais de rôle client de confiance). addComment fait
+// l'increment atomique de commentCount côté serveur.
+export const getTickets = (/* userId, role */) => api('GET', '/tickets');
+export const createTicket = (ticket) => api('POST', '/tickets', ticket).then((r) => r.id);
+export const updateTicketDoc = (ticketId, updates) => api('PUT', '/tickets/' + enc(ticketId), updates);
+export const deleteTicketDoc = (ticketId) => api('DELETE', '/tickets/' + enc(ticketId));
+export const getComments = (ticketId) => api('GET', '/tickets/' + enc(ticketId) + '/comments');
+export const addComment = (comment, ticketStatusUpdate = {}) =>
+  api('POST', '/tickets/' + enc(comment.ticketId) + '/comments', { comment, statusUpdate: ticketStatusUpdate }).then((r) => r.id);
+export const updateCommentAttachments = (commentId, attachments) =>
+  api('PUT', '/ticket-comments/' + enc(commentId) + '/attachments', { attachments });
+
 // Déconnexion : pas de session Firebase à fermer en mode MySQL.
 export const firebaseLogout = async () => {};
 
@@ -115,13 +129,6 @@ export const loginWithUsernameOrEmail = async () => NI('loginWithUsernameOrEmail
 export const getUsers = async () => NI('getUsers');
 export const getPendingItems = async () => NI('getPendingItems');
 export const savePendingList = async () => NI('savePendingList');
-export const getTickets = async () => NI('getTickets');
-export const createTicket = async () => NI('createTicket');
-export const updateTicketDoc = async () => NI('updateTicketDoc');
-export const deleteTicketDoc = async () => NI('deleteTicketDoc');
-export const getComments = async () => NI('getComments');
-export const addComment = async () => NI('addComment');
-export const updateCommentAttachments = async () => NI('updateCommentAttachments');
 export const createNotification = async () => NI('createNotification');
 export const getNotifications = async () => NI('getNotifications');
 export const markNotificationRead = async () => NI('markNotificationRead');

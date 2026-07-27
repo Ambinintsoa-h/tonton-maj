@@ -627,5 +627,158 @@ module.exports = ({ requireAuth, requireRole }) => {
     res.json({ ok: true });
   }));
 
+  // ── tickets + ticket_comments ────────────────────────────────────────────────
+  // Règles Firestore rejouées : la LISTE des tickets est filtrée par rôle
+  // (super_admin|manager|support voient tout via /api/admin/tickets ; cq_ia ne voit
+  // que ses tickets, creatorId==uid). commentaires lisibles par tout membre
+  // authentifié (règle permissive répliquée). Rôle/uid pris du JWT, jamais du client.
+  const TICKET_COL = {
+    creatorId: 'creator_id', creatorUsername: 'creator_username', creatorRole: 'creator_role',
+    assigneeId: 'assignee_id', assigneeUsername: 'assignee_username', status: 'status',
+    priority: 'priority', level: 'level', commentCount: 'comment_count', title: 'title',
+    resolvedAt: 'resolved_at', closedAt: 'closed_at',
+  };
+  const TICKET_DATA_SKIP = ['id', 'createdAt', 'updatedAt', ...Object.keys(TICKET_COL)];
+  const ADMIN_TICKET_ROLES = new Set(['super_admin', 'manager', 'support']);
+
+  const ticketToObj = (r) => ({
+    id: r.id,
+    ...parseJson(r.data, {}),
+    creatorId: r.creator_id,
+    ...(r.creator_username != null ? { creatorUsername: r.creator_username } : {}),
+    ...(r.creator_role != null ? { creatorRole: r.creator_role } : {}),
+    ...(r.assignee_id != null ? { assigneeId: r.assignee_id } : {}),
+    ...(r.assignee_username != null ? { assigneeUsername: r.assignee_username } : {}),
+    status: r.status,
+    ...(r.priority != null ? { priority: r.priority } : {}),
+    ...(r.level != null ? { level: r.level } : {}),
+    commentCount: r.comment_count,
+    ...(r.title != null ? { title: r.title } : {}),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    resolvedAt: r.resolved_at,
+    closedAt: r.closed_at,
+  });
+  const commentToObj = (r) => ({
+    id: r.id,
+    ticketId: r.ticket_id,
+    ...(r.author_id != null ? { authorId: r.author_id } : {}),
+    ...(r.author_username != null ? { authorUsername: r.author_username } : {}),
+    ...(r.author_role != null ? { authorRole: r.author_role } : {}),
+    ...(r.content != null ? { content: r.content } : {}),
+    attachments: parseJson(r.attachments, []),
+    ...(r.created_at != null ? { createdAt: r.created_at } : {}),
+  });
+
+  // GET /tickets — liste filtrée par rôle (JWT). Tri created_at desc (iso Firestore).
+  router.get('/tickets', requireAuth, wrap(async (req, res) => {
+    if (ADMIN_TICKET_ROLES.has(req.user.role)) {
+      const [rows] = await q('SELECT * FROM tickets ORDER BY created_at DESC');
+      return res.json(rows.map(ticketToObj));
+    }
+    // cq_ia (ou tout rôle non-admin) : seulement ses tickets. creator_id = uid || username.
+    const ids = [req.user.uid, req.user.username].filter(Boolean);
+    if (!ids.length) return res.json([]);
+    const [rows] = await q(
+      `SELECT * FROM tickets WHERE creator_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at DESC`, ids);
+    res.json(rows.map(ticketToObj));
+  }));
+
+  // POST /tickets — createTicket. status='open', comment_count=0, horloge serveur.
+  router.post('/tickets', requireAuth, wrap(async (req, res) => {
+    const b = req.body || {};
+    const id = genId();
+    const now = Date.now();
+    const v = (k) => (k in b && b[k] !== undefined ? b[k] : null);
+    await q(
+      `INSERT INTO tickets (id, creator_id, creator_username, creator_role, assignee_id, assignee_username,
+         status, priority, level, comment_count, title, created_at, updated_at, resolved_at, closed_at, data)
+       VALUES (?,?,?,?,?,?,'open',?,?,0,?,?,?,NULL,NULL,?)`,
+      [id, b.creatorId || req.user.uid || req.user.username, v('creatorUsername'), v('creatorRole'),
+       v('assigneeId'), v('assigneeUsername'), v('priority'), v('level'), v('title'),
+       now, now, asJson(omit(b, TICKET_DATA_SKIP))]);
+    res.json({ id });
+  }));
+
+  // PUT /tickets/:id — updateTicketDoc. Chaque champ → colonne connue sinon `data`
+  // (fusion). updated_at serveur ; no-op silencieux si le ticket n'existe pas.
+  router.put('/tickets/:id', requireAuth, wrap(async (req, res) => {
+    const updates = req.body || {};
+    const [rows] = await q('SELECT data FROM tickets WHERE id=?', [req.params.id]);
+    if (!rows.length) return res.json({ ok: true }); // updateDoc n'existe pas → no-op
+    const sets = ['updated_at=?'];
+    const args = [Date.now()];
+    const dataUpd = {};
+    for (const [k, val] of Object.entries(updates)) {
+      if (TICKET_COL[k]) { sets.push(`${TICKET_COL[k]}=?`); args.push(val); }
+      else dataUpd[k] = val;
+    }
+    if (Object.keys(dataUpd).length) {
+      sets.push('data=?'); args.push(asJson({ ...parseJson(rows[0].data, {}), ...dataUpd }));
+    }
+    args.push(req.params.id);
+    await q(`UPDATE tickets SET ${sets.join(', ')} WHERE id=?`, args);
+    res.json({ ok: true });
+  }));
+
+  // DELETE /tickets/:id — supprime le ticket (iso Firestore : les commentaires,
+  // collection séparée, ne sont pas cascadés ; getComments les filtre par ticketId).
+  router.delete('/tickets/:id', requireAuth, wrap(async (req, res) => {
+    await q('DELETE FROM tickets WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  }));
+
+  // GET /tickets/:id/comments — getComments, tri created_at asc.
+  router.get('/tickets/:id/comments', requireAuth, wrap(async (req, res) => {
+    const [rows] = await q('SELECT * FROM ticket_comments WHERE ticket_id=? ORDER BY created_at ASC', [req.params.id]);
+    res.json(rows.map(commentToObj));
+  }));
+
+  // POST /tickets/:id/comments — addComment : INSERT commentaire + increment ATOMIQUE
+  // comment_count (+ maj statut optionnelle) en une transaction (= addDoc+updateDoc
+  // parallèles côté Firestore, mais sans race sur le compteur).
+  router.post('/tickets/:id/comments', requireAuth, wrap(async (req, res) => {
+    const ticketId = req.params.id;
+    const { comment = {}, statusUpdate = {} } = req.body || {};
+    const id = genId();
+    const now = Date.now();
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(
+        `INSERT INTO ticket_comments (id, ticket_id, author_id, author_username, author_role, content, attachments, created_at)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [id, ticketId, comment.authorId ?? null, comment.authorUsername ?? null, comment.authorRole ?? null,
+         comment.content ?? null, asJson(comment.attachments || []), now]);
+      const sets = ['comment_count=comment_count+1', 'updated_at=?'];
+      const args = [now];
+      const dataUpd = {};
+      for (const [k, val] of Object.entries(statusUpdate || {})) {
+        if (TICKET_COL[k]) { sets.push(`${TICKET_COL[k]}=?`); args.push(val); }
+        else dataUpd[k] = val;
+      }
+      if (Object.keys(dataUpd).length) {
+        const [tr] = await conn.query('SELECT data FROM tickets WHERE id=?', [ticketId]);
+        sets.push('data=?'); args.push(asJson({ ...(tr.length ? parseJson(tr[0].data, {}) : {}), ...dataUpd }));
+      }
+      args.push(ticketId);
+      await conn.query(`UPDATE tickets SET ${sets.join(', ')} WHERE id=?`, args);
+      await conn.commit();
+      res.json({ id });
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }));
+
+  // PUT /ticket-comments/:commentId/attachments — updateCommentAttachments.
+  router.put('/ticket-comments/:commentId/attachments', requireAuth, wrap(async (req, res) => {
+    await q('UPDATE ticket_comments SET attachments=? WHERE id=?',
+      [asJson((req.body && req.body.attachments) || []), req.params.commentId]);
+    res.json({ ok: true });
+  }));
+
   return router;
 };
