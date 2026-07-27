@@ -481,6 +481,26 @@ const sendInviteEmail = async ({ toEmail, firstName, username, resetLink }) => {
   console.log(`[invite] Email d'invitation envoyé à ${toEmail}`);
 };
 
+// ─── Lien de réinitialisation Firebase (mode firestore) ───────────────────────
+// Firebase REFUSE un continueUrl dont le domaine n'est pas dans la liste autorisée
+// du projet : auth/unauthorized-continue-uri, « Domain not allowlisted by project ».
+// C'est ce qui empêchait tout envoi — ni « mot de passe oublié », ni lien dans les
+// emails d'invitation — l'erreur étant avalée par un catch silencieux.
+// Repli : on regénère un lien SANS continueUrl. L'utilisateur réinitialise alors sur
+// la page hébergée par Firebase au lieu de la nôtre : moins élégant, mais ça marche.
+// Pour retrouver la page de l'app, ajouter le domaine dans la console Firebase →
+// Authentication → Settings → Authorized domains.
+const generateFirebaseResetLink = async (email, appUrl) => {
+  try {
+    return await firebaseAdmin.auth().generatePasswordResetLink(email, { url: `${appUrl}/reset-password` });
+  } catch (e) {
+    if (e.code !== 'auth/unauthorized-continue-uri' && e.code !== 'auth/invalid-continue-uri') throw e;
+    console.error(`[auth] continueUrl refusé par Firebase (${e.code}) — lien de repli sans retour vers l'app. `
+      + 'Corriger en ajoutant le domaine dans Firebase Console → Authentication → Settings → Authorized domains.');
+    return await firebaseAdmin.auth().generatePasswordResetLink(email);
+  }
+};
+
 // ─── Reset mot de passe MySQL (lot 7b) ────────────────────────────────────────
 // Le token part EN CLAIR par email ; seul son SHA-256 est stocké en base (jamais
 // le token lui-même). Le hachage du MOT DE PASSE reste bcrypt (≠ hachage du token).
@@ -789,9 +809,8 @@ app.post('/api/auth/forgot-password', authRateLimiter, async (req, res) => {
       }
       if (email) {
         try {
-          const link = await firebaseAdmin.auth().generatePasswordResetLink(email, { url: `${appUrl}/reset-password` });
-          await sendResetEmail(email, link);
-        } catch (e) { console.warn('[forgot-password] firebase :', e.message); }
+          await sendResetEmail(email, await generateFirebaseResetLink(email, appUrl));
+        } catch (e) { console.error('[forgot-password] firebase :', e.code || '', e.message); }
       }
     }
   } catch (e) {
@@ -995,18 +1014,16 @@ app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager')
       email, role, status: 'active', createdAt: Date.now(),
       // password volontairement omis — Firebase Auth gère le hash côté serveur
     });
-    // Générer un lien de réinitialisation de mot de passe (pas d'envoi du mdp en clair)
+    // Générer un lien de réinitialisation de mot de passe (pas d'envoi du mdp en clair).
+    // Passe par generateFirebaseResetLink, qui retombe sur un lien sans continueUrl si
+    // le domaine n'est pas autorisé côté projet Firebase — sans ce repli, les invitations
+    // partaient SANS lien utilisable, l'échec étant avalé.
     let resetLink = null;
     try {
       const appUrl = IS_PROD ? 'https://maj.stomos.net' : 'http://localhost:3000';
-      resetLink = await firebaseAdmin.auth().generatePasswordResetLink(email, {
-        url: `${appUrl}/reset-password`,
-        // handleCodeInApp: true nécessite la configuration Firebase Console
-        // Authentication → Templates → Action URL → https://maj.stomos.net/reset-password
-        // Sans cette config, Firebase redirige vers /reset-password en continueUrl après sa propre page.
-      });
+      resetLink = await generateFirebaseResetLink(email, appUrl);
     } catch (e) {
-      console.warn('[invite] Impossible de générer le lien reset :', e.message);
+      console.error('[invite] Impossible de générer le lien reset :', e.code || '', e.message);
     }
     sendInviteEmail({ toEmail: email, firstName: firstName || username, username, resetLink }).catch(e => {
       console.error('[invite] Échec envoi email :', e.message);
