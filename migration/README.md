@@ -90,6 +90,29 @@ comme un fichier absent aujourd'hui). Le DRY-RUN signale les comptes **orphelins
 Clé de la table : l'`uid` de la fiche `users` ; `env:<username>` pour le
 super_admin break-glass du `.env`, qui n'a pas de fiche `users`.
 
+## Étape 3c — Profils : fichiers → colonnes `users` (lot 7b-3)
+
+`data/profiles/{username}.json` (nom, prénom, email de contact, avatar) disparaît :
+en mode `mysql`, **la fiche `users` EST le profil** (`first_name`, `last_name`,
+`avatar_url`, et `data.profileEmail`).
+
+`data.profileEmail` est **distinct de `users.email`** : dans Mon Compte, le membre
+a toujours pu changer son email de contact sans que cela touche son identifiant de
+connexion. Ce cloisonnement est conservé — `users.email` n'est jamais réécrit par
+le panneau Mon Compte, et `profileEmail` n'est pas exposé par `GET /api/data/users`.
+
+### À exécuter SUR n0c, avant la bascule
+```bash
+node migration/import-profiles.js            # DRY-RUN
+node migration/import-profiles.js --apply    # écrit réellement
+```
+
+Nom, prénom et avatar sont **déjà** en base (l'ancien `PUT /api/account` les
+synchronisait vers Firestore pour la page Équipe, ils ont suivi l'import initial) —
+le script ne fait que **combler les trous** sur ces trois champs, sans jamais
+écraser une valeur posée par un admin. L'**email de contact**, lui, n'a jamais été
+synchronisé : le fichier en est la seule source, et sans ce script il serait perdu.
+
 ## Étapes suivantes
 3. Couche REST du proxy (endpoints + autorisation par rôle serveur-side).
 4. Réécriture de la façade `src/services/firebase.js` (mêmes signatures).
