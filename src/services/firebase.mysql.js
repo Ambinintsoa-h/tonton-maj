@@ -98,6 +98,12 @@ const slimPendingItem = (item) => {
   return slim;
 };
 
+// Date locale utilisateur 'YYYY-MM-DD' (jamais serveur — cf. getTodayActivitySessions).
+const _localDate = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 // ── Domaines portés ───────────────────────────────────────────────────────────
 
 // skills
@@ -191,6 +197,29 @@ export const getPendingItems = () => api('GET', '/pending');
 export const savePendingList = (items) =>
   api('PUT', '/pending', { items: (Array.isArray(items) ? items : []).map(slimPendingItem) });
 
+// ── activité (tracking invisible) + temps par article ─────────────────────────
+// date/hour = HEURE LOCALE utilisateur : calculées/fournies côté client (jamais
+// serveur). Les wrappers de LECTURE tableau de bord reçoivent leurs bornes du client.
+export const saveActivitySession = (data) => api('POST', '/activity/session', data);
+export const updateActivityHeartbeat = (userId, date, hour) => api('POST', '/activity/heartbeat', { userId, date, hour });
+export const recordActivityPause = (userId, date, pause) => api('POST', '/activity/pause', { userId, date, pause });
+export const recordSessionClose = (userId, date, closeTime) => api('POST', '/activity/close', { userId, date, closeTime });
+export const recordActivityAction = (userId, date, actionType) => api('POST', '/activity/action', { userId, date, actionType });
+export const getActivitySessionsRange = (startDate, endDate) =>
+  api('GET', '/activity/sessions?start=' + enc(startDate) + '&end=' + enc(endDate));
+export const getUserActivitySessions = (userId, days = 7) =>
+  api('GET', '/activity/sessions/user?userId=' + enc(userId) + '&days=' + Number(days));
+export const getTodayActivitySessions = () => { const d = _localDate(); return getActivitySessionsRange(d, d); };
+
+// article_time (temps actif par article × éditeur)
+export const ensureArticleTimeDoc = (articleId, meta = {}) =>
+  api('POST', '/article-time/ensure', { articleId, ...meta });
+export const recordArticleTime = (articleId, userId, minutes = 1) =>
+  api('POST', '/article-time/record', { articleId, userId, minutes });
+export const markArticleTimePublished = (articleId, userId) =>
+  api('POST', '/article-time/published', { articleId, userId });
+export const getArticleTimeAll = () => api('GET', '/article-time');
+
 // Déconnexion : pas de session Firebase à fermer en mode MySQL.
 export const firebaseLogout = async () => {};
 
@@ -208,15 +237,3 @@ export const subscribeToNotifications = (userId, callback) =>
 // ── À porter (étape 3, domaine par domaine) ───────────────────────────────────
 export const loginWithUsernameOrEmail = async () => NI('loginWithUsernameOrEmail');
 export const getUsers = async () => NI('getUsers');
-export const saveActivitySession = async () => NI('saveActivitySession');
-export const updateActivityHeartbeat = async () => NI('updateActivityHeartbeat');
-export const recordActivityPause = async () => NI('recordActivityPause');
-export const recordSessionClose = async () => NI('recordSessionClose');
-export const recordActivityAction = async () => NI('recordActivityAction');
-export const ensureArticleTimeDoc = async () => NI('ensureArticleTimeDoc');
-export const recordArticleTime = async () => NI('recordArticleTime');
-export const markArticleTimePublished = async () => NI('markArticleTimePublished');
-export const getArticleTimeAll = async () => NI('getArticleTimeAll');
-export const getTodayActivitySessions = async () => NI('getTodayActivitySessions');
-export const getActivitySessionsRange = async () => NI('getActivitySessionsRange');
-export const getUserActivitySessions = async () => NI('getUserActivitySessions');
