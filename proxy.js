@@ -386,6 +386,14 @@ const setProfile = async (u, d) => {
 // Hashage HMAC-SHA256 des codes OTP email avant stockage (jamais en clair sur disque)
 const hashOtp = (code) => require('crypto').createHmac('sha256', JWT_SECRET).update(String(code)).digest('hex');
 
+// Expéditeur par défaut des emails sortants (OTP 2FA, invitation, réinitialisation,
+// notifications de tickets). Sert de repli quand `smtpFrom` n'est pas renseigné dans
+// les paramètres — l'ancien repli était `smtpUser`, qui n'est pas nécessairement une
+// adresse présentable. ⚠️ La plupart des serveurs SMTP exigent que le From corresponde
+// à la boîte authentifiée : pour que ce repli passe, `noreply@stomos.net` doit exister
+// et être la boîte utilisée comme `smtpUser` (sinon renseigner `smtpFrom`).
+const DEFAULT_MAIL_FROM = 'noreply@stomos.net';
+
 // ─── Envoi email OTP ──────────────────────────────────────────────────────────
 const sendEmailOtp = async (toEmail, code) => {
   const s = readServerSettings();
@@ -395,7 +403,7 @@ const sendEmailOtp = async (toEmail, code) => {
     auth: { user: s.smtpUser, pass: s.smtpPass },
   });
   await transporter.sendMail({
-    from: s.smtpFrom || s.smtpUser,
+    from: s.smtpFrom || DEFAULT_MAIL_FROM,
     to: toEmail,
     subject: 'TONTON AI — Code de connexion',
     text: `Votre code de vérification : ${code}\n\nCe code expire dans 10 minutes.`,
@@ -416,7 +424,7 @@ const sendInviteEmail = async ({ toEmail, firstName, username, resetLink }) => {
     auth: { user: s.smtpUser, pass: s.smtpPass },
   });
   await transporter.sendMail({
-    from: s.smtpFrom || s.smtpUser,
+    from: s.smtpFrom || DEFAULT_MAIL_FROM,
     to: toEmail,
     subject: 'TONTON AI — Votre accès à la plateforme',
     text: [
@@ -507,7 +515,7 @@ const sendResetEmail = async (toEmail, resetLink) => {
     auth: { user: s.smtpUser, pass: s.smtpPass },
   });
   await transporter.sendMail({
-    from: s.smtpFrom || s.smtpUser,
+    from: s.smtpFrom || DEFAULT_MAIL_FROM,
     to: toEmail,
     subject: 'TONTON AI — Réinitialisation du mot de passe',
     text: [
@@ -560,7 +568,7 @@ const sendTicketEmail = async (toEmails, subject, textBody, htmlBody) => {
     auth: { user: s.smtpUser, pass: s.smtpPass },
   });
   await transporter.sendMail({
-    from: s.smtpFrom || s.smtpUser,
+    from: s.smtpFrom || DEFAULT_MAIL_FROM,
     to: recipients.join(', '),
     subject,
     text: textBody,
