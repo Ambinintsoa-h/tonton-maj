@@ -85,3 +85,21 @@ jobs:
             echo "::error::SSH/restart échoué après 3 tentatives — n0c injoignable depuis GitHub Actions."
             exit 1
           fi
+
+      # Sans ce contrôle, le workflow passait au vert alors que l'application ne
+      # démarrait plus (Passenger « Web application could not be started ») : SCP et
+      # SSH réussissent, mais rien ne vérifiait que le proxy répond.
+      - name: Contrôle de santé (l'application répond-elle ?)
+        run: |
+          code=000
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://maj.stomos.net/api/backend || echo 000)
+            echo "Tentative $attempt/6 : HTTP $code"
+            if [ "$code" = "200" ]; then
+              echo "Application en ligne."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::L'application ne répond pas (dernier code HTTP : $code). Les fichiers sont déployés mais le proxy ne démarre pas — consulter stderr.log sur n0c."
+          exit 1

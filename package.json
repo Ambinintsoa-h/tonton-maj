@@ -29,7 +29,7 @@
     "framer-motion": "^12.38.0",
     "helmet": "^8.1.0",
     "highlight.js": "^11.11.1",
-    "jsdom": "^29.1.1",
+    "jsdom": "^26.1.0",
     "jsonwebtoken": "^9.0.3",
     "jszip": "^3.10.1",
     "lucide-react": "^1.16.0",
