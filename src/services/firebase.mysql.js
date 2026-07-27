@@ -220,6 +220,23 @@ export const markArticleTimePublished = (articleId, userId) =>
   api('POST', '/article-time/published', { articleId, userId });
 export const getArticleTimeAll = () => api('GET', '/article-time');
 
+// ── auth (login bcrypt en mode MySQL) ─────────────────────────────────────────
+// Même contrat que l'impl. Firestore : renvoie { token, role, username, uid } OU
+// { requires2fa, method, tempToken }. L'étape 2FA est jouée par la page Login via
+// /api/auth/login (backend-agnostique). Lève en cas d'échec → la page retombe sur
+// /api/auth/login (break-glass super_admin .env). getUsers = lecture seule (le
+// CRUD comptes / reset / 2FA en SQL viendront au lot 7b).
+export const loginWithUsernameOrEmail = async (identifier, password) => {
+  const res = await fetch('/api/auth/mysql-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: identifier, password }),
+  });
+  if (!res.ok) throw new Error('Échec authentification');
+  return res.json();
+};
+export const getUsers = () => api('GET', '/users');
+
 // Déconnexion : pas de session Firebase à fermer en mode MySQL.
 export const firebaseLogout = async () => {};
 
@@ -235,5 +252,3 @@ export const subscribeToNotifications = (userId, callback) =>
   pollUrl('/notifications', callback, 25000);
 
 // ── À porter (étape 3, domaine par domaine) ───────────────────────────────────
-export const loginWithUsernameOrEmail = async () => NI('loginWithUsernameOrEmail');
-export const getUsers = async () => NI('getUsers');
