@@ -360,6 +360,79 @@ const sendInviteEmail = async ({ toEmail, firstName, username, resetLink }) => {
   console.log(`[invite] Email d'invitation envoyé à ${toEmail}`);
 };
 
+// ─── Reset mot de passe MySQL (lot 7b) ────────────────────────────────────────
+// Le token part EN CLAIR par email ; seul son SHA-256 est stocké en base (jamais
+// le token lui-même). Le hachage du MOT DE PASSE reste bcrypt (≠ hachage du token).
+const sha256Hex = (v) => require('crypto').createHash('sha256').update(String(v)).digest('hex');
+const RESET_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24h (parité avec le lien Firebase actuel)
+
+// Émet un token de reset pour un uid : invalide les précédents tokens actifs du
+// même user (un seul lien valide à la fois), stocke le SHA-256, renvoie le token EN CLAIR.
+const issueResetToken = async (uid) => {
+  const crypto = require('crypto');
+  const { getPool } = require('./db');
+  const token = crypto.randomBytes(32).toString('hex');
+  const now = Date.now();
+  await getPool().query('UPDATE password_reset_tokens SET used=1 WHERE user_id=? AND used=0', [uid]);
+  await getPool().query(
+    'INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, used, created_at) VALUES (?,?,?,0,?)',
+    [sha256Hex(token), uid, now + RESET_TOKEN_TTL_MS, now]);
+  return token;
+};
+
+// Email de réinitialisation (self-service « mot de passe oublié »). Réutilise le
+// transport SMTP des paramètres. Échec silencieux si SMTP non configuré (comme les
+// autres envois) — l'appelant renvoie de toute façon une réponse générique.
+const sendResetEmail = async (toEmail, resetLink) => {
+  const s = readServerSettings();
+  if (!s.smtpHost || !s.smtpUser || !s.smtpPass) {
+    console.warn('[reset] SMTP non configuré — email de reset non envoyé');
+    return;
+  }
+  const transporter = nodemailer.createTransport({
+    host: s.smtpHost, port: s.smtpPort || 587, secure: (s.smtpPort || 587) === 465,
+    auth: { user: s.smtpUser, pass: s.smtpPass },
+  });
+  await transporter.sendMail({
+    from: s.smtpFrom || s.smtpUser,
+    to: toEmail,
+    subject: 'TONTON AI — Réinitialisation du mot de passe',
+    text: [
+      'Bonjour,',
+      '',
+      'Vous avez demandé la réinitialisation de votre mot de passe. Cliquez sur le lien ci-dessous pour en définir un nouveau :',
+      `  ${resetLink}`,
+      '',
+      'Ce lien expire dans 24 heures.',
+      "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email — votre mot de passe reste inchangé.",
+      '',
+      "L'équipe PUBLITHINGS",
+    ].join('\n'),
+    html: `
+      <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">
+        <div style="background:#111;padding:32px 36px 24px">
+          <p style="margin:0;color:#fff;font-size:20px;font-weight:800;letter-spacing:-0.02em">TONTON AI</p>
+          <p style="margin:4px 0 0;color:#aaa;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em">PUBLITHINGS</p>
+        </div>
+        <div style="padding:32px 36px">
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111">Réinitialisation du mot de passe</p>
+          <p style="margin:0 0 24px;color:#555;font-size:14px;line-height:1.6">
+            Vous avez demandé la réinitialisation de votre mot de passe.<br>
+            Cliquez sur le bouton ci-dessous pour en définir un nouveau.
+          </p>
+          <a href="${resetLink}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:14px 28px;border-radius:999px;letter-spacing:0.01em">
+            Définir un nouveau mot de passe →
+          </a>
+          <p style="margin:24px 0 0;color:#aaa;font-size:12px;line-height:1.6">
+            Ce lien expire dans 24h. Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.
+          </p>
+        </div>
+      </div>
+    `,
+  });
+  console.log(`[reset] Email de réinitialisation envoyé à ${toEmail}`);
+};
+
 // ─── Envoi email notifications tickets ───────────────────────────────────────
 const sendTicketEmail = async (toEmails, subject, textBody, htmlBody) => {
   const s = readServerSettings();
@@ -548,6 +621,93 @@ app.post('/api/auth/mysql-login', authRateLimiter, async (req, res) => {
   } catch (e) {
     console.error('[mysql-login]', e.message);
     return res.status(500).json({ success: false, error: 'Erreur serveur' });
+  }
+});
+
+// ─── Mot de passe oublié (self-service) ───────────────────────────────────────
+// Réponse TOUJOURS générique (anti-énumération : ne jamais révéler si le compte
+// existe). Mode MySQL → token maison (password_reset_tokens) + email. Mode
+// firestore → lien Firebase (generatePasswordResetLink), même mécanique que le
+// lien d'invitation déjà en service. ACTIF DANS LES DEUX MODES (choix Andrianina) :
+// contrairement aux autres lots de la migration, cette route n'est pas inerte.
+// Le super_admin break-glass (.env/settings.json) n'a pas de fiche users → aucun
+// email envoyé pour lui, réponse générique quand même.
+app.post('/api/auth/forgot-password', authRateLimiter, async (req, res) => {
+  const { identifier } = req.body || {};
+  const generic = { success: true };
+  if (!identifier || typeof identifier !== 'string') return res.json(generic);
+  const id = identifier.trim();
+  const appUrl = IS_PROD ? 'https://maj.stomos.net' : 'http://localhost:3000';
+  try {
+    if (DATA_BACKEND === 'mysql') {
+      const { getPool } = require('./db');
+      const isEmail = id.includes('@');
+      const [rows] = await getPool().query(
+        `SELECT uid, email FROM users WHERE ${isEmail ? 'email' : 'username'}=? AND status='active' LIMIT 1`,
+        [isEmail ? id.toLowerCase() : id]);
+      const user = rows[0];
+      if (user && user.email) {
+        const token = await issueResetToken(user.uid);
+        try { await sendResetEmail(user.email, `${appUrl}/reset-password?token=${token}`); }
+        catch (e) { console.error('[forgot-password] envoi email :', e.message); }
+      }
+    } else if (firebaseAdmin) {
+      // Mode firestore : lien Firebase. L'équipe se connecte avec son IDENTIFIANT,
+      // donc on résout username → email dans Firestore (comme resolve-username,
+      // mais sans jamais renvoyer l'email au client).
+      let email = null;
+      if (id.includes('@')) {
+        email = id.toLowerCase();
+      } else if (SAFE_USERNAME_RE.test(id)) {
+        const snap = await firebaseAdmin.firestore().collection('users')
+          .where('username', '==', id.toLowerCase()).limit(1).get();
+        const u = snap.empty ? null : snap.docs[0].data();
+        if (u && u.status !== 'disabled') email = u.email || null; // compte désactivé → aucun envoi
+      }
+      if (email) {
+        try {
+          const link = await firebaseAdmin.auth().generatePasswordResetLink(email, { url: `${appUrl}/reset-password` });
+          await sendResetEmail(email, link);
+        } catch (e) { console.warn('[forgot-password] firebase :', e.message); }
+      }
+    }
+  } catch (e) {
+    console.error('[forgot-password]', e.message);
+  }
+  return res.json(generic); // réponse identique quoi qu'il arrive
+});
+
+// ─── Réinitialisation via token maison (mode MySQL uniquement) ────────────────
+// Le token EN CLAIR arrive du lien email ; on vérifie son SHA-256 + non-consommé +
+// non-expiré, puis on pose le hash bcrypt et on consomme le token (transaction).
+app.post('/api/auth/reset-password', authRateLimiter, async (req, res) => {
+  if (DATA_BACKEND !== 'mysql') return res.status(400).json({ error: 'Indisponible dans ce mode' });
+  const { token, password } = req.body || {};
+  if (!token || !password) return res.status(400).json({ error: 'Token et mot de passe requis' });
+  if (String(password).length < 8) return res.status(400).json({ error: 'Mot de passe trop court (8 caractères min)' });
+  try {
+    const bcrypt = require('bcryptjs');
+    const { getPool } = require('./db');
+    const th = sha256Hex(token);
+    const [rows] = await getPool().query(
+      'SELECT user_id, expires_at, used FROM password_reset_tokens WHERE token_hash=? LIMIT 1', [th]);
+    const row = rows[0];
+    if (!row || row.used || Date.now() >= Number(row.expires_at)) {
+      return res.status(400).json({ error: 'Lien invalide ou expiré' });
+    }
+    const hash = await bcrypt.hash(String(password), 12);
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query('UPDATE users SET password_hash=?, password_algo=?, updated_at=? WHERE uid=?',
+        [hash, 'bcrypt', Date.now(), row.user_id]);
+      await conn.query('UPDATE password_reset_tokens SET used=1 WHERE token_hash=?', [th]);
+      await conn.commit();
+    } catch (e) { await conn.rollback(); throw e; } finally { conn.release(); }
+    return res.json({ success: true });
+  } catch (e) {
+    console.error('[reset-password]', e.message);
+    return res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 

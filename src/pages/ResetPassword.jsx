@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import axios from 'axios';
 import { Eye, EyeOff, CheckCircle2, AlertCircle, KeyRound, ArrowRight, Circle } from 'lucide-react';
 import { confirmPasswordReset, verifyPasswordResetCode, getAuth } from 'firebase/auth';
 import { getFirebaseAuth } from '../services/firebase';
@@ -63,7 +64,8 @@ export default function ResetPassword() {
   const [params]    = useSearchParams();
 
   const oobCode     = params.get('oobCode');
-  const mode        = params.get('mode'); // 'resetPassword'
+  const mode        = params.get('mode');   // 'resetPassword' (flux Firebase)
+  const token       = params.get('token');  // token maison (flux MySQL, lot 7b)
 
   const [step,        setStep]        = useState('loading'); // loading | form | success | expired | confirmed
   const [password,    setPassword]    = useState('');
@@ -74,9 +76,15 @@ export default function ResetPassword() {
   const [error,       setError]       = useState('');
   const [countdown,   setCountdown]   = useState(5);
 
-  // ── Vérifier le oobCode au chargement ────────────────────────────────────
+  // ── Vérifier le lien au chargement ────────────────────────────────────────
   useEffect(() => {
     const verify = async () => {
+      // Flux MySQL (lot 7b) : token maison → pas de vérif préalable, on valide à
+      // la soumission via /api/auth/reset-password. Le token prime sur l'oobCode.
+      if (token) {
+        setStep('form');
+        return;
+      }
       if (oobCode && mode === 'resetPassword') {
         try {
           const auth = getFirebaseAuth();
@@ -93,7 +101,7 @@ export default function ResetPassword() {
       }
     };
     verify();
-  }, [oobCode, mode]);
+  }, [oobCode, mode, token]);
 
   // ── Countdown après succès ────────────────────────────────────────────────
   useEffect(() => {
@@ -123,11 +131,18 @@ export default function ResetPassword() {
 
     setLoading(true);
     try {
-      const auth = getFirebaseAuth();
-      await confirmPasswordReset(auth, oobCode, password);
-      setStep('success');
+      if (token) {
+        // Flux MySQL : validation + écriture du hash côté serveur.
+        await axios.post('/api/auth/reset-password', { token, password });
+        setStep('success');
+      } else {
+        const auth = getFirebaseAuth();
+        await confirmPasswordReset(auth, oobCode, password);
+        setStep('success');
+      }
     } catch (err) {
-      if (err.code === 'auth/expired-action-code') {
+      // Token maison invalide/expiré → 400 ; Firebase → code dédié.
+      if (err?.response?.status === 400 || err.code === 'auth/expired-action-code') {
         setStep('expired');
       } else {
         setError('Erreur lors de la mise à jour. Réessayez ou demandez un nouveau lien.');
@@ -135,7 +150,7 @@ export default function ResetPassword() {
     } finally {
       setLoading(false);
     }
-  }, [password, confirm, oobCode]);
+  }, [password, confirm, oobCode, token]);
 
   // ── Layout partagé ────────────────────────────────────────────────────────
   const Wrapper = ({ children }) => (

@@ -37,6 +37,10 @@ export default function Login() {
   const [tempToken,   setTempToken]   = useState('');
   const [twoFaCode,   setTwoFaCode]   = useState('');
 
+  // Mot de passe oublié (self-service)
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotMsg,     setForgotMsg]     = useState('');
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -87,6 +91,23 @@ export default function Login() {
       setError('Code incorrect ou expiré');
       setLoading(false);
     }
+  };
+
+  // Mot de passe oublié : réutilise le champ identifiant. Réponse toujours
+  // générique côté serveur (anti-énumération) → message neutre quoi qu'il arrive.
+  const handleForgot = async () => {
+    setForgotMsg('');
+    setError('');
+    if (!username.trim()) {
+      setError('Saisissez votre identifiant ou email, puis cliquez sur « Mot de passe oublié ».');
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      await axios.post('/api/auth/forgot-password', { identifier: username.trim() });
+    } catch { /* réponse générique : on n'expose jamais l'erreur */ }
+    setForgotLoading(false);
+    setForgotMsg('Si un compte correspond, un email de réinitialisation vient d\'être envoyé.');
   };
 
   const handleLoaderDone = useCallback(() => navigate('/'), [navigate]);
@@ -226,6 +247,30 @@ export default function Login() {
                   {error}
                 </div>
               )}
+
+              {forgotMsg && (
+                <div style={{
+                  padding: '10px 14px',
+                  background: '#f0fdf4', border: '1px solid #bbf7d0',
+                  borderRadius: 10, fontSize: 13, color: '#16a34a',
+                }}>
+                  {forgotMsg}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleForgot}
+                disabled={loading || forgotLoading}
+                style={{
+                  background: 'none', border: 'none', color: '#666',
+                  fontSize: 12, cursor: (loading || forgotLoading) ? 'default' : 'pointer',
+                  textAlign: 'left', padding: 0, marginTop: -2,
+                  textDecoration: 'underline', fontFamily: 'inherit',
+                }}
+              >
+                {forgotLoading ? 'Envoi…' : 'Mot de passe oublié ?'}
+              </button>
             </form>
           ) : (
             /* ── Étape 2FA ── */
