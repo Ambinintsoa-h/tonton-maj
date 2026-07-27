@@ -885,5 +885,227 @@ module.exports = ({ requireAuth, requireRole }) => {
     res.json(rows.length ? lockToObj(rows[0]) : null);
   }));
 
+  // ── activité (tracking invisible) + temps par article ─────────────────────────
+  // ⚠ date (YYYY-MM-DD) et hour = HEURE LOCALE utilisateur, fournies par le client
+  // et JAMAIS recalculées serveur (fuseau équipe ≠ serveur EU). Les autres
+  // horodatages (last_activity_at, published_at…) = horloge serveur. Écriture :
+  // chaque membre n'écrit QUE sa propre activité (userId == req.user.uid, iso règle
+  // Firestore create/update). Lecture tableaux de bord : range/user = super_admin|
+  // manager (isAdmin) ; article-time = super_admin.
+  const ACTIVITY_READ = requireRole('super_admin', 'manager');
+  const ARTICLE_TIME_READ = requireRole('super_admin');
+  const ACTIVITY_ACTION_COL = {
+    articlesUpdated: 'actions_articles_updated', ticketsCreated: 'actions_tickets_created',
+    ticketsCommented: 'actions_tickets_commented', ticketsResolved: 'actions_tickets_resolved',
+  };
+  // N'autorise l'écriture d'activité QUE pour soi-même (règle resource.userId==uid).
+  const ownActivity = (req, res, next) => {
+    const uid = req.user.uid;
+    const bodyUid = req.body && req.body.userId;
+    if (!uid || !bodyUid || bodyUid !== uid) {
+      return res.status(403).json({ error: 'Activité : écriture limitée à soi-même' });
+    }
+    next();
+  };
+
+  // Assemble les sessions (forme Firestore) depuis la table + ses tables filles.
+  const buildSessions = (sessRows, hourlyRows, connRows, pauseRows, closeRows) => {
+    const by = () => new Map();
+    const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
+    const H = by(), C = by(), P = by(), Cl = by();
+    const key = (r) => r.user_id + '|' + r.date;
+    for (const r of hourlyRows) push(H, key(r), r);
+    for (const r of connRows) push(C, key(r), r);
+    for (const r of pauseRows) push(P, key(r), r);
+    for (const r of closeRows) push(Cl, key(r), r);
+    return sessRows.map((r) => {
+      const k = key(r);
+      const hourly = {};
+      for (const h of (H.get(k) || [])) hourly[String(h.hour)] = h.activity_count;
+      return {
+        id: `${r.user_id}_${r.date}`,
+        userId: r.user_id,
+        date: r.date,
+        ...(r.user_role != null ? { userRole: r.user_role } : {}),
+        ...(r.user_name != null ? { userName: r.user_name } : {}),
+        firstActivityAt: r.first_activity_at,
+        lastActivityAt: r.last_activity_at,
+        totalActiveMinutes: r.total_active_minutes,
+        actions: {
+          articlesUpdated: r.actions_articles_updated,
+          ticketsCreated: r.actions_tickets_created,
+          ticketsCommented: r.actions_tickets_commented,
+          ticketsResolved: r.actions_tickets_resolved,
+          total: r.actions_total,
+        },
+        hourlyActivity: hourly,
+        connections: (C.get(k) || []).map((c) => ({ at: c.connected_at })),
+        pauses: (P.get(k) || []).map((p) => ({ start: p.pause_start, end: p.pause_end })),
+        closes: (Cl.get(k) || []).map((c) => c.close_time),
+      };
+    });
+  };
+
+  // POST /activity/session — saveActivitySession. Création complète si absente ;
+  // sinon MAJ last_activity_at seulement (first_activity_at + totaux figés). Ajoute
+  // la connexion {at:firstActivityAt} en dédupliquant (= arrayUnion).
+  router.post('/activity/session', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    await q(
+      `INSERT INTO activity_sessions (user_id, date, user_role, user_name, first_activity_at, last_activity_at,
+         total_active_minutes, actions_articles_updated, actions_tickets_created, actions_tickets_commented,
+         actions_tickets_resolved, actions_total)
+       VALUES (?,?,?,?,?,?,0,0,0,0,0,0)
+       ON DUPLICATE KEY UPDATE last_activity_at=VALUES(last_activity_at)`,
+      [b.userId, b.date, b.userRole ?? null, b.userName ?? null, b.firstActivityAt ?? null, b.lastActivityAt ?? null]);
+    if (b.firstActivityAt != null) {
+      await q(
+        `INSERT INTO activity_connections (user_id, date, connected_at)
+         SELECT ?,?,? FROM DUAL WHERE NOT EXISTS
+           (SELECT 1 FROM activity_connections WHERE user_id=? AND date=? AND connected_at=?)`,
+        [b.userId, b.date, b.firstActivityAt, b.userId, b.date, b.firstActivityAt]);
+    }
+    res.json({ ok: true });
+  }));
+
+  // POST /activity/heartbeat — +2 min actives + hourly[hour]+1 (heure locale).
+  router.post('/activity/heartbeat', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    await q('UPDATE activity_sessions SET last_activity_at=?, total_active_minutes=total_active_minutes+2 WHERE user_id=? AND date=?',
+      [Date.now(), b.userId, b.date]);
+    const hn = Number(b.hour);
+    if (Number.isInteger(hn) && hn >= 0 && hn <= 23) {
+      await q(`INSERT INTO activity_hourly (user_id, date, hour, activity_count) VALUES (?,?,?,1)
+               ON DUPLICATE KEY UPDATE activity_count=activity_count+1`, [b.userId, b.date, hn]);
+    }
+    res.json({ ok: true });
+  }));
+
+  // POST /activity/pause — append pause {start,end} (dédupe = arrayUnion).
+  router.post('/activity/pause', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    const p = b.pause || {};
+    if (p.start != null && p.end != null) {
+      await q(
+        `INSERT INTO activity_pauses (user_id, date, pause_start, pause_end)
+         SELECT ?,?,?,? FROM DUAL WHERE NOT EXISTS
+           (SELECT 1 FROM activity_pauses WHERE user_id=? AND date=? AND pause_start=? AND pause_end=?)`,
+        [b.userId, b.date, p.start, p.end, b.userId, b.date, p.start, p.end]);
+    }
+    res.json({ ok: true });
+  }));
+
+  // POST /activity/close — append close_time (dédupe = arrayUnion).
+  router.post('/activity/close', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    if (b.closeTime != null) {
+      await q(
+        `INSERT INTO activity_closes (user_id, date, close_time)
+         SELECT ?,?,? FROM DUAL WHERE NOT EXISTS
+           (SELECT 1 FROM activity_closes WHERE user_id=? AND date=? AND close_time=?)`,
+        [b.userId, b.date, b.closeTime, b.userId, b.date, b.closeTime]);
+    }
+    res.json({ ok: true });
+  }));
+
+  // POST /activity/action — increment d'une action métier + total (horloge serveur).
+  router.post('/activity/action', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    const col = ACTIVITY_ACTION_COL[b.actionType]; // colonne issue d'un whitelist (pas d'injection)
+    if (!col) return res.json({ ok: true });
+    await q(`UPDATE activity_sessions SET ${col}=${col}+1, actions_total=actions_total+1, last_activity_at=? WHERE user_id=? AND date=?`,
+      [Date.now(), b.userId, b.date]);
+    res.json({ ok: true });
+  }));
+
+  // GET /activity/sessions?start&end — getActivitySessionsRange (super_admin|manager).
+  router.get('/activity/sessions', requireAuth, ACTIVITY_READ, wrap(async (req, res) => {
+    const start = String(req.query.start || '');
+    const end = String(req.query.end || '');
+    const [sess] = await q('SELECT * FROM activity_sessions WHERE date>=? AND date<=?', [start, end]);
+    if (!sess.length) return res.json([]);
+    const [h] = await q('SELECT * FROM activity_hourly WHERE date>=? AND date<=?', [start, end]);
+    const [c] = await q('SELECT * FROM activity_connections WHERE date>=? AND date<=?', [start, end]);
+    const [p] = await q('SELECT * FROM activity_pauses WHERE date>=? AND date<=?', [start, end]);
+    const [cl] = await q('SELECT * FROM activity_closes WHERE date>=? AND date<=?', [start, end]);
+    res.json(buildSessions(sess, h, c, p, cl));
+  }));
+
+  // GET /activity/sessions/user?userId&days — getUserActivitySessions (isAdmin).
+  router.get('/activity/sessions/user', requireAuth, ACTIVITY_READ, wrap(async (req, res) => {
+    const userId = String(req.query.userId || '');
+    let days = parseInt(req.query.days, 10);
+    if (!Number.isFinite(days) || days <= 0) days = 7;
+    if (days > 366) days = 366;
+    const [sess] = await q('SELECT * FROM activity_sessions WHERE user_id=? ORDER BY date DESC LIMIT ?', [userId, days]);
+    if (!sess.length) return res.json([]);
+    const dates = sess.map((s) => s.date);
+    const inC = dates.map(() => '?').join(',');
+    const [h] = await q(`SELECT * FROM activity_hourly WHERE user_id=? AND date IN (${inC})`, [userId, ...dates]);
+    const [c] = await q(`SELECT * FROM activity_connections WHERE user_id=? AND date IN (${inC})`, [userId, ...dates]);
+    const [p] = await q(`SELECT * FROM activity_pauses WHERE user_id=? AND date IN (${inC})`, [userId, ...dates]);
+    const [cl] = await q(`SELECT * FROM activity_closes WHERE user_id=? AND date IN (${inC})`, [userId, ...dates]);
+    res.json(buildSessions(sess, h, c, p, cl));
+  }));
+
+  // ── article_time (temps actif par article × éditeur) ──────────────────────────
+  const articleTimeToObj = (r) => ({
+    id: `${r.article_id}_${r.user_id}`,
+    articleId: r.article_id,
+    userId: r.user_id,
+    ...(r.user_name != null ? { userName: r.user_name } : {}),
+    ...(r.user_role != null ? { userRole: r.user_role } : {}),
+    ...(r.title != null ? { title: r.title } : {}),
+    ...(r.url != null ? { url: r.url } : {}),
+    totalActiveMinutes: r.total_active_minutes,
+    startedAt: r.started_at,
+    lastActivityAt: r.last_activity_at,
+    publishedAt: r.published_at,
+  });
+
+  // POST /article-time/ensure — crée le doc (startedAt figé) sinon MAJ métas +
+  // last_activity_at. Ne met à jour une méta que si fournie non vide (iso).
+  router.post('/article-time/ensure', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    if (!b.articleId || !b.userId) return res.json({ ok: true });
+    const now = Date.now();
+    await q(
+      `INSERT INTO article_time (article_id, user_id, user_name, user_role, title, url,
+         total_active_minutes, started_at, last_activity_at, published_at)
+       VALUES (?,?,?,?,?,?,0,?,?,NULL)
+       ON DUPLICATE KEY UPDATE last_activity_at=VALUES(last_activity_at),
+         user_name=IF(VALUES(user_name)<>'', VALUES(user_name), user_name),
+         user_role=IF(VALUES(user_role)<>'', VALUES(user_role), user_role),
+         title=IF(VALUES(title)<>'', VALUES(title), title),
+         url=IF(VALUES(url)<>'', VALUES(url), url)`,
+      [b.articleId, b.userId, b.userName || '', b.userRole || '', b.title || '', b.url || '', now, now]);
+    res.json({ ok: true });
+  }));
+
+  // POST /article-time/record — crédite `minutes` (increment atomique).
+  router.post('/article-time/record', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    const m = Number(b.minutes);
+    if (!b.articleId || !b.userId || !(m > 0)) return res.json({ ok: true });
+    await q('UPDATE article_time SET total_active_minutes=total_active_minutes+?, last_activity_at=? WHERE article_id=? AND user_id=?',
+      [m, Date.now(), b.articleId, b.userId]);
+    res.json({ ok: true });
+  }));
+
+  // POST /article-time/published — horodate la publication.
+  router.post('/article-time/published', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    if (b.articleId && b.userId) {
+      await q('UPDATE article_time SET published_at=? WHERE article_id=? AND user_id=?', [Date.now(), b.articleId, b.userId]);
+    }
+    res.json({ ok: true });
+  }));
+
+  // GET /article-time — getArticleTimeAll (super_admin).
+  router.get('/article-time', requireAuth, ARTICLE_TIME_READ, wrap(async (_req, res) => {
+    const [rows] = await q('SELECT * FROM article_time');
+    res.json(rows.map(articleTimeToObj));
+  }));
+
   return router;
 };
