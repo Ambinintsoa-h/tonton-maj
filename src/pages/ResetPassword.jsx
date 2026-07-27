@@ -59,6 +59,55 @@ function PasswordStrength({ password }) {
   );
 }
 
+// ── Layout partagé ───────────────────────────────────────────────────────────
+// ⚠️ DOIT rester au niveau module. Défini dans le corps de ResetPassword, son
+// identité changeait à chaque rendu : React y voyait un composant d'un autre type,
+// démontait puis remontait tout l'arbre — et l'`autoFocus` du premier champ
+// renvoyait le curseur en haut à chaque frappe dans « Confirmer le mot de passe ».
+function Wrapper({ children }) {
+  return (
+    <div style={{
+      minHeight: '100vh',
+      background: 'radial-gradient(ellipse at 38% 52%, #f8f8f8 0%, #aaaaaa 32%, #3a3a3a 62%, #0a0a0a 100%)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: 24,
+      fontFamily: '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    }}>
+      <style>{FONT_IMPORT}</style>
+      <div style={{
+        width: '100%', maxWidth: 460,
+        background: 'rgba(255,255,255,0.08)',
+        backdropFilter: 'blur(2px)',
+        WebkitBackdropFilter: 'blur(2px)',
+        border: '1px solid rgba(255,255,255,0.15)',
+        boxShadow: '0 32px 80px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.2)',
+        borderRadius: 28, overflow: 'hidden',
+      }}>
+        <div style={{
+          padding: '44px 44px 40px',
+          background: 'rgba(255,255,255,0.55)',
+          backdropFilter: 'blur(28px) saturate(160%)',
+          WebkitBackdropFilter: 'blur(28px) saturate(160%)',
+        }}>
+          {/* Logo */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 36 }}>
+            <img
+              src="/tonton.jpg"
+              alt="TONTON AI"
+              style={{ width: 42, height: 42, borderRadius: 12, objectFit: 'cover', objectPosition: '50% 18%', flexShrink: 0 }}
+            />
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 16, color: '#111', letterSpacing: '-0.02em' }}>TONTON AI</div>
+              <div style={{ fontSize: 11, color: '#999', marginTop: 1 }}>MAJ d'articles par IA</div>
+            </div>
+          </div>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ResetPassword() {
   const navigate    = useNavigate();
   const [params]    = useSearchParams();
@@ -151,49 +200,6 @@ export default function ResetPassword() {
       setLoading(false);
     }
   }, [password, confirm, oobCode, token]);
-
-  // ── Layout partagé ────────────────────────────────────────────────────────
-  const Wrapper = ({ children }) => (
-    <div style={{
-      minHeight: '100vh',
-      background: 'radial-gradient(ellipse at 38% 52%, #f8f8f8 0%, #aaaaaa 32%, #3a3a3a 62%, #0a0a0a 100%)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: 24,
-      fontFamily: '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    }}>
-      <style>{FONT_IMPORT}</style>
-      <div style={{
-        width: '100%', maxWidth: 460,
-        background: 'rgba(255,255,255,0.08)',
-        backdropFilter: 'blur(2px)',
-        WebkitBackdropFilter: 'blur(2px)',
-        border: '1px solid rgba(255,255,255,0.15)',
-        boxShadow: '0 32px 80px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.2)',
-        borderRadius: 28, overflow: 'hidden',
-      }}>
-        <div style={{
-          padding: '44px 44px 40px',
-          background: 'rgba(255,255,255,0.55)',
-          backdropFilter: 'blur(28px) saturate(160%)',
-          WebkitBackdropFilter: 'blur(28px) saturate(160%)',
-        }}>
-          {/* Logo */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 36 }}>
-            <img
-              src="/tonton.jpg"
-              alt="TONTON AI"
-              style={{ width: 42, height: 42, borderRadius: 12, objectFit: 'cover', objectPosition: '50% 18%', flexShrink: 0 }}
-            />
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 16, color: '#111', letterSpacing: '-0.02em' }}>TONTON AI</div>
-              <div style={{ fontSize: 11, color: '#999', marginTop: 1 }}>MAJ d'articles par IA</div>
-            </div>
-          </div>
-          {children}
-        </div>
-      </div>
-    </div>
-  );
 
   // ── États ─────────────────────────────────────────────────────────────────
 
