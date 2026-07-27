@@ -845,6 +845,11 @@ const _rlResolve = new Map();
 const resolveRateLimiter = makeRateLimiter(_rlResolve, 5); // 5 req/min/IP
 
 app.get('/api/auth/resolve-username', resolveRateLimiter, async (req, res) => {
+  // Endpoint propre au flux Firebase : en mysql, le client envoie directement
+  // l'identifiant à /api/auth/mysql-login, personne n'appelle cette route. On
+  // répond neutre au lieu d'interroger un Firestore devenu obsolète — et surtout
+  // sans porter en SQL une divulgation d'email dont la voie mysql n'a pas besoin.
+  if (DATA_BACKEND === 'mysql') return res.json({ email: null });
   if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   const username = (req.query.u || '').trim().toLowerCase();
   if (!username) return res.status(400).json({ error: 'Paramètre u requis' });
@@ -910,7 +915,6 @@ app.post('/api/auth/firebase-login', authRateLimiter, async (req, res) => {
 
 // ─── Créer un compte membre (admin ou manager) ────────────────────────────────
 app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
-  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   const { firstName, lastName, email, username, role, password } = req.body || {};
   // Manager ne peut créer que des cq_ia
   if (req.user.role === 'manager' && role !== 'cq_ia') {
@@ -919,6 +923,45 @@ app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager')
   if (!email || !username || !password || !role) return res.status(400).json({ error: 'Champs requis : email, username, role, password' });
   if (!SAFE_USERNAME_RE.test(username)) return res.status(400).json({ error: 'Username invalide — lettres, chiffres, tirets et underscores uniquement (1–64 caractères)' });
   if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Rôle invalide' });
+
+  // ── Voie MySQL (lot 7b-4) ───────────────────────────────────────────────────
+  // Mêmes garde-fous, mêmes réponses. Le mot de passe saisi par l'admin est haché
+  // en bcrypt (jamais stocké en clair) et le membre reçoit malgré tout un lien de
+  // réinitialisation, exactement comme aujourd'hui côté Firebase.
+  if (DATA_BACKEND === 'mysql') {
+    try {
+      const bcrypt = require('bcryptjs');
+      const { getPool } = require('./db');
+      const uid = require('crypto').randomUUID();
+      const now = Date.now();
+      const hash = await bcrypt.hash(String(password), 12);
+      await getPool().query(
+        `INSERT INTO users (uid, username, email, password_hash, password_algo, first_name, last_name,
+           role, status, created_at, updated_at) VALUES (?,?,?,?,'bcrypt',?,?,?,'active',?,?)`,
+        [uid, username, String(email).toLowerCase(), hash, firstName || '', lastName || '', role, now, now]);
+
+      // Lien de réinitialisation maison (table password_reset_tokens, lot 7b-1).
+      let resetLink = null;
+      try {
+        const token = await issueResetToken(uid);
+        resetLink = `${IS_PROD ? 'https://maj.stomos.net' : 'http://localhost:3000'}/reset-password?token=${token}`;
+      } catch (e) { console.warn('[invite] Lien reset non généré :', e.message); }
+      sendInviteEmail({ toEmail: email, firstName: firstName || username, username, resetLink }).catch(e => {
+        console.error('[invite] Échec envoi email :', e.message);
+      });
+      return res.json({ success: true, uid });
+    } catch (e) {
+      // Clés UNIQUE sur username et email → message ciblé plutôt qu'un 500 opaque.
+      if (e.code === 'ER_DUP_ENTRY') {
+        const dupUsername = /uq_users_username/.test(e.message);
+        return res.status(400).json({ error: dupUsername ? 'Cet identifiant est déjà utilisé' : 'Un compte actif utilise déjà cet email' });
+      }
+      console.error('[users/create]', e.message);
+      return res.status(400).json({ error: 'Création impossible' });
+    }
+  }
+
+  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   try {
     const db = firebaseAdmin.firestore();
 
@@ -968,7 +1011,6 @@ app.post('/api/users/create', requireAuth, requireRole('super_admin', 'manager')
 // Propage email / mot de passe / rôle vers Firebase Auth — sans quoi la modif
 // reste cosmétique côté Firestore et le login continue d'utiliser l'ancienne valeur.
 app.put('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
-  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   const { uid } = req.params;
   const { firstName, lastName, email, role, status, note, password } = req.body || {};
   if (req.user.role === 'manager' && role && role !== 'cq_ia') {
@@ -976,6 +1018,40 @@ app.put('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager'), a
   }
   if (role && !VALID_ROLES.has(role)) return res.status(400).json({ error: 'Rôle invalide' });
   if (password && password.length < 6) return res.status(400).json({ error: 'Mot de passe trop court (6 caractères min)' });
+
+  // ── Voie MySQL (lot 7b-4) ───────────────────────────────────────────────────
+  // Ici, changer l'email EST volontairement un changement d'identité de connexion
+  // (action admin) — à la différence de Mon Compte, qui ne touche jamais users.email.
+  if (DATA_BACKEND === 'mysql') {
+    if (status !== undefined && !['active', 'disabled'].includes(status)) {
+      return res.status(400).json({ error: 'Statut invalide' }); // colonne ENUM
+    }
+    try {
+      const { getPool } = require('./db');
+      const sets = ['updated_at=?'];
+      const vals = [Date.now()];
+      if (firstName !== undefined) { sets.push('first_name=?'); vals.push(firstName || ''); }
+      if (lastName  !== undefined) { sets.push('last_name=?');  vals.push(lastName  || ''); }
+      if (email     !== undefined) { sets.push('email=?');      vals.push(String(email).toLowerCase()); }
+      if (role      !== undefined) { sets.push('role=?');       vals.push(role); }
+      if (status    !== undefined) { sets.push('status=?');     vals.push(status); }
+      if (note      !== undefined) { sets.push('note=?');       vals.push(note); }
+      if (password) {
+        const bcrypt = require('bcryptjs');
+        sets.push('password_hash=?', 'password_algo=?');
+        vals.push(await bcrypt.hash(String(password), 12), 'bcrypt');
+      }
+      const [r] = await getPool().query(`UPDATE users SET ${sets.join(', ')} WHERE uid=?`, [...vals, uid]);
+      if (!r.affectedRows) return res.status(404).json({ error: 'Compte introuvable' });
+      return res.json({ success: true, uid });
+    } catch (e) {
+      if (e.code === 'ER_DUP_ENTRY') return res.status(400).json({ error: 'Un compte utilise déjà cet email' });
+      console.error('[users/update]', e.message);
+      return res.status(400).json({ error: 'Modification impossible' });
+    }
+  }
+
+  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   try {
     const db = firebaseAdmin.firestore();
     const existing = (await db.collection('users').doc(uid).get()).data() || {};
@@ -1010,8 +1086,32 @@ app.put('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager'), a
 
 // ─── Supprimer un compte membre (Auth + Firestore) ────────────────────────────
 app.delete('/api/users/:uid', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
-  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   const { uid } = req.params;
+
+  // ── Voie MySQL (lot 7b-4) ───────────────────────────────────────────────────
+  // Pas de FK dures en v1 → cascade EN CODE, limitée aux artefacts d'AUTH (2FA,
+  // jetons de reset), sinon le compte resterait joignable par un second facteur
+  // ou un lien de réinitialisation orphelin. Le contenu produit par le membre
+  // (articles, tickets…) n'est pas supprimé — iso avec Firebase aujourd'hui.
+  if (DATA_BACKEND === 'mysql') {
+    const { getPool } = require('./db');
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query('DELETE FROM users WHERE uid=?', [uid]);
+      await conn.query('DELETE FROM two_factor WHERE user_id=?', [uid]);
+      await conn.query('DELETE FROM password_reset_tokens WHERE user_id=?', [uid]);
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      console.error('[users/delete]', e.message);
+      return res.status(400).json({ error: 'Suppression impossible' });
+    } finally { conn.release(); }
+    // Succès même si la fiche n'existait pas — iso avec la suppression Firestore.
+    return res.json({ success: true });
+  }
+
+  if (!firebaseAdmin) return res.status(503).json({ error: 'Firebase Admin non configuré' });
   try {
     // Supprimer le compte Auth (sinon l'utilisateur peut toujours se connecter)
     // — on tolère son absence pour nettoyer quand même la fiche Firestore.
