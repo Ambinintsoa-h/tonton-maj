@@ -50,7 +50,7 @@ jobs:
           for attempt in 1 2 3; do
             echo "Tentative SCP $attempt/3..."
             scp -F ~/.ssh/config \
-              proxy.js package.json package-lock.json \
+              proxy.js data-api.js db.js crypto-util.js package.json package-lock.json \
               n0c:~/maj.stomos.net/ && \
             scp -F ~/.ssh/config -r build \
               n0c:~/maj.stomos.net/ && { ok=1; break; }
