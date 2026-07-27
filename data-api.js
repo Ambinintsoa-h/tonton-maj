@@ -780,5 +780,110 @@ module.exports = ({ requireAuth, requireRole }) => {
     res.json({ ok: true });
   }));
 
+  // ── notifications ─────────────────────────────────────────────────────────────
+  // `read` (mot réservé) → colonne is_read, remappée en `read`. Chaque membre lit
+  // SES notifications (to_user_id ∈ {uid, username}). Création permissive (règle
+  // répliquée : pas de vérif toUserId). GET renvoyé via res.json → ETag/304 auto
+  // (Express) pour le polling.
+  const notifToObj = (r) => ({
+    id: r.id,
+    ...parseJson(r.data, {}),
+    toUserId: r.to_user_id,
+    ...(r.type != null ? { type: r.type } : {}),
+    ...(r.message != null ? { message: r.message } : {}),
+    read: !!r.is_read,
+    ...(r.created_at != null ? { createdAt: r.created_at } : {}),
+  });
+  const NOTIF_DATA_SKIP = ['id', 'toUserId', 'type', 'message', 'read', 'createdAt'];
+  const myIds = (req) => [req.user.uid, req.user.username].filter(Boolean);
+
+  router.get('/notifications', requireAuth, wrap(async (req, res) => {
+    const ids = myIds(req);
+    if (!ids.length) return res.json([]);
+    const [rows] = await q(
+      `SELECT * FROM notifications WHERE to_user_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY created_at DESC LIMIT 50`, ids);
+    res.json(rows.map(notifToObj));
+  }));
+  router.post('/notifications', requireAuth, wrap(async (req, res) => {
+    const b = req.body || {};
+    const id = genId();
+    await q(
+      `INSERT INTO notifications (id, to_user_id, type, message, is_read, created_at, data) VALUES (?,?,?,?,0,?,?)`,
+      [id, b.toUserId != null ? String(b.toUserId) : '', b.type ?? null, b.message ?? null,
+       Date.now(), asJson(omit(b, NOTIF_DATA_SKIP))]);
+    res.json({ id });
+  }));
+  router.put('/notifications/:id/read', requireAuth, wrap(async (req, res) => {
+    await q('UPDATE notifications SET is_read=1 WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  }));
+  router.put('/notifications/read-all', requireAuth, wrap(async (req, res) => {
+    const ids = myIds(req);
+    if (ids.length) await q(
+      `UPDATE notifications SET is_read=1 WHERE is_read=0 AND to_user_id IN (${ids.map(() => '?').join(',')})`, ids);
+    res.json({ ok: true });
+  }));
+
+  // ── pending (file « MAJ en attente », partagée) ───────────────────────────────
+  // savePendingList = FULL-REPLACE debouncé (comme Firestore) : supprime les items
+  // disparus, upsert le reste. Les items arrivent DÉJÀ allégés (slimPendingItem
+  // côté client). GET trié (added_at||created_at) desc + ETag/304 auto pour le poll.
+  const pendingToObj = (r) => ({
+    id: r.id,
+    ...parseJson(r.data, {}),
+    ...(r.status != null ? { status: r.status } : {}),
+    ...(r.assignee_id != null ? { assigneeId: r.assignee_id } : {}),
+    ...(r.priority != null ? { priority: r.priority } : {}),
+    ...(r.title != null ? { title: r.title } : {}),
+    ...(r.url != null ? { url: r.url } : {}),
+    ...(r.added_at != null ? { addedAt: r.added_at } : {}),
+    ...(r.created_at != null ? { createdAt: r.created_at } : {}),
+  });
+  const PENDING_DATA_SKIP = ['id', 'status', 'assigneeId', 'priority', 'title', 'url', 'addedAt', 'createdAt'];
+
+  router.get('/pending', requireAuth, wrap(async (_req, res) => {
+    const [rows] = await q('SELECT * FROM pending ORDER BY COALESCE(added_at, created_at) DESC');
+    res.json(rows.map(pendingToObj));
+  }));
+  router.put('/pending', requireAuth, wrap(async (req, res) => {
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items : [];
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      const keep = items.map((i) => String(i.id));
+      if (keep.length) {
+        await conn.query(`DELETE FROM pending WHERE id NOT IN (${keep.map(() => '?').join(',')})`, keep);
+      } else {
+        await conn.query('DELETE FROM pending');
+      }
+      for (const item of items) {
+        const addedAt = item.addedAt || item.createdAt || Date.now();
+        await conn.query(
+          `INSERT INTO pending (id, status, assignee_id, priority, title, url, added_at, created_at, data)
+           VALUES (?,?,?,?,?,?,?,?,?)
+           ON DUPLICATE KEY UPDATE status=VALUES(status), assignee_id=VALUES(assignee_id), priority=VALUES(priority),
+             title=VALUES(title), url=VALUES(url), added_at=VALUES(added_at), created_at=VALUES(created_at), data=VALUES(data)`,
+          [String(item.id), item.status ?? null, item.assigneeId ?? null, item.priority ?? null,
+           item.title ?? null, item.url ?? null, addedAt, item.createdAt ?? null, asJson(omit(item, PENDING_DATA_SKIP))]);
+      }
+      await conn.commit();
+      res.json({ ok: true });
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }));
+
+  // GET /articles/:id/lock — état courant du verrou (ou null) pour watchEditLock
+  // (polling ~5 s). Renvoie le verrou BRUT ; la péremption est jugée côté client
+  // (isLockActive), comme sous Firestore. ETag/304 auto.
+  router.get('/articles/:id/lock', requireAuth, wrap(async (req, res) => {
+    const [rows] = await q('SELECT * FROM article_editing_locks WHERE article_id=?', [req.params.id]);
+    res.json(rows.length ? lockToObj(rows[0]) : null);
+  }));
+
   return router;
 };

@@ -36,6 +36,68 @@ const api = async (method, path, body) => {
 
 const enc = encodeURIComponent;
 
+// ── Polling (remplace les listeners temps réel Firestore onSnapshot) ──────────
+// Interroge un endpoint GET à intervalle régulier et invoque callback(data) à
+// chaque CHANGEMENT. Fidèle au contrat onSnapshot : 1er appel immédiat (état
+// initial), retourne une fonction de désabonnement.
+//   • ETag/304 : envoie If-None-Match ; un 304 = inchangé, on n'appelle pas callback.
+//   • Garde anti-re-render : même si le 304 est défait (cache navigateur), on
+//     compare le corps brut et on ignore les réponses identiques.
+//   • Pause quand l'onglet est caché (document.hidden) ; reprise immédiate au retour.
+const pollUrl = (path, callback, intervalMs, { onError } = {}) => {
+  let stopped = false;
+  let etag = null;
+  let lastBody = null;
+  const fetchOnce = async (force) => {
+    if (stopped) return;
+    if (!force && typeof document !== 'undefined' && document.hidden) return; // pause onglet caché
+    try {
+      const res = await fetch('/api/data' + path, {
+        cache: 'no-store',
+        headers: {
+          ...(authToken() ? { Authorization: `Bearer ${authToken()}` } : {}),
+          ...(etag ? { 'If-None-Match': etag } : {}),
+        },
+      });
+      if (stopped) return;
+      if (res.status === 304) return;            // inchangé
+      if (!res.ok) { if (onError) onError(new Error(`[mysql] poll ${path} → HTTP ${res.status}`)); return; }
+      etag = res.headers.get('ETag') || etag;
+      const text = await res.text();
+      if (text === lastBody) return;             // identique → pas de re-render
+      lastBody = text;
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { return; }
+      if (!stopped) callback(data);
+    } catch (e) { if (onError) onError(e); }
+  };
+  fetchOnce(true);                               // état initial (même onglet caché)
+  const timer = setInterval(() => fetchOnce(false), intervalMs);
+  const onVis = () => { if (typeof document !== 'undefined' && !document.hidden) fetchOnce(false); };
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis);
+  };
+};
+
+// Allège un item de file avant persistance (iso firebase.firestore.js) : le HTML
+// complet de majResult (avant/après) est déjà archivé dans articles/{id} — on ne
+// le duplique pas dans la file (contentInHistory:true → la review le re-fetch).
+const slimPendingItem = (item) => {
+  if (!item || !item.majResult) return { ...item };
+  const { originalContent, updatedContent, ...rest } = item.majResult;
+  let slim = { ...item, majResult: { ...rest, contentInHistory: true } };
+  for (const heavy of ['audit', 'analysis', 'updates', 'sources']) {
+    let size;
+    try { size = JSON.stringify(slim).length; } catch { break; }
+    if (size <= 900000) break;
+    slim = { ...slim, majResult: { ...slim.majResult, [heavy]: null } };
+  }
+  return slim;
+};
+
 // ── Domaines portés ───────────────────────────────────────────────────────────
 
 // skills
@@ -115,24 +177,37 @@ export const addComment = (comment, ticketStatusUpdate = {}) =>
 export const updateCommentAttachments = (commentId, attachments) =>
   api('PUT', '/ticket-comments/' + enc(commentId) + '/attachments', { attachments });
 
+// ── notifications ─────────────────────────────────────────────────────────────
+// Le serveur filtre par utilisateur (JWT) ; userId passé = ignoré. createNotification
+// est best-effort (erreur avalée, comme sous Firestore).
+export const getNotifications = (/* userId */) => api('GET', '/notifications');
+export const createNotification = (notif) => api('POST', '/notifications', notif).catch(() => {});
+export const markNotificationRead = (notifId) => api('PUT', '/notifications/' + enc(notifId) + '/read');
+export const markAllNotificationsRead = (/* userId */) => api('PUT', '/notifications/read-all');
+
+// ── pending (file « MAJ en attente ») ─────────────────────────────────────────
+// savePendingList : allègement client (slimPendingItem) puis full-replace serveur.
+export const getPendingItems = () => api('GET', '/pending');
+export const savePendingList = (items) =>
+  api('PUT', '/pending', { items: (Array.isArray(items) ? items : []).map(slimPendingItem) });
+
 // Déconnexion : pas de session Firebase à fermer en mode MySQL.
 export const firebaseLogout = async () => {};
 
-// Abonnements temps réel → deviendront du polling (domaines à venir). Stub = unsub no-op.
-export const watchEditLock = () => () => {};
-export const subscribeToPending = () => () => {};
-export const subscribeToComments = () => () => {};
-export const subscribeToNotifications = () => () => {};
+// Abonnements temps réel → POLLING (intervalles verrouillés). Retour = désabonnement.
+export const watchEditLock = (articleId, callback) => {
+  if (!articleId) return () => {};
+  return pollUrl('/articles/' + enc(articleId) + '/lock', callback, 5000);
+};
+export const subscribeToPending = (callback) => pollUrl('/pending', callback, 6000);
+export const subscribeToComments = (ticketId, onUpdate, onError = () => {}) =>
+  pollUrl('/tickets/' + enc(ticketId) + '/comments', onUpdate, 4000, { onError });
+export const subscribeToNotifications = (userId, callback) =>
+  pollUrl('/notifications', callback, 25000);
 
 // ── À porter (étape 3, domaine par domaine) ───────────────────────────────────
 export const loginWithUsernameOrEmail = async () => NI('loginWithUsernameOrEmail');
 export const getUsers = async () => NI('getUsers');
-export const getPendingItems = async () => NI('getPendingItems');
-export const savePendingList = async () => NI('savePendingList');
-export const createNotification = async () => NI('createNotification');
-export const getNotifications = async () => NI('getNotifications');
-export const markNotificationRead = async () => NI('markNotificationRead');
-export const markAllNotificationsRead = async () => NI('markAllNotificationsRead');
 export const saveActivitySession = async () => NI('saveActivitySession');
 export const updateActivityHeartbeat = async () => NI('updateActivityHeartbeat');
 export const recordActivityPause = async () => NI('recordActivityPause');
