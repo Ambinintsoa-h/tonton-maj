@@ -67,6 +67,29 @@ fois que voulu sur staging. Il :
 Modules partagés (racine, réutilisés par `proxy.js` en Phase 2) :
 `db.js` (pool mysql2 utf8mb4) · `crypto-util.js` (AES-256-GCM).
 
+## Étape 3b — 2FA : fichiers → table `two_factor` (lot 7b-2)
+
+La 2FA vivait dans `data/2fa/{username}.json` **sur le serveur** (jamais dans le
+dépôt). En mode `mysql`, `proxy.js` lit/écrit la table `two_factor` à la place,
+avec les **secrets TOTP chiffrés au repos** (`APP_ENCRYPTION_KEY`).
+
+### À exécuter SUR n0c, dans l'ordre, AVANT la bascule
+```bash
+# 1. élargir les colonnes de secrets (chiffré ≈ 86 car. > VARCHAR(64))
+#    → phpMyAdmin, onglet SQL : contenu de migration/alter-2fa-secrets.sql
+node migration/import-2fa.js            # 2. DRY-RUN : liste ce qui serait importé
+node migration/import-2fa.js --apply    # 3. écrit réellement dans two_factor
+```
+
+⚠️ **Étape critique de la bascule.** Sans cet import, un membre ayant activé la
+2FA n'a aucun secret en base : au mieux il est verrouillé, au pire il se connecte
+**sans second facteur** (une ligne absente se lit comme « 2FA désactivée », exactement
+comme un fichier absent aujourd'hui). Le DRY-RUN signale les comptes **orphelins**
+(fichier 2FA sans fiche `users`) — à traiter avant de basculer.
+
+Clé de la table : l'`uid` de la fiche `users` ; `env:<username>` pour le
+super_admin break-glass du `.env`, qui n'a pas de fiche `users`.
+
 ## Étapes suivantes
 3. Couche REST du proxy (endpoints + autorisation par rôle serveur-side).
 4. Réécriture de la façade `src/services/firebase.js` (mêmes signatures).
