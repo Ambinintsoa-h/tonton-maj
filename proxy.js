@@ -499,6 +499,58 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   setTimeout(() => res.status(401).json({ success: false, error: 'Identifiants incorrects' }), 500);
 });
 
+// ─── Login MySQL (bcrypt) — utilisé UNIQUEMENT en mode DATA_BACKEND=mysql ─────
+// Étape 1 : username|email + password → vérif bcrypt sur la table users. La 2FA
+// (fichiers, backend-agnostique) et son étape 2 restent gérées par /api/auth/login
+// ci-dessus — d'où le tempToken 'tfa_pending' au même format. Inerte tant qu'aucun
+// client MySQL n'appelle cette route (le pool DB reste paresseux ; bcryptjs en
+// require paresseux → le proxy démarre même sans la dépendance en mode firestore).
+app.post('/api/auth/mysql-login', authRateLimiter, async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ success: false, error: 'username et password requis' });
+  const clientIp = req.ip || 'local';
+  if (isLoginLocked(clientIp)) {
+    return res.status(429).json({ success: false, error: 'Trop de tentatives — accès verrouillé 15 minutes' });
+  }
+  try {
+    const bcrypt = require('bcryptjs');
+    const { getPool } = require('./db');
+    const id = String(username).trim();
+    const isEmail = id.includes('@');
+    const [rows] = await getPool().query(
+      `SELECT uid, username, email, role, status, password_hash FROM users WHERE ${isEmail ? 'email' : 'username'}=? LIMIT 1`,
+      [isEmail ? id.toLowerCase() : id]);
+    const user = rows[0];
+    const ok = !!(user && user.status === 'active' && user.password_hash
+      && await bcrypt.compare(password, user.password_hash));
+    if (!ok) {
+      recordLoginFailure(clientIp);
+      return setTimeout(() => res.status(401).json({ success: false, error: 'Identifiants incorrects' }), 500);
+    }
+    clearLoginFailure(clientIp);
+    const role = VALID_ROLES.has(user.role) ? user.role : 'cq_ia';
+    const tfa = read2fa(user.username);
+    if (tfa.enabled) {
+      if (tfa.method === 'email') {
+        const profile = readProfile(user.username);
+        const email = profile.email || tfa.email || user.email;
+        if (!email) return res.status(400).json({ error: 'Aucune adresse email configurée pour la 2FA' });
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        write2fa(user.username, { ...tfa, emailCode: hashOtp(code), emailCodeExpiry: Date.now() + 10 * 60 * 1000 });
+        try { await sendEmailOtp(email, code); } catch (e) { return res.status(500).json({ error: `Échec envoi email : ${e.message}` }); }
+      }
+      // tempToken au format attendu par l'étape 2 de /api/auth/login (backend-agnostique).
+      const tempToken = jwt.sign({ uid: user.uid, username: user.username, role, type: 'tfa_pending' }, JWT_SECRET, { expiresIn: '5m' });
+      return res.json({ success: true, requires2fa: true, method: tfa.method, tempToken });
+    }
+    const token = jwt.sign({ uid: user.uid, username: user.username, role, jti: require('crypto').randomUUID() }, JWT_SECRET, { expiresIn: '8h' });
+    return res.json({ success: true, token, role, username: user.username, uid: user.uid });
+  } catch (e) {
+    console.error('[mysql-login]', e.message);
+    return res.status(500).json({ success: false, error: 'Erreur serveur' });
+  }
+});
+
 // ─── Logout — révocation immédiate du token (M2) ──────────────────────────────
 app.post('/api/auth/logout', requireAuth, (req, res) => {
   if (req.user.jti) {

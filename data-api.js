@@ -1107,5 +1107,32 @@ module.exports = ({ requireAuth, requireRole }) => {
     res.json(rows.map(articleTimeToObj));
   }));
 
+  // ── users (lecture — getUsers) ────────────────────────────────────────────────
+  // Règle Firestore : lecture = tout membre authentifié (bootstrap App.js +
+  // résolution des noms d'auteurs). ⚠ password_hash/password_algo JAMAIS renvoyés
+  // (SELECT explicite). La gestion des comptes (create/update/delete) + reset + 2FA
+  // suivront en lot 7b (restent sur Firebase/fichiers pour l'instant).
+  const userToObj = (r) => ({
+    id: r.uid,
+    ...parseJson(r.data, {}),
+    uid: r.uid,
+    username: r.username,
+    email: r.email,
+    firstName: r.first_name,
+    lastName: r.last_name,
+    role: r.role,
+    status: r.status,
+    ...(r.avatar_url != null ? { avatarUrl: r.avatar_url } : {}),
+    ...(r.note != null ? { note: r.note } : {}),
+    ...(r.created_at != null ? { createdAt: r.created_at } : {}),
+    ...(r.updated_at != null ? { updatedAt: r.updated_at } : {}),
+  });
+  router.get('/users', requireAuth, wrap(async (_req, res) => {
+    const [rows] = await q(
+      `SELECT uid, username, email, first_name, last_name, role, status, avatar_url, note, created_at, updated_at, data
+       FROM users ORDER BY created_at DESC`);
+    res.json(rows.map(userToObj));
+  }));
+
   return router;
 };
