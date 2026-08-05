@@ -2,9 +2,28 @@
 // → sanitizeFullArticle rejoue la politique de enforceExternalLinkPolicy à
 //   l'échelle d'un article complet réécrit d'un bloc (mode Audit QAT + Refonte).
 /* eslint-env jest */
-import { sanitizeFullArticle } from './diff';
+import { sanitizeFullArticle, listExternalLinks } from './diff';
 
 const ARTICLE_URL = 'https://isolation-phonique.com/mon-article';
+
+describe('listExternalLinks — liste injectée dans le prompt de refonte', () => {
+  test('ne retient que les liens externes, avec leur ancre', () => {
+    const html = `<p>Voir <a href="https://ademe.fr/guide" rel="noopener">le guide ADEME</a>,
+      <a href="https://isolation-phonique.com/prix">nos prix</a> et <a href="/faq">la FAQ</a>.</p>`;
+    expect(listExternalLinks(html, ARTICLE_URL)).toEqual([
+      { href: 'https://ademe.fr/guide', text: 'le guide ADEME' },
+    ]);
+  });
+
+  test('dédoublonne par href', () => {
+    const html = '<p><a href="https://ademe.fr/g">A</a> puis <a href="https://ademe.fr/g">B</a></p>';
+    expect(listExternalLinks(html, ARTICLE_URL)).toHaveLength(1);
+  });
+
+  test('aucun lien externe → tableau vide', () => {
+    expect(listExternalLinks('<p>Texte nu</p>', ARTICLE_URL)).toEqual([]);
+  });
+});
 
 describe('sanitizeFullArticle — liens externes', () => {
   test('lien externe AJOUTÉ par l\'IA → désenveloppé, texte conservé, signalé dans stripped', () => {

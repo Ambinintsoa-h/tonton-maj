@@ -11,7 +11,7 @@
 // SKILLS IA : la méthode et les gabarits vivent dans le skill, jamais ici.
 
 import { searchWeb } from './search';
-import { sanitizeFullArticle } from '../utils/diff';
+import { sanitizeFullArticle, listExternalLinks } from '../utils/diff';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
@@ -380,8 +380,21 @@ ${buildSkillMethodBlock(brainSkills)}${buildSkillsBlock(
     'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — OBLIGATOIRES'
   )}${buildKnowledgeBlock(knowledge)}${instruction?.trim() ? `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instruction.trim().slice(0, 1500)}\nElle prime sur les règles générales, sauf le verrou liens externes.` : ''}`;
 
+  // Liens externes de l'article d'origine : listés explicitement dans le prompt
+  // pour ÉVITER le rejet, plutôt que de le corriger par un nouvel essai (chaque
+  // essai coûte plusieurs minutes sur un article de 2 500 mots).
+  const externalLinks = listExternalLinks(contentHtml || content, articleUrl);
+  const externalBlock = externalLinks.length
+    ? `## ═══ LIENS EXTERNES À REPRODUIRE À L'IDENTIQUE (${externalLinks.length}) ═══
+Chacun de ces liens DOIT figurer dans article_html avec le même href et le même
+texte d'ancre. Il en manque un seul et toute la génération est rejetée.
+${externalLinks.map((l, i) => `${i + 1}. <a href="${l.href}">${l.text}</a>`).join('\n')}`
+    : '## ═══ LIENS EXTERNES ═══\nL\'article d\'origine n\'en contient aucun : n\'en ajoute aucun.';
+
   const user = `## ARTICLE D'ORIGINE (HTML — à réécrire)
 ${content}
+
+${externalBlock}
 
 ## CONCLUSIONS DE L'AUDIT (elles pilotent la réécriture)
 ${summarizeAuditForRewrite(audit)}
@@ -397,11 +410,15 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
   let article = null;
   let raw = '';
   let sanitized = null;
+  // Message utilisateur de l'essai courant : enrichi à chaque rejet du détail de
+  // ce qui a manqué. Relancer un prompt IDENTIQUE reproduirait la même erreur.
+  let currentUser = user;
+
   for (let attempt = 1; attempt <= 3 && !sanitized; attempt++) {
     try {
       const { text, usage } = await callClaudeWithProgress(
         null,
-        { system, max_tokens: 32000, model: selectModel('update_generation'), messages: [{ role: 'user', content: user }] },
+        { system, max_tokens: 32000, model: selectModel('update_generation'), messages: [{ role: 'user', content: currentUser }] },
         onStep,
         onReplace,
         attempt === 1 ? 'Rédaction en cours' : `Rédaction — nouvel essai (${attempt}/3)`
@@ -411,6 +428,13 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
       article = parseJsonLoose(raw);
       if (!article?.article_html) {
         onStep(`⚠️ Réponse illisible ou article vide — nouvel essai (${attempt}/3)...`);
+        currentUser = `${user}
+
+## ═══ REPRISE — L'ESSAI PRÉCÉDENT A ÉCHOUÉ ═══
+Ta réponse précédente n'était pas un JSON exploitable, ou son champ article_html
+était vide. Réponds UNIQUEMENT par l'objet JSON du schéma, sans texte ni
+backticks avant ou après, et vérifie que article_html contient bien l'article
+complet.`;
         article = null;
         continue;
       }
@@ -427,6 +451,24 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
         if (attempt === 3) {
           throw new Error(`Verrou liens externes : ${check.missing.length} lien(s) externe(s) de l'article d'origine absent(s) de la réécriture après 3 essais (${check.missing.join(', ')}).`);
         }
+        // Reprise INSTRUITE : on nomme les liens perdus et leur ancre d'origine.
+        // Sans ce retour, l'essai suivant repartait du même prompt et échouait
+        // de la même façon — trois fois 8 minutes pour rien.
+        const lost = check.missing.map((href) => {
+          const src = externalLinks.find(l => l.href === href);
+          return `- <a href="${href}">${src?.text || 'ancre d\'origine'}</a>`;
+        }).join('\n');
+        currentUser = `${user}
+
+## ═══ REPRISE — VERROU LIENS EXTERNES DÉCLENCHÉ ═══
+Ta réécriture précédente a été REJETÉE : elle avait perdu ${check.missing.length} lien(s)
+externe(s) de l'article d'origine. Reprends la rédaction et place OBLIGATOIREMENT
+ces liens, avec exactement le même href et le même texte d'ancre, dans une phrase
+naturelle du corps de l'article :
+${lost}
+
+Ne les mets ni dans un titre, ni dans le TL;DR, ni dans un tableau, ni dans la FAQ.
+N'ajoute aucun AUTRE lien externe.`;
         article = null;
         continue;
       }

@@ -1057,6 +1057,18 @@ export const balanceFragment = (fragment) => {
 };
 
 /**
+ * Liens EXTERNES d'un HTML, sous forme listable : [{ href, text }].
+ * Sert à dire au modèle, AVANT la génération, quels liens il doit reproduire à
+ * l'identique — mieux vaut prévenir le rejet que le guérir par un nouvel essai
+ * (une génération d'article entier coûte plusieurs minutes).
+ */
+export const listExternalLinks = (html = '', articleUrl = '') => {
+  const articleHost = articleUrl ? hostOf(articleUrl) : null;
+  return [...externalLinksOf(html, articleHost).entries()]
+    .map(([href, info]) => ({ href, text: info.text || '' }));
+};
+
+/**
  * Verrou liens externes + sécurité structure pour le mode ARTICLE ENTIER.
  *
  * Le pipeline historique applique `enforceExternalLinkPolicy` et `balanceFragment`
