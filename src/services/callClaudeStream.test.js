@@ -34,6 +34,33 @@ const mockFetch = (impl) => { global.fetch = jest.fn(impl); };
 
 afterEach(() => { delete global.fetch; });
 
+describe('callClaudeStream — authentification', () => {
+  test('envoie le header Authorization depuis sessionStorage', async () => {
+    sessionStorage.setItem('tonton_auth_token', 'jeton-de-test');
+    mockFetch(async () => ({ ok: true, body: sse([{ type: 'done', text: 'ok', usage: {} }]) }));
+    await callClaudeStream({ messages: [] }, () => {});
+    const [, init] = global.fetch.mock.calls[0];
+    expect(init.headers.Authorization).toBe('Bearer jeton-de-test');
+    sessionStorage.removeItem('tonton_auth_token');
+  });
+
+  test('sans token, aucun header Authorization (et non « Bearer null »)', async () => {
+    sessionStorage.removeItem('tonton_auth_token');
+    mockFetch(async () => ({ ok: true, body: sse([{ type: 'done', text: 'ok', usage: {} }]) }));
+    await callClaudeStream({ messages: [] }, () => {});
+    const [, init] = global.fetch.mock.calls[0];
+    expect(init.headers.Authorization).toBeUndefined();
+  });
+
+  test('401 → STREAM_UNAVAILABLE avec le statut, pour que le repli axios gère la redirection', async () => {
+    mockFetch(async () => ({ ok: false, status: 401, body: null }));
+    await expect(callClaudeStream({ messages: [] })).rejects.toMatchObject({
+      message: 'STREAM_UNAVAILABLE',
+      status: 401,
+    });
+  });
+});
+
 describe('callClaudeStream — cas nominal', () => {
   test('assemble les deltas, retourne le texte de « done » et notifie onDelta', async () => {
     mockFetch(async () => ({
@@ -86,6 +113,43 @@ describe('callClaudeStream — repli sur le transport classique', () => {
   test('flux vide (bufferisé par le proxy, aucun événement) → STREAM_UNAVAILABLE', async () => {
     mockFetch(async () => ({ ok: true, body: sse([]) }));
     await expect(callClaudeStream({ messages: [] })).rejects.toThrow('STREAM_UNAVAILABLE');
+  });
+
+  test('flux coupé AVANT « done » → réponse tronquée, donc repli et non un JSON amputé', async () => {
+    mockFetch(async () => ({
+      ok: true,
+      body: sse([
+        { type: 'delta', chars: 12, text: '{"scores":{' },
+        { type: 'delta', chars: 24, text: '"ia":7,"geo":' },
+      ]),
+    }));
+    await expect(callClaudeStream({ messages: [] }, () => {})).rejects.toMatchObject({
+      message: 'STREAM_UNAVAILABLE',
+      truncated: true,
+    });
+  });
+
+  test('lecture qui échoue en cours de route → STREAM_UNAVAILABLE (pas de texte partiel rendu)', async () => {
+    mockFetch(async () => ({
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"type":"delta","chars":3,"text":"abc"}\n\n'));
+          controller.error(new Error('connexion réinitialisée'));
+        },
+      }),
+    }));
+    await expect(callClaudeStream({ messages: [] }, () => {})).rejects.toThrow('STREAM_UNAVAILABLE');
+  });
+
+  test('annulation par l\'appelant (signal) → STREAM_UNAVAILABLE', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    mockFetch(async (_url, init) => {
+      if (init?.signal?.aborted) throw new Error('The operation was aborted');
+      return { ok: true, body: sse([{ type: 'done', text: 'x', usage: {} }]) };
+    });
+    await expect(callClaudeStream({ messages: [] }, () => {}, ac.signal)).rejects.toThrow('STREAM_UNAVAILABLE');
   });
 });
 

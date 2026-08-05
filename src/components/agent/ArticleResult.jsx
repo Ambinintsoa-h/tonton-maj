@@ -1543,6 +1543,14 @@ export default function ArticleResult() {
         sources:         agent.sources     || r.sources     || [],
         analysis:        agent.analysis    || r.analysis    || '',
         audit:           agent.audit       || r.audit       || '',   // persiste le rapport d'audit (onglet AUDIT)
+        // Mode QAT : audit structuré + métadonnées de l'article réécrit. Sans ces
+        // champs, un article produit en QAT perdait son audit dès le « Terminer »
+        // ou la publication : l'onglet AUDIT était vide à la réouverture depuis
+        // l'Historique, et le bandeau « article réécrit » disparaissait.
+        // `qatArticle.html` est retiré : c'est déjà `updatedContent`.
+        majMode:         agent.majMode || r.majMode || 'classique',
+        ...(auditJson  ? { auditJson } : {}),
+        ...(qatArticle ? { qatArticle: (({ html, ...rest }) => rest)(qatArticle) } : {}),
         url:             cqItem.url        || '',
         keyword:         cqItem.keyword    || '',
         priority:        cqItem.priority   || 'normale',
@@ -2894,6 +2902,14 @@ export default function ArticleResult() {
           sources:         agent.sources || [],
           analysis:        agent.analysis || r.analysis || '',
           audit:           agent.audit    || r.audit    || '',
+          // Mode QAT : audit structuré + métadonnées de l'article réécrit. Sans ces
+          // champs, un article produit en QAT perdait son audit dès le « Terminer »
+          // ou la publication : l'onglet AUDIT était vide à la réouverture depuis
+          // l'Historique, et le bandeau « article réécrit » disparaissait.
+          // `qatArticle.html` est retiré : c'est déjà `updatedContent`.
+          majMode:         agent.majMode || r.majMode || 'classique',
+          ...(auditJson  ? { auditJson } : {}),
+          ...(qatArticle ? { qatArticle: (({ html, ...rest }) => rest)(qatArticle) } : {}),
           url:             articleUrl || cqItem?.url || '',
           keyword:         cqItem?.keyword || '',
           priority:        cqItem?.priority || 'normale',

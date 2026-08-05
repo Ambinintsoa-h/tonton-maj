@@ -34,7 +34,7 @@ const MAX_PREV_VISIBLE = 3;
  * produit : on l'affiche avec un curseur clignotant, comme une frappe au clavier.
  * Le compteur est celui des caractères RÉELS, pas une estimation.
  */
-const LiveTyping = ({ tail, chars }) => (
+const LiveTyping = ({ tail, chars, label }) => (
   <motion.div
     initial={{ opacity: 0, height: 0 }}
     animate={{ opacity: 1, height: 'auto' }}
@@ -45,22 +45,23 @@ const LiveTyping = ({ tail, chars }) => (
       <div className="flex items-center gap-2">
         <PenLine size={12} className="text-emerald-400 shrink-0" />
         <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wide">
-          Rédaction en cours
+          {label}
         </span>
         <span className="text-[10px] text-gray-500 ml-auto tabular-nums">
           {chars.toLocaleString('fr-FR')} caractères
         </span>
       </div>
-      {/* La queue du texte défile : la dernière ligne reste toujours visible */}
-      <p className="text-[11px] leading-relaxed text-gray-300 font-mono break-words max-h-24 overflow-hidden flex flex-col justify-end">
-        <span>
-          {tail}
-          <motion.span
-            animate={{ opacity: [1, 0, 1] }}
-            transition={{ duration: 1, repeat: Infinity }}
-            className="inline-block w-1.5 h-3 bg-emerald-400 align-middle ml-0.5"
-          />
-        </span>
+      {/* Seule la QUEUE du texte est conservée côté Redux (400 caractères), donc
+          le bloc ne peut pas déborder : pas de calage flex fragile à maintenir.
+          `whitespace-pre-wrap` restitue les retours à la ligne du modèle,
+          `break-words` empêche un JSON d'une seule ligne de pousser le bloc. */}
+      <p className="text-[11px] leading-relaxed text-gray-300 font-mono break-words whitespace-pre-wrap">
+        {tail}
+        <motion.span
+          animate={{ opacity: [1, 0, 1] }}
+          transition={{ duration: 1, repeat: Infinity }}
+          className="inline-block w-1.5 h-3 bg-emerald-400 align-middle ml-0.5"
+        />
       </p>
     </div>
   </motion.div>
@@ -208,10 +209,17 @@ export default function AgentThinking({ steps, progress, status, liveTail = '', 
         })()}
       </AnimatePresence>
 
-      {/* Rédaction en direct (streaming) — sous le step actif */}
+      {/* Production en direct (streaming) — sous le step actif.
+          L'étiquette suit la phase : pendant l'audit le modèle écrit du JSON, pas
+          de la prose — annoncer « Rédaction » y serait trompeur. */}
       <AnimatePresence>
         {status === 'running' && liveTail && (
-          <LiveTyping key="live" tail={liveTail} chars={liveChars} />
+          <LiveTyping
+            key="live"
+            tail={liveTail}
+            chars={liveChars}
+            label={/audit/i.test(currentStep?.text || '') ? 'Audit en cours' : 'Rédaction en cours'}
+          />
         )}
       </AnimatePresence>
     </motion.div>

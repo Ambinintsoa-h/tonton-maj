@@ -230,7 +230,12 @@ export const saveArticle = async (article) => {
   // automatique de fin d'analyse avec). On retire les champs les plus lourds du
   // DOCUMENT UNIQUEMENT (Redux/localStorage conservent tout), un par un.
   const MAX_DOC_CHARS = 800_000;
-  for (const heavy of ['updates', 'audit', 'analysis', 'originalContent', 'updatedContent']) {
+  // Ordre volontaire : les champs de DIAGNOSTIC (audit, qatArticle) partent
+  // avant le CONTENU de l'article. Sans qatArticle/auditJson dans cette liste,
+  // un article produit en mode QAT faisait sauter originalContent et
+  // updatedContent tout en conservant ses métadonnées d'audit — l'inverse de
+  // ce qu'on veut préserver.
+  for (const heavy of ['updates', 'audit', 'auditJson', 'qatArticle', 'analysis', 'originalContent', 'updatedContent']) {
     let size;
     try { size = JSON.stringify(firestoreData).length; } catch { break; }
     if (size <= MAX_DOC_CHARS) break;

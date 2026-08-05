@@ -287,9 +287,10 @@ export default function Articles() {
           onStep:     (s) => dispatch(addStep(s)),
           onReplace:  (s) => dispatch(replaceLastStep(s)),
           onProgress: (p) => dispatch(setProgress(p)),
-          // Rédaction en direct : seule la fin du texte est conservée (600 car.),
-          // c'est tout ce que l'affichage montre.
-          onDelta:    (text, chars) => dispatch(setLiveText({ tail: text.slice(-600), chars })),
+          // Production en direct : seule la fin du texte est conservée (400 car.),
+          // c'est tout ce que l'affichage montre — inutile de faire transiter
+          // 100 000 caractères par Redux à chaque fragment.
+          onDelta:    (text, chars) => dispatch(setLiveText({ tail: text.slice(-400), chars })),
         });
         dispatch(clearLiveText());
         dispatch(setWpData(result.wpData || null));
@@ -386,7 +387,13 @@ export default function Articles() {
         majMode,                        // classique | qat — conditionne l'affichage et la passe 2
         // Mode QAT : audit structuré + métadonnées de l'article réécrit (titre SEO,
         // méta-description, chapô) — repris par l'éditeur et par la publication WP.
-        ...(qatMode ? { auditJson: result.audit || null, qatArticle: result.article || null } : {}),
+        // `qatArticle.html` est VOLONTAIREMENT retiré : c'est exactement
+        // `updatedContent`, déjà persisté juste au-dessus. Le garder doublait le
+        // poids de l'article dans un document Firestore limité à 1 Mo.
+        ...(qatMode ? {
+          auditJson: result.audit || null,
+          qatArticle: result.article ? (({ html, ...rest }) => rest)(result.article) : null,
+        } : {}),
         createdAt: new Date().toISOString(),
         tokenUsage: result.tokenUsage || null,
         assigneeId: authUid || authUsername || null,
