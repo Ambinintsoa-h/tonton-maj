@@ -543,6 +543,14 @@ N'ajoute aucun AUTRE lien externe.`;
     }
   }
 
+  // Les 3 essais peuvent tous repartir en boucle SANS lever d'exception (JSON
+  // illisible ou article_html vide à chaque fois) : sans cette garde, la sortie
+  // de boucle laissait `sanitized` à null et l'accès à `sanitized.html` levait
+  // une TypeError opaque, illisible pour le rédacteur.
+  if (!sanitized) {
+    throw new Error("L'IA n'a pas produit d'article exploitable après 3 essais (réponse non conforme au format JSON attendu). Relancez la MAJ, ou vérifiez le skill actif dans le menu SKILLS IA.");
+  }
+
   onProgress(90);
   const finalHtml = sanitized.html;
   const words = stripHtml(finalHtml).trim().split(/\s+/).filter(Boolean).length;
