@@ -140,6 +140,91 @@ export const callClaudeWithProgress = async (apiKey, params, onStep, onReplace, 
   }
 };
 
+/**
+ * Appel Claude en STREAMING (SSE) — `POST /api/claude-stream`.
+ *
+ * Utilisé pour les générations longues (refonte d'un article entier : 8-9 min),
+ * afin que le rédacteur voie le texte se construire au lieu d'attendre devant un
+ * compteur factice. Deux bénéfices :
+ *   1. retour réel et honnête (caractères réellement produits, texte visible) ;
+ *   2. le flux n'est jamais muet → il ne peut pas être coupé par le proxy n0c,
+ *      contrairement à l'ancien POST bloquant (cf. transport job + polling).
+ *
+ * `fetch` et non EventSource : la requête doit être un POST avec un gros corps.
+ *
+ * @param {object}   params      { system, messages, max_tokens, model }
+ * @param {function} onDelta     (accumulatedText, chars) → affichage live
+ * @param {AbortSignal} signal   optionnel
+ * @returns {Promise<{text, usage}>}
+ * @throws  {Error} `STREAM_UNAVAILABLE` si la route est absente ou si aucun octet
+ *          n'arrive : au caller de basculer sur le transport job + polling.
+ */
+export const callClaudeStream = async (params, onDelta, signal) => {
+  const { system, messages, max_tokens = 32000, model } = params || {};
+  let resp;
+  try {
+    resp = await fetch('/api/claude-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ system, messages, max_tokens, model }),
+      signal,
+    });
+  } catch (e) {
+    const err = new Error('STREAM_UNAVAILABLE');
+    err.cause = e;
+    throw err;
+  }
+  // 404 (vieux serveur), 502/503/504 (passerelle), pas de corps lisible → repli
+  if (!resp.ok || !resp.body) {
+    throw new Error('STREAM_UNAVAILABLE');
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  let usage = null;
+  let appError = null;
+  let sawAnyEvent = false;
+
+  const handleEvent = (evt) => {
+    sawAnyEvent = true;
+    if (evt.type === 'delta') {
+      if (evt.text) text += evt.text;
+      if (typeof onDelta === 'function') onDelta(text, evt.chars || text.length);
+    } else if (evt.type === 'done') {
+      // `text` complet renvoyé par le serveur : source de vérité (les deltas
+      // peuvent avoir été tronqués si le throttle a sauté un fragment).
+      if (typeof evt.text === 'string' && evt.text) text = evt.text;
+      usage = evt.usage || null;
+    } else if (evt.type === 'error') {
+      appError = evt.error || 'Erreur de streaming';
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      try { handleEvent(JSON.parse(line.slice(6))); } catch { /* ligne partielle */ }
+    }
+  }
+
+  // Aucun événement du tout = flux bufferisé ou coupé en amont → repli
+  if (!sawAnyEvent) throw new Error('STREAM_UNAVAILABLE');
+  if (appError) {
+    const err = new Error(appError);
+    err.isAppError = true;   // erreur applicative : ne PAS rejouer en streaming
+    throw err;
+  }
+  return { text, usage: usage || { model, input_tokens: 0, output_tokens: Math.round(text.length / 4) } };
+};
+
 // ── Pré-filtrage des sources par Haiku ────────────────────────────────────────
 // Si > 5 sources, demande à Haiku de scorer chacune (0-10) pour n'envoyer
 // que les 7 plus pertinentes à Sonnet → contexte plus court, génération plus rapide.

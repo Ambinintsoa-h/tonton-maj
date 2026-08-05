@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2, Gauge } from 'lucide-react';
-import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setMajMode as setAgentMajMode, setAuditJson, setQatArticle } from '../store/slices/agentSlice';
+import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setMajMode as setAgentMajMode, setAuditJson, setQatArticle, setLiveText, clearLiveText } from '../store/slices/agentSlice';
 import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import {
   MAJ_MODES, DEFAULT_MODE, modeMeta, isQatMode,
@@ -287,7 +287,11 @@ export default function Articles() {
           onStep:     (s) => dispatch(addStep(s)),
           onReplace:  (s) => dispatch(replaceLastStep(s)),
           onProgress: (p) => dispatch(setProgress(p)),
+          // Rédaction en direct : seule la fin du texte est conservée (600 car.),
+          // c'est tout ce que l'affichage montre.
+          onDelta:    (text, chars) => dispatch(setLiveText({ tail: text.slice(-600), chars })),
         });
+        dispatch(clearLiveText());
         dispatch(setWpData(result.wpData || null));
         updatedHtml = makeTablesResponsive(normalizeFaqToAccordion(result.article.html));
         dispatch(setAuditJson(result.audit || null));
@@ -812,6 +816,8 @@ export default function Articles() {
               currentStep={agent.currentStep}
               progress={agent.progress}
               status={agent.status}
+              liveTail={agent.liveTail}
+              liveChars={agent.liveChars}
             />
           </motion.div>
         )}

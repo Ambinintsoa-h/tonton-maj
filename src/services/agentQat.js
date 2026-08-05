@@ -18,7 +18,7 @@ import {
   ARTICLE_TYPES, SEO_PLUGINS, cleanLinkRows,
 } from '../constants/majMode';
 import {
-  callWpTool, selectModel, getDateContext, calcCost, callClaudeWithProgress,
+  callWpTool, selectModel, getDateContext, calcCost, callClaudeWithProgress, callClaudeStream,
   callClaude, dedupeByUrl, makeTokenTracker, buildSkillsBlock, analyzeLinks,
   getBrainSkills, buildKnowledgeBlock, stripHtml, scrapeSource,
 } from './agent';
@@ -80,6 +80,50 @@ const buildBriefBlock = ({
 
 ### Liens INTERNES à placer (les seuls liens que tu ajoutes)
 ${linkBlock}`;
+};
+
+/** « 4 min 20 s » — durée écoulée, lisible par le rédacteur. */
+const fmtElapsed = (ms) => {
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`;
+};
+
+/**
+ * Appel long avec RETOUR EN DIRECT.
+ *
+ * Tente le streaming SSE : le rédacteur voit le texte se construire et un
+ * compteur de caractères RÉELS. Si la route est absente ou le flux bufferisé par
+ * le proxy (`STREAM_UNAVAILABLE`), bascule sur le transport job + polling — dont
+ * le compteur de tokens est simulé, d'où l'étiquette « estimation ».
+ *
+ * Une génération de refonte dure 8-9 minutes : sans ce retour, l'écran reste
+ * muet et le rédacteur croit l'application bloquée.
+ */
+const callWithLiveText = async ({ params, label, onStep, onReplace, onDelta, onProgress, trackCall, progressFrom = 0, progressTo = 0 }) => {
+  const t0 = Date.now();
+  const maxChars = (params.max_tokens || 32000) * 3.5;   // ~3,5 caractères par token
+  try {
+    onStep(`${label} — rédaction en direct...`);
+    const res = await callClaudeStream(params, (text, chars) => {
+      if (typeof onDelta === 'function') onDelta(text, chars);
+      onReplace(`${label} — ${chars.toLocaleString('fr-FR')} caractères écrits · ${fmtElapsed(Date.now() - t0)}`);
+      if (progressTo > progressFrom) {
+        const ratio = Math.min(1, chars / maxChars);
+        onProgress(Math.round(progressFrom + (progressTo - progressFrom) * ratio));
+      }
+    });
+    trackCall(res.usage);
+    onReplace(`${label} — terminé en ${fmtElapsed(Date.now() - t0)}`);
+    return res;
+  } catch (e) {
+    if (e.message !== 'STREAM_UNAVAILABLE') throw e;
+    console.warn('[qat] streaming indisponible → repli job + polling');
+    onStep(`${label} — flux direct indisponible, bascule sur le transport classique...`);
+    const res = await callClaudeWithProgress(null, params, onStep, onReplace, `${label} (estimation)`);
+    trackCall(res.usage);
+    onReplace(`${label} — terminé en ${fmtElapsed(Date.now() - t0)}`);
+    return res;
+  }
 };
 
 // ── Étape A — Audit QAT (sortie JSON) ─────────────────────────────────────────
@@ -177,6 +221,7 @@ export const runQatAudit = async ({
   onStep = () => {},
   onReplace = () => {},
   onProgress = () => {},
+  onDelta = () => {},        // (texte, caractères) → affichage live de la rédaction
 }) => {
   const { acc: tokenAcc, track: trackCall } = makeTokenTracker();
   const brainSkills = getBrainSkills(skills);
@@ -243,14 +288,12 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
   let rawAudit = '';
   for (let attempt = 1; attempt <= 3 && !audit; attempt++) {
     try {
-      const { text, usage } = await callClaudeWithProgress(
-        null,
-        { system, max_tokens: 12000, model: selectModel('update_generation'), messages: [{ role: 'user', content: user }] },
-        onStep,
-        onReplace,
-        attempt === 1 ? 'Audit QAT en cours' : `Audit QAT — nouvel essai (${attempt}/3)`
-      );
-      trackCall(usage);
+      const { text } = await callWithLiveText({
+        params: { system, max_tokens: 12000, model: selectModel('update_generation'), messages: [{ role: 'user', content: user }] },
+        label: attempt === 1 ? 'Audit QAT' : `Audit QAT — essai ${attempt}/3`,
+        onStep, onReplace, onProgress, onDelta, trackCall,
+        progressFrom: 25, progressTo: 40,
+      });
       rawAudit = (text || '').trim();
       audit = parseJsonLoose(rawAudit);
       if (!audit) onStep(`⚠️ Audit — JSON illisible, nouvel essai (${attempt}/3)...`);
@@ -335,6 +378,7 @@ export const runQatRewrite = async ({
   onStep = () => {},
   onReplace = () => {},
   onProgress = () => {},
+  onDelta = () => {},        // (texte, caractères) → affichage live de la rédaction
 }) => {
   const { acc: tokenAcc, track: trackCall } = makeTokenTracker();
   const brainSkills = getBrainSkills(skills);
@@ -437,14 +481,12 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
 
   for (let attempt = 1; attempt <= 3 && !sanitized; attempt++) {
     try {
-      const { text, usage } = await callClaudeWithProgress(
-        null,
-        { system, max_tokens: 32000, model: selectModel('update_generation'), messages: [{ role: 'user', content: currentUser }] },
-        onStep,
-        onReplace,
-        attempt === 1 ? 'Rédaction en cours' : `Rédaction — nouvel essai (${attempt}/3)`
-      );
-      trackCall(usage);
+      const { text } = await callWithLiveText({
+        params: { system, max_tokens: 32000, model: selectModel('update_generation'), messages: [{ role: 'user', content: currentUser }] },
+        label: attempt === 1 ? 'Rédaction de l\'article' : `Rédaction — essai ${attempt}/3`,
+        onStep, onReplace, onProgress, onDelta, trackCall,
+        progressFrom: 55, progressTo: 88,
+      });
       raw = (text || '').trim();
       article = parseJsonLoose(raw);
       if (!article?.article_html) {

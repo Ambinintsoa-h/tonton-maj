@@ -111,3 +111,25 @@ le temps que l'équipe valide le nouveau sur de vrais articles.
 - Pas d'`updates[]` en mode QAT : la validation modif par modif n'existe pas, la
   comparaison se fait entre les onglets « Avant » et « Après — article réécrit ».
 - **Non couvert** : le lancement depuis `/maj-en-attente` reste en mode classique.
+
+## Retour en direct pendant les appels longs (mode QAT)
+
+Une refonte dure 8-9 min : sans retour visible, le rédacteur croit l'application
+bloquée. Le mode QAT passe donc par `callClaudeStream` (agent.js) →
+**`POST /api/claude-stream`** (SSE, proxy.js) au lieu du transport job + polling.
+
+- Le serveur envoie `{type:'delta', chars, text}` tous les ~120 caractères (le
+  champ `text` a été **ajouté** : la route n'envoyait que le compteur, donc le
+  client ne pouvait rien afficher du contenu avant `done`), puis
+  `{type:'done', text, usage}`.
+- `callWithLiveText` (agentQat.js) affiche le nom de la phase, les **caractères
+  réels** et le temps écoulé, et fait avancer la barre de progression au prorata.
+- **Repli** : `STREAM_UNAVAILABLE` (route absente, 502/504, flux vide car
+  bufferisé) → bascule automatique sur `callClaudeWithProgress`, dont le compteur
+  de tokens est SIMULÉ — d'où l'étiquette « (estimation) » à l'écran.
+- `AgentThinking` affiche `LiveTyping` : queue du texte (600 derniers caractères
+  conservés dans Redux, `liveTail`/`liveChars`) avec un curseur clignotant.
+- Bénéfice annexe : un flux SSE n'est jamais muet, donc il échappe à la coupure
+  n0c à ~30 s qui avait imposé le transport job + polling.
+- ⚠️ `proxy.js` est modifié → un déploiement du serveur est nécessaire, sinon le
+  client tombera systématiquement dans le repli (compteur estimé, pas de texte).

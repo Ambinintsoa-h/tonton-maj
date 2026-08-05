@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { Brain, Search, FileCheck, Sparkles, CheckCircle2, Globe } from 'lucide-react';
+import { Brain, Search, FileCheck, Sparkles, CheckCircle2, Globe, PenLine } from 'lucide-react';
 import { detectAgent } from '../../constants/agents';
 
 const STEP_ICONS = {
@@ -26,7 +26,47 @@ const getIcon = (text) => {
 // Nombre de steps précédentes visibles avant le step actif
 const MAX_PREV_VISIBLE = 3;
 
-export default function AgentThinking({ steps, progress, status }) {
+/**
+ * Panneau de rédaction en direct — mode « Audit QAT + Refonte ».
+ *
+ * Une refonte dure 8 à 9 minutes. Sans retour visible, le rédacteur croit
+ * l'application bloquée. Le streaming SSE fournit la fin du texte réellement
+ * produit : on l'affiche avec un curseur clignotant, comme une frappe au clavier.
+ * Le compteur est celui des caractères RÉELS, pas une estimation.
+ */
+const LiveTyping = ({ tail, chars }) => (
+  <motion.div
+    initial={{ opacity: 0, height: 0 }}
+    animate={{ opacity: 1, height: 'auto' }}
+    exit={{ opacity: 0, height: 0 }}
+    className="overflow-hidden"
+  >
+    <div className="bg-gray-900 rounded-xl px-4 py-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <PenLine size={12} className="text-emerald-400 shrink-0" />
+        <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wide">
+          Rédaction en cours
+        </span>
+        <span className="text-[10px] text-gray-500 ml-auto tabular-nums">
+          {chars.toLocaleString('fr-FR')} caractères
+        </span>
+      </div>
+      {/* La queue du texte défile : la dernière ligne reste toujours visible */}
+      <p className="text-[11px] leading-relaxed text-gray-300 font-mono break-words max-h-24 overflow-hidden flex flex-col justify-end">
+        <span>
+          {tail}
+          <motion.span
+            animate={{ opacity: [1, 0, 1] }}
+            transition={{ duration: 1, repeat: Infinity }}
+            className="inline-block w-1.5 h-3 bg-emerald-400 align-middle ml-0.5"
+          />
+        </span>
+      </p>
+    </div>
+  </motion.div>
+);
+
+export default function AgentThinking({ steps, progress, status, liveTail = '', liveChars = 0 }) {
   const total = steps.length;
   const prevSteps = total > 1 ? steps.slice(0, total - 1) : [];
   const currentStep = total > 0 ? steps[total - 1] : null;
@@ -166,6 +206,13 @@ export default function AgentThinking({ steps, progress, status }) {
             </motion.div>
           );
         })()}
+      </AnimatePresence>
+
+      {/* Rédaction en direct (streaming) — sous le step actif */}
+      <AnimatePresence>
+        {status === 'running' && liveTail && (
+          <LiveTyping key="live" tail={liveTail} chars={liveChars} />
+        )}
       </AnimatePresence>
     </motion.div>
   );

@@ -2283,6 +2283,11 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
   let lastSentAt = 0;
   let usage = {};
   let sseBuffer = '';
+  // Fragment accumulé depuis le dernier envoi : transmis au client pour qu'il
+  // affiche le texte en cours de rédaction (effet « frappe au clavier »).
+  // Sans lui, le client ne recevait qu'un compteur de caractères et ne pouvait
+  // rien montrer du contenu avant l'événement « done ».
+  let pending = '';
 
   const apiReq = https.request({
     hostname: 'api.anthropic.com',
@@ -2327,10 +2332,12 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
             const delta = event.delta.text || '';
             fullText += delta;
             charCount += delta.length;
+            pending += delta;
             // Throttle : envoyer au max toutes les 120 chars (~30 tokens)
             if (charCount - lastSentAt >= 120) {
               lastSentAt = charCount;
-              send({ type: 'delta', chars: charCount });
+              send({ type: 'delta', chars: charCount, text: pending });
+              pending = '';
             }
           } else if (event.type === 'message_start' && event.message?.usage) {
             usage.input_tokens = event.message.usage.input_tokens || 0;
@@ -2342,6 +2349,9 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
     });
 
     apiRes.on('end', () => {
+      // Reste sous le seuil de throttle : envoyé avant « done » pour que le
+      // client ait vu passer l'intégralité du texte en direct.
+      if (pending) { send({ type: 'delta', chars: charCount, text: pending }); pending = ''; }
       send({
         type: 'done',
         text: fullText,
