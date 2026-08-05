@@ -414,8 +414,14 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
         article = null;
         continue;
       }
+      // Le chapô vit dans son propre champ côté skill, mais WordPress attend un
+      // corps unique : on le replace en tête AVANT le contrôle, pour qu'il passe
+      // lui aussi par le verrou liens externes et la sécurité structure.
+      const chapo = String(article.chapo_html || '').trim();
+      const composed = chapo ? `${chapo}\n${article.article_html}` : article.article_html;
+
       // ── Verrou liens externes + sécurité structure (règle 8, non négociable) ──
-      const check = sanitizeFullArticle(contentHtml || content, article.article_html, articleUrl);
+      const check = sanitizeFullArticle(contentHtml || content, composed, articleUrl);
       if (check.missing.length) {
         onStep(`⚠️ ${check.missing.length} lien(s) externe(s) d'origine perdu(s) — génération rejetée, nouvel essai (${attempt}/3)...`);
         if (attempt === 3) {

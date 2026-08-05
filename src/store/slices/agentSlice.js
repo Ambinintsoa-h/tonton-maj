@@ -23,6 +23,10 @@ const agentSlice = createSlice({
     majDepth: 'standard',  // profondeur de MAJ (legere|standard|refonte) — transmise à la passe 2
     instruction: '',  // consigne libre de l'équipe → injectée dans les prompts (analyse + MAJ, passe 2)
     audit: '',  // rapport d'audit complet (markdown) produit par le skill SKILL.md — onglet AUDIT
+    // ── Mode « Audit QAT + Refonte » (double flux — voir constants/majMode.js) ──
+    majMode: 'classique',  // classique (historique, défaut) | qat
+    auditJson: null,       // objet d'audit QAT { scores, ampleur, priority_actions… } — onglet AUDIT
+    qatArticle: null,      // { titreSeo, metaDescription, h1, chapoHtml, wordCount, ampleurAppliquee… }
     // Métadonnées d'édition restaurées depuis le brouillon autosave (titre édité,
     // SEO Meta, date MAJ, image à la une, catégories) — consommées une fois par
     // ArticleResult pour rehydrater ses états locaux après un rechargement.
@@ -52,6 +56,9 @@ const agentSlice = createSlice({
       state.majDepth = 'standard';
       state.instruction = '';
       state.audit = '';
+      state.majMode = 'classique';
+      state.auditJson = null;
+      state.qatArticle = null;
       state.editorMeta = null;
       state.draftStatus = 'idle';
       state.draftSavedAt = null;
@@ -88,6 +95,9 @@ const agentSlice = createSlice({
     setMajDepth: (state, action) => { state.majDepth = action.payload || 'standard'; },
     setInstruction: (state, action) => { state.instruction = action.payload || ''; },
     setAudit: (state, action) => { state.audit = action.payload || ''; },
+    setMajMode: (state, action) => { state.majMode = action.payload || 'classique'; },
+    setAuditJson: (state, action) => { state.auditJson = action.payload || null; },
+    setQatArticle: (state, action) => { state.qatArticle = action.payload || null; },
     setEditorMeta: (state, action) => { state.editorMeta = action.payload || null; },
     setDraftStatus: (state, action) => {
       // payload : { status, savedAt? }
@@ -102,5 +112,6 @@ export const {
   setOriginalContent, setUpdatedContent, setDiff, setSources,
   setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
   setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword, setMajDepth, setInstruction, setAudit, setEditorMeta, setDraftStatus,
+  setMajMode, setAuditJson, setQatArticle,
 } = agentSlice.actions;
 export default agentSlice.reducer;

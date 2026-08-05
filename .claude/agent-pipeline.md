@@ -75,3 +75,34 @@ searchWeb(query)
 | claude-haiku-4-5 | 0.80 | 4.00 |
 | claude-sonnet-4-5 | 3.00 | 15.00 |
 | claude-opus-4-5 | 15.00 | 75.00 |
+
+## Mode « Audit QAT + Refonte » (double flux, août 2026)
+
+Second flux **sélectionnable au lancement** (`src/constants/majMode.js`). Le flux
+historique décrit ci-dessus reste **intact et par défaut** : rien ne change tant
+que l'utilisateur ne choisit pas `qat`. Décision équipe : double flux temporaire,
+le temps que l'équipe valide le nouveau sur de vrais articles.
+
+| Étape | Description |
+|-------|-------------|
+| Phase 0 | `wp_get_post` MCP (identique au flux historique) |
+| Fraîcheur | Haiku génère **2 requêtes max**, `searchWeb` + scraping ≤3 URLs |
+| Étape A | Sonnet produit l'**audit JSON** (framework QAT) — `scores`, `ampleur`, `keyword_repositioning`, `a_supprimer`, `priority_actions` P1/P2/P3, `pre_pub_checklist`, `freshness_checks`, `sources_check`, `recent_context`, EEAT, gaps. 3 essais si JSON illisible |
+| Étape B | Sonnet réécrit l'**article entier** (32k tokens) : `titre_seo`, `meta_description`, `h1`, `chapo_html`, `article_html`, `ancres_placees` |
+| Sécurité | `sanitizeFullArticle` (diff.js) — verrou liens externes + `balanceFragment` + `moveFaqToEnd` à l'échelle de l'article. Un lien externe d'origine introuvable ⇒ **génération rejetée**, 3 essais, puis erreur |
+
+- **Ampleur** : `resolveQatDepth` — `auto` (défaut) laisse l'audit décider ; un
+  choix explicite du rédacteur PRIME et lève `overridden` (affiché dans l'UI).
+- **Champs de lancement** : type d'article (Dossier/Actus), plugin SEO, longueur
+  cible (**2 500 mots** par défaut — médiane réelle de l'équipe, contre 1 500 dans
+  le prompt d'origine), paires ancre + URL (3 lignes, jusqu'à 15).
+- **Le chapô est replacé en tête du corps** avant le contrôle : WordPress attend
+  un corps unique, et il doit passer par le verrou comme le reste.
+- **Titre SEO, méta-description et H1** sont repris du skill (pas de second appel
+  `generateSeoMeta`), et le H1 est marqué `titleDirty` pour partir réellement à WP.
+- Le mode exige un **skill cerveau actif** (SKILL.md) : bouton bloqué sinon.
+- Onglet AUDIT : `QatAuditPanel.jsx` rend le JSON (ampleur en tête). Le rapport
+  markdown historique reste affiché quand `auditJson` est absent.
+- Pas d'`updates[]` en mode QAT : la validation modif par modif n'existe pas, la
+  comparaison se fait entre les onglets « Avant » et « Après — article réécrit ».
+- **Non couvert** : le lancement depuis `/maj-en-attente` reste en mode classique.
