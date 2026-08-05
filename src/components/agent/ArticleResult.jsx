@@ -44,6 +44,8 @@ import { renderMarkdown, emojiToIcons, unwrapProseFences, trimAuditForDisplay } 
 import { validateImageFile } from '../../utils/uploadLimits';
 import { useNavigate } from 'react-router-dom';
 
+import QatAuditPanel from './QatAuditPanel';
+
 const TAB_AUDIT = 'audit';
 const TAB_AVANT = 'avant';
 const TAB_APRES = 'apres';
@@ -161,6 +163,12 @@ export default function ArticleResult() {
 
   // Rapport d'audit (mode cerveau) — depuis le state agent ou la review rouverte
   const auditReport = agent.audit || cqItem?.majResult?.audit || '';
+  // Mode « Audit QAT + Refonte » : l'audit est un OBJET (schéma QAT) et l'article
+  // a été réécrit d'un bloc. Les deux flux coexistent (double flux temporaire) :
+  // `auditJson` présent = mode QAT, sinon rapport markdown historique.
+  const auditJson  = agent.auditJson  || cqItem?.majResult?.auditJson  || null;
+  const qatArticle = agent.qatArticle || cqItem?.majResult?.qatArticle || null;
+  const isQat      = !!auditJson || !!qatArticle;
   // Vrai si un skill SKILL.md est actif → l'onglet Audit est attendu (affiché même vide).
   const hasBrainSkill = (skills || []).some(s => s?.format === 'skillmd' && s.active !== false && s.body);
 
@@ -376,6 +384,23 @@ export default function ArticleResult() {
       setSeoGenerating(false);
     }
   }, [agent.updatedContent, agent.originalContent, wpMcpData?.wpTitle]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mode QAT : le skill produit déjà le titre SEO, la méta-description et le H1
+  // aux bonnes longueurs. On les reprend tels quels au lieu de relancer un appel
+  // generateSeoMeta, et on marque le titre « dirty » pour qu'il soit RÉELLEMENT
+  // envoyé à WordPress (sans ça, le H1 réécrit ne partait jamais).
+  const qatMetaRef = useRef(false);
+  useEffect(() => {
+    if (!qatArticle || qatMetaRef.current) return;
+    // Des métas restaurées depuis un brouillon sont du travail validé : on ne les écrase pas.
+    const m = agent.editorMeta;
+    if (m && (m.seoTitle || m.seoDescription)) { qatMetaRef.current = true; return; }
+    qatMetaRef.current = true;
+    seoGeneratedRef.current = true;   // neutralise l'auto-génération du flux historique
+    if (qatArticle.titreSeo)        setSeoTitle(qatArticle.titreSeo);
+    if (qatArticle.metaDescription) setSeoDescription(qatArticle.metaDescription);
+    if (qatArticle.h1 && !titleDirty) { setEditedTitle(qatArticle.h1); setTitleDirty(true); }
+  }, [qatArticle, agent.editorMeta]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-génération SEO dès que la MAJ est prête (une seule fois par analyse)
   useEffect(() => {
@@ -3220,7 +3245,7 @@ export default function ArticleResult() {
                 activeIcon: 'text-slate-600', idleIcon: 'text-slate-400',
               },
               {
-                id: TAB_APRES, label: 'Après — MAJ proposées', icon: Sparkles,
+                id: TAB_APRES, label: isQat ? 'Après — article réécrit' : 'Après — MAJ proposées', icon: Sparkles,
                 activeText: 'text-emerald-700', activeBg: 'bg-emerald-50', activeRing: 'ring-emerald-200',
                 activeIcon: 'text-emerald-600', idleIcon: 'text-emerald-500',
               },
@@ -3502,11 +3527,19 @@ export default function ArticleResult() {
             >
               <div className="flex items-center gap-2 mb-3">
                 <ClipboardCheck size={15} className="text-violet-500" />
-                <p className="text-sm font-semibold text-gray-800">Audit du skill — rapport complet</p>
-                <span className="text-[10px] text-gray-400">les corrections appliquées dans « Après » en sont déduites</span>
+                <p className="text-sm font-semibold text-gray-800">
+                  {auditJson ? 'Audit QAT — rapport structuré' : 'Audit du skill — rapport complet'}
+                </p>
+                <span className="text-[10px] text-gray-400">
+                  {auditJson
+                    ? 'l\'article réécrit dans « Après » découle de cet audit'
+                    : 'les corrections appliquées dans « Après » en sont déduites'}
+                </span>
               </div>
               <div className="bg-white border border-gray-200 rounded-xl p-6 min-h-[420px] shadow-sm">
-                {auditReport ? (
+                {auditJson ? (
+                  <QatAuditPanel audit={auditJson} />
+                ) : auditReport ? (
                   <div
                     onClick={handleAuditToggle}
                     className="md-content audit-md text-sm leading-relaxed break-words [&_h1]:!text-xl [&_h1]:!mt-4 [&_h2]:!text-lg [&_h2]:!mt-5 [&_h3]:!text-base [&_h3]:!mt-3 [&_h4]:!text-sm [&_p]:!text-[13px] [&_li]:!text-[13px] [&_a]:break-all [&_pre]:!max-w-full [&_pre]:!overflow-x-auto [&_pre]:!text-[12px] [&_table]:!table [&_table]:!w-full [&_table]:!max-w-none [&_td]:!align-top [&_td]:!max-w-none [&_th]:!whitespace-normal"
@@ -3524,6 +3557,40 @@ export default function ArticleResult() {
                 )}
               </div>
             </motion.div>
+          )}
+
+          {activeTab === TAB_APRES && isQat && qatArticle && (
+            <div className="px-6 pt-6 -mb-2">
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 space-y-1.5">
+                <p className="text-sm font-semibold text-emerald-800">
+                  Article réécrit entièrement
+                  {qatArticle.ampleurAppliquee === 'ciblee' ? ' (MAJ ciblée)' : ' (refonte totale)'}
+                </p>
+                <p className="text-xs text-emerald-700">
+                  Le mode « Audit QAT + Refonte » ne produit pas de modifications à valider une par une :
+                  comparez cette version à l'onglet « Avant », puis corrigez directement dans l'éditeur.
+                </p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-emerald-700 pt-0.5">
+                  <span><strong>{qatArticle.wordCount}</strong> mots</span>
+                  {qatArticle.motCleRetenu && <span>Mot-clé : <strong>{qatArticle.motCleRetenu}</strong></span>}
+                  {qatArticle.ancresPlacees?.length > 0 && (
+                    <span><strong>{qatArticle.ancresPlacees.length}</strong> lien(s) interne(s) placé(s)</span>
+                  )}
+                  {qatArticle.ampleurSource === 'redacteur' && qatArticle.ampleurOverridden && (
+                    <span className="text-amber-700">Ampleur imposée par le rédacteur, différente de l'audit</span>
+                  )}
+                </div>
+                {qatArticle.strippedExternalLinks?.length > 0 && (
+                  <p className="text-[11px] text-amber-700">
+                    {qatArticle.strippedExternalLinks.length} lien(s) externe(s) ajouté(s) par l'IA ont été retiré(s) —
+                    la règle interdit d'ajouter ou de supprimer un lien externe.
+                  </p>
+                )}
+                {qatArticle.notesRedaction && (
+                  <p className="text-[11px] text-emerald-600 italic">{qatArticle.notesRedaction}</p>
+                )}
+              </div>
+            </div>
           )}
 
           {activeTab === TAB_AVANT && (
