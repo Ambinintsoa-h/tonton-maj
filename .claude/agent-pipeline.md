@@ -91,7 +91,12 @@ le temps que l'équipe valide le nouveau sur de vrais articles.
 | Étape B | Sonnet réécrit l'**article entier** (32k tokens) : `titre_seo`, `meta_description`, `h1`, `chapo_html`, `article_html`, `ancres_placees` |
 | Sécurité | `sanitizeFullArticle` (diff.js) — verrou liens externes + `balanceFragment` + `moveFaqToEnd` à l'échelle de l'article. Un lien externe d'origine introuvable ⇒ **génération rejetée**, 3 essais, puis erreur |
 
-- **Ampleur** : `resolveQatDepth` — `auto` (défaut) laisse l'audit décider ; un
+- **Ampleur** : `resolveQatDepth` — trois valeurs. `refonte_totale` (le fond est
+  en cause), `restructuration` (le fond tient, seul le plan est refait : paragraphes
+  conservés, H2 fusionnés en 6 à 8 sections, réordonnés), `maj_ciblee` (tout tient).
+  `auto` (défaut) laisse l'audit décider ; un choix explicite du rédacteur PRIME et
+  lève `overridden`. Le sélecteur n'expose que Ciblée et Refonte : la
+  restructuration reste une décision de l'audit, via « Auto ».
   choix explicite du rédacteur PRIME et lève `overridden` (affiché dans l'UI).
 - **Champs de lancement** : type d'article (Dossier/Actus), plugin SEO, longueur
   cible (**2 500 mots** par défaut — médiane réelle de l'équipe, contre 1 500 dans
