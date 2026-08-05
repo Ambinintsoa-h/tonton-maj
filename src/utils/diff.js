@@ -1056,6 +1056,80 @@ export const balanceFragment = (fragment) => {
   } catch { return fragment; }
 };
 
+/**
+ * Verrou liens externes + sécurité structure pour le mode ARTICLE ENTIER.
+ *
+ * Le pipeline historique applique `enforceExternalLinkPolicy` et `balanceFragment`
+ * update par update (voir `applyAllDiffs`). En mode « Audit QAT + Refonte » l'IA
+ * renvoie UN bloc HTML complet : il n'y a plus d'update, donc plus aucun de ces
+ * deux garde-fous. Cette fonction rejoue la MÊME politique à l'échelle de
+ * l'article :
+ *   1. tout lien EXTERNE absent de l'original est désenveloppé (texte conservé) ;
+ *   2. tout lien EXTERNE de l'original disparu du nouveau texte est ré-enveloppé
+ *      sur son ancre si elle existe encore en clair ;
+ *   3. s'il ne peut pas être ré-enveloppé, il est reporté dans `missing` — au
+ *      caller de REJETER la génération et de relancer (règle 8 : on n'ajoute ni
+ *      ne supprime jamais un lien externe, et ce verrou ne s'affaiblit pas).
+ * Puis la structure est sécurisée (balises rouvertes fermées, FAQ en fin).
+ *
+ * Les liens INTERNES (même domaine) ne sont pas concernés : ce sont eux que le
+ * rédacteur fournit au lancement.
+ *
+ * @returns {{ html: string, stripped: string[], missing: string[] }}
+ */
+export const sanitizeFullArticle = (originalHtml = '', newHtml = '', articleUrl = '') => {
+  if (!newHtml || typeof document === 'undefined') {
+    return { html: newHtml, stripped: [], missing: [] };
+  }
+  const articleHost = articleUrl ? hostOf(articleUrl) : null;
+  const before = externalLinksOf(originalHtml, articleHost);
+
+  // 1. Liens externes AJOUTÉS → désenveloppés (le texte de l'ancre reste)
+  const incoming = externalLinksOf(newHtml, articleHost);
+  const stripped = [...incoming.keys()].filter((href) => !before.has(href));
+  let html = stripForeignExternalLinks(newHtml, before, articleHost);
+
+  // 2. Liens externes SUPPRIMÉS → ré-enveloppés sur leur ancre si possible
+  const missing = [];
+  const after = externalLinksOf(html, articleHost);
+  for (const [href, info] of before) {
+    if (after.has(href)) continue;
+    let reinjected = false;
+    if (info.text) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        const idx = node.textContent.indexOf(info.text);
+        if (idx === -1) continue;
+        if (node.parentElement?.closest('a')) continue;  // déjà lié
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + info.text.length);
+        const a = document.createElement('a');
+        info.attrs.forEach(([name, value]) => { try { a.setAttribute(name, value); } catch {} });
+        try { range.surroundContents(a); reinjected = true; } catch { /* sélection à cheval sur des balises */ }
+        break;
+      }
+      if (reinjected) html = tmp.innerHTML;
+    }
+    if (!reinjected) missing.push(href);
+  }
+
+  // 3. Sécurité structure — mêmes garde-fous que le mode update
+  html = balanceFragment(html);
+  html = moveFaqToEnd(html);
+
+  if (stripped.length) {
+    console.warn(`[refonte] ${stripped.length} lien(s) externe(s) ajouté(s) par l'IA → désenveloppé(s) :`, stripped);
+  }
+  if (missing.length) {
+    console.warn(`[refonte] ${missing.length} lien(s) externe(s) d'origine INTROUVABLE(s) → génération à rejeter :`, missing);
+  }
+  return { html, stripped, missing };
+};
+
 // ── Suppressions : absorber les petits mots orphelins ─────────────────────────
 // Quand l'IA barre « chats noirs » dans « voici les chats noirs », le
 // déterminant « les » reste orphelin après acceptation (« voici les . »).

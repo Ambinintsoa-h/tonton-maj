@@ -57,7 +57,7 @@ export const WP_MCP_TOOLS = [
 ];
 
 // ── Appel direct d'un outil WordPress MCP (sans passer par Claude) ────────────
-const callWpTool = async (toolName, toolInput, wpSites) => {
+export const callWpTool = async (toolName, toolInput, wpSites) => {
   const resp = await axios.post(
     WP_TOOL_PROXY,
     { toolName, toolInput, wpSites },
@@ -74,7 +74,7 @@ const MODELS = {
   BEST: 'claude-opus-4-5',
 };
 
-const selectModel = (task) => {
+export const selectModel = (task) => {
   switch (task) {
     case 'query_extraction': return MODELS.FAST;
     case 'update_generation': return MODELS.SMART;
@@ -83,7 +83,7 @@ const selectModel = (task) => {
 };
 
 // ── Helpers date ──────────────────────────────────────────────────────────────
-const getDateContext = () => {
+export const getDateContext = () => {
   const now = new Date();
   const iso = now.toISOString().split('T')[0];                          // 2026-05-17
   const fr  = now.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }); // 17 mai 2026
@@ -105,7 +105,7 @@ const TOKEN_PRICING_FALLBACK = {
   'claude-opus-4-5':   { input: 15.00, output: 75.00 }, // USD/MTok
 };
 // pricing : objet { 'claude-xxx': { input, output } } — vient du Redux store settings.modelPricing
-const calcCost = (calls, pricing = TOKEN_PRICING_FALLBACK) => calls.reduce((t, c) => {
+export const calcCost = (calls, pricing = TOKEN_PRICING_FALLBACK) => calls.reduce((t, c) => {
   const table = pricing || TOKEN_PRICING_FALLBACK;
   const p = table[c.model] || table['claude-haiku-4-5'] || TOKEN_PRICING_FALLBACK['claude-haiku-4-5'];
   return t + (c.input / 1_000_000) * p.input + (c.output / 1_000_000) * p.output;
@@ -117,7 +117,7 @@ const calcCost = (calls, pricing = TOKEN_PRICING_FALLBACK) => calls.reduce((t, c
 // onStep    : callback pour AJOUTER un nouveau step (premier tick)
 // onReplace : callback pour REMPLACER le dernier step (ticks suivants)
 // Retourne { text, usage } — même interface que callClaude.
-const callClaudeWithProgress = async (apiKey, params, onStep, onReplace, stepLabel) => {
+export const callClaudeWithProgress = async (apiKey, params, onStep, onReplace, stepLabel) => {
   let fakeTokens = 0;
   let firstTick = true;
   // Incrément aléatoire : ~90-160 tokens/700ms ≈ vitesse Sonnet réelle
@@ -275,7 +275,7 @@ const callClaudeLegacy = async ({ system, messages, max_tokens, model }) => {
   return parseClaudeResponse(response.data, model);
 };
 
-const callClaude = async (_apiKey, { system, messages, max_tokens = 2048, model = MODELS.FAST }) => {
+export const callClaude = async (_apiKey, { system, messages, max_tokens = 2048, model = MODELS.FAST }) => {
   // _apiKey ignoré — le proxy lit la clé depuis data/settings.json côté serveur.
   // La clé n'est plus jamais transmise dans le body HTTP (invisible dans DevTools).
   let useLegacy = false;
@@ -497,7 +497,7 @@ Ne génère PAS de doublons avec les modifications déjà présentes.`,
 // ── Helpers partagés ─────────────────────────────────────────────────────────
 
 /** Déduplique un tableau d'objets par la propriété `url`. */
-const dedupeByUrl = (items) => {
+export const dedupeByUrl = (items) => {
   const seen = new Set();
   return items.filter(r => {
     if (!r.url || seen.has(r.url)) return false;
@@ -548,7 +548,7 @@ const parseJsonResponse = (text, fallback = {}, warnLabel = '') => {
 };
 
 /** Crée un accumulateur de tokens avec sa fonction de suivi. */
-const makeTokenTracker = () => {
+export const makeTokenTracker = () => {
   const acc = { input: 0, output: 0, calls: [] };
   const track = (usage) => {
     if (!usage) return;
@@ -584,7 +584,7 @@ const extractIlCount = (skills) => {
 };
 
 /** Construit le bloc Skills pour le system prompt. */
-const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON style, ta méthode et tes contraintes rédactionnelles.\nTu DOIS les respecter intégralement dans TOUTES tes modifications.', label = 'SKILLS ACTIFS — RÈGLES D\'ÉCRITURE OBLIGATOIRES') => {
+export const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON style, ta méthode et tes contraintes rédactionnelles.\nTu DOIS les respecter intégralement dans TOUTES tes modifications.', label = 'SKILLS ACTIFS — RÈGLES D\'ÉCRITURE OBLIGATOIRES') => {
   const active = skills.filter(s => s.content && isActiveEntry(s));
   if (!active.length) return '';
   return `\n\n## ═══ ${label} ═══\n${intro}\n\n` +
@@ -599,7 +599,7 @@ const buildSkillsBlock = (skills, intro = 'Ces instructions définissent TON sty
  * ou lien relatif) vs EXTERNES (autre domaine). Ignore ancres #, mailto:, tel:.
  * Comptage fiable côté code (le modèle ne compte pas) → chiffres injectés dans l'audit.
  */
-const analyzeLinks = (html = '', articleUrl = '') => {
+export const analyzeLinks = (html = '', articleUrl = '') => {
   const src = String(html);
   const hrefs = [
     ...[...src.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]),  // HTML <a href>
@@ -626,7 +626,7 @@ const analyzeLinks = (html = '', articleUrl = '') => {
  * Skills au format Claude (SKILL.md) actifs → pilotent l'agent en « mode cerveau ».
  * Ils portent { description, body, resources[] } (pas de `content`).
  */
-const getBrainSkills = (skills = []) => {
+export const getBrainSkills = (skills = []) => {
   const active = (skills || []).filter(s => s?.format === 'skillmd' && s.body && isActiveEntry(s));
   // Dédoublonnage : une ré-importation de SKILL.md crée un NOUVEAU doc Firestore (addDoc,
   // pas d'upsert) → plusieurs cerveaux de MÊME nom peuvent coexister et injecteraient deux
@@ -672,7 +672,7 @@ N'insère JAMAIS dans l'article les titres de rapport (« Score global », « Ta
 };
 
 /** Construit le bloc Base de connaissances pour le system prompt. */
-const buildKnowledgeBlock = (knowledge, intro = '', label = 'CHECKLIST OBLIGATOIRE') => {
+export const buildKnowledgeBlock = (knowledge, intro = '', label = 'CHECKLIST OBLIGATOIRE') => {
   const active = knowledge.filter(k => k.content && isActiveEntry(k));
   if (!active.length) return '';
   const defaultIntro = `ATTENTION - PROTOCOLE STRICT : Tu DOIS lire chacun des ${active.length} documents ci-dessous,\nligne par ligne, et vérifier si l'article le respecte ou en a besoin.\nPour chaque élément applicable : ajoute une entrée dans "updates" avec\nreason = "Base de connaissances n°X — [Nom du document]".`;
@@ -688,7 +688,7 @@ const buildKnowledgeBlock = (knowledge, intro = '', label = 'CHECKLIST OBLIGATOI
 };
 
 // ── Strip HTML → texte lisible pour le prompt ─────────────────────────────────
-const stripHtml = (html = '') =>
+export const stripHtml = (html = '') =>
   html
     .replace(/<\/?(h[1-6]|p|li|tr|td|th|br|div|blockquote)[^>]*>/gi, '\n')
     .replace(/<[^>]+>/g, '')
@@ -701,7 +701,7 @@ const stripHtml = (html = '') =>
 // ── Scraping rapide d'une source (timeout 12s, max 3000 chars) ────────────────
 // Utilise AbortController pour annuler proprement la requête axios si le timeout
 // expire — évite les unhandled rejection sur les requêtes abandonnées.
-const scrapeSource = async (url) => {
+export const scrapeSource = async (url) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 12000);
   try {
