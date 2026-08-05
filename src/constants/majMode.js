@@ -59,7 +59,10 @@ export const DEFAULT_SEO_PLUGIN = 'yoast';
 // mots du prompt d'origine qui produisaient des articles 40 % trop courts.
 export const DEFAULT_TARGET_WORDS = 2500;
 export const TARGET_WORDS_MIN = 800;
-export const TARGET_WORDS_MAX = 4000;
+// Plafond relevé à 5 000 : sur les MAJ réellement publiées par l'équipe, un
+// article de prix est monté à 4 500 mots — le curseur ne doit pas brider un
+// sujet dense (au-delà de 3 000 mots, le taux de citation par les IA double).
+export const TARGET_WORDS_MAX = 5000;
 
 // Maillage interne : le rédacteur fournit des paires ancre + URL. Les articles
 // publiés en portent 8 à 15 ; on part sur 3 lignes vides et on laisse ajouter.
