@@ -67,7 +67,14 @@ const QatAuditPanel = ({ audit }) => {
   const s = audit.scores || {};
   const qat = audit.qat_assessment || {};
   const ampleur = audit.ampleur || {};
-  const isRefonte = ampleur.decision === 'refonte_totale';
+  // Trois ampleurs possibles : le fond est en cause, le plan seul est en cause,
+  // ou tout tient. Chacune a son code couleur pour être lue d'un coup d'œil.
+  const AMPLEUR_UI = {
+    refonte_totale:   { label: 'Refonte totale recommandée', hint: 'le fond est en cause', box: 'bg-orange-50 border-orange-200', title: 'text-orange-800', text: 'text-orange-700', icon: 'text-orange-600' },
+    restructuration:  { label: 'Restructuration recommandée', hint: 'le fond tient, le plan est à refaire', box: 'bg-amber-50 border-amber-200', title: 'text-amber-800', text: 'text-amber-700', icon: 'text-amber-600' },
+    maj_ciblee:       { label: 'MAJ ciblée recommandée', hint: 'le fond et le plan tiennent', box: 'bg-sky-50 border-sky-200', title: 'text-sky-800', text: 'text-sky-700', icon: 'text-sky-600' },
+  };
+  const amp = AMPLEUR_UI[ampleur.decision];
   const repo = audit.keyword_repositioning;
   const toRemove = asArray(audit.a_supprimer);
   const recent = audit.recent_context || {};
@@ -76,19 +83,16 @@ const QatAuditPanel = ({ audit }) => {
     <div className="space-y-6 text-sm">
 
       {/* ── Décision d'ampleur — la conclusion la plus structurante ─────────── */}
-      {ampleur.decision && (
-        <div className={`rounded-xl border px-4 py-3 flex items-start gap-3 ${
-          isRefonte ? 'bg-orange-50 border-orange-200' : 'bg-sky-50 border-sky-200'
-        }`}>
-          <Target size={16} className={`shrink-0 mt-0.5 ${isRefonte ? 'text-orange-600' : 'text-sky-600'}`} />
+      {amp && (
+        <div className={`rounded-xl border px-4 py-3 flex items-start gap-3 ${amp.box}`}>
+          <Target size={16} className={`shrink-0 mt-0.5 ${amp.icon}`} />
           <div className="min-w-0">
-            <p className={`font-semibold ${isRefonte ? 'text-orange-800' : 'text-sky-800'}`}>
-              {isRefonte ? 'Refonte totale recommandée' : 'MAJ ciblée recommandée'}
+            <p className={`font-semibold ${amp.title}`}>
+              {amp.label}
+              <span className={`ml-1.5 text-xs font-normal ${amp.text}`}>— {amp.hint}</span>
             </p>
             {ampleur.justification && (
-              <p className={`text-xs mt-0.5 ${isRefonte ? 'text-orange-700' : 'text-sky-700'}`}>
-                {ampleur.justification}
-              </p>
+              <p className={`text-xs mt-0.5 ${amp.text}`}>{ampleur.justification}</p>
             )}
           </div>
         </div>

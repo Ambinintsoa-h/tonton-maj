@@ -3563,8 +3563,9 @@ export default function ArticleResult() {
             <div className="px-6 pt-6 -mb-2">
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 space-y-1.5">
                 <p className="text-sm font-semibold text-emerald-800">
-                  Article réécrit entièrement
-                  {qatArticle.ampleurAppliquee === 'ciblee' ? ' (MAJ ciblée)' : ' (refonte totale)'}
+                  {qatArticle.ampleurAppliquee === 'ciblee' ? 'Article mis à jour (MAJ ciblée)'
+                    : qatArticle.ampleurAppliquee === 'restructuration' ? 'Article restructuré (plan refait, fond conservé)'
+                    : 'Article réécrit entièrement (refonte totale)'}
                 </p>
                 <p className="text-xs text-emerald-700">
                   Le mode « Audit QAT + Refonte » ne produit pas de modifications à valider une par une :

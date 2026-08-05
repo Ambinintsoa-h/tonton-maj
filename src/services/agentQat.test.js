@@ -31,6 +31,20 @@ describe('parseJsonLoose', () => {
 describe('resolveQatDepth — l\'audit propose, le rédacteur tranche', () => {
   const refonte = { ampleur: { decision: 'refonte_totale' } };
   const ciblee  = { ampleur: { decision: 'maj_ciblee' } };
+  const restru  = { ampleur: { decision: 'restructuration' } };
+
+  test('auto + audit restructuration → restructuration (fond conservé, plan refait)', () => {
+    expect(resolveQatDepth('auto', restru)).toEqual({ depth: 'restructuration', source: 'audit', overridden: false });
+  });
+
+  test('le rédacteur peut imposer refonte ou ciblée contre une restructuration', () => {
+    expect(resolveQatDepth('refonte', restru)).toEqual({ depth: 'refonte', source: 'redacteur', overridden: true });
+    expect(resolveQatDepth('legere', restru)).toEqual({ depth: 'ciblee', source: 'redacteur', overridden: true });
+  });
+
+  test('decision inconnue → refonte prudente, pas de crash', () => {
+    expect(resolveQatDepth('auto', { ampleur: { decision: 'n_importe_quoi' } }).depth).toBe('refonte');
+  });
 
   test('auto + audit refonte → refonte, décidée par l\'audit', () => {
     expect(resolveQatDepth('auto', refonte)).toEqual({ depth: 'refonte', source: 'audit', overridden: false });

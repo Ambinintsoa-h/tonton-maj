@@ -300,9 +300,19 @@ const summarizeAuditForRewrite = (audit) => {
  * Un choix explicite du rédacteur PRIME toujours sur l'audit.
  */
 export const resolveQatDepth = (depth, audit) => {
-  const fromAudit = audit?.ampleur?.decision === 'maj_ciblee' ? 'ciblee' : 'refonte';
+  // Trois ampleurs : le fond est en cause (refonte), le plan seul est en cause
+  // (restructuration : on garde la matière et on refond la hiérarchie des H2),
+  // ou tout tient (MAJ ciblée). Défaut prudent en l'absence d'audit : refonte.
+  const decision = audit?.ampleur?.decision;
+  const fromAudit = decision === 'maj_ciblee' ? 'ciblee'
+    : decision === 'restructuration' ? 'restructuration'
+    : 'refonte';
   if (!depth || depth === 'auto') return { depth: fromAudit, source: 'audit', overridden: false };
-  const chosen = depth === 'legere' ? 'ciblee' : depth === 'refonte' ? 'refonte' : depth === 'ciblee' ? 'ciblee' : 'refonte';
+  // Le sélecteur du rédacteur ne propose que Ciblée et Refonte : la
+  // restructuration reste une décision de l'audit (mode « Auto »).
+  const chosen = depth === 'legere' || depth === 'ciblee' ? 'ciblee'
+    : depth === 'restructuration' ? 'restructuration'
+    : 'refonte';
   return { depth: chosen, source: 'redacteur', overridden: chosen !== fromAudit };
 };
 
@@ -335,7 +345,17 @@ export const runQatRewrite = async ({
   const resolved = resolveQatDepth(depth, audit);
   const brief = buildBriefBlock({ targetKeyword, articleType, seoPlugin, targetWords, internalLinks, articleUrl });
 
-  const depthBlock = resolved.depth === 'ciblee'
+  const depthBlock = resolved.depth === 'restructuration'
+    ? `## ═══ AMPLEUR RETENUE : RESTRUCTURATION ═══
+Le FOND de l'article tient : ne réécris RIEN sur le fond. Tu refais le PLAN.
+Conserve chaque information, chiffre, norme et exemple de l'ancien texte — tu
+peux les reformuler au style, jamais en changer le sens ni remplacer une donnée
+exacte. Fusionne les H2 courts et redondants en 6 à 8 sections denses formulées
+comme de vraies questions, réordonne du général au spécifique, fais descendre les
+sujets secondaires en H3, et ajoute ce qui manque (TL;DR, FAQ, tableau, sections
+de priorité haute). Le nombre de H2 peut BAISSER : c'est l'objectif. Tu renvoies
+l'article ENTIER dans article_html.`
+    : resolved.depth === 'ciblee'
     ? `## ═══ AMPLEUR RETENUE : MAJ CIBLÉE ═══
 Tu ne réécris PAS tout. Conserve la structure et les sections qui fonctionnent, à
 leur texte d'origine. Limite-toi à : corriger les données fausses ou obsolètes,
@@ -404,7 +424,8 @@ ${formatSourcesForPrompt(sources)}
 
 Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
 
-  onStep(`Réécriture de l'article (${resolved.depth === 'ciblee' ? 'MAJ ciblée' : 'refonte totale'})...`);
+  const AMPLEUR_LABEL = { ciblee: 'MAJ ciblée', restructuration: 'restructuration du plan', refonte: 'refonte totale' };
+  onStep(`Réécriture de l'article (${AMPLEUR_LABEL[resolved.depth] || 'refonte totale'})...`);
   onProgress(55);
 
   let article = null;
