@@ -27,6 +27,11 @@ const agentSlice = createSlice({
     majMode: 'classique',  // classique (historique, défaut) | qat
     auditJson: null,       // objet d'audit QAT { scores, ampleur, priority_actions… } — onglet AUDIT
     qatArticle: null,      // { titreSeo, metaDescription, h1, chapoHtml, wordCount, ampleurAppliquee… }
+    // Rédaction en direct (streaming SSE) : on ne garde que la QUEUE du texte —
+    // une refonte dépasse 100 000 caractères, inutile de la stocker en entier
+    // dans Redux alors que l'affichage n'en montre que la fin.
+    liveTail: '',
+    liveChars: 0,
     // Métadonnées d'édition restaurées depuis le brouillon autosave (titre édité,
     // SEO Meta, date MAJ, image à la une, catégories) — consommées une fois par
     // ArticleResult pour rehydrater ses états locaux après un rechargement.
@@ -59,6 +64,8 @@ const agentSlice = createSlice({
       state.majMode = 'classique';
       state.auditJson = null;
       state.qatArticle = null;
+      state.liveTail = '';
+      state.liveChars = 0;
       state.editorMeta = null;
       state.draftStatus = 'idle';
       state.draftSavedAt = null;
@@ -98,6 +105,11 @@ const agentSlice = createSlice({
     setMajMode: (state, action) => { state.majMode = action.payload || 'classique'; },
     setAuditJson: (state, action) => { state.auditJson = action.payload || null; },
     setQatArticle: (state, action) => { state.qatArticle = action.payload || null; },
+    setLiveText: (state, action) => {
+      state.liveTail  = action.payload?.tail  || '';
+      state.liveChars = action.payload?.chars || 0;
+    },
+    clearLiveText: (state) => { state.liveTail = ''; state.liveChars = 0; },
     setEditorMeta: (state, action) => { state.editorMeta = action.payload || null; },
     setDraftStatus: (state, action) => {
       // payload : { status, savedAt? }
@@ -112,6 +124,6 @@ export const {
   setOriginalContent, setUpdatedContent, setDiff, setSources,
   setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
   setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword, setMajDepth, setInstruction, setAudit, setEditorMeta, setDraftStatus,
-  setMajMode, setAuditJson, setQatArticle,
+  setMajMode, setAuditJson, setQatArticle, setLiveText, clearLiveText,
 } = agentSlice.actions;
 export default agentSlice.reducer;

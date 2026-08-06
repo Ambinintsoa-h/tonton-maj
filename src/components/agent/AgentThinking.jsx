@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { Brain, Search, FileCheck, Sparkles, CheckCircle2, Globe } from 'lucide-react';
+import { Brain, Search, FileCheck, Sparkles, CheckCircle2, Globe, PenLine } from 'lucide-react';
 import { detectAgent } from '../../constants/agents';
 
 const STEP_ICONS = {
@@ -26,7 +26,48 @@ const getIcon = (text) => {
 // Nombre de steps précédentes visibles avant le step actif
 const MAX_PREV_VISIBLE = 3;
 
-export default function AgentThinking({ steps, progress, status }) {
+/**
+ * Panneau de rédaction en direct — mode « Audit QAT + Refonte ».
+ *
+ * Une refonte dure 8 à 9 minutes. Sans retour visible, le rédacteur croit
+ * l'application bloquée. Le streaming SSE fournit la fin du texte réellement
+ * produit : on l'affiche avec un curseur clignotant, comme une frappe au clavier.
+ * Le compteur est celui des caractères RÉELS, pas une estimation.
+ */
+const LiveTyping = ({ tail, chars, label }) => (
+  <motion.div
+    initial={{ opacity: 0, height: 0 }}
+    animate={{ opacity: 1, height: 'auto' }}
+    exit={{ opacity: 0, height: 0 }}
+    className="overflow-hidden"
+  >
+    <div className="bg-gray-900 rounded-xl px-4 py-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <PenLine size={12} className="text-emerald-400 shrink-0" />
+        <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wide">
+          {label}
+        </span>
+        <span className="text-[10px] text-gray-500 ml-auto tabular-nums">
+          {chars.toLocaleString('fr-FR')} caractères
+        </span>
+      </div>
+      {/* Seule la QUEUE du texte est conservée côté Redux (400 caractères), donc
+          le bloc ne peut pas déborder : pas de calage flex fragile à maintenir.
+          `whitespace-pre-wrap` restitue les retours à la ligne du modèle,
+          `break-words` empêche un JSON d'une seule ligne de pousser le bloc. */}
+      <p className="text-[11px] leading-relaxed text-gray-300 font-mono break-words whitespace-pre-wrap">
+        {tail}
+        <motion.span
+          animate={{ opacity: [1, 0, 1] }}
+          transition={{ duration: 1, repeat: Infinity }}
+          className="inline-block w-1.5 h-3 bg-emerald-400 align-middle ml-0.5"
+        />
+      </p>
+    </div>
+  </motion.div>
+);
+
+export default function AgentThinking({ steps, progress, status, liveTail = '', liveChars = 0 }) {
   const total = steps.length;
   const prevSteps = total > 1 ? steps.slice(0, total - 1) : [];
   const currentStep = total > 0 ? steps[total - 1] : null;
@@ -166,6 +207,20 @@ export default function AgentThinking({ steps, progress, status }) {
             </motion.div>
           );
         })()}
+      </AnimatePresence>
+
+      {/* Production en direct (streaming) — sous le step actif.
+          L'étiquette suit la phase : pendant l'audit le modèle écrit du JSON, pas
+          de la prose — annoncer « Rédaction » y serait trompeur. */}
+      <AnimatePresence>
+        {status === 'running' && liveTail && (
+          <LiveTyping
+            key="live"
+            tail={liveTail}
+            chars={liveChars}
+            label={/audit/i.test(currentStep?.text || '') ? 'Audit en cours' : 'Rédaction en cours'}
+          />
+        )}
       </AnimatePresence>
     </motion.div>
   );

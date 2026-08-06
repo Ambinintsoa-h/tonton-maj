@@ -140,6 +140,168 @@ export const callClaudeWithProgress = async (apiKey, params, onStep, onReplace, 
   }
 };
 
+/**
+ * Appel Claude en STREAMING (SSE) — `POST /api/claude-stream`.
+ *
+ * Utilisé pour les générations longues (refonte d'un article entier : 8-9 min),
+ * afin que le rédacteur voie le texte se construire au lieu d'attendre devant un
+ * compteur factice. Deux bénéfices :
+ *   1. retour réel et honnête (caractères réellement produits, texte visible) ;
+ *   2. le flux n'est jamais muet → il ne peut pas être coupé par le proxy n0c,
+ *      contrairement à l'ancien POST bloquant (cf. transport job + polling).
+ *
+ * `fetch` et non EventSource : la requête doit être un POST avec un gros corps.
+ *
+ * ⚠️ L'authentification de l'app passe par un INTERCEPTEUR AXIOS (src/App.js) qui
+ * ajoute `Authorization: Bearer <token>` sur les URL /api/*. Un `fetch` brut ne
+ * passe PAS par cet intercepteur : sans le header ajouté ici, `requireAuth`
+ * (proxy.js) répond 401 et le streaming se rabat silencieusement à chaque appel.
+ *
+ * @param {object}   params      { system, messages, max_tokens, model }
+ * @param {function} onDelta     (accumulatedText, chars) → affichage live
+ * @param {AbortSignal} signal   optionnel — annulation par l'appelant
+ * @returns {Promise<{text, usage}>}
+ * @throws  {Error} `STREAM_UNAVAILABLE` (avec `.status` si HTTP) quand la route
+ *          est absente, la passerelle en erreur, le flux vide/bufferisé ou figé :
+ *          au caller de basculer sur le transport job + polling.
+ */
+// Même clé que l'intercepteur axios de src/App.js.
+const AUTH_TOKEN_KEY = 'tonton_auth_token';
+// Aucun octet pendant ce délai = flux figé (passerelle qui bufferise, connexion
+// morte sans FIN). Sans ce garde-fou, la promesse ne se résolvait JAMAIS : le
+// transport job + polling a une deadline de 12 min, le streaming n'en avait
+// aucune. Généreux, car la latence avant le premier token peut atteindre ~30 s
+// sur un prompt de 100k caractères.
+const STREAM_STALL_MS = 120000;
+
+export const callClaudeStream = async (params, onDelta, signal) => {
+  const { system, messages, max_tokens = 32000, model } = params || {};
+
+  let token = null;
+  try { token = sessionStorage.getItem(AUTH_TOKEN_KEY); } catch { /* storage indisponible */ }
+
+  // Chien de garde : annule le fetch si le flux reste muet trop longtemps.
+  const ctrl = new AbortController();
+  const onAbort = () => ctrl.abort();
+  if (signal) {
+    if (signal.aborted) ctrl.abort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
+  let stalled = false;
+  let watchdog = null;
+  const armWatchdog = () => {
+    if (watchdog) clearTimeout(watchdog);
+    watchdog = setTimeout(() => { stalled = true; ctrl.abort(); }, STREAM_STALL_MS);
+  };
+  const disarm = () => {
+    if (watchdog) clearTimeout(watchdog);
+    watchdog = null;
+    if (signal) signal.removeEventListener('abort', onAbort);
+  };
+
+  let resp;
+  try {
+    armWatchdog();
+    resp = await fetch('/api/claude-stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ system, messages, max_tokens, model }),
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    disarm();
+    const err = new Error('STREAM_UNAVAILABLE');
+    err.cause = e;
+    throw err;
+  }
+  // 401 (token expiré : le repli axios déclenchera la redirection /login),
+  // 404 (vieux serveur sans la route), 502/503/504 (passerelle), corps illisible.
+  if (!resp.ok || !resp.body) {
+    disarm();
+    const err = new Error('STREAM_UNAVAILABLE');
+    err.status = resp.status;
+    console.warn(`[stream] indisponible — HTTP ${resp.status} → repli job + polling`);
+    throw err;
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  let usage = null;
+  let appError = null;
+  let sawAnyEvent = false;
+
+  const handleEvent = (evt) => {
+    sawAnyEvent = true;
+    if (evt.type === 'delta') {
+      if (evt.text) text += evt.text;
+      if (typeof onDelta === 'function') onDelta(text, evt.chars || text.length);
+    } else if (evt.type === 'done') {
+      // `text` complet renvoyé par le serveur : source de vérité (les deltas
+      // peuvent avoir été tronqués si le throttle a sauté un fragment).
+      if (typeof evt.text === 'string' && evt.text) text = evt.text;
+      usage = evt.usage || null;
+    } else if (evt.type === 'error') {
+      appError = evt.error || 'Erreur de streaming';
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      armWatchdog();                       // des octets arrivent → on repart à zéro
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';          // ligne incomplète conservée
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        if (!raw || raw === '[DONE]') continue;
+        try { handleEvent(JSON.parse(raw)); } catch { /* fragment SSE non parsable */ }
+      }
+    }
+  } catch (e) {
+    // Lecture interrompue : chien de garde, annulation par l'appelant, ou
+    // connexion coupée. La réponse est incomplète → repli.
+    const err = new Error('STREAM_UNAVAILABLE');
+    err.cause = e;
+    err.stalled = stalled;
+    err.charsReceived = text.length;   // déjà produits par Anthropic → déjà facturés
+    console.warn(`[stream] lecture interrompue (${stalled ? 'flux figé' : e.message}) → repli job + polling`);
+    throw err;
+  } finally {
+    disarm();
+    try { reader.releaseLock(); } catch { /* déjà libéré */ }
+  }
+
+  // Aucun événement du tout = flux bufferisé par la passerelle → repli
+  if (!sawAnyEvent) {
+    console.warn('[stream] aucun événement reçu (flux probablement bufferisé) → repli job + polling');
+    throw new Error('STREAM_UNAVAILABLE');
+  }
+  if (appError) {
+    const err = new Error(appError);
+    err.isAppError = true;   // erreur applicative : ne PAS rejouer, ni en repli
+    throw err;
+  }
+  // Flux coupé net avant « done » : le texte est tronqué, donc inexploitable
+  // pour du JSON. Le repli produira une réponse complète.
+  if (!usage) {
+    console.warn('[stream] terminé sans événement « done » — réponse tronquée → repli');
+    const err = new Error('STREAM_UNAVAILABLE');
+    err.truncated = true;
+    err.charsReceived = text.length;   // déjà produits par Anthropic → déjà facturés
+    throw err;
+  }
+  return { text, usage };
+};
+
 // ── Pré-filtrage des sources par Haiku ────────────────────────────────────────
 // Si > 5 sources, demande à Haiku de scorer chacune (0-10) pour n'envoyer
 // que les 7 plus pertinentes à Sonnet → contexte plus court, génération plus rapide.

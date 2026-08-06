@@ -111,3 +111,46 @@ le temps que l'équipe valide le nouveau sur de vrais articles.
 - Pas d'`updates[]` en mode QAT : la validation modif par modif n'existe pas, la
   comparaison se fait entre les onglets « Avant » et « Après — article réécrit ».
 - **Non couvert** : le lancement depuis `/maj-en-attente` reste en mode classique.
+
+## Retour en direct pendant les appels longs (mode QAT)
+
+Une refonte dure 8-9 min : sans retour visible, le rédacteur croit l'application
+bloquée. Le mode QAT passe donc par `callClaudeStream` (agent.js) →
+**`POST /api/claude-stream`** (SSE, proxy.js) au lieu du transport job + polling.
+
+- Le serveur envoie `{type:'delta', chars, text}` tous les ~120 caractères (le
+  champ `text` a été **ajouté** : la route n'envoyait que le compteur, donc le
+  client ne pouvait rien afficher du contenu avant `done`), puis
+  `{type:'done', text, usage}`.
+- `callWithLiveText` (agentQat.js) affiche le nom de la phase, les **caractères
+  réels** et le temps écoulé, et fait avancer la barre de progression au prorata.
+- **Repli** : `STREAM_UNAVAILABLE` (route absente, 502/504, flux vide car
+  bufferisé) → bascule automatique sur `callClaudeWithProgress`, dont le compteur
+  de tokens est SIMULÉ — d'où l'étiquette « (estimation) » à l'écran.
+- `AgentThinking` affiche `LiveTyping` : queue du texte (600 derniers caractères
+  conservés dans Redux, `liveTail`/`liveChars`) avec un curseur clignotant.
+- Bénéfice annexe : un flux SSE n'est jamais muet, donc il échappe à la coupure
+  n0c à ~30 s qui avait imposé le transport job + polling.
+- ⚠️ `proxy.js` est modifié → un déploiement du serveur est nécessaire, sinon le
+  client tombera systématiquement dans le repli (compteur estimé, pas de texte).
+
+### Points de vigilance du mode QAT (relevés en revue)
+
+- **`sourceHtml = contentHtml || content`** est la source UNIQUE de l'article dans
+  agentQat, audit comme réécriture. Sur le chemin scraping, `content` est du texte
+  brut sans balises `<a>` : envoyer `content` rendait le modèle incapable de
+  restituer les liens que le verrou exige (rejet des 3 essais).
+- **`realignExternalHrefs`** (diff.js, chemin QAT uniquement) ramène les variantes
+  cosmétiques d'URL (slash final, `www.`, casse d'hôte) à l'href EXACT de
+  l'original avant contrôle. Le verrou historique reste strict, inchangé.
+- **`auditJson` / `qatArticle` / `majMode`** doivent être dispatchés à CHAQUE
+  ouverture d'article (Historique, MAJ en attente), y compris à `null` : sinon
+  l'audit d'un article QAT précédent s'affiche sur un article classique.
+- **Tout champ d'audit affiché passe par `asText()`** : l'audit est du JSON libre,
+  un champ objet là où une chaîne est attendue faisait disparaître tout le
+  résultat après 10 minutes de génération.
+- **`qatArticle.html` n'est jamais persisté** (doublon de `updatedContent`), et
+  `auditJson`/`qatArticle` figurent dans `HEAVY_HISTORY_FIELDS` (localCache) et
+  dans la liste d'allègement anti-1 Mo, AVANT le contenu de l'article.
+- **La passe 2 reste le flux historique** : elle ne consulte pas `majMode` et
+  produit des updates ciblés. Un avertissement le dit au rédacteur.

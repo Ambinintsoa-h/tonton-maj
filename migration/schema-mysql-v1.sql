@@ -101,7 +101,7 @@ CREATE TABLE articles (
   assignee_id      VARCHAR(64) NULL,
   created_at       BIGINT      NULL,             -- ⚠ ETL : 90 docs en chaîne ISO, 63 en nombre ms, 131 absents -> normaliser en ms
   updated_at       BIGINT      NULL,
-  data             JSON        NULL,             -- updates/audit/analysis/seoMeta/instruction/editedTitle/publishDate/sources/keyword/priority/publishedAt(ISO)/majDepth...
+  data             JSON        NULL,             -- updates/audit/analysis/seoMeta/instruction/editedTitle/publishDate/sources/keyword/priority/publishedAt(ISO)/majDepth/majMode/auditJson/qatArticle...
   -- Reproduit le tri client getArticles = max(lastModifiedAt,updatedAt,createdAt)
   sort_at          BIGINT AS (GREATEST(COALESCE(last_modified_at,0),
                                        COALESCE(updated_at,0),

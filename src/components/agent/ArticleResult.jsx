@@ -352,8 +352,11 @@ export default function ArticleResult() {
   // Réinitialiser catsDirty/selectedCategories/catSuggestedRef évite d'hériter d'un
   // état « dirty » d'un article précédent (sinon on pourrait publier des catégories
   // non désirées → changement de permalien → 404).
+  const qatMetaRef = useRef(false);
   useEffect(() => {
     seoGeneratedRef.current = false;
+    qatMetaRef.current = false;   // symétrie : sans ça, un 2e article QAT ouvert
+                                  // sans démontage ne reprenait pas ses métas
     setSeoTitle('');
     setSeoDescription('');
     setCatsDirty(false);
@@ -389,7 +392,6 @@ export default function ArticleResult() {
   // aux bonnes longueurs. On les reprend tels quels au lieu de relancer un appel
   // generateSeoMeta, et on marque le titre « dirty » pour qu'il soit RÉELLEMENT
   // envoyé à WordPress (sans ça, le H1 réécrit ne partait jamais).
-  const qatMetaRef = useRef(false);
   useEffect(() => {
     if (!qatArticle || qatMetaRef.current) return;
     // Des métas restaurées depuis un brouillon sont du travail validé : on ne les écrase pas.
@@ -1449,6 +1451,13 @@ export default function ArticleResult() {
 
   // ── Deuxième passe classique (sans sources manuelles) ─────────────────────
   const handleReview = async () => {
+    // Le flux de passe 2 est le flux HISTORIQUE : il produit des updates ciblés et
+    // ne consulte pas `agent.majMode`. Sur un article refondu en mode QAT, la
+    // sémantique d'ampleur est perdue (le verrou liens externes s'applique quand
+    // même). On avertit le rédacteur plutôt que de lui retirer la fonction.
+    if (isQat) {
+      toast('Passe 2 en mode classique : elle proposera des modifications ciblées, pas une refonte.', { icon: 'ℹ️', duration: 6000 });
+    }
     setReviewing(true);
     setReviewProgress(0);
     setReviewStep('Démarrage de la deuxième passe...');
@@ -1543,6 +1552,14 @@ export default function ArticleResult() {
         sources:         agent.sources     || r.sources     || [],
         analysis:        agent.analysis    || r.analysis    || '',
         audit:           agent.audit       || r.audit       || '',   // persiste le rapport d'audit (onglet AUDIT)
+        // Mode QAT : audit structuré + métadonnées de l'article réécrit. Sans ces
+        // champs, un article produit en QAT perdait son audit dès le « Terminer »
+        // ou la publication : l'onglet AUDIT était vide à la réouverture depuis
+        // l'Historique, et le bandeau « article réécrit » disparaissait.
+        // `qatArticle.html` est retiré : c'est déjà `updatedContent`.
+        majMode:         agent.majMode || r.majMode || 'classique',
+        ...(auditJson  ? { auditJson } : {}),
+        ...(qatArticle ? { qatArticle: (({ html, ...rest }) => rest)(qatArticle) } : {}),
         url:             cqItem.url        || '',
         keyword:         cqItem.keyword    || '',
         priority:        cqItem.priority   || 'normale',
@@ -2894,6 +2911,14 @@ export default function ArticleResult() {
           sources:         agent.sources || [],
           analysis:        agent.analysis || r.analysis || '',
           audit:           agent.audit    || r.audit    || '',
+          // Mode QAT : audit structuré + métadonnées de l'article réécrit. Sans ces
+          // champs, un article produit en QAT perdait son audit dès le « Terminer »
+          // ou la publication : l'onglet AUDIT était vide à la réouverture depuis
+          // l'Historique, et le bandeau « article réécrit » disparaissait.
+          // `qatArticle.html` est retiré : c'est déjà `updatedContent`.
+          majMode:         agent.majMode || r.majMode || 'classique',
+          ...(auditJson  ? { auditJson } : {}),
+          ...(qatArticle ? { qatArticle: (({ html, ...rest }) => rest)(qatArticle) } : {}),
           url:             articleUrl || cqItem?.url || '',
           keyword:         cqItem?.keyword || '',
           priority:        cqItem?.priority || 'normale',

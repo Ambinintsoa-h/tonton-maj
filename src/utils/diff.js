@@ -1089,12 +1089,65 @@ export const listExternalLinks = (html = '', articleUrl = '') => {
  *
  * @returns {{ html: string, stripped: string[], missing: string[] }}
  */
+/**
+ * Clé de comparaison d'URL, tolérante aux variations COSMÉTIQUES : casse du
+ * schéma et de l'hôte, `www.`, port par défaut, slash final, fragment.
+ * Sert UNIQUEMENT à reconnaître « c'est le même lien », jamais à réécrire l'URL
+ * publiée — celle de l'article d'origine est toujours restituée à l'identique.
+ */
+const hrefKey = (href = '') => {
+  try {
+    const u = new URL(href);
+    const host = u.hostname.replace(/^www\./i, '').toLowerCase();
+    const path = u.pathname.replace(/\/+$/, '');
+    return `${host}${path}${u.search}`;
+  } catch {
+    return String(href).trim().toLowerCase().replace(/\/+$/, '');
+  }
+};
+
+/**
+ * Réaligne les liens externes du texte réécrit sur les href EXACTS de l'original.
+ *
+ * Sans cette passe, une réécriture qui rend `https://site.fr/guide/` au lieu de
+ * `https://site.fr/guide` était comptée SIMULTANÉMENT comme un ajout (lien
+ * désenveloppé, donc détruit) et comme une suppression (`missing`, donc les
+ * 3 générations de 8-9 min rejetées puis échec dur) — pour une variation
+ * purement cosmétique. On ne touche qu'à l'attribut href, jamais au texte.
+ */
+const realignExternalHrefs = (html, before, articleHost) => {
+  if (!before.size) return html;
+  const byKey = new Map();
+  for (const href of before.keys()) byKey.set(hrefKey(href), href);
+
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  let changed = false;
+  tmp.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    if (!/^https?:\/\//i.test(href)) return;
+    const h = hostOf(href);
+    if (!h || (articleHost && h === articleHost)) return;   // lien interne
+    if (before.has(href)) return;                           // déjà exact
+    const exact = byKey.get(hrefKey(href));
+    if (!exact) return;                                     // vrai lien ajouté
+    a.setAttribute('href', exact);
+    changed = true;
+    console.warn(`[refonte] href réaligné sur l'original : ${href} → ${exact}`);
+  });
+  return changed ? tmp.innerHTML : html;
+};
+
 export const sanitizeFullArticle = (originalHtml = '', newHtml = '', articleUrl = '') => {
   if (!newHtml || typeof document === 'undefined') {
     return { html: newHtml, stripped: [], missing: [] };
   }
   const articleHost = articleUrl ? hostOf(articleUrl) : null;
   const before = externalLinksOf(originalHtml, articleHost);
+
+  // 0. Variations cosmétiques d'URL ramenées à l'href exact de l'original, pour
+  //    ne pas rejeter une génération valide sur un slash final.
+  newHtml = realignExternalHrefs(newHtml, before, articleHost);
 
   // 1. Liens externes AJOUTÉS → désenveloppés (le texte de l'ancre reste)
   const incoming = externalLinksOf(newHtml, articleHost);

@@ -59,6 +59,20 @@ const Section = ({ icon, title, count, children }) => (
 
 const asArray = (v) => (Array.isArray(v) ? v : []);
 
+/**
+ * Coercition de sûreté avant rendu React. L'audit vient d'un JSON LIBRE produit
+ * par le modèle : rien ne garantit qu'un champ annoncé « string » n'arrive pas en
+ * objet ou en tableau. Passé tel quel comme enfant React, cela lève « Objects are
+ * not valid as a React child » et fait disparaître TOUT le résultat — après une
+ * génération de 10 minutes. Ici, on affiche au pire du JSON lisible.
+ */
+const asText = (v) => {
+  if (v == null || v === '') return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try { return JSON.stringify(v); } catch { return ''; }
+};
+
 // ── Panneau ───────────────────────────────────────────────────────────────────
 
 const QatAuditPanel = ({ audit }) => {
@@ -92,7 +106,7 @@ const QatAuditPanel = ({ audit }) => {
               <span className={`ml-1.5 text-xs font-normal ${amp.text}`}>— {amp.hint}</span>
             </p>
             {ampleur.justification && (
-              <p className={`text-xs mt-0.5 ${amp.text}`}>{ampleur.justification}</p>
+              <p className={`text-xs mt-0.5 ${amp.text}`}>{asText(ampleur.justification)}</p>
             )}
           </div>
         </div>
@@ -105,11 +119,11 @@ const QatAuditPanel = ({ audit }) => {
           <div className="min-w-0">
             <p className="font-semibold text-violet-800">Mot-clé cible à repositionner</p>
             <p className="text-xs text-violet-700 mt-0.5">
-              <span className="line-through opacity-70">{repo.actuel || '—'}</span>
+              <span className="line-through opacity-70">{asText(repo.actuel) || '—'}</span>
               {' → '}
-              <strong>{repo.recommande}</strong>
+              <strong>{asText(repo.recommande)}</strong>
             </p>
-            {repo.raison && <p className="text-xs text-violet-600 mt-1">{repo.raison}</p>}
+            {repo.raison && <p className="text-xs text-violet-600 mt-1">{asText(repo.raison)}</p>}
           </div>
         </div>
       )}
@@ -132,13 +146,13 @@ const QatAuditPanel = ({ audit }) => {
             Score atteignable après mise à jour : <strong className="text-gray-600">{fmtScore(s.globalAttainable)}/10</strong>
           </p>
         )}
-        {s.justification && <p className="text-xs text-gray-500">{s.justification}</p>}
+        {s.justification && <p className="text-xs text-gray-500">{asText(s.justification)}</p>}
       </Section>
 
       {/* ── Résumé exécutif ─────────────────────────────────────────────────── */}
       {audit.executive_summary && (
         <Section icon={<Info size={13} />} title="Résumé exécutif">
-          <p className="text-gray-600 leading-relaxed whitespace-pre-line">{audit.executive_summary}</p>
+          <p className="text-gray-600 leading-relaxed whitespace-pre-line">{asText(audit.executive_summary)}</p>
         </Section>
       )}
 
@@ -154,8 +168,8 @@ const QatAuditPanel = ({ audit }) => {
                   <span className="text-xs font-semibold text-gray-700">{label}</span>
                   <span className={`text-xs font-semibold ${scoreTone(v.score)}`}>{fmtScore(v.score)}/10</span>
                 </div>
-                {v.detail && <p className="text-xs text-gray-500 mt-1">{v.detail}</p>}
-                {v.fanout_coverage && <p className="text-[11px] text-gray-400 mt-0.5">Fan-out : {v.fanout_coverage}</p>}
+                {v.detail && <p className="text-xs text-gray-500 mt-1">{asText(v.detail)}</p>}
+                {v.fanout_coverage && <p className="text-[11px] text-gray-400 mt-0.5">Fan-out : {asText(v.fanout_coverage)}</p>}
               </div>
             ))}
           </div>
@@ -172,8 +186,8 @@ const QatAuditPanel = ({ audit }) => {
                   {a.priority || 'P3'}
                 </span>
                 <div className="min-w-0">
-                  <p className="text-gray-700 font-medium text-xs">{a.title}</p>
-                  {a.detail && <p className="text-xs text-gray-500">{a.detail}</p>}
+                  <p className="text-gray-700 font-medium text-xs">{asText(a.title)}</p>
+                  {a.detail && <p className="text-xs text-gray-500">{asText(a.detail)}</p>}
                 </div>
               </div>
             ))}
@@ -191,8 +205,8 @@ const QatAuditPanel = ({ audit }) => {
                   {MOTIF_LABEL[r.motif] || r.motif || '—'}
                 </span>
                 <div className="min-w-0">
-                  <p className="text-gray-700 text-xs font-medium">{r.element}</p>
-                  {r.detail && <p className="text-xs text-gray-500">{r.detail}</p>}
+                  <p className="text-gray-700 text-xs font-medium">{asText(r.element)}</p>
+                  {r.detail && <p className="text-xs text-gray-500">{asText(r.detail)}</p>}
                 </div>
               </div>
             ))}
@@ -208,8 +222,8 @@ const QatAuditPanel = ({ audit }) => {
               <div key={i} className="flex items-start gap-2">
                 {STATUS_ICON[f.status] || <Info size={13} className="text-gray-400 shrink-0" />}
                 <p className="text-xs text-gray-600 min-w-0">
-                  <strong className="text-gray-700">{f.element}</strong>
-                  {f.note ? ` — ${f.note}` : ''}
+                  <strong className="text-gray-700">{asText(f.element)}</strong>
+                  {f.note ? ` — ${asText(f.note)}` : ''}
                 </p>
               </div>
             ))}
@@ -222,13 +236,13 @@ const QatAuditPanel = ({ audit }) => {
         <Section icon={<AlertTriangle size={13} />} title="Contexte récent">
           {asArray(recent.donnees_obsoletes).map((d, i) => (
             <div key={`o${i}`} className="rounded-xl border border-red-100 bg-red-50/60 px-3 py-2">
-              <p className="text-xs font-medium text-red-800">{d.element}</p>
+              <p className="text-xs font-medium text-red-800">{asText(d.element)}</p>
               <p className="text-xs text-red-700">
-                <span className="line-through opacity-70">{d.valeur_article}</span> → <strong>{d.valeur_actuelle}</strong>
+                <span className="line-through opacity-70">{asText(d.valeur_article)}</span> → <strong>{asText(d.valeur_actuelle)}</strong>
               </p>
               {d.source && (
-                <a href={d.source} target="_blank" rel="noopener noreferrer" className="text-[11px] text-red-600 underline break-all">
-                  {d.source}
+                <a href={asText(d.source)} target="_blank" rel="noopener noreferrer" className="text-[11px] text-red-600 underline break-all">
+                  {asText(d.source)}
                 </a>
               )}
             </div>
@@ -236,13 +250,13 @@ const QatAuditPanel = ({ audit }) => {
           {asArray(recent.developpements_manquants).map((d, i) => (
             <div key={`d${i}`} className="rounded-xl border border-sky-100 bg-sky-50/60 px-3 py-2">
               <p className="text-xs font-medium text-sky-800">
-                {d.sujet}
+                {asText(d.sujet)}
                 {d.importance && <span className="ml-1.5 font-normal text-sky-500">({d.importance})</span>}
               </p>
-              {d.description && <p className="text-xs text-sky-700">{d.description}</p>}
+              {d.description && <p className="text-xs text-sky-700">{asText(d.description)}</p>}
               {d.source && (
-                <a href={d.source} target="_blank" rel="noopener noreferrer" className="text-[11px] text-sky-600 underline break-all">
-                  {d.source}
+                <a href={asText(d.source)} target="_blank" rel="noopener noreferrer" className="text-[11px] text-sky-600 underline break-all">
+                  {asText(d.source)}
                 </a>
               )}
             </div>
@@ -258,7 +272,7 @@ const QatAuditPanel = ({ audit }) => {
               <div key={i} className="flex items-start gap-2">
                 {STATUS_ICON[c.status] || <Info size={13} className="text-gray-400 shrink-0" />}
                 <p className="text-xs text-gray-600 min-w-0">
-                  « {c.affirmation} »{c.note ? ` — ${c.note}` : ''}
+                  « {asText(c.affirmation)} »{c.note ? ` — ${asText(c.note)}` : ''}
                 </p>
               </div>
             ))}
@@ -274,8 +288,8 @@ const QatAuditPanel = ({ audit }) => {
               <div key={i} className="flex items-start gap-2">
                 {STATUS_ICON[c.status] || <Info size={13} className="text-gray-400 shrink-0" />}
                 <p className="text-xs text-gray-600 min-w-0">
-                  <strong className="text-gray-700">{c.item}</strong>
-                  {c.recommended_value ? ` — ${c.recommended_value}` : ''}
+                  <strong className="text-gray-700">{asText(c.item)}</strong>
+                  {c.recommended_value ? ` — ${asText(c.recommended_value)}` : ''}
                 </p>
               </div>
             ))}
@@ -289,9 +303,9 @@ const QatAuditPanel = ({ audit }) => {
           <div className="space-y-1.5">
             {audit.internal_linking.liens_entrants.map((l, i) => (
               <div key={i} className="text-xs text-gray-600">
-                <p><strong className="text-gray-700">Ancre :</strong> {l.ancre}</p>
-                <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline break-all">{l.url}</a>
-                {l.contexte && <p className="text-gray-400">{l.contexte}</p>}
+                <p><strong className="text-gray-700">Ancre :</strong> {asText(l.ancre)}</p>
+                <a href={asText(l.url)} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline break-all">{asText(l.url)}</a>
+                {l.contexte && <p className="text-gray-400">{asText(l.contexte)}</p>}
               </div>
             ))}
           </div>
@@ -306,7 +320,7 @@ const QatAuditPanel = ({ audit }) => {
       ].filter(([, arr]) => asArray(arr).length > 0).map(([title, arr]) => (
         <Section key={title} icon={<ListChecks size={13} />} title={title} count={arr.length}>
           <ul className="list-disc pl-5 space-y-0.5 text-xs text-gray-600">
-            {arr.map((x, i) => <li key={i}>{typeof x === 'string' ? x : JSON.stringify(x)}</li>)}
+            {arr.map((x, i) => <li key={i}>{asText(x)}</li>)}
           </ul>
         </Section>
       ))}

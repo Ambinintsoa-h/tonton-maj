@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2, Gauge } from 'lucide-react';
-import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setMajMode as setAgentMajMode, setAuditJson, setQatArticle } from '../store/slices/agentSlice';
+import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setMajMode as setAgentMajMode, setAuditJson, setQatArticle, setLiveText, clearLiveText } from '../store/slices/agentSlice';
 import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import {
   MAJ_MODES, DEFAULT_MODE, modeMeta, isQatMode,
@@ -287,9 +287,21 @@ export default function Articles() {
           onStep:     (s) => dispatch(addStep(s)),
           onReplace:  (s) => dispatch(replaceLastStep(s)),
           onProgress: (p) => dispatch(setProgress(p)),
+          // Production en direct : seule la fin du texte est conservée (400 car.),
+          // c'est tout ce que l'affichage montre — inutile de faire transiter
+          // 100 000 caractères par Redux à chaque fragment.
+          onDelta:    (text, chars) => dispatch(setLiveText({ tail: text.slice(-400), chars })),
         });
+        dispatch(clearLiveText());
         dispatch(setWpData(result.wpData || null));
-        updatedHtml = makeTablesResponsive(normalizeFaqToAccordion(result.article.html));
+        // Même repli que la branche classique : si le modèle renvoie un article
+        // sans balises de bloc, les sauts de ligne sont convertis — sans ça, la
+        // vue Après affichait un mur de texte sans aucun recours.
+        const qatRaw = result.article.html || '';
+        const qatBase = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(qatRaw)
+          ? qatRaw
+          : qatRaw.replace(/\n/g, '<br>');
+        updatedHtml = makeTablesResponsive(normalizeFaqToAccordion(qatBase));
         dispatch(setAuditJson(result.audit || null));
         dispatch(setQatArticle(result.article || null));
         if (result.article?.strippedExternalLinks?.length) {
@@ -345,7 +357,12 @@ export default function Articles() {
       // En mode QAT il n'y a pas de champ `analysis` : le résumé exécutif de
       // l'audit en tient lieu, et l'audit lui-même vit dans `auditJson` (objet),
       // pas dans `audit` (markdown du flux historique).
-      const analysisText = qatMode ? (result.audit?.executive_summary || '') : (result.analysis || '');
+      // `executive_summary` vient d'un JSON libre : un objet ou un tableau ferait
+      // planter renderMarkdown (text.trimStart) après 10 min de génération.
+      const rawSummary = result.audit?.executive_summary;
+      const analysisText = qatMode
+        ? (typeof rawSummary === 'string' ? rawSummary : rawSummary ? JSON.stringify(rawSummary) : '')
+        : (result.analysis || '');
       const auditMarkdown = qatMode ? '' : (result.audit || '');
       dispatch(setAnalysis(analysisText));
       dispatch(setParseFailed(result.parseFailed === true));
@@ -382,7 +399,17 @@ export default function Articles() {
         majMode,                        // classique | qat — conditionne l'affichage et la passe 2
         // Mode QAT : audit structuré + métadonnées de l'article réécrit (titre SEO,
         // méta-description, chapô) — repris par l'éditeur et par la publication WP.
-        ...(qatMode ? { auditJson: result.audit || null, qatArticle: result.article || null } : {}),
+        // `qatArticle.html` est VOLONTAIREMENT retiré : c'est exactement
+        // `updatedContent`, déjà persisté juste au-dessus. Le garder doublait le
+        // poids de l'article dans un document Firestore limité à 1 Mo.
+        ...(qatMode ? {
+          auditJson: result.audit || null,
+          qatArticle: result.article ? (({ html, ...rest }) => rest)(result.article) : null,
+          // Brief de lancement : sans lui, impossible de rejouer une MAJ QAT à
+          // l'identique (le type d'article et le maillage ne vivaient que dans
+          // l'état local de cette page et disparaissaient au démontage).
+          qatBrief: { articleType, seoPlugin, targetWords, internalLinks: cleanLinkRows(linkRows) },
+        } : {}),
         createdAt: new Date().toISOString(),
         tokenUsage: result.tokenUsage || null,
         assigneeId: authUid || authUsername || null,
@@ -812,6 +839,8 @@ export default function Articles() {
               currentStep={agent.currentStep}
               progress={agent.progress}
               status={agent.status}
+              liveTail={agent.liveTail}
+              liveChars={agent.liveChars}
             />
           </motion.div>
         )}

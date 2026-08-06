@@ -21,6 +21,7 @@ import {
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
   setWpData, setMajDepth, setInstruction, setAudit, setEditorMeta,
+  setAuditJson, setQatArticle, setMajMode,
 } from '../store/slices/agentSlice';
 import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import { addArticleStat } from '../store/slices/statsSlice';
@@ -1666,6 +1667,17 @@ export default function MajEnAttente() {
     // de publier sur le post d'un article ouvert précédemment (mauvaise cible).
     dispatch(setWpData(r.wpData || null));
     dispatch(setAudit(r.audit || ''));
+    // Mode QAT : audit structuré + métadonnées de l'article réécrit. Dispatchés
+    // TOUJOURS, même à null — sans ça, l'audit d'un article QAT ouvert
+    // PRÉCÉDEMMENT restait en mémoire et s'affichait sur un article classique
+    // (même classe de bug que le wpData ci-dessus).
+    // Source : l'ARCHIVE d'abord. Le mode QAT ne se lance que depuis la page
+    // Articles, qui écrit ces champs dans le doc d'historique — `majResult` de la
+    // file ne les porte que si un « Terminer » les y a recopiés.
+    const qatSrc = (arch && (arch.auditJson || arch.qatArticle)) ? arch : r;
+    dispatch(setAuditJson(qatSrc.auditJson || null));
+    dispatch(setQatArticle(qatSrc.qatArticle || null));
+    dispatch(setMajMode(qatSrc.majMode || r.majMode || 'classique'));
     dispatch(setMajDepth(r.majDepth || item.depth || DEFAULT_DEPTH));
     // Métadonnées d'édition persistées avec l'article (autosave/Enregistrer) →
     // rehydratées par ArticleResult. Priorité à l'archive (à jour au fil de
