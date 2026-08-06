@@ -1671,9 +1671,13 @@ export default function MajEnAttente() {
     // TOUJOURS, même à null — sans ça, l'audit d'un article QAT ouvert
     // PRÉCÉDEMMENT restait en mémoire et s'affichait sur un article classique
     // (même classe de bug que le wpData ci-dessus).
-    dispatch(setAuditJson(r.auditJson || null));
-    dispatch(setQatArticle(r.qatArticle || null));
-    dispatch(setMajMode(r.majMode || 'classique'));
+    // Source : l'ARCHIVE d'abord. Le mode QAT ne se lance que depuis la page
+    // Articles, qui écrit ces champs dans le doc d'historique — `majResult` de la
+    // file ne les porte que si un « Terminer » les y a recopiés.
+    const qatSrc = (arch && (arch.auditJson || arch.qatArticle)) ? arch : r;
+    dispatch(setAuditJson(qatSrc.auditJson || null));
+    dispatch(setQatArticle(qatSrc.qatArticle || null));
+    dispatch(setMajMode(qatSrc.majMode || r.majMode || 'classique'));
     dispatch(setMajDepth(r.majDepth || item.depth || DEFAULT_DEPTH));
     // Métadonnées d'édition persistées avec l'article (autosave/Enregistrer) →
     // rehydratées par ArticleResult. Priorité à l'archive (à jour au fil de

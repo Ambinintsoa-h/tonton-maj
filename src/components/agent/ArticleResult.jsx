@@ -1451,6 +1451,13 @@ export default function ArticleResult() {
 
   // ── Deuxième passe classique (sans sources manuelles) ─────────────────────
   const handleReview = async () => {
+    // Le flux de passe 2 est le flux HISTORIQUE : il produit des updates ciblés et
+    // ne consulte pas `agent.majMode`. Sur un article refondu en mode QAT, la
+    // sémantique d'ampleur est perdue (le verrou liens externes s'applique quand
+    // même). On avertit le rédacteur plutôt que de lui retirer la fonction.
+    if (isQat) {
+      toast('Passe 2 en mode classique : elle proposera des modifications ciblées, pas une refonte.', { icon: 'ℹ️', duration: 6000 });
+    }
     setReviewing(true);
     setReviewProgress(0);
     setReviewStep('Démarrage de la deuxième passe...');

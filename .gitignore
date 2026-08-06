@@ -41,3 +41,7 @@ migration/dump/
 data/
 .claude/MEMORY.md
 .claude/CLAUDE.md
+
+# Config de lancement du dev server (locale) — la règle 3 interdit de démarrer
+# le serveur depuis l'agent : ce fichier ne doit pas être suivi.
+.claude/launch.json

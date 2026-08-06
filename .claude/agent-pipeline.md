@@ -133,3 +133,24 @@ bloquée. Le mode QAT passe donc par `callClaudeStream` (agent.js) →
   n0c à ~30 s qui avait imposé le transport job + polling.
 - ⚠️ `proxy.js` est modifié → un déploiement du serveur est nécessaire, sinon le
   client tombera systématiquement dans le repli (compteur estimé, pas de texte).
+
+### Points de vigilance du mode QAT (relevés en revue)
+
+- **`sourceHtml = contentHtml || content`** est la source UNIQUE de l'article dans
+  agentQat, audit comme réécriture. Sur le chemin scraping, `content` est du texte
+  brut sans balises `<a>` : envoyer `content` rendait le modèle incapable de
+  restituer les liens que le verrou exige (rejet des 3 essais).
+- **`realignExternalHrefs`** (diff.js, chemin QAT uniquement) ramène les variantes
+  cosmétiques d'URL (slash final, `www.`, casse d'hôte) à l'href EXACT de
+  l'original avant contrôle. Le verrou historique reste strict, inchangé.
+- **`auditJson` / `qatArticle` / `majMode`** doivent être dispatchés à CHAQUE
+  ouverture d'article (Historique, MAJ en attente), y compris à `null` : sinon
+  l'audit d'un article QAT précédent s'affiche sur un article classique.
+- **Tout champ d'audit affiché passe par `asText()`** : l'audit est du JSON libre,
+  un champ objet là où une chaîne est attendue faisait disparaître tout le
+  résultat après 10 minutes de génération.
+- **`qatArticle.html` n'est jamais persisté** (doublon de `updatedContent`), et
+  `auditJson`/`qatArticle` figurent dans `HEAVY_HISTORY_FIELDS` (localCache) et
+  dans la liste d'allègement anti-1 Mo, AVANT le contenu de l'article.
+- **La passe 2 reste le flux historique** : elle ne consulte pas `majMode` et
+  produit des updates ciblés. Un avertissement le dit au rédacteur.

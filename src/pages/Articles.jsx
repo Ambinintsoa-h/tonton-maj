@@ -405,6 +405,10 @@ export default function Articles() {
         ...(qatMode ? {
           auditJson: result.audit || null,
           qatArticle: result.article ? (({ html, ...rest }) => rest)(result.article) : null,
+          // Brief de lancement : sans lui, impossible de rejouer une MAJ QAT à
+          // l'identique (le type d'article et le maillage ne vivaient que dans
+          // l'état local de cette page et disparaissaient au démontage).
+          qatBrief: { articleType, seoPlugin, targetWords, internalLinks: cleanLinkRows(linkRows) },
         } : {}),
         createdAt: new Date().toISOString(),
         tokenUsage: result.tokenUsage || null,
