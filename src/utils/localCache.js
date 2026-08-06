@@ -17,7 +17,11 @@ import { STORAGE_KEYS } from '../constants/storage';
 // Champs lourds retirés des entrées d'historique mises en cache local.
 // Le HTML complet vit dans Firebase Storage (via *ContentUrl) ; l'audit et les
 // textes de diff sont rechargés depuis Firestore/Storage à l'ouverture.
-const HEAVY_HISTORY_FIELDS = ['originalContent', 'updatedContent', 'audit', 'analysis'];
+// `auditJson` (rapport QAT structuré) et `qatArticle` (métadonnées de l'article
+// réécrit) sont eux aussi volumineux : sans eux dans cette liste, chaque MAJ en
+// mode QAT gonflait le cache de plusieurs kilo-octets jusqu'au dépassement de
+// quota localStorage et à la dégradation de persistHistory.
+const HEAVY_HISTORY_FIELDS = ['originalContent', 'updatedContent', 'audit', 'analysis', 'auditJson', 'qatArticle'];
 
 // Plafond d'entrées d'historique gardées en cache local (les plus récentes).
 // La liste COMPLÈTE reste en base et est rechargée au démarrage.

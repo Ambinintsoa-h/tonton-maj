@@ -294,7 +294,14 @@ export default function Articles() {
         });
         dispatch(clearLiveText());
         dispatch(setWpData(result.wpData || null));
-        updatedHtml = makeTablesResponsive(normalizeFaqToAccordion(result.article.html));
+        // Même repli que la branche classique : si le modèle renvoie un article
+        // sans balises de bloc, les sauts de ligne sont convertis — sans ça, la
+        // vue Après affichait un mur de texte sans aucun recours.
+        const qatRaw = result.article.html || '';
+        const qatBase = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(qatRaw)
+          ? qatRaw
+          : qatRaw.replace(/\n/g, '<br>');
+        updatedHtml = makeTablesResponsive(normalizeFaqToAccordion(qatBase));
         dispatch(setAuditJson(result.audit || null));
         dispatch(setQatArticle(result.article || null));
         if (result.article?.strippedExternalLinks?.length) {
@@ -350,7 +357,12 @@ export default function Articles() {
       // En mode QAT il n'y a pas de champ `analysis` : le résumé exécutif de
       // l'audit en tient lieu, et l'audit lui-même vit dans `auditJson` (objet),
       // pas dans `audit` (markdown du flux historique).
-      const analysisText = qatMode ? (result.audit?.executive_summary || '') : (result.analysis || '');
+      // `executive_summary` vient d'un JSON libre : un objet ou un tableau ferait
+      // planter renderMarkdown (text.trimStart) après 10 min de génération.
+      const rawSummary = result.audit?.executive_summary;
+      const analysisText = qatMode
+        ? (typeof rawSummary === 'string' ? rawSummary : rawSummary ? JSON.stringify(rawSummary) : '')
+        : (result.analysis || '');
       const auditMarkdown = qatMode ? '' : (result.audit || '');
       dispatch(setAnalysis(analysisText));
       dispatch(setParseFailed(result.parseFailed === true));

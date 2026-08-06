@@ -118,6 +118,13 @@ const callWithLiveText = async ({ params, label, onStep, onReplace, onDelta, onP
   } catch (e) {
     if (e.message !== 'STREAM_UNAVAILABLE') throw e;
     console.warn('[qat] streaming indisponible → repli job + polling');
+    // Un flux interrompu APRÈS avoir produit du texte a déjà été facturé par
+    // Anthropic. Sans cette estimation, le repli relançait la génération entière
+    // et le coût affiché n'en comptait qu'une seule — sous-estimation silencieuse.
+    if (e.charsReceived > 0) {
+      trackCall({ model: params.model, input_tokens: 0, output_tokens: Math.round(e.charsReceived / 3.5) });
+      console.warn(`[qat] ${e.charsReceived} caractères déjà produits avant l'échec du flux — comptés en estimation`);
+    }
     onStep(`${label} — flux direct indisponible, bascule sur le transport classique...`);
     const res = await callClaudeWithProgress(null, params, onStep, onReplace, `${label} (estimation)`);
     trackCall(res.usage);
@@ -263,15 +270,23 @@ export const runQatAudit = async ({
   onProgress(15);
   const { sources, queries } = await gatherFreshnessSources(content, targetKeyword, onStep, trackCall);
 
+  // ── Une seule source de vérité pour l'article ──────────────────────────────
+  // Sur le chemin SCRAPING, Articles.jsx met le TEXTE BRUT dans `content` (les
+  // balises <a> ont disparu) et le HTML dans `contentHtml`. Le verrou liens
+  // externes travaille sur le HTML : si on envoyait `content` au modèle, il
+  // devrait reproduire des liens qu'il ne voit nulle part → rejet systématique
+  // des 3 essais sur tout site non connecté en WordPress MCP.
+  const sourceHtml = contentHtml || content;
+
   // ── Chiffres comptés côté code (fiables) ───────────────────────────────────
-  const linkStats = analyzeLinks(contentHtml || content, articleUrl);
-  const rawText = stripHtml(contentHtml || content || '').trim();
+  const linkStats = analyzeLinks(sourceHtml, articleUrl);
+  const rawText = stripHtml(sourceHtml || '').trim();
   const wordCount = rawText ? rawText.split(/\s+/).length : 0;
 
   const brief = buildBriefBlock({ targetKeyword, articleType, seoPlugin, targetWords, internalLinks, articleUrl });
   const system = buildAuditSystem(brainSkills, skills, knowledge, brief);
   const user = `## ARTICLE À AUDITER (HTML)
-${content}
+${sourceHtml}
 
 ## DONNÉES FACTUELLES (comptées automatiquement — fiables, reprends-les telles quelles)
 - Liens INTERNES (même site) : ${linkStats.internal}
@@ -444,10 +459,15 @@ ${buildSkillMethodBlock(brainSkills)}${buildSkillsBlock(
     'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — OBLIGATOIRES'
   )}${buildKnowledgeBlock(knowledge)}${instruction?.trim() ? `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instruction.trim().slice(0, 1500)}\nElle prime sur les règles générales, sauf le verrou liens externes.` : ''}`;
 
+  // Même source de vérité que le verrou : le HTML. Sur le chemin scraping,
+  // `content` est du texte brut sans balises <a> — l'envoyer au modèle le
+  // rendrait incapable de reproduire les liens que le verrou exige.
+  const sourceHtml = contentHtml || content;
+
   // Liens externes de l'article d'origine : listés explicitement dans le prompt
   // pour ÉVITER le rejet, plutôt que de le corriger par un nouvel essai (chaque
   // essai coûte plusieurs minutes sur un article de 2 500 mots).
-  const externalLinks = listExternalLinks(contentHtml || content, articleUrl);
+  const externalLinks = listExternalLinks(sourceHtml, articleUrl);
   const externalBlock = externalLinks.length
     ? `## ═══ LIENS EXTERNES À REPRODUIRE À L'IDENTIQUE (${externalLinks.length}) ═══
 Chacun de ces liens DOIT figurer dans article_html avec le même href et le même
@@ -456,7 +476,7 @@ ${externalLinks.map((l, i) => `${i + 1}. <a href="${l.href}">${l.text}</a>`).joi
     : '## ═══ LIENS EXTERNES ═══\nL\'article d\'origine n\'en contient aucun : n\'en ajoute aucun.';
 
   const user = `## ARTICLE D'ORIGINE (HTML — à réécrire)
-${content}
+${sourceHtml}
 
 ${externalBlock}
 
@@ -508,7 +528,7 @@ complet.`;
       const composed = chapo ? `${chapo}\n${article.article_html}` : article.article_html;
 
       // ── Verrou liens externes + sécurité structure (règle 8, non négociable) ──
-      const check = sanitizeFullArticle(contentHtml || content, composed, articleUrl);
+      const check = sanitizeFullArticle(sourceHtml, composed, articleUrl);
       if (check.missing.length) {
         onStep(`⚠️ ${check.missing.length} lien(s) externe(s) d'origine perdu(s) — génération rejetée, nouvel essai (${attempt}/3)...`);
         if (attempt === 3) {

@@ -16,6 +16,7 @@ import { addPendingItem } from '../store/slices/pendingSlice';
 import {
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit, setWpData,
+  setAuditJson, setQatArticle, setMajMode,
 } from '../store/slices/agentSlice';
 import { deleteArticle, fetchArticleHtml, getArticles, isLockActive, archiveArticle } from '../services/firebase';
 import ConfirmDialog from '../components/common/ConfirmDialog';
@@ -865,6 +866,13 @@ export default function Historique() {
     // PRÉCÉDEMMENT reste en mémoire → menu Publier lié au MAUVAIS site.
     // La publication retrouve le bon post par l'URL de l'article (findPostByUrl).
     dispatch(setWpData(article.wpData || null));
+    // Mode QAT : audit structuré + métadonnées de l'article réécrit. Dispatchés
+    // TOUJOURS, même à null — sans ça, l'audit d'un article QAT ouvert
+    // PRÉCÉDEMMENT restait en mémoire et s'affichait sur un article classique
+    // (même classe de bug que le wpData ci-dessus).
+    dispatch(setAuditJson(article.auditJson || null));
+    dispatch(setQatArticle(article.qatArticle || null));
+    dispatch(setMajMode(article.majMode || 'classique'));
     dispatch(setCurrentArticleId(article.id));
     dispatch(setStatus('done'));
     navigate('/');

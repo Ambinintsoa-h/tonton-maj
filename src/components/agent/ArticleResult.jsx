@@ -352,8 +352,11 @@ export default function ArticleResult() {
   // Réinitialiser catsDirty/selectedCategories/catSuggestedRef évite d'hériter d'un
   // état « dirty » d'un article précédent (sinon on pourrait publier des catégories
   // non désirées → changement de permalien → 404).
+  const qatMetaRef = useRef(false);
   useEffect(() => {
     seoGeneratedRef.current = false;
+    qatMetaRef.current = false;   // symétrie : sans ça, un 2e article QAT ouvert
+                                  // sans démontage ne reprenait pas ses métas
     setSeoTitle('');
     setSeoDescription('');
     setCatsDirty(false);
@@ -389,7 +392,6 @@ export default function ArticleResult() {
   // aux bonnes longueurs. On les reprend tels quels au lieu de relancer un appel
   // generateSeoMeta, et on marque le titre « dirty » pour qu'il soit RÉELLEMENT
   // envoyé à WordPress (sans ça, le H1 réécrit ne partait jamais).
-  const qatMetaRef = useRef(false);
   useEffect(() => {
     if (!qatArticle || qatMetaRef.current) return;
     // Des métas restaurées depuis un brouillon sont du travail validé : on ne les écrase pas.

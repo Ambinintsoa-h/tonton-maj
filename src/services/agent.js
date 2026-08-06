@@ -272,6 +272,7 @@ export const callClaudeStream = async (params, onDelta, signal) => {
     const err = new Error('STREAM_UNAVAILABLE');
     err.cause = e;
     err.stalled = stalled;
+    err.charsReceived = text.length;   // déjà produits par Anthropic → déjà facturés
     console.warn(`[stream] lecture interrompue (${stalled ? 'flux figé' : e.message}) → repli job + polling`);
     throw err;
   } finally {
@@ -295,6 +296,7 @@ export const callClaudeStream = async (params, onDelta, signal) => {
     console.warn('[stream] terminé sans événement « done » — réponse tronquée → repli');
     const err = new Error('STREAM_UNAVAILABLE');
     err.truncated = true;
+    err.charsReceived = text.length;   // déjà produits par Anthropic → déjà facturés
     throw err;
   }
   return { text, usage };

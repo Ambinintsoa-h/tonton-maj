@@ -72,6 +72,39 @@ describe('sanitizeFullArticle — liens externes', () => {
   });
 });
 
+describe('sanitizeFullArticle — variations cosmétiques d\'URL', () => {
+  // Sans le réalignement, chacun de ces cas comptait le lien SIMULTANÉMENT comme
+  // ajouté (désenveloppé, donc détruit) et comme supprimé (missing → 3 essais de
+  // 8-9 min puis échec dur), pour une différence purement cosmétique.
+  const cases = [
+    ['slash final ajouté',        'https://ademe.fr/guide',  'https://ademe.fr/guide/'],
+    ['slash final retiré',        'https://ademe.fr/guide/', 'https://ademe.fr/guide'],
+    ['www ajouté',                'https://ademe.fr/guide',  'https://www.ademe.fr/guide'],
+    ['casse de l\'hôte',          'https://ademe.fr/guide',  'https://ADEME.fr/guide'],
+  ];
+
+  test.each(cases)('%s → réaligné sur l\'href d\'origine, aucun rejet', (_label, orig, rewritten) => {
+    const { html, stripped, missing } = sanitizeFullArticle(
+      `<p>Voir <a href="${orig}">le guide ADEME</a>.</p>`,
+      `<p>Consultez <a href="${rewritten}">le guide ADEME</a> avant vos travaux.</p>`,
+      ARTICLE_URL,
+    );
+    expect(missing).toEqual([]);
+    expect(stripped).toEqual([]);
+    expect(html).toContain(`href="${orig}"`);   // l'URL publiée reste celle de l'origine
+  });
+
+  test('un lien réellement DIFFÉRENT reste traité comme un ajout', () => {
+    const { html, stripped } = sanitizeFullArticle(
+      '<p><a href="https://ademe.fr/guide">le guide</a></p>',
+      '<p><a href="https://ademe.fr/autre-page">le guide</a></p>',
+      ARTICLE_URL,
+    );
+    expect(stripped).toEqual(['https://ademe.fr/autre-page']);
+    expect(html).toContain('href="https://ademe.fr/guide"'); // l'original ré-injecté
+  });
+});
+
 describe('sanitizeFullArticle — sécurité structure', () => {
   test('balise de bloc restée OUVERTE → refermée dans le fragment', () => {
     const { html } = sanitizeFullArticle('<p>x</p>', '<h2>Titre</h2><p>Paragraphe non fermé', ARTICLE_URL);
