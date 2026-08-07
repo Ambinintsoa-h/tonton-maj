@@ -2,9 +2,10 @@
 // Le flux historique continue d'afficher son rapport markdown : ce panneau ne
 // s'affiche que lorsque `auditJson` est présent.
 import React from 'react';
+import toast from 'react-hot-toast';
 import {
   Gauge, AlertTriangle, CheckCircle2, XCircle, Info, Tag, Trash2,
-  Clock, Link2, ShieldCheck, Target, ListChecks,
+  Clock, Link2, ShieldCheck, Target, ListChecks, Copy,
 } from 'lucide-react';
 
 // ── Helpers d'affichage ───────────────────────────────────────────────────────
@@ -93,8 +94,31 @@ const QatAuditPanel = ({ audit }) => {
   const toRemove = asArray(audit.a_supprimer);
   const recent = audit.recent_context || {};
 
+  // Le panneau MET EN FORME le JSON, il ne permet pas de le récupérer. Or l'audit
+  // brut est nécessaire pour comparer une MAJ à un rendu de référence, ou pour
+  // signaler un audit incohérent. D'où ce bouton de copie.
+  const copyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(audit, null, 2));
+      toast.success('Audit JSON copié dans le presse-papiers');
+    } catch {
+      toast.error('Copie impossible — le navigateur a refusé l\'accès au presse-papiers');
+    }
+  };
+
   return (
     <div className="space-y-6 text-sm">
+
+      <div className="flex justify-end -mt-2 -mb-2">
+        <button
+          type="button"
+          onClick={copyJson}
+          className="inline-flex items-center gap-1.5 text-[11px] font-medium text-gray-400 hover:text-gray-700 transition-colors"
+          title="Copier l'audit brut au format JSON"
+        >
+          <Copy size={12} /> Copier le JSON
+        </button>
+      </div>
 
       {/* ── Décision d'ampleur — la conclusion la plus structurante ─────────── */}
       {amp && (
