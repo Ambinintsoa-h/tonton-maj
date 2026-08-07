@@ -153,15 +153,35 @@ describe('callClaudeStream — repli sur le transport classique', () => {
   });
 });
 
-describe('callClaudeStream — erreur applicative', () => {
-  test('événement error → erreur marquée isAppError (pas de repli, message conservé)', async () => {
-    mockFetch(async () => ({
-      ok: true,
-      body: sse([{ type: 'error', error: 'Crédit Anthropic épuisé' }]),
-    }));
+describe('callClaudeStream — classification des erreurs du flux', () => {
+  // DÉFINITIVES : le repli sur job + polling échouerait à l'identique en coûtant
+  // plusieurs minutes. On remonte le message, il est actionnable tel quel.
+  const definitives = [
+    ['crédits épuisés',        'Crédits Anthropic épuisés — le compte doit être rechargé.'],
+    ['compte désactivé',       "Erreur lors de l'appel à l'IA — This organization has been disabled."],
+    ['clé invalide',           'Clé API Anthropic invalide ou expirée — prévenez un administrateur.'],
+    ['article trop volumineux', 'Article trop volumineux pour le modèle — réduisez le contenu.'],
+    ['délai dépassé',          'Délai dépassé (analyse > 10 min) — réessayez.'],
+  ];
+
+  test.each(definitives)('%s → isAppError, message conservé, pas de repli', async (_l, message) => {
+    mockFetch(async () => ({ ok: true, body: sse([{ type: 'error', error: message }]) }));
+    await expect(callClaudeStream({ messages: [] })).rejects.toMatchObject({ message, isAppError: true });
+  });
+
+  // TRANSPORT : le transport job + polling porte ses propres relances et a de
+  // bonnes chances d'aboutir — il FAUT se rabattre.
+  const transports = [
+    ['socket hang up',      "Erreur lors de l'appel à l'IA — socket hang up"],
+    ['connexion coupée',    "Erreur lors de l'appel à l'IA — ECONNRESET"],
+    ['IA surchargée',       "L'IA (Anthropic) est momentanément surchargée — réessayez dans quelques instants."],
+  ];
+
+  test.each(transports)('%s → STREAM_UNAVAILABLE, repli déclenché', async (_l, message) => {
+    mockFetch(async () => ({ ok: true, body: sse([{ type: 'error', error: message }]) }));
     await expect(callClaudeStream({ messages: [] })).rejects.toMatchObject({
-      message: 'Crédit Anthropic épuisé',
-      isAppError: true,
+      message: 'STREAM_UNAVAILABLE',
+      streamError: message,
     });
   });
 });
