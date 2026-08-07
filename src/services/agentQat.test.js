@@ -2,7 +2,7 @@
 // resolveQatDepth porte l'arbitrage produit : l'audit propose l'ampleur, un
 // choix explicite du rédacteur prime toujours (item 11).
 /* eslint-env jest */
-import { parseJsonLoose, repairTruncatedJson, resolveQatDepth } from './agentQat';
+import { parseJsonLoose, repairTruncatedJson, repairJsonStructure, resolveQatDepth } from './agentQat';
 
 describe('parseJsonLoose', () => {
   test('JSON nu', () => {
@@ -42,6 +42,56 @@ describe('parseJsonLoose', () => {
       { priority: 'P1', title: 'Réécrire' },
       { priority: 'P1' },
     ]);
+  });
+});
+
+describe('repairJsonStructure — accolade fermante parasite', () => {
+  // Cas RÉEL observé en production : audit de 10 107 tokens (donc non tronqué),
+  // le modèle ferme l'objet racine au tiers du document après
+  // « executive_summary ». Deux tiers de l'audit étaient perdus.
+  const reel = `\`\`\`json
+{
+  "scores": { "ia": 4.2, "global": 4.3, "justification": "Lacunes majeures." },
+  "executive_summary": "L'article décrit Open Spoken AI mais s'éloigne du mot-clé."
+  },
+  "qat_assessment": {
+    "quality": { "score": 4.0, "tldr_present": true, "detail": "TL;DR non balisé." }
+  },
+  "priority_actions": [
+    { "priority": "P1", "title": "Recentrer sur le mot-clé", "detail": "…", "snippet": null }
+  ],
+  "ampleur": { "decision": "refonte_totale", "justification": "Score 4,3/10." }
+}
+\`\`\``;
+
+  test('récupère la TOTALITÉ de l\'audit, pas seulement le début', () => {
+    const strict = parseJsonLoose(reel.replace(/```json|```/g, ''));
+    // La réparation est intégrée à parseJsonLoose : le résultat doit être complet.
+    expect(strict).not.toBeNull();
+    expect(strict.scores.global).toBe(4.3);
+    expect(strict.qat_assessment.quality.score).toBe(4.0);      // APRÈS la parasite
+    expect(strict.priority_actions).toHaveLength(1);
+    expect(strict.ampleur.decision).toBe('refonte_totale');     // la décision clé
+  });
+
+  test('fonctionne aussi à travers les backticks ```json', () => {
+    const r = parseJsonLoose(reel);
+    expect(r.ampleur.decision).toBe('refonte_totale');
+  });
+
+  test('JSON valide → aucune réparation, retour null (on ne touche à rien)', () => {
+    expect(repairJsonStructure('{"a":1,"b":{"c":2}}')).toBeNull();
+  });
+
+  test('crochet fermant parasite dans un tableau racine imbriqué', () => {
+    const cut = '{"a":[1,2],"b":"x"],"c":3}';
+    expect(repairJsonStructure(cut)).toEqual({ a: [1, 2], b: 'x', c: 3 });
+  });
+
+  test('texte de conclusion après un JSON VALIDE → pas de faux positif', () => {
+    // Ici la dernière accolade est légitime : la réparation doit échouer
+    // proprement et laisser les autres stratégies faire leur travail.
+    expect(parseJsonLoose('{"a":1,"b":2}\nVoilà le rapport.')).toEqual({ a: 1, b: 2 });
   });
 });
 

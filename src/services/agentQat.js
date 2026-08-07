@@ -47,7 +47,76 @@ export const parseJsonLoose = (raw = '', { salvage = false } = {}) => {
       try { return JSON.parse(slice); } catch { /* candidat suivant */ }
     }
   }
+  // Faute de syntaxe STRUCTURELLE (accolade fermante en trop) : réparable sans
+  // perte, on tente toujours. Voir repairJsonStructure.
+  const repaired = repairJsonStructure(fenced);
+  if (repaired) return repaired;
   return salvage ? repairTruncatedJson(fenced) : null;
+};
+
+/**
+ * Répare un JSON dont une accolade ou un crochet fermant EN TROP ferme
+ * prématurément l'objet racine.
+ *
+ * Cas réellement observé en production sur un audit de 10 000 tokens (donc NON
+ * tronqué) : le modèle a émis
+ *     "executive_summary": "…"
+ *     },                       ← ferme la racine au tiers du document
+ *     "qat_assessment": { …
+ * `JSON.parse` échoue, et l'extraction « du premier { au dernier } » renvoie le
+ * même texte invalide. Deux tiers de l'audit étaient perdus pour une virgule
+ * mal placée.
+ *
+ * On retire les fermetures qui ramènent la profondeur à zéro alors qu'il reste
+ * du contenu derrière. Sans perte : tout le document est conservé.
+ * Conservateur : ne retourne un objet que s'il porte au moins deux clés.
+ */
+export const repairJsonStructure = (raw = '') => {
+  const from = String(raw || '').indexOf('{');
+  if (from === -1) return null;
+  const s = String(raw).slice(from);
+
+  let out = '';
+  let depth = 0;
+  let inStr = false, esc = false, removed = 0;
+
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      out += c;
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; out += c; continue; }
+    if (c === '{' || c === '[') { depth++; out += c; continue; }
+    if (c === '}' || c === ']') {
+      // Cette fermeture ramènerait la racine à zéro : est-ce la vraie fin ?
+      if (depth === 1 && s.slice(i + 1).trim() !== '') {
+        removed++;
+        continue;                       // fermeture parasite → ignorée
+      }
+      depth--;
+      out += c;
+      continue;
+    }
+    out += c;
+  }
+  if (!removed) return null;            // rien de parasite : ce n'est pas ce cas
+
+  // Refermer ce qui reste ouvert (le retrait a pu déséquilibrer la fin).
+  while (depth > 0) { out += '}'; depth--; }
+
+  try {
+    const obj = JSON.parse(out);
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    if (Object.keys(obj).length < 2) return null;
+    console.warn(`[qat] JSON réparé — ${removed} fermeture(s) parasite(s) retirée(s), ${Object.keys(obj).length} champs récupérés`);
+    return obj;
+  } catch {
+    return null;
+  }
 };
 
 /**

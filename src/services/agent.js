@@ -937,6 +937,12 @@ L'utilisateur demande une RÉÉCRITURE EN PROFONDEUR (informations majoritaireme
 - RAPPEL ABSOLU : tout lien EXTERNE présent dans un passage réécrit doit réapparaître À L'IDENTIQUE (href ET texte d'ancre) dans "updated" — le verrou technique rejette sinon l'update entière.
 
 ### GRANULARITÉ OBLIGATOIRE (sinon les modifications ne peuvent PAS être appliquées)
+- ⚠️ CONTRÔLE AUTOMATIQUE : un remplacement est **REFUSÉ par le moteur** si son
+  "original" contient un titre absent de "updated", ou s'il fusionne plusieurs
+  blocs en un seul. Ces updates sont PERDUES pour le rédacteur, qui doit les
+  reposer à la main. Exemple REFUSÉ : "original" = « <h2>Quel est le coût ?</h2><p>Comptez 60 EUR/m².</p> » avec "updated" = « <p>Comptez 60 à 180 EUR/m².</p> » — le titre disparaîtrait.
+  À la place : laisse le titre HORS du remplacement et ne cible que le paragraphe,
+  ou réémets le titre à l'identique dans "updated".
 - UN update = UN paragraphe (ou UN titre, UNE liste, UN tableau). NE regroupe JAMAIS plusieurs paragraphes ou une section entière dans un seul update.
 - "original" = la copie EXACTE d'UN SEUL bloc court (une à trois phrases, ~300 caractères MAX). JAMAIS un "original" couvrant plusieurs paragraphes ou contenant du HTML de structure (<h2>, <div>, plusieurs <p>…) : le moteur ne le retrouve pas et l'update est perdue.
 - Pour réécrire une section entière : produis PLUSIEURS updates de remplacement (un par paragraphe existant) + des additions ciblées, jamais un seul énorme bloc.
