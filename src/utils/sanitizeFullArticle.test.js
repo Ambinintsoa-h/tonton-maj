@@ -61,6 +61,39 @@ describe('sanitizeFullArticle — liens externes', () => {
     expect(missing).toEqual(['https://ademe.fr/guide']);
   });
 
+  test('lien externe PROTOCOL-RELATIVE ajouté (//host) → désenveloppé comme un absolu', () => {
+    // Le verrou ne reconnaissait que `^https?://` : un href en `//host/...` le
+    // traversait sans être ni retiré ni signalé, et se retrouvait publié.
+    const { html, stripped } = sanitizeFullArticle(
+      '<p>Le prix moyen est de 40 €/m².</p>',
+      '<p>Comptez 55 €/m² selon <a href="//concurrent.com/etude">cette étude</a>.</p>',
+      ARTICLE_URL,
+    );
+    expect(html).not.toContain('concurrent.com');
+    expect(html).toContain('cette étude');
+    expect(stripped).toEqual(['https://concurrent.com/etude']);
+  });
+
+  test('lien protocol-relative vers le MÊME domaine → conservé (c\'est un lien interne)', () => {
+    const { html, stripped } = sanitizeFullArticle(
+      '<p>Texte.</p>',
+      '<p>Voir <a href="//isolation-phonique.com/prix">nos prix</a>.</p>',
+      ARTICLE_URL,
+    );
+    expect(html).toContain('isolation-phonique.com/prix');
+    expect(stripped).toEqual([]);
+  });
+
+  test('lien externe d\'origine en protocol-relative → reconnu, donc non déclaré manquant', () => {
+    const { missing, stripped } = sanitizeFullArticle(
+      '<p>Voir <a href="//ademe.fr/guide">le guide ADEME</a>.</p>',
+      '<p>Consultez <a href="//ademe.fr/guide">le guide ADEME</a> avant travaux.</p>',
+      ARTICLE_URL,
+    );
+    expect(missing).toEqual([]);
+    expect(stripped).toEqual([]);
+  });
+
   test('liens INTERNES (même domaine) librement ajoutés — hors périmètre du verrou', () => {
     const original = '<p>Texte d\'origine sans lien.</p>';
     const rewritten = '<p>Voir <a href="https://isolation-phonique.com/prix-plafond">le prix au m²</a> et <a href="/faq">la FAQ</a>.</p>';

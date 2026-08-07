@@ -167,6 +167,30 @@ export const callClaudeWithProgress = async (apiKey, params, onStep, onReplace, 
  */
 // Même clé que l'intercepteur axios de src/App.js.
 const AUTH_TOKEN_KEY = 'tonton_auth_token';
+
+/**
+ * Une erreur remontée par le flux SSE est-elle DÉFINITIVE ?
+ *
+ * Le flux peut échouer pour deux raisons très différentes :
+ *   - transport (« socket hang up », connexion réinitialisée, passerelle
+ *     surchargée) → le transport job + polling, qui porte ses propres relances,
+ *     a de bonnes chances d'aboutir : il FAUT se rabattre ;
+ *   - définitive (compte désactivé, crédits épuisés, clé invalide, article trop
+ *     volumineux) → le repli échouerait à l'identique en coûtant plusieurs
+ *     minutes de plus. On remonte l'erreur telle quelle, elle est actionnable.
+ *
+ * Le défaut est le REPLI : « socket hang up » était jusqu'ici traité comme une
+ * erreur applicative, ce qui abandonnait la génération sans jamais essayer le
+ * transport éprouvé, et masquait au passage la vraie cause côté Anthropic.
+ */
+const isDefinitiveAiError = (msg = '') => {
+  const low = String(msg).toLowerCase();
+  return /clé api|api.?key|invalide ou expir|authentication|unauthor|auth_required/.test(low)
+    || /crédit|credit|balance|quota|billing|payment/.test(low)
+    || /disabled|désactiv|suspend/.test(low)
+    || /trop volumineux|too long|prompt is too long|request too large/.test(low)
+    || /délai dépassé|timeout|timed out/.test(low);   // le repli reprendrait 10 min pour rien
+};
 // Aucun octet pendant ce délai = flux figé (passerelle qui bufferise, connexion
 // morte sans FIN). Sans ce garde-fou, la promesse ne se résolvait JAMAIS : le
 // transport job + polling a une deadline de 12 min, le streaming n'en avait
@@ -286,8 +310,16 @@ export const callClaudeStream = async (params, onDelta, signal) => {
     throw new Error('STREAM_UNAVAILABLE');
   }
   if (appError) {
-    const err = new Error(appError);
-    err.isAppError = true;   // erreur applicative : ne PAS rejouer, ni en repli
+    if (isDefinitiveAiError(appError)) {
+      const err = new Error(appError);
+      err.isAppError = true;   // définitive : le repli échouerait à l'identique
+      throw err;
+    }
+    // Transport (socket hang up, connexion coupée, passerelle surchargée) → repli.
+    console.warn(`[stream] erreur de transport (« ${appError} ») → repli job + polling`);
+    const err = new Error('STREAM_UNAVAILABLE');
+    err.streamError = appError;   // conservé pour le diagnostic
+    err.charsReceived = text.length;
     throw err;
   }
   // Flux coupé net avant « done » : le texte est tronqué, donc inexploitable
