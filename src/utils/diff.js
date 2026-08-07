@@ -1138,11 +1138,42 @@ const realignExternalHrefs = (html, before, articleHost) => {
   return changed ? tmp.innerHTML : html;
 };
 
+/**
+ * Rend absolus les href PROTOCOL-RELATIVE (`//exemple.com/page`).
+ *
+ * Le verrou ne reconnaît un lien externe qu'au motif `^https?://`. Un
+ * `href="//concurrent.com/etude"` n'y correspond pas : il était donc classé
+ * « hors périmètre » et traversait le contrôle sans être ni désenveloppé ni
+ * comptabilisé — un lien externe ajouté par l'IA se retrouvait publié.
+ * On les réécrit avec le schéma de l'article AVANT tout contrôle, pour qu'ils
+ * soient traités comme n'importe quel autre lien absolu.
+ */
+const absolutizeProtocolRelative = (html, articleUrl) => {
+  if (!html || html.indexOf('//') === -1) return html;
+  let scheme = 'https:';
+  try { if (articleUrl) scheme = new URL(articleUrl).protocol || 'https:'; } catch { /* défaut https */ }
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  let changed = false;
+  tmp.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    if (!/^\/\/[^/]/.test(href)) return;        // ni `//host`, on ne touche à rien
+    a.setAttribute('href', `${scheme}${href}`);
+    changed = true;
+    console.warn(`[refonte] href protocol-relative rendu absolu pour le contrôle : ${href}`);
+  });
+  return changed ? tmp.innerHTML : html;
+};
+
 export const sanitizeFullArticle = (originalHtml = '', newHtml = '', articleUrl = '') => {
   if (!newHtml || typeof document === 'undefined') {
     return { html: newHtml, stripped: [], missing: [] };
   }
   const articleHost = articleUrl ? hostOf(articleUrl) : null;
+  // Avant TOUT contrôle : les liens protocol-relative deviennent absolus, sinon
+  // ils échappent entièrement au verrou (des deux côtés de la comparaison).
+  originalHtml = absolutizeProtocolRelative(originalHtml, articleUrl);
+  newHtml = absolutizeProtocolRelative(newHtml, articleUrl);
   const before = externalLinksOf(originalHtml, articleHost);
 
   // 0. Variations cosmétiques d'URL ramenées à l'href exact de l'original, pour
