@@ -33,7 +33,7 @@ const MAX_SOURCES_INJECTED = 6;
  * confiance au format : une génération à 12k tokens qui casse sur une virgule
  * ne doit pas perdre tout l'audit.
  */
-export const parseJsonLoose = (raw = '') => {
+export const parseJsonLoose = (raw = '', { salvage = false } = {}) => {
   const text = String(raw || '').trim();
   if (!text) return null;
   const fenced = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
@@ -47,7 +47,68 @@ export const parseJsonLoose = (raw = '') => {
       try { return JSON.parse(slice); } catch { /* candidat suivant */ }
     }
   }
-  return null;
+  return salvage ? repairTruncatedJson(fenced) : null;
+};
+
+/**
+ * Récupère un JSON TRONQUÉ (réponse coupée par la limite de tokens).
+ *
+ * Un audit interrompu à 95 % contient déjà l'ampleur, les scores et les actions
+ * prioritaires : tout jeter serait absurde. On coupe au dernier élément COMPLET,
+ * puis on referme les accolades et crochets restés ouverts. Les champs
+ * postérieurs à la coupure sont simplement absents — l'affichage les ignore.
+ *
+ * Conservateur par construction : n'est utilisé qu'en dernier recours, et ne
+ * retourne un objet que s'il porte au moins deux clés (sinon ce n'est pas un
+ * audit exploitable, autant échouer franchement).
+ */
+export const repairTruncatedJson = (raw = '') => {
+  const from = String(raw || '').indexOf('{');
+  if (from === -1) return null;
+  const s = String(raw).slice(from);
+
+  // Dernière position où une valeur venait d'être TERMINÉE, hors chaîne.
+  let inStr = false, esc = false, cut = -1;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '}' || c === ']') cut = i + 1;   // juste APRÈS le bloc refermé
+    else if (c === ',') cut = i;               // juste AVANT la virgule
+  }
+  if (cut <= 0) return null;
+
+  // Brackets restés ouverts dans le fragment conservé.
+  const head = s.slice(0, cut);
+  const stack = [];
+  inStr = false; esc = false;
+  for (const c of head) {
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '{') stack.push('}');
+    else if (c === '[') stack.push(']');
+    else if (c === '}' || c === ']') stack.pop();
+  }
+
+  try {
+    const obj = JSON.parse(head + stack.reverse().join(''));
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    if (Object.keys(obj).length < 2) return null;
+    console.warn(`[qat] audit tronqué récupéré — ${Object.keys(obj).length} champ(s) exploitable(s)`);
+    return obj;
+  } catch {
+    return null;
+  }
 };
 
 /** Bloc « méthode du skill » : corps + ressources du (ou des) skill cerveau. */
@@ -301,21 +362,52 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
   onProgress(25);
   let audit = null;
   let rawAudit = '';
+  // Deux causes d'échec TRÈS différentes, à ne jamais confondre : l'appel à l'IA
+  // qui échoue (compte désactivé, crédits épuisés, réseau) et la réponse reçue
+  // mais illisible. Les présenter sous le même message envoyait le rédacteur
+  // chercher un problème de format alors que le compte était simplement à
+  // recharger. `apiError` retient le message réel de l'API.
+  let apiError = null;
+  let currentUser = user;
+
   for (let attempt = 1; attempt <= 3 && !audit; attempt++) {
     try {
       const { text } = await callWithLiveText({
-        params: { system, max_tokens: 12000, model: selectModel('update_generation'), messages: [{ role: 'user', content: user }] },
+        // Le schéma d'audit est volumineux ; 12 000 tokens tronquaient la réponse
+        // sur les articles longs, et un JSON tronqué est illisible.
+        params: { system, max_tokens: 20000, model: selectModel('update_generation'), messages: [{ role: 'user', content: currentUser }] },
         label: attempt === 1 ? 'Audit QAT' : `Audit QAT — essai ${attempt}/3`,
         onStep, onReplace, onProgress, onDelta, trackCall,
         progressFrom: 25, progressTo: 40,
       });
+      apiError = null;
       rawAudit = (text || '').trim();
-      audit = parseJsonLoose(rawAudit);
-      if (!audit) onStep(`⚠️ Audit — JSON illisible, nouvel essai (${attempt}/3)...`);
+      // Dernier essai : on accepte un audit tronqué mais exploitable plutôt que
+      // de tout jeter (l'ampleur et les actions prioritaires arrivent en tête).
+      audit = parseJsonLoose(rawAudit, { salvage: attempt === 3 });
+      if (!audit) {
+        onStep(`⚠️ Audit — réponse illisible, nouvel essai (${attempt}/3)...`);
+        // Reprise INSTRUITE : sans ce retour, les 3 essais repartaient du même
+        // prompt et échouaient de la même façon.
+        currentUser = `${user}
+
+## ═══ REPRISE — L'ESSAI PRÉCÉDENT A ÉCHOUÉ ═══
+Ta réponse précédente n'était pas un JSON exploitable (probablement tronquée, ou
+précédée de texte). Réponds UNIQUEMENT par l'objet JSON, sans texte ni backticks.
+Pour tenir dans la limite : laisse "tldr", "comparative_table" et "faq" à null —
+ils sont produits à l'étape de rédaction, pas dans l'audit — et respecte les
+limites de taille par champ. Priorise "ampleur", "scores", "priority_actions",
+"a_supprimer" et "recent_context".`;
+      }
     } catch (e) {
+      apiError = e;
       console.warn(`[qat audit] essai ${attempt}/3:`, e.message);
-      if (attempt < 3) await new Promise(r => setTimeout(r, 1500 * attempt));
-      else onStep(`⚠️ Audit indisponible après 3 essais (${e.message})`);
+      if (attempt < 3) {
+        onStep(`⚠️ Appel à l'IA en échec (${e.message}) — nouvel essai (${attempt}/3)...`);
+        await new Promise(r => setTimeout(r, 1500 * attempt));
+      } else {
+        onStep(`⚠️ Appel à l'IA en échec après 3 essais : ${e.message}`);
+      }
     }
   }
 
@@ -323,6 +415,7 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
   return {
     audit,
     auditRaw: rawAudit,
+    apiError,
     parseFailed: !audit && !!rawAudit,
     wpData,
     sources,
@@ -609,7 +702,13 @@ export const runQatAgent = async (opts) => {
   const auditRes = await runQatAudit(opts);
   if (!auditRes.audit) {
     // L'audit est la BASE de la refonte : sans lui, on ne réécrit pas à l'aveugle.
-    throw new Error('Audit QAT illisible après 3 essais — refonte annulée pour ne pas réécrire sans diagnostic.');
+    // Le message doit nommer la VRAIE cause : un échec d'appel à l'IA (compte
+    // désactivé, crédits épuisés, réseau) n'a rien à voir avec une réponse
+    // illisible, et n'appelle pas du tout la même action.
+    if (auditRes.apiError) {
+      throw new Error(`Audit impossible — l'appel à l'IA a échoué après 3 essais : ${auditRes.apiError.message}`);
+    }
+    throw new Error("Audit impossible — l'IA a répondu mais sa réponse n'était pas exploitable après 3 essais. Refonte annulée pour ne pas réécrire sans diagnostic.");
   }
   const rewriteRes = await runQatRewrite({
     ...opts,

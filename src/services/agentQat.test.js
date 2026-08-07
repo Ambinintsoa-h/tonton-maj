@@ -2,7 +2,7 @@
 // resolveQatDepth porte l'arbitrage produit : l'audit propose l'ampleur, un
 // choix explicite du rédacteur prime toujours (item 11).
 /* eslint-env jest */
-import { parseJsonLoose, resolveQatDepth } from './agentQat';
+import { parseJsonLoose, repairTruncatedJson, resolveQatDepth } from './agentQat';
 
 describe('parseJsonLoose', () => {
   test('JSON nu', () => {
@@ -25,6 +25,44 @@ describe('parseJsonLoose', () => {
     expect(parseJsonLoose('')).toBeNull();
     expect(parseJsonLoose('pas de json ici')).toBeNull();
     expect(parseJsonLoose('{"a":')).toBeNull();
+  });
+
+  test('JSON tronqué → null par défaut, récupéré avec salvage:true', () => {
+    // Réponse coupée par la limite de tokens, au milieu d'un tableau.
+    const cut = '{"scores":{"ia":6,"geo":5},"executive_summary":"Article daté.","priority_actions":[{"priority":"P1","title":"Réécrire"},{"priority":"P1","tit';
+    expect(parseJsonLoose(cut)).toBeNull();
+    const saved = parseJsonLoose(cut, { salvage: true });
+    expect(saved.scores).toEqual({ ia: 6, geo: 5 });
+    expect(saved.executive_summary).toBe('Article daté.');
+    // La coupure se fait au dernier champ COMPLET, y compris à l'intérieur du
+    // dernier élément : celui-ci survit donc partiellement (ici sans `title`).
+    // C'est voulu — mieux vaut une action de trop, incomplète et rendue vide par
+    // l'affichage, que perdre tout l'audit.
+    expect(saved.priority_actions).toEqual([
+      { priority: 'P1', title: 'Réécrire' },
+      { priority: 'P1' },
+    ]);
+  });
+});
+
+describe('repairTruncatedJson', () => {
+  test('coupure au milieu d\'une chaîne contenant une accolade', () => {
+    const cut = '{"a":1,"b":"texte avec { et } dedans","c":"coupé au mi';
+    const r = repairTruncatedJson(cut);
+    expect(r).toEqual({ a: 1, b: 'texte avec { et } dedans' });
+  });
+
+  test('objets imbriqués refermés dans le bon ordre', () => {
+    const cut = '{"x":{"y":{"z":1},"w":2},"v":[1,2,3],"u":{"t":';
+    expect(repairTruncatedJson(cut)).toEqual({ x: { y: { z: 1 }, w: 2 }, v: [1, 2, 3] });
+  });
+
+  test('moins de deux champs exploitables → null (inutilisable comme audit)', () => {
+    expect(repairTruncatedJson('{"scores":{"ia":6},"exec')).toBeNull();
+  });
+
+  test('entrée sans accolade → null', () => {
+    expect(repairTruncatedJson('Voici votre audit :')).toBeNull();
   });
 });
 
