@@ -1259,6 +1259,42 @@ export const absorbOrphanDeterminers = (html) => {
   return changed ? div.innerHTML : html;
 };
 
+// ── Garde-fou de GRANULARITÉ ──────────────────────────────────────────────────
+// Le prompt Refonte impose « UN update = UN bloc » et « original ~300 caractères
+// max, jamais multi-paragraphe ». Le modèle ne s'y tient pas toujours : il
+// renvoie un `original` couvrant plusieurs blocs (titre + paragraphes + liste) et
+// un `updated` réduit à un seul paragraphe. L'insertion écrase alors les <h2>,
+// les <ul> et les <table> au passage — l'article publié devient un mur de texte.
+//
+// On mesure donc ce que le remplacement FERAIT perdre, et on refuse quand il
+// aplatit. Refuser n'est pas perdre : l'update part dans la liste des
+// modifications non appliquées, que le rédacteur peut poser à la main.
+const BLOCK_TAG_RX   = /<(p|h[1-6]|ul|ol|li|table|tr|thead|tbody|blockquote|section|details)\b/gi;
+const HEADING_TAG_RX = /<h[1-6]\b/gi;
+const countMatches = (s, rx) => (String(s || '').match(rx) || []).length;
+
+/**
+ * @returns {{ ok: boolean, reason?: string }} — `ok:false` quand le remplacement
+ * ferait disparaître un titre ou fusionnerait plusieurs blocs en un seul.
+ */
+export const guardBlockGranularity = (update) => {
+  // Une addition n'écrase rien ; une suppression pure est déjà encadrée ailleurs.
+  if (!update || update.type === 'addition' || update.type === 'suppression') return { ok: true };
+  if (!update.original || !update.updated) return { ok: true };
+
+  const oHead = countMatches(update.original, HEADING_TAG_RX);
+  const uHead = countMatches(update.updated,  HEADING_TAG_RX);
+  if (oHead > uHead) return { ok: false, reason: 'titre-perdu' };
+
+  const oBlocks = countMatches(update.original, BLOCK_TAG_RX);
+  const uBlocks = countMatches(update.updated,  BLOCK_TAG_RX);
+  // Un bloc unique remplacé par un bloc unique reste légitime (ex. un tableau
+  // entier réécrit en tableau). C'est la FUSION de plusieurs blocs qui aplatit.
+  if (oBlocks >= 2 && uBlocks < oBlocks) return { ok: false, reason: 'blocs-fusionnes' };
+
+  return { ok: true };
+};
+
 export const applyAllDiffs = (html, updates, passNumber = 1, articleUrl = '') => {
   let updatedHtml = html;
   const withStatus = (updates || []).map((rawUpdate) => {
@@ -1267,6 +1303,14 @@ export const applyAllDiffs = (html, updates, passNumber = 1, articleUrl = '') =>
     if (blocked) {
       console.warn(`[diff p${passNumber}] Update BLOQUÉE (supprimerait un lien externe) :`, (policed.original || '').substring(0, 70));
       return { ...policed, applied: false, pass: passNumber, blockedReason: 'lien-externe' };
+    }
+    // Garde-fou GRANULARITÉ : un remplacement qui fusionnerait plusieurs blocs ou
+    // ferait disparaître un titre est refusé — il détruirait la structure de
+    // l'article (mur de texte sans h2, sans liste, sans tableau).
+    const gran = guardBlockGranularity(policed);
+    if (!gran.ok) {
+      console.warn(`[diff p${passNumber}] Update REFUSÉE (${gran.reason}) :`, (policed.original || '').substring(0, 70));
+      return { ...policed, applied: false, pass: passNumber, blockedReason: gran.reason };
     }
     // Sécurité structure : équilibrer le fragment inséré (updated) pour qu'aucune
     // balise non fermée ne fuie dans le document (cascade d'imbrication en Refonte).
