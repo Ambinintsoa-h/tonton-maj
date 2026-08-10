@@ -1,4 +1,5 @@
 import { createSlice } from '@reduxjs/toolkit';
+import { PHASE_AUDIT, initialPhaseStatus } from '../../constants/majPhases';
 
 const agentSlice = createSlice({
   name: 'agent',
@@ -23,8 +24,16 @@ const agentSlice = createSlice({
     majDepth: 'standard',  // profondeur de MAJ (legere|standard|refonte) — transmise à la passe 2
     instruction: '',  // consigne libre de l'équipe → injectée dans les prompts (analyse + MAJ, passe 2)
     audit: '',  // rapport d'audit complet (markdown) produit par le skill SKILL.md — onglet AUDIT
-    // ── Mode « Audit QAT + Refonte » (double flux — voir constants/majMode.js) ──
-    majMode: 'classique',  // classique (historique, défaut) | qat
+    // ── Parcours en QUATRE phases (voir constants/majPhases.js) ───────────────
+    // Remplace le double flux « classique | qat », annoncé comme temporaire. Il n'y
+    // a plus qu'un seul parcours, et l'ampleur (MAJ simple / refonte) se décide en
+    // PHASE 2, une fois l'audit lu — plus au lancement, où le rédacteur n'avait
+    // aucun élément pour trancher.
+    phase: PHASE_AUDIT,                  // phase ouverte dans l'éditeur
+    phaseStatus: initialPhaseStatus(),   // { audit, generation, obsolescence, relecture }
+    majScope: null,                      // simple | refonte — null tant que le rédacteur n'a pas tranché
+    linkAudit: null,                     // inventaire des liens de l'original (pré-requis de l'audit)
+    obsolescenceReport: null,            // suggestions de la phase 3
     auditJson: null,       // objet d'audit QAT { scores, ampleur, priority_actions… } — onglet AUDIT
     qatArticle: null,      // { titreSeo, metaDescription, h1, chapoHtml, wordCount, ampleurAppliquee… }
     // Rédaction en direct (streaming SSE) : on ne garde que la QUEUE du texte —
@@ -61,7 +70,11 @@ const agentSlice = createSlice({
       state.majDepth = 'standard';
       state.instruction = '';
       state.audit = '';
-      state.majMode = 'classique';
+      state.phase = PHASE_AUDIT;
+      state.phaseStatus = initialPhaseStatus();
+      state.majScope = null;
+      state.linkAudit = null;
+      state.obsolescenceReport = null;
       state.auditJson = null;
       state.qatArticle = null;
       state.liveTail = '';
@@ -102,7 +115,22 @@ const agentSlice = createSlice({
     setMajDepth: (state, action) => { state.majDepth = action.payload || 'standard'; },
     setInstruction: (state, action) => { state.instruction = action.payload || ''; },
     setAudit: (state, action) => { state.audit = action.payload || ''; },
-    setMajMode: (state, action) => { state.majMode = action.payload || 'classique'; },
+    setPhase: (state, action) => { state.phase = action.payload || PHASE_AUDIT; },
+    setPhaseStatus: (state, action) => {
+      // payload : { phase, status } — une phase à la fois, pour que l'appelant ne
+      // puisse pas écraser par mégarde l'avancement des trois autres.
+      const { phase, status } = action.payload || {};
+      if (phase && status) state.phaseStatus = { ...state.phaseStatus, [phase]: status };
+    },
+    // Restauration EN BLOC de l'avancement, à la réouverture d'un article
+    // (historique, file d'attente). Complète setPhaseStatus, qui ne touche qu'une
+    // phase à la fois pendant le déroulé normal.
+    restorePhaseStatus: (state, action) => {
+      state.phaseStatus = { ...initialPhaseStatus(), ...(action.payload || {}) };
+    },
+    setMajScope: (state, action) => { state.majScope = action.payload || null; },
+    setLinkAudit: (state, action) => { state.linkAudit = action.payload || null; },
+    setObsolescenceReport: (state, action) => { state.obsolescenceReport = action.payload || null; },
     setAuditJson: (state, action) => { state.auditJson = action.payload || null; },
     setQatArticle: (state, action) => { state.qatArticle = action.payload || null; },
     setLiveText: (state, action) => {
@@ -124,6 +152,7 @@ export const {
   setOriginalContent, setUpdatedContent, setDiff, setSources,
   setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
   setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword, setMajDepth, setInstruction, setAudit, setEditorMeta, setDraftStatus,
-  setMajMode, setAuditJson, setQatArticle, setLiveText, clearLiveText,
+  setPhase, setPhaseStatus, restorePhaseStatus, setMajScope, setLinkAudit, setObsolescenceReport,
+  setAuditJson, setQatArticle, setLiveText, clearLiveText,
 } = agentSlice.actions;
 export default agentSlice.reducer;

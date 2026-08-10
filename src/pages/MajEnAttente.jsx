@@ -21,9 +21,10 @@ import {
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
   setWpData, setMajDepth, setInstruction, setAudit, setEditorMeta,
-  setAuditJson, setQatArticle, setMajMode,
+  setAuditJson, setQatArticle, restorePhaseStatus, setPhase, setMajScope, setObsolescenceReport,
 } from '../store/slices/agentSlice';
 import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
+import { derivePhaseStatus, maxReachablePhase } from '../constants/majPhases';
 import { addArticleStat } from '../store/slices/statsSlice';
 import { addToHistory } from '../store/slices/articlesSlice';
 import { cacheSiteFonts } from '../store/slices/wordpressSlice';
@@ -1677,7 +1678,13 @@ export default function MajEnAttente() {
     const qatSrc = (arch && (arch.auditJson || arch.qatArticle)) ? arch : r;
     dispatch(setAuditJson(qatSrc.auditJson || null));
     dispatch(setQatArticle(qatSrc.qatArticle || null));
-    dispatch(setMajMode(qatSrc.majMode || r.majMode || 'classique'));
+    // Avancement du parcours en 4 phases — même règle que l'Historique : priorité à
+    // l'archive, puis déduction du contenu pour les enregistrements antérieurs.
+    const statuts = derivePhaseStatus((arch && arch.phaseStatus) ? arch : qatSrc);
+    dispatch(restorePhaseStatus(statuts));
+    dispatch(setPhase(maxReachablePhase(statuts)));
+    dispatch(setMajScope(qatSrc.majScope || r.majScope || null));
+    dispatch(setObsolescenceReport(qatSrc.obsolescenceReport || r.obsolescenceReport || null));
     dispatch(setMajDepth(r.majDepth || item.depth || DEFAULT_DEPTH));
     // Métadonnées d'édition persistées avec l'article (autosave/Enregistrer) →
     // rehydratées par ArticleResult. Priorité à l'archive (à jour au fil de

@@ -16,8 +16,9 @@ import { addPendingItem } from '../store/slices/pendingSlice';
 import {
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit, setWpData,
-  setAuditJson, setQatArticle, setMajMode,
+  setAuditJson, setQatArticle, restorePhaseStatus, setPhase, setMajScope, setObsolescenceReport,
 } from '../store/slices/agentSlice';
+import { derivePhaseStatus, maxReachablePhase } from '../constants/majPhases';
 import { deleteArticle, fetchArticleHtml, getArticles, isLockActive, archiveArticle } from '../services/firebase';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Pagination, { pageSlice } from '../components/common/Pagination';
@@ -872,7 +873,15 @@ export default function Historique() {
     // (même classe de bug que le wpData ci-dessus).
     dispatch(setAuditJson(article.auditJson || null));
     dispatch(setQatArticle(article.qatArticle || null));
-    dispatch(setMajMode(article.majMode || 'classique'));
+    // Parcours en 4 phases : on restaure l'avancement de CET article et on ouvre la
+    // phase où il en était. Les enregistrements antérieurs au parcours n'en portent
+    // pas — derivePhaseStatus le déduit de leur contenu, pour ne pas renvoyer le
+    // rédacteur à la phase 1 sur un article déjà travaillé.
+    const statuts = derivePhaseStatus(article);
+    dispatch(restorePhaseStatus(statuts));
+    dispatch(setPhase(maxReachablePhase(statuts)));
+    dispatch(setMajScope(article.majScope || null));
+    dispatch(setObsolescenceReport(article.obsolescenceReport || null));
     dispatch(setCurrentArticleId(article.id));
     dispatch(setStatus('done'));
     navigate('/');
