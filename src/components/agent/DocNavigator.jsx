@@ -116,9 +116,17 @@ export default function DocNavigator({ articleEl, onEdited, clipboard = null, on
   const [inView, setInView] = useState(false);
   useEffect(() => {
     if (!articleEl) { setInView(false); return; }
+    // threshold 0 (toute intersection, même d'un pixel) et NON une fraction de
+    // l'élément : l'éditeur d'un long article mesure plusieurs fois la hauteur de
+    // la fenêtre, donc la fraction visible est structurellement minuscule. Avec un
+    // seuil de 0,05 un article de 13 000 px dans une fenêtre de 700 px plafonnait
+    // à 0,052 → le panneau n'apparaissait que dans une bande de défilement
+    // étroite, et devenait DÉFINITIVEMENT inatteignable au-delà de 20 × la
+    // hauteur de fenêtre. La bonne question est « l'éditeur est-il à l'écran ? »,
+    // pas « quelle proportion de l'éditeur est à l'écran ? ».
     const io = new IntersectionObserver(
       ([entry]) => setInView(entry.isIntersecting),
-      { threshold: 0.05 },
+      { threshold: 0 },
     );
     io.observe(articleEl);
     return () => io.disconnect();
