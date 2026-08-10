@@ -10,15 +10,14 @@ import {
   INTERNAL_LINK_ROWS_INITIAL, emptyLinkRow, cleanLinkRows,
 } from '../constants/majMode';
 import {
-  PHASE_AUDIT, PHASE_GENERATION, PHASE_OBSOLESCENCE, DONE,
-  SCOPE_SIMPLE, SCOPE_REFONTE,
+  PHASE_AUDIT, PHASE_GENERATION, DONE,
 } from '../constants/majPhases';
 import { addToHistory, updateInHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
 import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
-import { runQatAgent } from '../services/agentQat';
+import { runQatAudit } from '../services/agentQat';
 import QatBriefFields from '../components/agent/QatBriefFields';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
 import { loadDraftLocal, loadDraftRemote, clearDraft } from '../services/articleDraft';
@@ -26,8 +25,6 @@ import tracker from '../services/activityTracker';
 import articleTimeTracker from '../services/articleTimeTracker';
 import AgentThinking from '../components/agent/AgentThinking';
 import ArticleResult from '../components/agent/ArticleResult';
-import { normalizeFaqToAccordion } from '../utils/faq';
-import { makeTablesResponsive } from '../utils/blocks';
 
 const TAB_URL = 'url';
 const TAB_TEXT = 'text';
@@ -257,68 +254,52 @@ export default function Articles() {
     dispatch(setOriginalContent(articleHtml));
 
     try {
-      // Parcours UNIQUE : l'IA renvoie l'article ENTIER, déjà passé par
-      // sanitizeFullArticle (verrou liens externes + sécurité structure). Il n'y a
-      // donc plus d'updates[] à appliquer un par un comme dans l'ancien flux.
-      const allUpdatesWithStatus = [];
-      let updatedHtml = '';
+      // PHASE 1 — AUDIT SEUL. La génération est désormais une étape distincte,
+      // déclenchée par le rédacteur en phase 2 une fois l'audit lu : c'est tout
+      // l'objet du découpage en quatre phases. Le lancement ne produit donc aucun
+      // texte, et ne coûte qu'un appel d'audit au lieu de deux.
+      const result = await runQatAudit({
+        content: articleContent,
+        contentHtml: articleHtml,
+        skills,
+        knowledge,
+        articleUrl,
+        targetKeyword:  targetKeyword.trim(),
+        articleType,
+        seoPlugin,
+        targetWords,
+        internalLinks:  cleanLinkRows(linkRows),
+        wpSites,
+        existingWpData: prefetchedWpData,
+        modelPricing:   settings.modelPricing || null,
+        onStep:     (s) => dispatch(addStep(s)),
+        onReplace:  (s) => dispatch(replaceLastStep(s)),
+        onProgress: (p) => dispatch(setProgress(p)),
+        // Rédaction en direct : seule la fin du texte est conservée (400 car.),
+        // c'est tout ce que l'affichage montre.
+        onDelta:    (text, chars) => dispatch(setLiveText({ tail: text.slice(-400), chars })),
+      });
+      dispatch(clearLiveText());
+      dispatch(setWpData(result.wpData || null));
+      dispatch(setAuditJson(result.audit || null));
+      dispatch(setQatArticle(null));      // rien n'est encore généré
 
-      const result = await runQatAgent({
-          content: articleContent,
-          contentHtml: articleHtml,
-          skills,
-          knowledge,
-          articleUrl,
-          targetKeyword:  targetKeyword.trim(),
-          articleType,
-          seoPlugin,
-          targetWords,
-          internalLinks:  cleanLinkRows(linkRows),
-          instruction:    notes.trim(),
-          wpSites,
-          existingWpData: prefetchedWpData,
-          modelPricing:   settings.modelPricing || null,
-          // « auto » → l'audit décide de l'ampleur ; un choix explicite du rédacteur prime.
-          depth:          majDepth === DEFAULT_DEPTH ? 'auto' : majDepth,
-          onStep:     (s) => dispatch(addStep(s)),
-          onReplace:  (s) => dispatch(replaceLastStep(s)),
-          onProgress: (p) => dispatch(setProgress(p)),
-          // Production en direct : seule la fin du texte est conservée (400 car.),
-          // c'est tout ce que l'affichage montre — inutile de faire transiter
-          // 100 000 caractères par Redux à chaque fragment.
-          onDelta:    (text, chars) => dispatch(setLiveText({ tail: text.slice(-400), chars })),
-        });
-        dispatch(clearLiveText());
-        dispatch(setWpData(result.wpData || null));
-        // Même repli que la branche classique : si le modèle renvoie un article
-        // sans balises de bloc, les sauts de ligne sont convertis — sans ça, la
-        // vue Après affichait un mur de texte sans aucun recours.
-        const qatRaw = result.article.html || '';
-        const qatBase = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(qatRaw)
-          ? qatRaw
-          : qatRaw.replace(/\n/g, '<br>');
-        updatedHtml = makeTablesResponsive(normalizeFaqToAccordion(qatBase));
-        dispatch(setAuditJson(result.audit || null));
-        dispatch(setQatArticle(result.article || null));
-        if (result.article?.strippedExternalLinks?.length) {
-          toast(`${result.article.strippedExternalLinks.length} lien(s) externe(s) ajouté(s) par l'IA ont été retiré(s) — règle liens externes.`, { icon: '🔒' });
-        }
-      const appliedUpdates = allUpdatesWithStatus.filter(u => u.applied);
+      // L'éditeur travaille sur `updatedContent`. Tant que la phase 2 n'a pas
+      // tourné, c'est l'article D'ORIGINE, inchangé : le rédacteur voit le texte
+      // réel sur lequel porte l'audit, plutôt qu'un écran vide.
+      const updatedHtml = articleHtml;
+      const appliedUpdates = [];
       dispatch(setUpdatedContent(updatedHtml));
-      // Stocker TOUS les updates avec leur statut (applied/non-applied)
-      dispatch(setDiff(allUpdatesWithStatus));
+      dispatch(setDiff([]));
       dispatch(setSources(result.sources || []));
-      // En mode QAT il n'y a pas de champ `analysis` : le résumé exécutif de
-      // l'audit en tient lieu, et l'audit lui-même vit dans `auditJson` (objet),
-      // pas dans `audit` (markdown du flux historique).
       // `executive_summary` vient d'un JSON libre : un objet ou un tableau ferait
-      // planter renderMarkdown (text.trimStart) après 10 min de génération.
+      // planter renderMarkdown (text.trimStart).
       const rawSummary = result.audit?.executive_summary;
       const analysisText = typeof rawSummary === 'string'
         ? rawSummary
         : rawSummary ? JSON.stringify(rawSummary) : '';
       // L'audit markdown du flux historique n'existe plus : l'audit vit dans
-      // `auditJson` (objet structure), consulte en phase 1.
+      // `auditJson` (objet structuré), consulté en phase 1.
       const auditMarkdown = '';
       dispatch(setAnalysis(analysisText));
       dispatch(setParseFailed(result.parseFailed === true));
@@ -326,12 +307,11 @@ export default function Articles() {
       dispatch(setInternalLinksInfo(result.internalLinksInfo || null));
       dispatch(setAgentTargetKeyword(targetKeyword.trim()));
       dispatch(setAgentMajDepth(majDepth));
-      // Phase 1 terminée, et phase 2 aussi tant que la génération reste dans le
-      // même appel (elles seront séparées en PR 2). L'éditeur ouvre donc la phase 3.
+      // SEULE la phase 1 est terminée. Le parcours s'ouvre sur la phase 2, où le
+      // rédacteur tranche l'ampleur et lance la génération.
       dispatch(setPhaseStatus({ phase: PHASE_AUDIT, status: DONE }));
-      dispatch(setPhaseStatus({ phase: PHASE_GENERATION, status: DONE }));
-      dispatch(setPhase(PHASE_OBSOLESCENCE));
-      dispatch(setMajScope(result.article?.ampleurAppliquee === 'ciblee' ? SCOPE_SIMPLE : SCOPE_REFONTE));
+      dispatch(setPhase(PHASE_GENERATION));
+      dispatch(setMajScope(null));
       dispatch(setAudit(auditMarkdown));
       dispatch(setStatus('done'));
 
@@ -357,17 +337,14 @@ export default function Articles() {
         url: articleUrl,
         keyword: targetKeyword.trim(),  // mot-clé cible → focus keyphrase à la publication
         majDepth,                       // profondeur choisie — réutilisée par la phase 3
-        // Avancement du parcours, pour rouvrir l'article à la bonne phase.
-        phaseStatus: { [PHASE_AUDIT]: DONE, [PHASE_GENERATION]: DONE },
-        majScope: result.article?.ampleurAppliquee === 'ciblee' ? SCOPE_SIMPLE : SCOPE_REFONTE,
-        // Mode QAT : audit structuré + métadonnées de l'article réécrit (titre SEO,
-        // méta-description, chapô) — repris par l'éditeur et par la publication WP.
-        // `qatArticle.html` est VOLONTAIREMENT retiré : c'est exactement
-        // `updatedContent`, déjà persisté juste au-dessus. Le garder doublait le
-        // poids de l'article dans un document Firestore limité à 1 Mo.
+        // Avancement : seule la phase 1 est faite, l'article se rouvrira en phase 2.
+        phaseStatus: { [PHASE_AUDIT]: DONE },
+        // Audit structuré, consultable à la réouverture. `qatArticle` (titre SEO,
+        // méta-description, chapô, ampleur appliquée) naît en PHASE 2 : au sortir
+        // du lancement il n'existe pas encore.
         ...{
           auditJson: result.audit || null,
-          qatArticle: result.article ? (({ html, ...rest }) => rest)(result.article) : null,
+          qatArticle: null,
           // Brief de lancement : sans lui, impossible de rejouer une MAJ QAT à
           // l'identique (le type d'article et le maillage ne vivaient que dans
           // l'état local de cette page et disparaissaient au démontage).

@@ -28,7 +28,15 @@ import {
 } from '../../utils/faq';
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, tableBlockOf, unwrapTransparentDivs, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
 import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
-import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction } from '../../store/slices/agentSlice';
+import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction,
+  setQatArticle, setPhase, setPhaseStatus, setMajScope } from '../../store/slices/agentSlice';
+import { runQatRewrite } from '../../services/agentQat';
+import {
+  PHASE_AUDIT, PHASE_GENERATION, DONE, RUNNING, ERROR,
+  SCOPE_SIMPLE, scopeProposedByAudit,
+} from '../../constants/majPhases';
+import PhaseStepper from './PhaseStepper';
+import PhaseGeneration from './PhaseGeneration';
 import RewritePanel from './RewritePanel';
 import ImageAltCaptionPanel from './ImageAltCaptionPanel';
 import SectionRewritePanel from './SectionRewritePanel';
@@ -170,6 +178,10 @@ export default function ArticleResult() {
   const auditJson  = agent.auditJson  || cqItem?.majResult?.auditJson  || null;
   const qatArticle = agent.qatArticle || cqItem?.majResult?.qatArticle || null;
   const isQat      = !!auditJson || !!qatArticle;
+  // Parcours en quatre phases. L'avancement vit dans le store et est PERSISTE par
+  // l'autosave existant : on ne tient pas un second compteur en parallele.
+  const phase       = agent.phase || PHASE_AUDIT;
+  const phaseStatus = agent.phaseStatus || {};
   // Vrai si un skill SKILL.md est actif → l'onglet Audit est attendu (affiché même vide).
   const hasBrainSkill = (skills || []).some(s => s?.format === 'skillmd' && s.active !== false && s.body);
 
@@ -1386,6 +1398,81 @@ export default function ArticleResult() {
   const [reviewing, setReviewing] = useState(false);
   const [reviewStep, setReviewStep] = useState('');
   const [reviewProgress, setReviewProgress] = useState(0);
+
+  // ── PHASE 2 — GENERATION ────────────────────────────────────────────────────
+  // L'audit a tourne en phase 1. Ici on ne fait QUE la reecriture, avec l'ampleur
+  // tranchee par le redacteur. Le brief de lancement (type d'article, plugin SEO,
+  // longueur cible, maillage) est repris de l'enregistrement : il ne vit plus dans
+  // l'etat de la page Articles, qui est demontee a ce stade.
+  // L'enregistrement passe par triggerAutosave, le meme mecanisme que toute
+  // edition — aucune persistance supplementaire n'est introduite.
+  const [generating, setGenerating]   = useState(false);
+  const [genStep, setGenStep]         = useState('');
+  const [genProgress, setGenProgress] = useState(0);
+
+  const handleGenerate = async (scope) => {
+    if (!auditJson) {
+      toast.error('Lancez l\'audit (phase 1) avant de generer.');
+      return;
+    }
+    const brief = currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {};
+    const source = agent.originalContent || '';
+    setGenerating(true);
+    setGenProgress(0);
+    setGenStep('Preparation de la generation...');
+    dispatch(setPhaseStatus({ phase: PHASE_GENERATION, status: RUNNING }));
+    try {
+      const res = await runQatRewrite({
+        content:        source,
+        contentHtml:    source,
+        audit:          auditJson,
+        skills,
+        knowledge,
+        articleUrl,
+        targetKeyword:  agent.targetKeyword || '',
+        articleType:    brief.articleType,
+        seoPlugin:      brief.seoPlugin,
+        targetWords:    brief.targetWords,
+        internalLinks:  brief.internalLinks || [],
+        // L'ampleur tranchee en phase 2 pilote la profondeur : un choix explicite
+        // du redacteur prime toujours sur la recommandation de l'audit.
+        depth:          scope === SCOPE_SIMPLE ? 'ciblee' : 'refonte',
+        instruction:    agent.instruction || '',
+        modelPricing:   settings.modelPricing || null,
+        onStep:     (t) => setGenStep(t),
+        onReplace:  (t) => setGenStep(t),
+        onProgress: (p) => setGenProgress(p),
+        onDelta:    () => {},
+      });
+      const raw = res.article?.html || '';
+      if (!raw.trim()) throw new Error('article vide renvoye par l\'IA');
+      // Meme repli que l'ecran de lancement : un article sans balise de bloc
+      // deviendrait un mur de texte sans aucun recours.
+      const base = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(raw) ? raw : raw.replace(/\n/g, '<br>');
+      const html = makeTablesResponsive(normalizeFaqToAccordion(base));
+
+      dispatch(setUpdatedContent(html));
+      dispatch(setQatArticle(res.article || null));
+      dispatch(setMajScope(scope));
+      dispatch(setPhaseStatus({ phase: PHASE_GENERATION, status: DONE }));
+      if (res.tokenUsage) dispatch(setTokenUsage(res.tokenUsage));
+
+      // Synchroniser l'editeur puis ENREGISTRER par le circuit habituel.
+      if (articleRef.current) { articleRef.current.innerHTML = html; lockMedia(articleRef.current); }
+      contentRef.current = html;
+      humanEditRef.current = false;
+      triggerAutosave();
+
+      // On RESTE en phase 2 : le redacteur doit d'abord voir le bilan de longueur
+      // calcule. Le stepper ouvre desormais la phase 3, il y va quand il veut.
+      toast.success('Mise a jour generee — verifiez le bilan de longueur.');
+    } catch (e) {
+      dispatch(setPhaseStatus({ phase: PHASE_GENERATION, status: ERROR }));
+      toast.error(`Generation en echec — ${e.message}`);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   // ── Modal "Ajouter des sources" ────────────────────────────────────────────
   const [showSourcesModal, setShowSourcesModal] = useState(false);
@@ -3602,6 +3689,29 @@ export default function ArticleResult() {
         </div>
         </div>,
         document.body)}
+
+        {/* ── Parcours en quatre phases — repere principal du redacteur ─────── */}
+        <div className="px-6 pt-6 space-y-4">
+          <PhaseStepper
+            phase={phase}
+            phaseStatus={phaseStatus}
+            onSelect={(p) => dispatch(setPhase(p))}
+          />
+          {phase === PHASE_GENERATION && (
+            <PhaseGeneration
+              audit={auditJson}
+              scope={agent.majScope || scopeProposedByAudit(auditJson)}
+              onScopeChange={(sc) => dispatch(setMajScope(sc))}
+              onGenerate={handleGenerate}
+              generating={generating}
+              step={genStep}
+              progress={genProgress}
+              originalHtml={agent.originalContent || ''}
+              generatedHtml={qatArticle ? (agent.updatedContent || '') : ''}
+              qatArticle={qatArticle}
+            />
+          )}
+        </div>
 
         {/* Contenu des tabs */}
         <AnimatePresence mode="wait">
