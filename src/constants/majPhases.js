@@ -138,6 +138,20 @@ export const MAJ_SCOPES = {
 };
 
 /**
+ * Ampleur PROPOSÉE par l'audit. L'audit propose, le rédacteur tranche : cette
+ * valeur ne fait que présélectionner le choix de la phase 2.
+ *
+ * `restructuration` (plan refait, fond conservé) relève de la refonte : la
+ * structure change, donc c'est hors de portée de modifications ciblées.
+ * Décision absente ou inconnue → refonte, l'option prudente : mieux vaut
+ * proposer trop de travail que de laisser passer un article à refaire.
+ */
+export const scopeProposedByAudit = (audit) => {
+  const d = audit && audit.ampleur && audit.ampleur.decision;
+  return d === 'maj_ciblee' ? SCOPE_SIMPLE : SCOPE_REFONTE;
+};
+
+/**
  * MINIMUM STRICT sur une MAJ simple : 200 mots ajoutés. Ce n'est pas un objectif
  * indicatif — une MAJ simple qui ajoute moins que ça est NON CONFORME et doit
  * être signalée comme telle, pas comme une remarque neutre.
