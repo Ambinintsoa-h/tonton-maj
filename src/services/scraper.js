@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { stripNonEditorialLinks, stripNonEditorialUrlsFromText } from '../utils/scrapeClean';
 
 const PROXY_SCRAPE = '/api/scrape';
 const PROXY_JINA   = '/api/jina';   // Jina via proxy — évite l'appel direct depuis le browser
@@ -31,10 +32,18 @@ export const scrapeUrl = async (url, signal) => {
       const titleHtml = (title && !content.includes(title))
         ? `<h1>${title}</h1>\n`
         : '';
+      // Boutons de suivi Google (« Discover », « Ajouter comme source préférée »)
+      // retirés AVANT que le contenu n'entre dans le parcours : le verrou liens
+      // externes exigerait ensuite que l'IA les reproduise dans l'article, ce qui
+      // a déjà fait échouer des générations entières (voir utils/scrapeClean.js).
+      const propre = stripNonEditorialLinks(titleHtml + content);
+      if (propre.removed.length) {
+        console.warn(`[scrape] ${propre.removed.length} lien(s) non éditorial(aux) retiré(s) :`, propre.removed);
+      }
       return {
         success:     true,
-        content:     titleHtml + content,   // HTML structuré
-        textContent: textContent || content, // texte brut pour Claude
+        content:     propre.html,                                     // HTML structuré
+        textContent: stripNonEditorialUrlsFromText(textContent || content), // texte brut pour Claude
         title,
       };
     }
@@ -59,8 +68,10 @@ export const scrapeUrl = async (url, signal) => {
       { timeout: 35000, ...(signal ? { signal } : {}) }
     );
 
-    const text = typeof resp.data?.data === 'string' ? resp.data.data : '';
-    if (!text || text.trim().length < 100) throw new Error('Contenu insuffisant');
+    const brut = typeof resp.data?.data === 'string' ? resp.data.data : '';
+    if (!brut || brut.trim().length < 100) throw new Error('Contenu insuffisant');
+    // Jina rend du texte, pas du HTML : les widgets y apparaissent en URL nues.
+    const text = stripNonEditorialUrlsFromText(brut);
 
     return {
       success:     true,
