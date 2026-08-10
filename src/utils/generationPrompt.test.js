@@ -45,6 +45,25 @@ describe('ampleur — la consigne change vraiment selon le choix de phase 2', ()
     expect(p).not.toContain('## Ampleur : refonte');
   });
 
+  test('MAJ simple : la préséance sur une action d\'audit contradictoire est posée', () => {
+    // Constaté en test reel : l'audit demandait « reduire de 3452 a 2500 mots »,
+    // le prompt exigeait +200 mots, et le modele a suivi l'audit — article
+    // raccourci de 935 mots. Les deux consignes venant du meme prompt, il doit
+    // dire laquelle l'emporte.
+    const p = buildGenerationPrompt({
+      scope: SCOPE_SIMPLE,
+      audit: { priority_actions: [{ priority: 'P2', title: 'Réduire la longueur', detail: 'De 3452 à 2500 mots.' }] },
+    });
+    expect(p).toMatch(/PRÉSÉANCE/);
+    expect(p).toMatch(/c'est CETTE AMPLEUR qui prime/);
+    expect(p).toMatch(/sans réduire la longueur/);
+    expect(p).toContain('Réduire la longueur');   // l'action de l'audit reste citée
+  });
+
+  test('une refonte ne porte AUCUNE règle de préséance — il n\'y a pas de conflit', () => {
+    expect(buildGenerationPrompt({ scope: SCOPE_REFONTE })).not.toMatch(/PRÉSÉANCE/);
+  });
+
   test('refonte : réécriture intégrale, et interdiction de perdre l\'existant valable', () => {
     const p = buildGenerationPrompt({ scope: SCOPE_REFONTE });
     expect(p).toContain('## Ampleur : refonte');
