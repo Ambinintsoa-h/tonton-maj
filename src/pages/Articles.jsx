@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2, Gauge } from 'lucide-react';
-import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setPhase, setPhaseStatus, setMajScope, setAuditJson, setQatArticle, setLiveText, clearLiveText } from '../store/slices/agentSlice';
+import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setPhase, setPhaseStatus, restorePhaseStatus, setMajScope, setAuditJson, setQatArticle, setLiveText, clearLiveText } from '../store/slices/agentSlice';
 import { DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
@@ -11,6 +11,7 @@ import {
 } from '../constants/majMode';
 import {
   PHASE_AUDIT, PHASE_GENERATION, DONE,
+  derivePhaseStatus, maxReachablePhase,
 } from '../constants/majPhases';
 import { addToHistory, updateInHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
@@ -85,6 +86,21 @@ export default function Articles() {
         dispatch(setWpData(d.wpData || null));
         dispatch(setInternalLinks(d.internalLinks || []));
         dispatch(setAudit(d.audit || ''));
+        // Avancement du parcours en quatre phases. C'est le chemin d'entrée le PLUS
+        // fréquent — il se déclenche à chaque chargement de page — et l'oublier
+        // ramenait le stepper à « phase 1 à faire » sur un article déjà généré,
+        // en verrouillant les phases 2 à 4. Un brouillon antérieur ne porte pas
+        // d'avancement : derivePhaseStatus le déduit alors de son contenu.
+        const statuts = derivePhaseStatus({
+          phaseStatus: d.phaseStatus,
+          audit:       d.audit,
+          auditJson:   d.auditJson,
+          qatArticle:  d.qatArticle,
+          diff:        d.diff,
+        });
+        dispatch(restorePhaseStatus(statuts));
+        dispatch(setPhase(maxReachablePhase(statuts)));
+        if (d.majScope) dispatch(setMajScope(d.majScope));
         dispatch(setCurrentArticleId(d.currentArticleId || null));
         if (d.tokenUsage) dispatch(setTokenUsage(d.tokenUsage));
         if (d.instruction) dispatch(setAgentInstruction(d.instruction));

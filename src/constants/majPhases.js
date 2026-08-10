@@ -104,8 +104,12 @@ export const derivePhaseStatus = (rec) => {
   if (!rec) return base;
   if (rec.phaseStatus) return { ...base, ...rec.phaseStatus };   // déjà au nouveau format
 
-  const aUnAudit      = !!(rec.auditJson || rec.audit);
-  const aUneGenration = !!(rec.qatArticle || rec.updatedContent || (rec.diff && rec.diff.length));
+  const aUnAudit = !!(rec.auditJson || rec.audit);
+  // `updatedContent` n'est PAS un signal de génération : depuis la séparation des
+  // phases, il porte l'article D'ORIGINE dès la fin de l'audit. S'en servir
+  // marquerait la phase 2 terminée alors que rien n'a été produit. Les seuls
+  // signaux fiables sont l'article réécrit ou des modifications proposées.
+  const aUneGenration = !!(rec.qatArticle || (Array.isArray(rec.diff) && rec.diff.length));
   const aUneVerif     = !!rec.obsolescenceReport;
 
   // Une génération présente implique un audit passé : sur les anciens

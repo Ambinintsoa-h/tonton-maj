@@ -6,7 +6,7 @@
 import {
   PHASE_AUDIT, PHASE_GENERATION, PHASE_OBSOLESCENCE, PHASE_RELECTURE, PHASE_ORDER,
   PHASES, TODO, DONE, RUNNING, initialPhaseStatus,
-  phaseMeta, phaseIndex, nextPhase, prevPhase, maxReachablePhase, canEnterPhase,
+  phaseMeta, phaseIndex, nextPhase, prevPhase, maxReachablePhase, canEnterPhase, derivePhaseStatus,
   SCOPE_SIMPLE, SCOPE_REFONTE, MAJ_SCOPES, MIN_WORDS_ADDED_SIMPLE,
   scopeProposedByAudit, wordCount, wordsAddedReport,
 } from './majPhases';
@@ -97,6 +97,52 @@ describe('ampleur décidée en phase 2', () => {
     expect(MAJ_SCOPES[SCOPE_SIMPLE].label).toBe('MAJ simple');
     expect(MAJ_SCOPES[SCOPE_REFONTE].label).toBe('Refonte');
     Object.values(MAJ_SCOPES).forEach(s => expect(s.description).toBeTruthy());
+  });
+});
+
+describe('derivePhaseStatus — rouvrir un article au bon endroit', () => {
+  test('un enregistrement au nouveau format est repris tel quel', () => {
+    const s = derivePhaseStatus({ phaseStatus: { [PHASE_AUDIT]: DONE, [PHASE_GENERATION]: DONE } });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+    expect(s[PHASE_GENERATION]).toBe(DONE);
+    expect(s[PHASE_OBSOLESCENCE]).toBe(TODO);   // les clés absentes restent à faire
+  });
+
+  test('article QAT ancien (audit + article réécrit) → phases 1 et 2 faites', () => {
+    const s = derivePhaseStatus({ auditJson: { scores: {} }, qatArticle: { wordCount: 2200 } });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+    expect(s[PHASE_GENERATION]).toBe(DONE);
+  });
+
+  test('article classique ancien (audit markdown + updates) → phases 1 et 2 faites', () => {
+    const s = derivePhaseStatus({ audit: 'RAPPORT...', diff: [{ original: 'a', updated: 'b' }] });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+    expect(s[PHASE_GENERATION]).toBe(DONE);
+  });
+
+  test('AUDIT SEUL : updatedContent ne doit PAS faire croire à une génération', () => {
+    // Depuis la séparation des phases, updatedContent porte l'article d'origine
+    // dès la fin de l'audit. Le compter marquerait la phase 2 faite à tort et
+    // sauterait l'étape de génération.
+    const s = derivePhaseStatus({ auditJson: { scores: {} }, updatedContent: '<p>article d\'origine</p>', diff: [] });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+    expect(s[PHASE_GENERATION]).toBe(TODO);
+  });
+
+  test('une génération sans audit conservé implique quand même l\'audit', () => {
+    const s = derivePhaseStatus({ qatArticle: { wordCount: 1 } });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+  });
+
+  test('vérification enregistrée → phase 3 faite', () => {
+    const s = derivePhaseStatus({ auditJson: {}, qatArticle: {}, obsolescenceReport: { items: [] } });
+    expect(s[PHASE_OBSOLESCENCE]).toBe(DONE);
+  });
+
+  test('enregistrement vide ou absent → tout à faire', () => {
+    expect(derivePhaseStatus(null)).toEqual(initialPhaseStatus());
+    expect(derivePhaseStatus({})).toEqual(initialPhaseStatus());
+    expect(derivePhaseStatus(undefined)).toEqual(initialPhaseStatus());
   });
 });
 
