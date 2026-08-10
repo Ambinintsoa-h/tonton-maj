@@ -32,13 +32,15 @@ import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setW
   setQatArticle, setPhase, setPhaseStatus, setMajScope } from '../../store/slices/agentSlice';
 import { runQatRewrite } from '../../services/agentQat';
 import {
-  PHASE_AUDIT, PHASE_GENERATION, DONE, RUNNING, ERROR,
-  SCOPE_SIMPLE, scopeProposedByAudit,
+  PHASE_AUDIT, PHASE_GENERATION, PHASE_OBSOLESCENCE, PHASE_RELECTURE,
+  DONE, RUNNING, ERROR, SCOPE_SIMPLE, scopeProposedByAudit,
 } from '../../constants/majPhases';
-import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE } from '../../utils/generationPrompt';
+import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, DEFAULT_VERIFICATION_TEMPLATE } from '../../utils/generationPrompt';
 import { setProfile } from '../../store/slices/authSlice';
 import PhaseStepper from './PhaseStepper';
 import PhaseGeneration from './PhaseGeneration';
+import PhaseObsolescence from './PhaseObsolescence';
+import PhaseRelecture from './PhaseRelecture';
 import RewritePanel from './RewritePanel';
 import ImageAltCaptionPanel from './ImageAltCaptionPanel';
 import SectionRewritePanel from './SectionRewritePanel';
@@ -1435,17 +1437,85 @@ export default function ArticleResult() {
     if (!promptTouche) reconstruirePrompt();
   }, [reconstruirePrompt, promptTouche]);
 
-  const handleSaveTemplate = async () => {
-    setSavingTemplate(true);
+  const handleSaveTemplate = () => enregistrerModele('generation', prompt, setSavingTemplate);
+
+  // ── PHASE 3 — VERIFICATION D'OBSOLESCENCE ──────────────────────────────────
+  // Reutilise runReviewAgent (l'ancienne passe 2), reoriente par le prompt du
+  // redacteur. Difference essentielle : les suggestions ne sont PAS fusionnees
+  // dans l'article. Elles s'affichent a cote, pretes a etre copiees — c'est le
+  // redacteur qui decide de ce qu'il reprend.
+  const monModeleVerif = authUser?.prompts?.verification || DEFAULT_VERIFICATION_TEMPLATE;
+  const [verifPrompt, setVerifPrompt] = useState('');
+  const [verifPromptTouche, setVerifPromptTouche] = useState(false);
+  const [verifRunning, setVerifRunning] = useState(false);
+  const [verifStep, setVerifStep] = useState('');
+  const [verifProgress, setVerifProgress] = useState(0);
+  const [verifSuggestions, setVerifSuggestions] = useState([]);
+  const [verifATourne, setVerifATourne] = useState(false);
+  const [savingVerifTemplate, setSavingVerifTemplate] = useState(false);
+  const [relectureTick, setRelectureTick] = useState(0);
+
+  const reconstruireVerifPrompt = useCallback(() => {
+    const mc = agent.targetKeyword ? `\n\nMot-cle de l'article : « ${agent.targetKeyword} ».` : '';
+    setVerifPrompt(`${monModeleVerif}${mc}`);
+    setVerifPromptTouche(false);
+  }, [monModeleVerif, agent.targetKeyword]);
+
+  useEffect(() => {
+    if (!verifPromptTouche) reconstruireVerifPrompt();
+  }, [reconstruireVerifPrompt, verifPromptTouche]);
+
+  const enregistrerModele = async (cle, texte, setBusy) => {
+    setBusy(true);
     try {
-      const prompts = { ...(authUser?.prompts || {}), generation: prompt };
+      const prompts = { ...(authUser?.prompts || {}), [cle]: texte };
       await axios.put('/api/account', { prompts });
       dispatch(setProfile({ prompts }));
       toast.success('Modele enregistre — il pre-remplira vos prochains articles.');
     } catch (e) {
       toast.error(`Modele non enregistre — ${e?.response?.data?.error || e.message}`);
     } finally {
-      setSavingTemplate(false);
+      setBusy(false);
+    }
+  };
+
+  const handleVerify = async () => {
+    // On verifie le texte REELLEMENT produit en phase 2, diffs resolus.
+    const texte = getFinalHtml({ pendingChanges: 'accept' });
+    if (!texte || !texte.trim()) { toast.error('Aucun article a verifier — passez par la phase 2.'); return; }
+    setVerifRunning(true);
+    setVerifProgress(0);
+    setVerifStep('Verification des informations...');
+    dispatch(setPhaseStatus({ phase: PHASE_OBSOLESCENCE, status: RUNNING }));
+    try {
+      const res = await runReviewAgent({
+        content: texte,
+        firstPassUpdates: [],
+        firstPassAnalysis: agent.analysis || '',
+        skills,
+        knowledge,
+        modelPricing: settings.modelPricing || null,
+        depth: agent.majDepth,
+        instruction: verifPrompt,
+        onStep: (t) => setVerifStep(t),
+        onProgress: (p) => setVerifProgress(p),
+      });
+      const propositions = Array.isArray(res?.updates) ? res.updates : [];
+      setVerifSuggestions(propositions);
+      setVerifATourne(true);
+      dispatch(setPhaseStatus({ phase: PHASE_OBSOLESCENCE, status: DONE }));
+      if (res.tokenUsage) dispatch(setTokenUsage(res.tokenUsage));
+      // Enregistrement par le circuit habituel : l'avancement de la phase 3 suit
+      // l'article, comme les autres artefacts.
+      triggerAutosave();
+      toast.success(propositions.length
+        ? `${propositions.length} suggestion(s) a examiner.`
+        : 'Aucune information obsolete detectee.');
+    } catch (e) {
+      dispatch(setPhaseStatus({ phase: PHASE_OBSOLESCENCE, status: ERROR }));
+      toast.error(`Verification en echec — ${e.message}`);
+    } finally {
+      setVerifRunning(false);
     }
   };
 
@@ -3759,6 +3829,31 @@ export default function ArticleResult() {
               onResetPrompt={reconstruirePrompt}
               onSaveTemplate={handleSaveTemplate}
               savingTemplate={savingTemplate}
+            />
+          )}
+          {phase === PHASE_OBSOLESCENCE && (
+            <PhaseObsolescence
+              articleHtml={agent.updatedContent || ''}
+              suggestions={verifSuggestions}
+              running={verifRunning}
+              step={verifStep}
+              progress={verifProgress}
+              aTourne={verifATourne}
+              prompt={verifPrompt}
+              onPromptChange={(t) => { setVerifPrompt(t); setVerifPromptTouche(true); }}
+              onResetPrompt={reconstruireVerifPrompt}
+              onSaveTemplate={() => enregistrerModele('verification', verifPrompt, setSavingVerifTemplate)}
+              savingTemplate={savingVerifTemplate}
+              onRun={handleVerify}
+            />
+          )}
+          {phase === PHASE_RELECTURE && (
+            // `key` force le recalcul sur le texte COURANT de l'editeur : le
+            // decompte doit refleter les corrections au fur et a mesure.
+            <PhaseRelecture
+              key={relectureTick}
+              html={contentRef.current || agent.updatedContent || ''}
+              onRefresh={() => setRelectureTick((t) => t + 1)}
             />
           )}
         </div>

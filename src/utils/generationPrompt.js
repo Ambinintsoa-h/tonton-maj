@@ -23,6 +23,16 @@ Conserve toute information encore valable de l'article d'origine, reformulée au
 Remplace les données datées par des chiffres vérifiables et récents.
 Ne laisse aucun paragraphe sans apport concret.`;
 
+/**
+ * Modèle par défaut de la PHASE 3. Volontairement restrictif : cette étape ne
+ * doit vérifier que l'exactitude et la fraîcheur. Sans cette borne, le modèle
+ * repart en réécriture éditoriale et noie les vraies obsolescences.
+ */
+export const DEFAULT_VERIFICATION_TEMPLATE = `Vérifie uniquement l'exactitude et la fraîcheur des informations de cet article.
+Signale les chiffres et tarifs dépassés, les dates révolues, les normes ou réglementations remplacées, les produits ou versions abandonnés.
+Pour chaque point, donne le passage exact à remplacer et sa version corrigée, avec la source quand tu l'as.
+N'apporte aucune amélioration de style : ce n'est pas l'objet de cette étape.`;
+
 const MAX_ACTIONS = 8;      // même plafond que l'audit (skill QAT)
 const MAX_OBSOLETES = 5;
 
