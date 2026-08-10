@@ -1003,6 +1003,12 @@ export default function ArticleResult() {
       wpData:          agent.wpData || null,
       internalLinks:   agent.internalLinks || [],
       audit:           agent.audit || '',
+      // Avancement du parcours. Sans lui, un simple rechargement de page ramenait
+      // le stepper à « phase 1 à faire » sur un article déjà généré, et
+      // VERROUILLAIT les phases suivantes — le rédacteur ne pouvait plus rien
+      // faire. Constaté en test fonctionnel sur un article de 37 modifications.
+      phaseStatus:     agent.phaseStatus || null,
+      majScope:        agent.majScope || null,
       currentArticleId: agent.currentArticleId || null,
       tokenUsage:      agent.tokenUsage || null,
       instruction:     agent.instruction || '',

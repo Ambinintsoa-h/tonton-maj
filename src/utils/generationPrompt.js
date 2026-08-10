@@ -93,7 +93,13 @@ export const buildGenerationPrompt = ({
   if (scope === SCOPE_SIMPLE) {
     bloc.push('', '## Ampleur : MAJ simple',
       'Corrige et enrichis les passages concernés en conservant la structure et le texte qui fonctionnent.',
-      `Ajoute ${MIN_WORDS_ADDED_SIMPLE} mots au minimum : c'est un minimum strict, pas un objectif indicatif.`);
+      `Ajoute ${MIN_WORDS_ADDED_SIMPLE} mots au minimum : c'est un minimum strict, pas un objectif indicatif.`,
+      // Sans cette préséance, une action d'audit du type « réduire de 3452 à 2500
+      // mots » entre en contradiction directe avec le minimum ci-dessus. Constaté
+      // en test réel : le modèle a suivi l'audit et RACCOURCI l'article de 935
+      // mots sur une MAJ simple. Les deux consignes venant du même prompt, c'est
+      // à lui de dire laquelle l'emporte.
+      'PRÉSÉANCE : si une action de l\'audit contredit cette ampleur — par exemple une demande de raccourcir l\'article — c\'est CETTE AMPLEUR qui prime. Applique le fond de l\'action sans réduire la longueur, et signale la contradiction en fin de réponse.');
   } else {
     bloc.push('', '## Ampleur : refonte',
       'Réécris l\'article intégralement à partir de ces directives. Le plan peut être refait.',

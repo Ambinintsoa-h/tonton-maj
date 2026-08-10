@@ -6,9 +6,9 @@
 import {
   PHASE_AUDIT, PHASE_GENERATION, PHASE_OBSOLESCENCE, PHASE_RELECTURE, PHASE_ORDER,
   PHASES, TODO, DONE, RUNNING, initialPhaseStatus,
-  phaseMeta, phaseIndex, nextPhase, prevPhase, maxReachablePhase, canEnterPhase,
+  phaseMeta, phaseIndex, nextPhase, prevPhase, maxReachablePhase, canEnterPhase, derivePhaseStatus,
   SCOPE_SIMPLE, SCOPE_REFONTE, MAJ_SCOPES, MIN_WORDS_ADDED_SIMPLE,
-  scopeProposedByAudit, wordCount, wordsAddedReport,
+  scopeProposedByAudit, scopeRecommendationSource, wordCount, wordsAddedReport,
 } from './majPhases';
 
 describe('ordre et métadonnées des phases', () => {
@@ -100,6 +100,52 @@ describe('ampleur décidée en phase 2', () => {
   });
 });
 
+describe('derivePhaseStatus — rouvrir un article au bon endroit', () => {
+  test('un enregistrement au nouveau format est repris tel quel', () => {
+    const s = derivePhaseStatus({ phaseStatus: { [PHASE_AUDIT]: DONE, [PHASE_GENERATION]: DONE } });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+    expect(s[PHASE_GENERATION]).toBe(DONE);
+    expect(s[PHASE_OBSOLESCENCE]).toBe(TODO);   // les clés absentes restent à faire
+  });
+
+  test('article QAT ancien (audit + article réécrit) → phases 1 et 2 faites', () => {
+    const s = derivePhaseStatus({ auditJson: { scores: {} }, qatArticle: { wordCount: 2200 } });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+    expect(s[PHASE_GENERATION]).toBe(DONE);
+  });
+
+  test('article classique ancien (audit markdown + updates) → phases 1 et 2 faites', () => {
+    const s = derivePhaseStatus({ audit: 'RAPPORT...', diff: [{ original: 'a', updated: 'b' }] });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+    expect(s[PHASE_GENERATION]).toBe(DONE);
+  });
+
+  test('AUDIT SEUL : updatedContent ne doit PAS faire croire à une génération', () => {
+    // Depuis la séparation des phases, updatedContent porte l'article d'origine
+    // dès la fin de l'audit. Le compter marquerait la phase 2 faite à tort et
+    // sauterait l'étape de génération.
+    const s = derivePhaseStatus({ auditJson: { scores: {} }, updatedContent: '<p>article d\'origine</p>', diff: [] });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+    expect(s[PHASE_GENERATION]).toBe(TODO);
+  });
+
+  test('une génération sans audit conservé implique quand même l\'audit', () => {
+    const s = derivePhaseStatus({ qatArticle: { wordCount: 1 } });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+  });
+
+  test('vérification enregistrée → phase 3 faite', () => {
+    const s = derivePhaseStatus({ auditJson: {}, qatArticle: {}, obsolescenceReport: { items: [] } });
+    expect(s[PHASE_OBSOLESCENCE]).toBe(DONE);
+  });
+
+  test('enregistrement vide ou absent → tout à faire', () => {
+    expect(derivePhaseStatus(null)).toEqual(initialPhaseStatus());
+    expect(derivePhaseStatus({})).toEqual(initialPhaseStatus());
+    expect(derivePhaseStatus(undefined)).toEqual(initialPhaseStatus());
+  });
+});
+
 describe('scopeProposedByAudit — l\'audit propose, le rédacteur tranche', () => {
   test('une MAJ ciblée est la seule décision qui présélectionne « MAJ simple »', () => {
     expect(scopeProposedByAudit({ ampleur: { decision: 'maj_ciblee' } })).toBe(SCOPE_SIMPLE);
@@ -113,12 +159,39 @@ describe('scopeProposedByAudit — l\'audit propose, le rédacteur tranche', () 
     expect(scopeProposedByAudit({ ampleur: { decision: 'refonte_totale' } })).toBe(SCOPE_REFONTE);
   });
 
-  test('décision absente, inconnue ou audit manquant → refonte, l\'option prudente', () => {
+  test('décision inconnue → refonte, l\'option prudente', () => {
     expect(scopeProposedByAudit({ ampleur: { decision: 'n_importe_quoi' } })).toBe(SCOPE_REFONTE);
-    expect(scopeProposedByAudit({ ampleur: {} })).toBe(SCOPE_REFONTE);
+  });
+
+  test('sans décision, on se rabat sur le SCORE GLOBAL de l\'audit', () => {
+    // Constaté en test réel : l'audit omet parfois `ampleur` alors qu'il est par
+    // ailleurs complet. Recommander une refonte en aveugle serait pauvre, alors
+    // que le score global, lui, a bien été produit.
+    expect(scopeProposedByAudit({ scores: { global: 8.4 } })).toBe(SCOPE_SIMPLE);
+    expect(scopeProposedByAudit({ scores: { global: 7 } })).toBe(SCOPE_SIMPLE);   // borne incluse
+    expect(scopeProposedByAudit({ scores: { global: 6.2 } })).toBe(SCOPE_REFONTE); // le cas mesuré
+    expect(scopeProposedByAudit({ scores: { global: 4.8 } })).toBe(SCOPE_REFONTE);
+  });
+
+  test('une décision explicite PRIME sur les scores', () => {
+    expect(scopeProposedByAudit({ ampleur: { decision: 'maj_ciblee' }, scores: { global: 2 } })).toBe(SCOPE_SIMPLE);
+    expect(scopeProposedByAudit({ ampleur: { decision: 'refonte_totale' }, scores: { global: 9.5 } })).toBe(SCOPE_REFONTE);
+  });
+
+  test('scores absents, nuls ou illisibles → refonte, l\'option prudente', () => {
+    expect(scopeProposedByAudit({ scores: {} })).toBe(SCOPE_REFONTE);
+    expect(scopeProposedByAudit({ scores: { global: 0 } })).toBe(SCOPE_REFONTE);
+    expect(scopeProposedByAudit({ scores: { global: 'six' } })).toBe(SCOPE_REFONTE);
     expect(scopeProposedByAudit({})).toBe(SCOPE_REFONTE);
     expect(scopeProposedByAudit(null)).toBe(SCOPE_REFONTE);
     expect(scopeProposedByAudit(undefined)).toBe(SCOPE_REFONTE);
+  });
+
+  test('la SOURCE de la recommandation est explicite — ne jamais faire passer une déduction pour une décision', () => {
+    expect(scopeRecommendationSource({ ampleur: { decision: 'maj_ciblee' } })).toBe('ampleur');
+    expect(scopeRecommendationSource({ scores: { global: 6.2 } })).toBe('scores');
+    expect(scopeRecommendationSource({})).toBe('defaut');
+    expect(scopeRecommendationSource(null)).toBe('defaut');
   });
 });
 
