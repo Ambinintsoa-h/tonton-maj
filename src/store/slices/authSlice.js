@@ -16,6 +16,7 @@ const getInitialState = () => {
     username: null, role: null, uid: null,
     nom: '', prenom: '', email: '', avatarUrl: '',
     twoFaEnabled: false, twoFaMethod: 'none',
+    prompts: {},   // prompts personnels des phases 2 et 3, chargés par /api/account
   };
   // Restaurer role/username/uid depuis le payload — évite le menu réduit après F5
   const decoded = decodeJwt(token);
@@ -27,6 +28,7 @@ const getInitialState = () => {
     uid:      decoded?.uid      || null,
     nom: '', prenom: '', email: '', avatarUrl: '',
     twoFaEnabled: false, twoFaMethod: 'none',
+    prompts: {},   // prompts personnels des phases 2 et 3, chargés par /api/account
   };
 };
 
@@ -44,13 +46,17 @@ const authSlice = createSlice({
       sessionStorage.setItem(TOKEN_KEY, token);
     },
     setProfile(state, action) {
-      const { nom, prenom, email, avatarUrl, twoFaEnabled, twoFaMethod } = action.payload;
+      const { nom, prenom, email, avatarUrl, twoFaEnabled, twoFaMethod, prompts } = action.payload;
       if (nom       !== undefined) state.nom       = nom;
       if (prenom    !== undefined) state.prenom    = prenom;
       if (email     !== undefined) state.email     = email;
       if (avatarUrl !== undefined) state.avatarUrl = avatarUrl;
       if (twoFaEnabled !== undefined) state.twoFaEnabled = twoFaEnabled;
       if (twoFaMethod  !== undefined) state.twoFaMethod  = twoFaMethod;
+      // Prompts personnels du rédacteur (phases 2 et 3). Cette liste est un
+      // FILTRE : un champ non cité ici n'atteint jamais le store, quoi que
+      // renvoie /api/account.
+      if (prompts   !== undefined) state.prompts   = prompts || {};
     },
     logout(state) {
       state.isAuthenticated = false;

@@ -35,6 +35,8 @@ import {
   PHASE_AUDIT, PHASE_GENERATION, DONE, RUNNING, ERROR,
   SCOPE_SIMPLE, scopeProposedByAudit,
 } from '../../constants/majPhases';
+import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE } from '../../utils/generationPrompt';
+import { setProfile } from '../../store/slices/authSlice';
 import PhaseStepper from './PhaseStepper';
 import PhaseGeneration from './PhaseGeneration';
 import RewritePanel from './RewritePanel';
@@ -1406,6 +1408,47 @@ export default function ArticleResult() {
   // l'etat de la page Articles, qui est demontee a ce stade.
   // L'enregistrement passe par triggerAutosave, le meme mecanisme que toute
   // edition — aucune persistance supplementaire n'est introduite.
+  // Prompt de generation : Tonton le PRE-REMPLIT depuis le modele personnel du
+  // redacteur et l'audit de cet article ; le redacteur l'ajuste. C'est ce texte
+  // exact qui part dans `instruction`.
+  const monModele = authUser?.prompts?.generation || DEFAULT_GENERATION_TEMPLATE;
+  const [prompt, setPrompt]           = useState('');
+  const [promptTouche, setPromptTouche] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
+  const ampleurRetenue = agent.majScope || scopeProposedByAudit(auditJson);
+
+  const reconstruirePrompt = useCallback(() => {
+    setPrompt(buildGenerationPrompt({
+      audit: auditJson,
+      template: monModele,
+      scope: ampleurRetenue,
+      targetKeyword: agent.targetKeyword || '',
+    }));
+    setPromptTouche(false);
+  }, [auditJson, monModele, ampleurRetenue, agent.targetKeyword]);
+
+  // Reconstruction automatique tant que le redacteur n'a pas retouche le texte :
+  // changer d'ampleur doit se refleter dans les directives. Des qu'il y a touche,
+  // on ne l'ecrase plus — ses retouches primen sur toute regeneration.
+  useEffect(() => {
+    if (!promptTouche) reconstruirePrompt();
+  }, [reconstruirePrompt, promptTouche]);
+
+  const handleSaveTemplate = async () => {
+    setSavingTemplate(true);
+    try {
+      const prompts = { ...(authUser?.prompts || {}), generation: prompt };
+      await axios.put('/api/account', { prompts });
+      dispatch(setProfile({ prompts }));
+      toast.success('Modele enregistre — il pre-remplira vos prochains articles.');
+    } catch (e) {
+      toast.error(`Modele non enregistre — ${e?.response?.data?.error || e.message}`);
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
   const [generating, setGenerating]   = useState(false);
   const [genStep, setGenStep]         = useState('');
   const [genProgress, setGenProgress] = useState(0);
@@ -1437,7 +1480,9 @@ export default function ArticleResult() {
         // L'ampleur tranchee en phase 2 pilote la profondeur : un choix explicite
         // du redacteur prime toujours sur la recommandation de l'audit.
         depth:          scope === SCOPE_SIMPLE ? 'ciblee' : 'refonte',
-        instruction:    agent.instruction || '',
+        // Les directives de la phase 2 REMPLACENT la consigne libre : c'est le
+        // texte que le redacteur a relu et valide juste avant de lancer.
+        instruction:    prompt || agent.instruction || '',
         modelPricing:   settings.modelPricing || null,
         onStep:     (t) => setGenStep(t),
         onReplace:  (t) => setGenStep(t),
@@ -3709,6 +3754,11 @@ export default function ArticleResult() {
               originalHtml={agent.originalContent || ''}
               generatedHtml={qatArticle ? (agent.updatedContent || '') : ''}
               qatArticle={qatArticle}
+              prompt={prompt}
+              onPromptChange={(t) => { setPrompt(t); setPromptTouche(true); }}
+              onResetPrompt={reconstruirePrompt}
+              onSaveTemplate={handleSaveTemplate}
+              savingTemplate={savingTemplate}
             />
           )}
         </div>

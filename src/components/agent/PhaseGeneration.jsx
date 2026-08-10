@@ -13,7 +13,7 @@
  * PR 3 ; ici la consigne libre existante en tient lieu.
  */
 import { motion } from 'framer-motion';
-import { Sparkles, Loader2, Check, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Sparkles, Loader2, Check, AlertTriangle, ArrowRight, FileText, RotateCcw, Save } from 'lucide-react';
 import {
   MAJ_SCOPES, SCOPE_SIMPLE, scopeProposedByAudit, wordsAddedReport,
 } from '../../constants/majPhases';
@@ -35,6 +35,12 @@ export default function PhaseGeneration({
   originalHtml = '',
   generatedHtml = '',
   qatArticle = null,
+  // Prompt de génération — pré-rempli par Tonton, éditable par le rédacteur
+  prompt = '',
+  onPromptChange,
+  onResetPrompt,
+  onSaveTemplate,
+  savingTemplate = false,
 }) {
   const propose  = scopeProposedByAudit(audit);
   const decision = audit && audit.ampleur && audit.ampleur.decision;
@@ -101,6 +107,50 @@ export default function PhaseGeneration({
             sera affiché ici après la génération.
           </p>
         )}
+      </div>
+
+      {/* Le prompt : la vision du rédacteur fusionnée avec l'audit */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
+            <FileText size={13} className="text-gray-400" />
+            Directives envoyées à TONTON
+          </label>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={generating}
+              onClick={() => onResetPrompt?.()}
+              title="Reconstruire le prompt depuis mon modèle et l'audit — annule mes retouches"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-gray-500 hover:text-gray-800 hover:bg-black/5 transition-colors disabled:opacity-40"
+            >
+              <RotateCcw size={11} /> Reconstruire
+            </button>
+            <button
+              type="button"
+              disabled={generating || savingTemplate || !prompt.trim()}
+              onClick={() => onSaveTemplate?.()}
+              title="Garder ces directives comme mon modèle par défaut, réutilisé sur mes prochains articles"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-gray-500 hover:text-gray-800 hover:bg-black/5 transition-colors disabled:opacity-40"
+            >
+              {savingTemplate ? <Loader2 size={11} className="animate-spin" /> : <Save size={11} />}
+              Enregistrer comme mon modèle
+            </button>
+          </div>
+        </div>
+        <textarea
+          value={prompt}
+          onChange={(e) => onPromptChange?.(e.target.value)}
+          disabled={generating}
+          rows={12}
+          spellCheck={false}
+          className="input-glass text-[12px] leading-relaxed font-mono resize-y w-full disabled:opacity-60"
+          placeholder="Directives de génération…"
+        />
+        <p className="text-[11px] text-gray-400">
+          Pré-rempli avec vos directives permanentes et ce que l'audit demande de corriger. Ajustez-le pour CET
+          article — c'est ce texte exact qui part à l'IA.
+        </p>
       </div>
 
       {/* Lancement */}
