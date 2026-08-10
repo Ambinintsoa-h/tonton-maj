@@ -33,6 +33,7 @@ export const getSkills = (...a) => impl().getSkills(...a);
 export const saveSkill = (...a) => impl().saveSkill(...a);
 export const deleteSkill = (...a) => impl().deleteSkill(...a);
 export const getArticles = (...a) => impl().getArticles(...a);
+export const getArticle  = (...a) => impl().getArticle(...a);
 export const saveArticle = (...a) => impl().saveArticle(...a);
 export const updateArticleHtml = (...a) => impl().updateArticleHtml(...a);
 export const acquireEditLock = (...a) => impl().acquireEditLock(...a);

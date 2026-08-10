@@ -371,6 +371,34 @@ module.exports = ({ requireAuth, requireRole }) => {
     }));
   }));
 
+  // GET /articles/:id — UN SEUL article, avec son verrou et son suivi SEO.
+  //
+  // Pourquoi cette route existe : la review d'un article de la file lit son
+  // contenu dans l'archive. L'item de file est volontairement allégé
+  // (`contentInHistory`), donc sans route unitaire le client devait charger
+  // /articles EN ENTIER — toutes les lignes avec tout leur HTML — juste pour en
+  // retrouver une. Sur un historique fourni cet appel dépasse 30 secondes, et la
+  // review affichait alors « Contenu de l'analyse introuvable — relancez la MAJ
+  // de cet article », poussant le rédacteur à relancer une analyse payante pour
+  // un simple problème de chargement.
+  //
+  // Placée AVANT les routes /articles/:id/… : `:id` ne traverse pas les `/`,
+  // donc elle ne les masque pas.
+  router.get('/articles/:id', requireAuth, wrap(async (req, res) => {
+    const { id } = req.params;
+    const [rows] = await q('SELECT * FROM articles WHERE id=? LIMIT 1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Article introuvable' });
+    const o = articleToObj(rows[0]);
+    const [locks] = await q('SELECT * FROM article_editing_locks WHERE article_id=? LIMIT 1', [id]);
+    if (locks.length) o.editingLock = lockToObj(locks[0]);
+    const [tracks] = await q('SELECT * FROM seo_tracking WHERE article_id=? LIMIT 1', [id]);
+    if (tracks.length) {
+      const [snaps] = await q('SELECT * FROM seo_snapshots WHERE article_id=? ORDER BY captured_at ASC', [id]);
+      o.seoTracking = seoTrackingToObj(tracks[0], snaps);
+    }
+    res.json(o);
+  }));
+
   // POST /articles — saveArticle. id fourni ⟹ upsert MERGE (préserve les champs
   // non transmis, ex. extraFields écrits par updateArticleHtml ; seoTracking/
   // editingLock sont hors table donc intouchables) + updated_at serveur. Sans id

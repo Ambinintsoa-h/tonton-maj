@@ -146,6 +146,10 @@ export const deleteArticleDraftRemote = () => api('DELETE', '/article-drafts');
 // (l'Historique lit ces sous-objets sur chaque article). saveArticle retourne
 // { id, originalContentUrl, updatedContentUrl } (URLs null : pas de Storage).
 export const getArticles = () => api('GET', '/articles');
+
+// UN seul article. Évite de charger la collection entière — avec tout le HTML de
+// chaque article — quand on n'en veut qu'un (réouverture d'une review).
+export const getArticle = (id) => api('GET', `/articles/${enc(id)}`);
 export const saveArticle = (article) => api('POST', '/articles', article);
 export const updateArticleHtml = (articleId, updatedContent, editorMeta = null, extraFields = null) =>
   api('PUT', '/articles/' + enc(articleId) + '/html', { updatedContent, editorMeta, extraFields });

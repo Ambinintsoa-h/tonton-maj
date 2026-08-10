@@ -181,6 +181,14 @@ export const getArticles = async () => {
       - Math.max(toMs(a.lastModifiedAt), toMs(a.updatedAt), toMs(a.createdAt)));
 };
 
+// UN seul article. Évite de lire la collection entière quand on n'en veut qu'un
+// (réouverture d'une review). `null` si le document n'existe pas.
+export const getArticle = async (id) => {
+  if (!db || !id) return null;
+  const snap = await getDoc(doc(db, 'articles', id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+};
+
 // Sauvegarde un article : HTML → Firebase Storage, métadonnées + URLs → Firestore.
 // Retourne { id, originalContentUrl, updatedContentUrl }
 export const saveArticle = async (article) => {
