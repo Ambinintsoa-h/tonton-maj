@@ -2,9 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2, Gauge } from 'lucide-react';
+import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2 } from 'lucide-react';
 import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setPhase, setPhaseStatus, restorePhaseStatus, setMajScope, setAuditJson, setQatArticle, setLiveText, clearLiveText } from '../store/slices/agentSlice';
-import { DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
+import { DEFAULT_DEPTH } from '../constants/majDepth';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
   INTERNAL_LINK_ROWS_INITIAL, emptyLinkRow, cleanLinkRows,
@@ -54,7 +54,12 @@ export default function Articles() {
   const [scraping, setScraping] = useState(false);
   const [targetKeyword, setTargetKeyword] = useState('');
   const [notes, setNotes]                 = useState(''); // instruction libre transmise en priorité à TONTON (passe 1)
-  const [majDepth, setMajDepth]           = useState(DEFAULT_DEPTH); // profondeur de la MAJ (legere|standard|refonte)
+  // `majDepth` reste dans l'etat mais N'EST PLUS demande au lancement : l'ampleur
+  // se decide en PHASE 2, une fois l'audit lu. Le selecteur qui subsistait ici
+  // etait de l'interface morte — runQatAudit ne prend pas de `depth` — et il
+  // redemandait la decision au moment precis ou le redacteur n'a rien pour
+  // trancher. La valeur par defaut sert encore a la verification de phase 3.
+  const [majDepth] = useState(DEFAULT_DEPTH);
   // Parcours UNIQUE en quatre phases (voir constants/majPhases.js). Le double flux
   // « classique | qat » a été retiré : il était explicitement temporaire, et le
   // choix de l'ampleur descend en phase 2, une fois l'audit lu.
@@ -137,15 +142,6 @@ export default function Articles() {
   // Un skill cerveau (SKILL.md actif) est requis par le mode QAT : il porte la
   // méthode d'audit et les gabarits de rédaction.
   const hasBrainSkill = (skills || []).some(k => k?.format === 'skillmd' && k?.body && k?.active !== false);
-
-  // « Auto » laisse l'audit trancher l'ampleur ; un choix explicite du rédacteur
-  // prime sur sa recommandation. Ces options restent ici en PR 1 ; elles
-  // descendront en phase 2 quand l'audit et la génération seront séparés.
-  const depthOptions = {
-    legere:   { label: 'Ciblée',  hint: 'imposée', description: 'Force une MAJ ciblée : les sections qui fonctionnent gardent leur texte d\'origine, même si l\'audit recommande une refonte.' },
-    standard: { label: 'Auto',    hint: 'selon l\'audit', description: 'L\'audit décide de l\'ampleur (refonte totale ou MAJ ciblée) et l\'affiche en tête de la phase 1. Recommandé.' },
-    refonte:  { label: 'Refonte', hint: 'imposée', description: 'Force une réécriture intégrale, même si l\'audit juge une MAJ ciblée suffisante.' },
-  };
 
   // Le skill cerveau porte la méthode d'audit : sans lui, le parcours n'a plus de
   // règles à appliquer. Il est donc requis, et non plus seulement pour un mode.
@@ -615,31 +611,6 @@ export default function Articles() {
                   rows={3}
                   className="input-glass text-sm resize-none"
                 />
-              </div>
-
-              {/* ── Profondeur de la MAJ ──────────────────────────────────────────── */}
-              <div className="space-y-1.5">
-                <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
-                  <Gauge size={13} className="text-gray-400" />
-                  Profondeur de la MAJ
-                </label>
-                <div className="flex items-center gap-1 bg-gray-100/70 rounded-xl p-1 w-fit">
-                  {Object.entries(depthOptions).map(([key, m]) => (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setMajDepth(key)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                        majDepth === key
-                          ? 'bg-white text-gray-900 shadow-sm'
-                          : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                    >
-                      {m.label} <span className={`text-[10px] ml-0.5 ${majDepth === key ? 'text-gray-400' : 'text-gray-300'}`}>{m.hint}</span>
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-gray-400">{depthOptions[majDepth]?.description || depthMeta(majDepth).description}</p>
               </div>
 
               {/* ── Brief du mode « Audit QAT + Refonte » ─────────────────────────── */}
