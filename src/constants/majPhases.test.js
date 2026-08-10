@@ -8,7 +8,7 @@ import {
   PHASES, TODO, DONE, RUNNING, initialPhaseStatus,
   phaseMeta, phaseIndex, nextPhase, prevPhase, maxReachablePhase, canEnterPhase,
   SCOPE_SIMPLE, SCOPE_REFONTE, MAJ_SCOPES, MIN_WORDS_ADDED_SIMPLE,
-  wordCount, wordsAddedReport,
+  scopeProposedByAudit, wordCount, wordsAddedReport,
 } from './majPhases';
 
 describe('ordre et métadonnées des phases', () => {
@@ -97,6 +97,28 @@ describe('ampleur décidée en phase 2', () => {
     expect(MAJ_SCOPES[SCOPE_SIMPLE].label).toBe('MAJ simple');
     expect(MAJ_SCOPES[SCOPE_REFONTE].label).toBe('Refonte');
     Object.values(MAJ_SCOPES).forEach(s => expect(s.description).toBeTruthy());
+  });
+});
+
+describe('scopeProposedByAudit — l\'audit propose, le rédacteur tranche', () => {
+  test('une MAJ ciblée est la seule décision qui présélectionne « MAJ simple »', () => {
+    expect(scopeProposedByAudit({ ampleur: { decision: 'maj_ciblee' } })).toBe(SCOPE_SIMPLE);
+  });
+
+  test('une restructuration relève de la refonte : le plan change', () => {
+    expect(scopeProposedByAudit({ ampleur: { decision: 'restructuration' } })).toBe(SCOPE_REFONTE);
+  });
+
+  test('une refonte totale présélectionne la refonte', () => {
+    expect(scopeProposedByAudit({ ampleur: { decision: 'refonte_totale' } })).toBe(SCOPE_REFONTE);
+  });
+
+  test('décision absente, inconnue ou audit manquant → refonte, l\'option prudente', () => {
+    expect(scopeProposedByAudit({ ampleur: { decision: 'n_importe_quoi' } })).toBe(SCOPE_REFONTE);
+    expect(scopeProposedByAudit({ ampleur: {} })).toBe(SCOPE_REFONTE);
+    expect(scopeProposedByAudit({})).toBe(SCOPE_REFONTE);
+    expect(scopeProposedByAudit(null)).toBe(SCOPE_REFONTE);
+    expect(scopeProposedByAudit(undefined)).toBe(SCOPE_REFONTE);
   });
 });
 
