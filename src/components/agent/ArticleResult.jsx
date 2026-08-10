@@ -1507,10 +1507,10 @@ export default function ArticleResult() {
 
   // ── Deuxième passe classique (sans sources manuelles) ─────────────────────
   const handleReview = async () => {
-    // Le flux de passe 2 est le flux HISTORIQUE : il produit des updates ciblés et
-    // ne consulte pas `agent.majMode`. Sur un article refondu en mode QAT, la
-    // sémantique d'ampleur est perdue (le verrou liens externes s'applique quand
-    // même). On avertit le rédacteur plutôt que de lui retirer la fonction.
+    // La passe 2 produit des updates CIBLÉS, quelle que soit l'ampleur retenue en
+    // phase 2 : sur un article refondu, la sémantique de refonte est perdue (le
+    // verrou liens externes s'applique quand même). On avertit le rédacteur plutôt
+    // que de lui retirer la fonction. Elle deviendra la phase 3 en PR 4.
     if (isQat) {
       toast('Passe 2 en mode classique : elle proposera des modifications ciblées, pas une refonte.', { icon: 'ℹ️', duration: 6000 });
     }
@@ -1613,7 +1613,10 @@ export default function ArticleResult() {
         // ou la publication : l'onglet AUDIT était vide à la réouverture depuis
         // l'Historique, et le bandeau « article réécrit » disparaissait.
         // `qatArticle.html` est retiré : c'est déjà `updatedContent`.
-        majMode:         agent.majMode || r.majMode || 'classique',
+        // Avancement du parcours en 4 phases (remplace l'ancien `majMode`) — omis
+        // plutôt que mis à undefined : Firestore refuse les champs undefined.
+        ...(agent.phaseStatus ? { phaseStatus: agent.phaseStatus } : {}),
+        ...(agent.majScope    ? { majScope: agent.majScope }       : {}),
         ...(auditJson  ? { auditJson } : {}),
         ...(qatArticle ? { qatArticle: (({ html, ...rest }) => rest)(qatArticle) } : {}),
         url:             cqItem.url        || '',
@@ -2972,7 +2975,9 @@ export default function ArticleResult() {
           // ou la publication : l'onglet AUDIT était vide à la réouverture depuis
           // l'Historique, et le bandeau « article réécrit » disparaissait.
           // `qatArticle.html` est retiré : c'est déjà `updatedContent`.
-          majMode:         agent.majMode || r.majMode || 'classique',
+          // Avancement du parcours en 4 phases (remplace l'ancien `majMode`).
+          ...(agent.phaseStatus ? { phaseStatus: agent.phaseStatus } : {}),
+          ...(agent.majScope    ? { majScope: agent.majScope }       : {}),
           ...(auditJson  ? { auditJson } : {}),
           ...(qatArticle ? { qatArticle: (({ html, ...rest }) => rest)(qatArticle) } : {}),
           url:             articleUrl || cqItem?.url || '',

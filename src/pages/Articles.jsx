@@ -3,19 +3,21 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2, Gauge } from 'lucide-react';
-import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setMajMode as setAgentMajMode, setAuditJson, setQatArticle, setLiveText, clearLiveText } from '../store/slices/agentSlice';
-import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
+import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setPhase, setPhaseStatus, setMajScope, setAuditJson, setQatArticle, setLiveText, clearLiveText } from '../store/slices/agentSlice';
+import { DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import {
-  MAJ_MODES, DEFAULT_MODE, modeMeta, isQatMode,
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
   INTERNAL_LINK_ROWS_INITIAL, emptyLinkRow, cleanLinkRows,
 } from '../constants/majMode';
+import {
+  PHASE_AUDIT, PHASE_GENERATION, PHASE_OBSOLESCENCE, DONE,
+  SCOPE_SIMPLE, SCOPE_REFONTE,
+} from '../constants/majPhases';
 import { addToHistory, updateInHistory } from '../store/slices/articlesSlice';
 import { addArticleStat } from '../store/slices/statsSlice';
 import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
-import { runAgent } from '../services/agent';
 import { runQatAgent } from '../services/agentQat';
 import QatBriefFields from '../components/agent/QatBriefFields';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
@@ -24,7 +26,6 @@ import tracker from '../services/activityTracker';
 import articleTimeTracker from '../services/articleTimeTracker';
 import AgentThinking from '../components/agent/AgentThinking';
 import ArticleResult from '../components/agent/ArticleResult';
-import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
 import { normalizeFaqToAccordion } from '../utils/faq';
 import { makeTablesResponsive } from '../utils/blocks';
 
@@ -56,10 +57,9 @@ export default function Articles() {
   const [targetKeyword, setTargetKeyword] = useState('');
   const [notes, setNotes]                 = useState(''); // instruction libre transmise en priorité à TONTON (passe 1)
   const [majDepth, setMajDepth]           = useState(DEFAULT_DEPTH); // profondeur de la MAJ (legere|standard|refonte)
-  // ── Mode de MAJ (double flux) ───────────────────────────────────────────────
-  // « classique » = comportement historique et défaut ; « qat » = audit JSON +
-  // refonte de l'article entier (voir constants/majMode.js).
-  const [majMode, setMajMode]           = useState(DEFAULT_MODE);
+  // Parcours UNIQUE en quatre phases (voir constants/majPhases.js). Le double flux
+  // « classique | qat » a été retiré : il était explicitement temporaire, et le
+  // choix de l'ampleur descend en phase 2, une fois l'audit lu.
   const [articleType, setArticleType]   = useState(DEFAULT_ARTICLE_TYPE);
   const [seoPlugin, setSeoPlugin]       = useState(DEFAULT_SEO_PLUGIN);
   const [targetWords, setTargetWords]   = useState(DEFAULT_TARGET_WORDS);
@@ -125,21 +125,21 @@ export default function Articles() {
   // méthode d'audit et les gabarits de rédaction.
   const hasBrainSkill = (skills || []).some(k => k?.format === 'skillmd' && k?.body && k?.active !== false);
 
-  // En mode QAT, « Standard » devient « Auto » : c'est l'audit qui tranche
-  // l'ampleur (refonte totale ou MAJ ciblée), et un choix explicite du rédacteur
-  // prime sur sa recommandation.
-  const depthOptions = isQatMode(majMode)
-    ? {
-        legere:   { label: 'Ciblée',  hint: 'imposée', description: 'Force une MAJ ciblée : les sections qui fonctionnent gardent leur texte d\'origine, même si l\'audit recommande une refonte.' },
-        standard: { label: 'Auto',    hint: 'selon l\'audit', description: 'L\'audit décide de l\'ampleur (refonte totale ou MAJ ciblée) et l\'affiche en tête de l\'onglet AUDIT. Recommandé.' },
-        refonte:  { label: 'Refonte', hint: 'imposée', description: 'Force une réécriture intégrale, même si l\'audit juge une MAJ ciblée suffisante.' },
-      }
-    : MAJ_DEPTHS;
+  // « Auto » laisse l'audit trancher l'ampleur ; un choix explicite du rédacteur
+  // prime sur sa recommandation. Ces options restent ici en PR 1 ; elles
+  // descendront en phase 2 quand l'audit et la génération seront séparés.
+  const depthOptions = {
+    legere:   { label: 'Ciblée',  hint: 'imposée', description: 'Force une MAJ ciblée : les sections qui fonctionnent gardent leur texte d\'origine, même si l\'audit recommande une refonte.' },
+    standard: { label: 'Auto',    hint: 'selon l\'audit', description: 'L\'audit décide de l\'ampleur (refonte totale ou MAJ ciblée) et l\'affiche en tête de la phase 1. Recommandé.' },
+    refonte:  { label: 'Refonte', hint: 'imposée', description: 'Force une réécriture intégrale, même si l\'audit juge une MAJ ciblée suffisante.' },
+  };
 
+  // Le skill cerveau porte la méthode d'audit : sans lui, le parcours n'a plus de
+  // règles à appliquer. Il est donc requis, et non plus seulement pour un mode.
   const canRun = (settings.aiConfigured || settings.useLocalProxy || settings.anthropicKey)
     && (tab === TAB_URL ? url.trim() : text.trim())
     && targetKeyword.trim()
-    && (!isQatMode(majMode) || hasBrainSkill);
+    && hasBrainSkill;
 
   const handleRun = async () => {
     if (!settings.aiConfigured && !settings.useLocalProxy && !settings.anthropicKey) {
@@ -173,7 +173,7 @@ export default function Articles() {
       userRole:  authRole || '',
     });
 
-    let articleContent   = '';    // texte brut → envoyé à Claude + applyAllDiffs
+    let articleContent   = '';    // texte brut → envoyé à Claude pour l'audit
     let articleHtml      = '';    // HTML structuré → affiché dans l'UI (tableaux, titres…)
     let prefetchedWpData = null;  // données WP déjà récupérées — évite un 2e appel MCP
 
@@ -202,7 +202,7 @@ export default function Articles() {
             articleHtml    = r.content;
             articleContent = r.content;
             // Stocker immédiatement les données WP (image à la une incluse)
-            // sans attendre la fin de runAgent — la barre image s'affiche dès le début
+            // sans attendre la fin de l'agent — la barre image s'affiche dès le début
             prefetchedWpData = {
               siteId:          matchingSite.id,
               siteName:        matchingSite.name,
@@ -256,18 +256,14 @@ export default function Articles() {
     // originalContent stocke le HTML → affiché avec mise en page préservée
     dispatch(setOriginalContent(articleHtml));
 
-    const qatMode = isQatMode(majMode);
-
     try {
-      let result;
-      let allUpdatesWithStatus = [];
+      // Parcours UNIQUE : l'IA renvoie l'article ENTIER, déjà passé par
+      // sanitizeFullArticle (verrou liens externes + sécurité structure). Il n'y a
+      // donc plus d'updates[] à appliquer un par un comme dans l'ancien flux.
+      const allUpdatesWithStatus = [];
       let updatedHtml = '';
 
-      if (qatMode) {
-        // ── Mode « Audit QAT + Refonte » : audit JSON puis article ENTIER ─────
-        // Pas d'updates[] : l'IA renvoie le nouvel article, déjà passé par
-        // sanitizeFullArticle (verrou liens externes + sécurité structure).
-        result = await runQatAgent({
+      const result = await runQatAgent({
           content: articleContent,
           contentHtml: articleHtml,
           skills,
@@ -307,48 +303,6 @@ export default function Articles() {
         if (result.article?.strippedExternalLinks?.length) {
           toast(`${result.article.strippedExternalLinks.length} lien(s) externe(s) ajouté(s) par l'IA ont été retiré(s) — règle liens externes.`, { icon: '🔒' });
         }
-      } else {
-        result = await runAgent({
-          content: articleContent,   // texte brut pour Claude
-          contentHtml: articleHtml,  // HTML (avec liens) pour l'analyse du maillage
-          skills,
-          knowledge,
-          articleUrl,
-          targetKeyword:   targetKeyword.trim(),
-          instruction:     notes.trim(),       // consigne libre de l'équipe — priorité haute dans les prompts
-          wpSites,
-          existingWpData:  prefetchedWpData,  // évite un 2e appel WP MCP dans runAgent
-          modelPricing:    settings.modelPricing || null,
-          depth:           majDepth,          // profondeur de MAJ choisie par l'utilisateur
-          onStep:     (s) => dispatch(addStep(s)),
-          onReplace:  (s) => dispatch(replaceLastStep(s)),
-          onProgress: (p) => dispatch(setProgress(p)),
-        });
-        // TOUJOURS rebinder (null si absent) : sinon le wpData de l'article PRÉCÉDENT
-        // reste en mémoire → le menu Publier propose le mauvais site (confusion de sites).
-        dispatch(setWpData(result.wpData || null));
-
-        // ── Application des diffs via utils/diff ─────────────────────────────
-        // On applique les diffs sur le HTML structuré (articleHtml) pour préserver
-        // la mise en page originale : tableaux, titres, listes…
-        const applied = applyAllDiffs(articleHtml, result.updates, 1, articleUrl);
-        const rawHtml = applied.html;
-        allUpdatesWithStatus = applied.updates;
-
-        // Conversion \n→<br> uniquement si le contenu n'a pas déjà une structure
-        // de blocs HTML (<p>, <h1-6>, <table>, <ul>, <ol>).
-        // Cas couverts :
-        //   - HTML riche de Readability → pas de conversion (les <p> gèrent les espacements)
-        //   - Texte brut de Jina / coller manuel → conversion pour afficher les sauts de ligne
-        //   - HTML pauvre (Readability sans <p>) → conversion pour éviter le mur de texte
-        const hasBlockStructure = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(rawHtml);
-        const baseHtml    = hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>');
-        // FAQ : déplacée en fin d'article PUIS normalisée au format accordéon
-        // (<details>/<summary>) quel que soit son format d'origine (h3/p, <p><b>Q</b>, Yoast…)
-        // Tableaux : enveloppés dans un conteneur responsive (défilement horizontal sur mobile)
-        updatedHtml = makeTablesResponsive(normalizeFaqToAccordion(moveFaqToEnd(baseHtml)));
-      }
-
       const appliedUpdates = allUpdatesWithStatus.filter(u => u.applied);
       dispatch(setUpdatedContent(updatedHtml));
       // Stocker TOUS les updates avec leur statut (applied/non-applied)
@@ -360,17 +314,24 @@ export default function Articles() {
       // `executive_summary` vient d'un JSON libre : un objet ou un tableau ferait
       // planter renderMarkdown (text.trimStart) après 10 min de génération.
       const rawSummary = result.audit?.executive_summary;
-      const analysisText = qatMode
-        ? (typeof rawSummary === 'string' ? rawSummary : rawSummary ? JSON.stringify(rawSummary) : '')
-        : (result.analysis || '');
-      const auditMarkdown = qatMode ? '' : (result.audit || '');
+      const analysisText = typeof rawSummary === 'string'
+        ? rawSummary
+        : rawSummary ? JSON.stringify(rawSummary) : '';
+      // L'audit markdown du flux historique n'existe plus : l'audit vit dans
+      // `auditJson` (objet structure), consulte en phase 1.
+      const auditMarkdown = '';
       dispatch(setAnalysis(analysisText));
       dispatch(setParseFailed(result.parseFailed === true));
       dispatch(setInternalLinks(result.internalLinks || []));
       dispatch(setInternalLinksInfo(result.internalLinksInfo || null));
       dispatch(setAgentTargetKeyword(targetKeyword.trim()));
       dispatch(setAgentMajDepth(majDepth));
-      dispatch(setAgentMajMode(majMode));
+      // Phase 1 terminée, et phase 2 aussi tant que la génération reste dans le
+      // même appel (elles seront séparées en PR 2). L'éditeur ouvre donc la phase 3.
+      dispatch(setPhaseStatus({ phase: PHASE_AUDIT, status: DONE }));
+      dispatch(setPhaseStatus({ phase: PHASE_GENERATION, status: DONE }));
+      dispatch(setPhase(PHASE_OBSOLESCENCE));
+      dispatch(setMajScope(result.article?.ampleurAppliquee === 'ciblee' ? SCOPE_SIMPLE : SCOPE_REFONTE));
       dispatch(setAudit(auditMarkdown));
       dispatch(setStatus('done'));
 
@@ -395,21 +356,23 @@ export default function Articles() {
         audit: auditMarkdown,   // persiste le rapport d'audit markdown (flux historique)
         url: articleUrl,
         keyword: targetKeyword.trim(),  // mot-clé cible → focus keyphrase à la publication
-        majDepth,                       // profondeur choisie — réutilisée par la passe 2
-        majMode,                        // classique | qat — conditionne l'affichage et la passe 2
+        majDepth,                       // profondeur choisie — réutilisée par la phase 3
+        // Avancement du parcours, pour rouvrir l'article à la bonne phase.
+        phaseStatus: { [PHASE_AUDIT]: DONE, [PHASE_GENERATION]: DONE },
+        majScope: result.article?.ampleurAppliquee === 'ciblee' ? SCOPE_SIMPLE : SCOPE_REFONTE,
         // Mode QAT : audit structuré + métadonnées de l'article réécrit (titre SEO,
         // méta-description, chapô) — repris par l'éditeur et par la publication WP.
         // `qatArticle.html` est VOLONTAIREMENT retiré : c'est exactement
         // `updatedContent`, déjà persisté juste au-dessus. Le garder doublait le
         // poids de l'article dans un document Firestore limité à 1 Mo.
-        ...(qatMode ? {
+        ...{
           auditJson: result.audit || null,
           qatArticle: result.article ? (({ html, ...rest }) => rest)(result.article) : null,
           // Brief de lancement : sans lui, impossible de rejouer une MAJ QAT à
           // l'identique (le type d'article et le maillage ne vivaient que dans
           // l'état local de cette page et disparaissaient au démontage).
           qatBrief: { articleType, seoPlugin, targetWords, internalLinks: cleanLinkRows(linkRows) },
-        } : {}),
+        },
         createdAt: new Date().toISOString(),
         tokenUsage: result.tokenUsage || null,
         assigneeId: authUid || authUsername || null,
@@ -661,31 +624,6 @@ export default function Articles() {
                 />
               </div>
 
-              {/* ── Mode de MAJ (double flux temporaire) ──────────────────────────── */}
-              <div className="space-y-1.5">
-                <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
-                  <Sparkles size={13} className="text-gray-400" />
-                  Mode de mise à jour
-                </label>
-                <div className="flex items-center gap-1 bg-gray-100/70 rounded-xl p-1 w-fit">
-                  {Object.entries(MAJ_MODES).map(([key, m]) => (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setMajMode(key)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                        majMode === key
-                          ? 'bg-white text-gray-900 shadow-sm'
-                          : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                    >
-                      {m.label} <span className={`text-[10px] ml-0.5 ${majMode === key ? 'text-gray-400' : 'text-gray-300'}`}>{m.hint}</span>
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-gray-400">{modeMeta(majMode).description}</p>
-              </div>
-
               {/* ── Profondeur de la MAJ ──────────────────────────────────────────── */}
               <div className="space-y-1.5">
                 <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
@@ -713,7 +651,7 @@ export default function Articles() {
 
               {/* ── Brief du mode « Audit QAT + Refonte » ─────────────────────────── */}
               <AnimatePresence>
-                {isQatMode(majMode) && (
+                {(
                   <QatBriefFields
                     articleType={articleType} setArticleType={setArticleType}
                     seoPlugin={seoPlugin} setSeoPlugin={setSeoPlugin}
