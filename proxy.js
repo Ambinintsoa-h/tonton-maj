@@ -356,6 +356,10 @@ const getProfile = async (u) => {
     // toujours pas. users.email ne sert que de valeur d'affichage par défaut.
     email:     extra.profileEmail || r.email || '',
     avatarUrl: r.avatar_url || '',
+    // Prompts personnels du rédacteur — phase 2 (génération) et phase 3
+    // (vérification d'obsolescence). Rangés dans la colonne JSON `data`, comme
+    // profileEmail. Sans cette ligne ils étaient écrits puis JAMAIS relus.
+    prompts:   extra.prompts || {},
   };
 };
 
@@ -375,9 +379,15 @@ const setProfile = async (u, d) => {
   if (d.prenom    !== undefined) { sets.push('first_name=?'); vals.push(d.prenom || ''); }
   if (d.nom       !== undefined) { sets.push('last_name=?');  vals.push(d.nom || ''); }
   if (d.avatarUrl !== undefined) { sets.push('avatar_url=?'); vals.push(d.avatarUrl || null); }
-  if (d.email     !== undefined) {
+  // Colonne JSON `data` : UN SEUL `set` pour toutes ses clés, en repartant de
+  // l'existant. La pousser deux fois dans le même UPDATE ferait perdre la
+  // première valeur — c'est pourquoi email et prompts partagent cette branche.
+  if (d.email !== undefined || d.prompts !== undefined) {
+    const donnees = { ..._parseData(r.data) };
+    if (d.email   !== undefined) donnees.profileEmail = d.email || '';
+    if (d.prompts !== undefined) donnees.prompts      = d.prompts || {};
     sets.push('data=?');
-    vals.push(JSON.stringify({ ..._parseData(r.data), profileEmail: d.email || '' }));
+    vals.push(JSON.stringify(donnees));
   }
   await getPool().query(`UPDATE users SET ${sets.join(', ')} WHERE uid=?`, [...vals, r.uid]);
   return true;
@@ -1270,12 +1280,27 @@ app.get('/api/account', requireAuth, async (req, res) => {
 // pour que la page Équipe affiche la vraie photo des membres. En mysql, écrire
 // la fiche users EST cette synchronisation (la page Équipe lit getUsers).
 app.put('/api/account', requireAuth, async (req, res) => {
-  const { nom, prenom, email, avatarUrl } = req.body || {};
+  const { nom, prenom, email, avatarUrl, prompts } = req.body || {};
   if (avatarUrl && !avatarUrl.startsWith('https://') && !avatarUrl.startsWith('data:image/')) {
     return res.status(400).json({ error: 'avatarUrl invalide — doit commencer par https:// ou data:image/' });
   }
+  // Prompts personnels : objet de chaînes, bornées. Sans plafond, un collage
+  // malheureux logerait un article entier dans la fiche utilisateur.
+  if (prompts !== undefined) {
+    if (typeof prompts !== 'object' || prompts === null || Array.isArray(prompts)) {
+      return res.status(400).json({ error: 'prompts invalide — objet attendu' });
+    }
+    for (const [cle, val] of Object.entries(prompts)) {
+      if (typeof val !== 'string')  return res.status(400).json({ error: `prompts.${cle} doit être une chaîne` });
+      if (val.length > 8000)        return res.status(400).json({ error: `prompts.${cle} dépasse 8000 caractères` });
+    }
+  }
   const existing = await getProfile(req.user);
-  const saved = await setProfile(req.user, { ...existing, nom, prenom, email, avatarUrl, updatedAt: Date.now() });
+  const saved = await setProfile(req.user, {
+    ...existing, nom, prenom, email, avatarUrl, updatedAt: Date.now(),
+    // Omis quand le client ne l'envoie pas : `prompts: undefined` écraserait la clé.
+    ...(prompts !== undefined ? { prompts } : {}),
+  });
   if (!saved) {
     // mysql : aucune fiche users pour ce compte (cas du break-glass .env s'il n'a
     // pas de ligne). On refuse explicitement plutôt que de perdre la saisie.
