@@ -19,14 +19,15 @@ import TableToolbar from './TableToolbar';
 import DocNavigator from './DocNavigator';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
-import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, wrapLooseTextIntoParagraphs, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment } from '../../utils/diff';
+import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, stripDiffDeletions, wrapLooseTextIntoParagraphs, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment } from '../../utils/diff';
 import { analyzeSeo } from '../../utils/seoCheck';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
   insertFaqHtmlAtCaret, rectOfNodes, normalizeFaqToAccordion, dedupeFaqHeading,
 } from '../../utils/faq';
-import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, topLevelBlockOf, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
+import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, tableBlockOf, unwrapTransparentDivs, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
+import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction } from '../../store/slices/agentSlice';
 import RewritePanel from './RewritePanel';
 import ImageAltCaptionPanel from './ImageAltCaptionPanel';
@@ -344,9 +345,17 @@ export default function ArticleResult() {
     if (wpTitle) { setEditedTitle(wpTitle); return; }
     // Priorité 2 : H1 de l'article original — jamais le slug d'URL
     const h1 = extractH1FromHtml(agent.originalContent);
-    // Priorité 3 : première ligne du texte brut collé (aucun H1)
-    setEditedTitle(h1 || firstLineAsTitle(agent.originalContent));
-  }, [wpMcpData?.wpTitle, agent.originalContent]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Priorité 3 : titre déjà enregistré pour cet article (file d'attente puis
+    // historique). Il vient du relevé WordPress fait au lancement de la MAJ, donc
+    // il est fiable — contrairement à la première ligne du contenu, qui sur un
+    // article RÉCUPÉRÉ PAR SCRAPING capte volontiers un titre de widget de la
+    // page (« Suivez … », « Articles récents »…). Ce titre parasite n'était pas
+    // publié (protégé par titleDirty) mais il était archivé dans l'Historique
+    // via handleTerminer, et affiché au rédacteur comme s'il était correct.
+    const enregistre = cqItem?.title || currentArticle?.title || '';
+    // Priorité 4 : première ligne du texte brut collé (dernier recours)
+    setEditedTitle(h1 || enregistre || firstLineAsTitle(agent.originalContent));
+  }, [wpMcpData?.wpTitle, agent.originalContent, cqItem?.title, currentArticle?.title]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset SEO fields + état catégories quand on passe à un nouvel article.
   // Réinitialiser catsDirty/selectedCategories/catSuggestedRef évite d'hériter d'un
@@ -533,13 +542,18 @@ export default function ArticleResult() {
       tmp.querySelectorAll('ins.added-content').forEach(el => el.remove());
     }
 
-    // 2b. Filet : retirer toute SUPPRESSION résiduelle qui n'est plus un <del> —
-    //     élément portant .deleted-content, balises <s>/<strike>, ou tout élément dont
-    //     le style inline barre le texte (line-through). Ces résidus apparaissent quand
-    //     Chrome « inline » le style d'un <del> lors d'une édition manuelle dans le
-    //     contentEditable. Règle de base : le barré (supprimé) ne doit jamais rester
-    //     dans la vue finale ni dans l'article publié.
-    tmp.querySelectorAll('.deleted-content, s, strike, [style*="line-through"]').forEach(el => el.remove());
+    // 2b. Résidu de SUPPRESSION ≠ BARRÉ VOLONTAIRE — deux choses à ne pas confondre.
+    //     Un <del class="deleted-content"> dont Chrome a « inliné » le style lors
+    //     d'une édition manuelle dans le contentEditable doit bien disparaître :
+    //     c'est du texte supprimé. Mais le bouton « Barré » de la barre de mise en
+    //     forme produit lui aussi du line-through (<strike> ou un <span> avec
+    //     text-decoration selon styleWithCSS) : le retirer EFFAÇAIT le texte du
+    //     rédacteur, en coupant les mots voisins —
+    //       « Le prix etait de 60 euros hors pose. » → « Le prix etait os hors pose. »
+    //     On ne supprime donc que ce qui porte la marque du diff : la classe
+    //     .deleted-content, ou le fond rouge du marqueur recopié en style inline.
+    //     Tout autre barré est intentionnel et reste publié tel quel.
+    stripDiffDeletions(tmp);
 
     // 3. Débaliser les <mark> de diff : conserver le contenu, ignorer les surlignages manuels
     //    Les <mark class="manual-highlight"> sont des surlignages intentionnels de l'utilisateur
@@ -594,8 +608,12 @@ export default function ArticleResult() {
     let html = tmp.innerHTML;
     // Supprimer tout <del …>…</del> résiduel (contenu texte simple, pas de <del> imbriqués)
     html = html.replace(/<del\b[^>]*>[\s\S]*?<\/del>/gi, '');
-    // Idem pour <s>/<strike> résiduels (texte barré = supprimé → jamais publié)
-    html = html.replace(/<(s|strike)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+    // PAS de filet regex sur <s>/<strike> : ces balises sont exactement ce que
+    // produit le bouton « Barré » de la barre de mise en forme. Les supprimer
+    // effaçait le texte volontairement barré par le rédacteur (et coupait les
+    // mots voisins). Les vrais résidus de suppression sont traités plus haut,
+    // à l'étape 2b, sur le DOM et sur un critère précis : la classe
+    // .deleted-content ou le fond rouge du marqueur de diff.
     // Débaliser tout <mark> résiduel de diff (sans "manual-highlight") — garder le contenu interne.
     // Les <mark class="manual-highlight"> (surlignages manuels) sont exclus et préservés.
     // Boucle pour gérer les marks éventuellement imbriqués (ex: édition manuelle)
@@ -623,6 +641,12 @@ export default function ArticleResult() {
     // reflète le rendu publié (taille uniforme du thème). Les tailles px volontaires
     // (barre d'outils) sont conservées.
     stripParasiticFontSize(el);
+    // Déplier les <div> sans aucun attribut : sur un article issu d'un scraping,
+    // le corps arrive enveloppé dans de tels div, ce qui réduisait le navigateur
+    // de structure à 2 blocs et faisait porter la barre « Tableau » sur l'article
+    // entier. Idempotent : dès la première passe il n'en reste plus, donc les
+    // appels suivants (après chaque accepter/rejeter) ne touchent à rien.
+    unwrapTransparentDivs(el);
     // Réparer une structure cassée par un déplacement/collage (#2) : blocs sortis
     // d'un <p>, marqueurs de diff vides, <p> vidés. Préserve l'identité des nœuds.
     repairStructureEl(el);
@@ -1042,6 +1066,15 @@ export default function ArticleResult() {
   // rejeter, insertion média/lien — que l'undo natif du navigateur ne gère pas.
   const MAX_HISTORY = 100;
   const historyRef = useRef({ past: [], present: null, future: [] });
+  // Pile PARALLÈLE de la liste des suggestions (agent.diff), empilée et dépilée
+  // aux mêmes instants que les instantanés HTML — donc synchrone par construction.
+  // Sans elle, appliquer une suggestion puis Ctrl+Z restaurait le texte mais
+  // laissait la suggestion consommée : applyMissed marque `applied:true` dans
+  // Redux, et l'historique ne mémorisait que du HTML. Mesuré avant correction :
+  // 33 appliquée / 7 non localisée au lieu de 32 / 8, y compris après un
+  // rechargement de la page. Une entrée `null` = état inconnu (historique
+  // restauré du localStorage, où seul le HTML est persisté) → on ne rejoue rien.
+  const updatesHistRef = useRef({ past: [], present: null, future: [] });
   const [histState, setHistState] = useState({ canUndo: false, canRedo: false });
   const syncHist = useCallback(() => {
     const h = historyRef.current;
@@ -1071,13 +1104,21 @@ export default function ArticleResult() {
   // Enregistre l'état courant (dédupliqué). Assigné au ref → appelable depuis doSave.
   commitHistoryRef.current = (html) => {
     const h = historyRef.current;
+    const uh = updatesHistRef.current;
     const snap = html != null ? html : (contentRef.current || '');
-    if (h.present == null) { h.present = snap; return; }   // 1er état = référence, pas d'undo dessus
-    if (snap === h.present) return;                          // rien de neuf
+    // Réassigné à chaque rendu → `agent.diff` est toujours l'état courant de la
+    // liste des suggestions, apparié au HTML qu'on enregistre ici.
+    const suggestions = agent.diff || null;
+    if (h.present == null) { h.present = snap; uh.present = suggestions; return; } // 1er état = référence
+    if (snap === h.present) { uh.present = suggestions; return; }                  // contenu inchangé
     h.past.push(h.present);
+    uh.past.push(uh.present);
     if (h.past.length > MAX_HISTORY) h.past.shift();
+    if (uh.past.length > MAX_HISTORY) uh.past.shift();
     h.present = snap;
+    uh.present = suggestions;
     h.future = [];
+    uh.future = [];
     syncHist();
     persistHistory();
   };
@@ -1089,24 +1130,37 @@ export default function ArticleResult() {
     setTimeout(() => { isRestoringRef.current = false; }, 0);
     triggerAutosave(); // persiste l'état restauré (no-op côté historique : snap === present)
   }, [lockMedia, triggerAutosave]);
+  // Rejoue l'état de la liste des suggestions apparié à l'instantané restauré.
+  // `null` (historique venu du localStorage) → on ne touche à rien.
+  const restaurerSuggestions = useCallback((liste) => {
+    if (Array.isArray(liste)) dispatch(setDiff(liste));
+  }, [dispatch]);
   const undo = useCallback(() => {
     const h = historyRef.current;
+    const uh = updatesHistRef.current;
     if (!h.past.length) return;
     h.future.unshift(h.present);
     h.present = h.past.pop();
+    uh.future.unshift(uh.present);
+    uh.present = uh.past.length ? uh.past.pop() : null;
     syncHist();
     persistHistory();
     applyHistorySnap(h.present);
-  }, [syncHist, persistHistory, applyHistorySnap]);
+    restaurerSuggestions(uh.present);
+  }, [syncHist, persistHistory, applyHistorySnap, restaurerSuggestions]);
   const redo = useCallback(() => {
     const h = historyRef.current;
+    const uh = updatesHistRef.current;
     if (!h.future.length) return;
     h.past.push(h.present);
     h.present = h.future.shift();
+    uh.past.push(uh.present);
+    uh.present = uh.future.length ? uh.future.shift() : null;
     syncHist();
     persistHistory();
     applyHistorySnap(h.present);
-  }, [syncHist, persistHistory, applyHistorySnap]);
+    restaurerSuggestions(uh.present);
+  }, [syncHist, persistHistory, applyHistorySnap, restaurerSuggestions]);
   // Changement d'article : restaure l'historique persisté (localStorage) s'il correspond
   // à CET article (→ undo survit au Ctrl+F5), sinon repart propre ancré sur le contenu courant.
   useEffect(() => {
@@ -1124,6 +1178,16 @@ export default function ArticleResult() {
           present: restored.present ?? current,
           future: Array.isArray(restored.future) ? restored.future : [] }
       : { past: [], present: current, future: [] };
+    // Aligner la pile des suggestions sur la MÊME profondeur. Le localStorage ne
+    // persiste que le HTML : les entrées héritées valent donc `null` (état
+    // inconnu) — l'undo du contenu fonctionne toujours, il ne rejoue simplement
+    // pas la liste des suggestions au-delà de la session courante.
+    const h0 = historyRef.current;
+    updatesHistRef.current = {
+      past: h0.past.map(() => null),
+      present: agent.diff || null,
+      future: h0.future.map(() => null),
+    };
     setHistState({ canUndo: historyRef.current.past.length > 0, canRedo: historyRef.current.future.length > 0 });
   }, [agent.currentArticleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1309,21 +1373,13 @@ export default function ArticleResult() {
     changeIdxRef.current = (changeIdxRef.current + dir + targets.length) % targets.length;
     const target = targets[changeIdxRef.current];
 
-    // Scroll manuel plutôt que scrollIntoView : évite le bug Chrome où scrollIntoView
-    // sur un contentEditable réinitialise le scrollTop à 0 avant de scroller.
-    // getBoundingClientRect() est correct même si un ancêtre intermédiaire est positionné
-    // (offsetTop serait relatif à cet ancêtre, pas au container — résultat erroné).
-    const container = articleRef.current;
-    const relativeTop = target.getBoundingClientRect().top
-      - container.getBoundingClientRect().top
-      + container.scrollTop;
-    const center = relativeTop - container.clientHeight / 2 + target.offsetHeight / 2;
-    container.scrollTo({ top: Math.max(0, center), behavior: 'smooth' });
-
-    // Flash outline pour signaler le changement actif
-    target.style.outline = '2px solid #2d6a2d';
-    target.style.outlineOffset = '2px';
-    setTimeout(() => { target.style.outline = ''; target.style.outlineOffset = ''; }, 900);
+    // Le défilement passe par scrollBlockIntoView : l'ancienne version appelait
+    // container.scrollTo() sur l'éditeur, qui n'est PAS un conteneur défilant
+    // (scrollHeight === clientHeight, ~13 000 px) → l'appel ne faisait rien et
+    // ces deux flèches ne déplaçaient jamais rien. L'utilitaire corrige l'éditeur
+    // s'il défile, sinon ses ancêtres défilants, sinon la fenêtre.
+    scrollBlockIntoView(articleRef.current, target);
+    flashBlock(target);
   }, []);
 
   // ── Deuxième passe ────────────────────────────────────────────────────────
@@ -4091,7 +4147,7 @@ export default function ArticleResult() {
                           // 3bis) Tableau → barre « bloc entier » (copier / couper / supprimer)
                           const tbl = e.target.closest('table, [data-tt-table-wrap]');
                           if (tbl && e.currentTarget.contains(tbl)) {
-                            const top = topLevelBlockOf(articleRef.current, tbl) || tbl;
+                            const top = tableBlockOf(articleRef.current, tbl) || tbl;
                             clearTimeout(leaveTimerRef.current);
                             setTableHover({ el: top, rect: top.getBoundingClientRect() });
                             setLinkHover(null);
@@ -4890,7 +4946,16 @@ export default function ArticleResult() {
               onMouseDown={(e) => {
                 e.preventDefault();
                 const el = tableHover.el;
-                if (!el || el.parentNode !== articleRef.current) { setTableHover(null); return; }
+                // Garde-fou : la cible doit VRAIMENT être le tableau (ou son unique
+                // wrapper). L'ancienne condition « enfant direct de l'éditeur »
+                // rejetait un tableau imbriqué tout en acceptant le <div> qui
+                // enveloppait l'article entier → la corbeille effaçait 3 534 mots
+                // sur 3 535. On vérifie donc le contenu de la cible, pas sa place.
+                const cibleSaine = !!el && el !== articleRef.current
+                  && !!articleRef.current?.contains(el)
+                  && el.querySelectorAll('table').length <= 1
+                  && !el.querySelector('h1, h2, h3, h4, h5, h6');
+                if (!cibleSaine) { setTableHover(null); return; }
                 if (!window.confirm('Supprimer ce tableau ? (annulable avec Ctrl+Z)')) return;
                 el.remove();
                 afterFaqEdit();

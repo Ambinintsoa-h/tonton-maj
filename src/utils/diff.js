@@ -504,6 +504,40 @@ export const applyReplacementFuzzy = (html, original, updated, reason) => {
  * <p> vidés par le déplacement. Opère IN PLACE sur l'élément fourni (préserve
  * l'identité des nœuds → curseur conservé). Idempotent.
  */
+// ── Résidu de SUPPRESSION ≠ BARRÉ VOLONTAIRE ─────────────────────────────────
+// Fonds rouges du marqueur « supprimé » (#fee2e2 et son survol #fecaca), tels
+// que Chrome les recopie en style inline quand on édite à la main dans le
+// contentEditable.
+export const DIFF_DELETED_BG = ['rgb(254,226,226)', 'rgb(254,202,202)'];
+
+/**
+ * Retire du DOM les SUPPRESSIONS de diff, et RIEN d'autre.
+ *
+ * À ne pas confondre : le bouton « Barré » de la barre de mise en forme produit
+ * lui aussi du line-through — un <strike> ou un <span style="text-decoration…">
+ * selon l'état de styleWithCSS. L'ancien filtre retirait tout `s`, `strike` et
+ * `[style*="line-through"]`, donc il EFFAÇAIT le texte barré volontairement par
+ * le rédacteur, en coupant les mots voisins :
+ *   « Le prix etait de 60 euros hors pose. » → « Le prix etait os hors pose. »
+ *
+ * Critère retenu : on ne supprime que ce qui porte la marque du diff — la classe
+ * .deleted-content, ou le fond rouge du marqueur recopié en style inline. Tout
+ * autre barré est intentionnel et reste publié tel quel.
+ *
+ * @returns {number} nombre d'éléments retirés
+ */
+export const stripDiffDeletions = (root) => {
+  if (!root || !root.querySelectorAll) return 0;
+  let n = 0;
+  root.querySelectorAll('.deleted-content').forEach((el) => { el.remove(); n++; });
+  root.querySelectorAll('s, strike, [style*="line-through"]').forEach((el) => {
+    if (!el.parentNode) return;                       // déjà retiré avec son parent
+    const bg = ((el.style && el.style.backgroundColor) || '').replace(/\s/g, '').toLowerCase();
+    if (bg && DIFF_DELETED_BG.includes(bg)) { el.remove(); n++; }
+  });
+  return n;
+};
+
 export const repairStructureEl = (el) => {
   if (!el) return;
   const BLOCK = 'table, ul, ol, h1, h2, h3, h4, h5, h6, blockquote, figure, pre, hr';

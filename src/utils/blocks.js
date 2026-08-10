@@ -19,6 +19,63 @@ export const topLevelBlockOf = (container, node) => {
   return n && n.nodeType === Node.ELEMENT_NODE ? n : null;
 };
 
+// ── Bloc d'un TABLEAU (barre flottante « Tableau ») ──────────────────────────
+// topLevelBlockOf ne convient PAS ici : sur un article dont le corps est enfermé
+// dans un <div> — fréquent quand le contenu vient d'un scraping — il remonte
+// jusqu'à ce div, donc jusqu'à TOUT l'article. La barre « Tableau » demandait
+// alors « Supprimer ce tableau ? » et effaçait 3 534 mots sur 3 535, les 14
+// titres et les 3 tableaux ; « Copier »/« Couper » emportaient tout de même.
+// On ne remonte donc que tant que l'ancêtre n'enveloppe QUE ce tableau : on
+// récupère bien le wrapper responsive [data-tt-table-wrap] posé par
+// makeTablesResponsive, mais jamais un conteneur qui emporterait du voisinage.
+const nEnveloppeQue = (parent, child) => {
+  if (!parent || parent.nodeType !== Node.ELEMENT_NODE) return false;
+  if (parent.children.length !== 1 || parent.children[0] !== child) return false;
+  return !Array.from(parent.childNodes)
+    .some(n => n.nodeType === Node.TEXT_NODE && n.nodeValue && n.nodeValue.trim());
+};
+
+export const tableBlockOf = (container, node) => {
+  if (!container || !node || node === container) return null;
+  if (!container.contains(node)) return null;
+  let n = node;
+  while (n.parentNode && n.parentNode !== container && nEnveloppeQue(n.parentNode, n)) {
+    n = n.parentNode;
+  }
+  return n.nodeType === Node.ELEMENT_NODE ? n : null;
+};
+
+// ── Déplier les <div> strictement décoratifs ─────────────────────────────────
+// Un article récupéré par scraping arrive souvent emballé dans des <div> SANS
+// AUCUN attribut (ni class, ni id, ni style, ni data-*) : de purs résidus de la
+// page d'origine. Ils n'ont aucun effet de rendu — rien ne peut les cibler en
+// CSS — mais ils cassaient deux fonctions qui raisonnent, à juste titre, sur les
+// blocs de premier niveau :
+//   • le navigateur de structure n'énumérait plus que 2 blocs au lieu de ~80,
+//     donc réordonner / glisser / copier une section devenait impossible ;
+//   • la barre « Tableau » remontait jusqu'à eux (cf. tableBlockOf).
+// On les déplie donc, en remontant leurs enfants exactement à leur place. Un
+// <div> portant LE MOINDRE attribut est laissé intact : il peut être signifiant
+// (wrapper responsive de tableau, bloc Gutenberg, mise en page du thème…).
+export const unwrapTransparentDivs = (el, { maxPasses = 6 } = {}) => {
+  if (!el || !el.querySelectorAll) return 0;
+  let total = 0;
+  for (let pass = 0; pass < maxPasses; pass++) {
+    const cibles = Array.from(el.querySelectorAll('div')).filter(d => d.attributes.length === 0);
+    if (!cibles.length) break;
+    // for…of plutôt que forEach : une fonction déclarée dans la boucle qui
+    // incrémente `total` déclenche l'avertissement no-loop-func.
+    for (const d of cibles) {
+      if (!d.parentNode) continue;
+      const frag = (d.ownerDocument || document).createDocumentFragment();
+      while (d.firstChild) frag.appendChild(d.firstChild);
+      d.parentNode.replaceChild(frag, d);
+      total++;
+    }
+  }
+  return total;
+};
+
 // Bloc top-level au point d'un Range (clic droit) : gère le cas où le caret
 // est directement entre deux blocs (startContainer === container).
 export const blockAtRange = (container, range) => {
