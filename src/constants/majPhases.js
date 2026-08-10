@@ -150,9 +150,33 @@ export const MAJ_SCOPES = {
  * Décision absente ou inconnue → refonte, l'option prudente : mieux vaut
  * proposer trop de travail que de laisser passer un article à refaire.
  */
+/**
+ * Score global au-delà duquel l'article est jugé sain : des corrections ciblées
+ * suffisent. En dessous, l'audit constate des manques de fond.
+ */
+export const SCORE_ARTICLE_SAIN = 7;
+
 export const scopeProposedByAudit = (audit) => {
   const d = audit && audit.ampleur && audit.ampleur.decision;
-  return d === 'maj_ciblee' ? SCOPE_SIMPLE : SCOPE_REFONTE;
+  if (d) return d === 'maj_ciblee' ? SCOPE_SIMPLE : SCOPE_REFONTE;
+  // `ampleur` est réclamée « IMPÉRATIVEMENT » à l'audit (agentQat), mais le modèle
+  // l'omet parfois — constaté en test sur un audit par ailleurs complet. Plutôt
+  // que de recommander une refonte en aveugle, on s'appuie sur le score global,
+  // que l'audit a bien produit : c'est une recommandation fondée sur SES chiffres.
+  const g = Number(audit && audit.scores && audit.scores.global);
+  if (Number.isFinite(g) && g > 0) return g >= SCORE_ARTICLE_SAIN ? SCOPE_SIMPLE : SCOPE_REFONTE;
+  return SCOPE_REFONTE;
+};
+
+/**
+ * Sur quoi repose la recommandation affichée au rédacteur : la décision explicite
+ * de l'audit, ses scores à défaut, ou rien du tout. Sert à formuler honnêtement
+ * la justification — ne jamais présenter une déduction comme une décision.
+ */
+export const scopeRecommendationSource = (audit) => {
+  if (audit && audit.ampleur && audit.ampleur.decision) return 'ampleur';
+  const g = Number(audit && audit.scores && audit.scores.global);
+  return (Number.isFinite(g) && g > 0) ? 'scores' : 'defaut';
 };
 
 /**

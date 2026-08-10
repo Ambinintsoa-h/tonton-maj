@@ -15,7 +15,7 @@
 import { motion } from 'framer-motion';
 import { Sparkles, Loader2, Check, AlertTriangle, ArrowRight, FileText, RotateCcw, Save } from 'lucide-react';
 import {
-  MAJ_SCOPES, SCOPE_SIMPLE, scopeProposedByAudit, wordsAddedReport,
+  MAJ_SCOPES, SCOPE_SIMPLE, scopeProposedByAudit, scopeRecommendationSource, wordsAddedReport,
 } from '../../constants/majPhases';
 
 const LIBELLE_DECISION = {
@@ -43,6 +43,7 @@ export default function PhaseGeneration({
   savingTemplate = false,
 }) {
   const propose  = scopeProposedByAudit(audit);
+  const source   = scopeRecommendationSource(audit);
   const decision = audit && audit.ampleur && audit.ampleur.decision;
   const retenu   = scope || propose;
   const contredit = !!scope && scope !== propose;
@@ -58,14 +59,21 @@ export default function PhaseGeneration({
           <Sparkles size={14} className="text-sage-500" />
           Ampleur de la mise à jour
         </h3>
-        {decision ? (
+        {/* La justification dit sur QUOI elle repose : une déduction ne doit jamais
+            être présentée comme une décision de l'audit. */}
+        {source === 'ampleur' ? (
           <p className="text-[11px] text-gray-500">
             L'audit recommande une <strong className="text-gray-700">{LIBELLE_DECISION[decision] || decision}</strong>.
             {audit.ampleur.justification ? ` ${audit.ampleur.justification}` : ''}
           </p>
+        ) : source === 'scores' ? (
+          <p className="text-[11px] text-gray-500">
+            L'audit n'a pas tranché l'ampleur. D'après son <strong className="text-gray-700">score global de {audit.scores.global}/10</strong>,
+            {' '}<strong className="text-gray-700">{MAJ_SCOPES[propose]?.label}</strong> est présélectionnée — à vous de confirmer.
+          </p>
         ) : (
           <p className="text-[11px] text-gray-400 italic">
-            L'audit n'a pas exprimé d'ampleur — la refonte est présélectionnée par prudence.
+            Ni ampleur ni score exploitable dans l'audit — la refonte est présélectionnée par prudence.
           </p>
         )}
       </div>
