@@ -31,7 +31,7 @@ import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runAgent } from '../services/agent';
-import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts, createNotification, fetchArticleHtml } from '../services/firebase';
+import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts, createNotification, fetchArticleHtml, getArticle } from '../services/firebase';
 import store from '../store';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Pagination, { pageSlice } from '../components/common/Pagination';
@@ -1634,7 +1634,7 @@ export default function MajEnAttente() {
     // L'archive Historique (même id, créée en fin d'analyse) sert DEUX usages :
     // recharger les HTML allégés ET restaurer les métadonnées d'édition
     // (SEO Meta, date MAJ, instruction, titre) → recherchée systématiquement.
-    const arch = store.getState().articles.history.find(a => a.id === item.id) || null;
+    let arch = store.getState().articles.history.find(a => a.id === item.id) || null;
     if (!r.originalContent || !r.updatedContent) {
       if (arch) {
         const [orig, updated] = await Promise.all([
@@ -1655,8 +1655,39 @@ export default function MajEnAttente() {
         };
       }
     }
+    // L'archive n'était pas dans le store : soit la liste des articles n'a pas fini
+    // de charger (elle rapatrie TOUT le HTML de TOUS les articles et peut dépasser
+    // 30 s), soit on arrive directement sur cette page. On va chercher CET article
+    // seul plutôt que de déclarer le contenu perdu — il ne l'est pas.
     if (!r.updatedContent) {
-      toast.error('Contenu de l\'analyse introuvable — relancez la MAJ de cet article');
+      try {
+        const seul = await getArticle(item.id);
+        if (seul) {
+          arch = arch || seul;   // sert aussi à la restauration des phases plus bas
+          const [orig, updated] = await Promise.all([
+            seul.originalContent || fetchArticleHtml(seul.originalContentUrl),
+            seul.updatedContent  || fetchArticleHtml(seul.updatedContentUrl),
+          ]);
+          r = {
+            ...r,
+            articleTitle:    r.articleTitle    || seul.title      || '',
+            originalContent: r.originalContent || orig            || '',
+            updatedContent:  r.updatedContent  || updated         || '',
+            updates:         r.updates     || seul.updates     || [],
+            sources:         r.sources     || seul.sources     || [],
+            analysis:        r.analysis    || seul.analysis    || '',
+            audit:           r.audit       || seul.audit       || '',
+            wpData:          r.wpData      || seul.wpData      || null,
+            seoTracking:     r.seoTracking || seul.seoTracking || null,
+            majDepth:        r.majDepth    || seul.majDepth    || null,
+          };
+        }
+      } catch { /* on retombe sur le message ci-dessous */ }
+    }
+    if (!r.updatedContent) {
+      // Ne JAMAIS conseiller de relancer la MAJ : c'est une analyse payante de
+      // plusieurs minutes, et le contenu n'est pas perdu pour autant.
+      toast.error('Contenu pas encore chargé — patientez quelques secondes et réessayez. Inutile de relancer la MAJ.');
       return;
     }
     dispatch(setOriginalContent(r.originalContent || ''));
