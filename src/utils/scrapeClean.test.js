@@ -127,6 +127,24 @@ describe('stripNonEditorialUrlsFromText — même filtre sur du texte brut (repl
     expect(stripNonEditorialUrlsFromText(`Suivez (${DISCOVER}).`)).not.toContain('profile.google.com');
   });
 
+  test('liens MARKDOWN — la forme rendue par Jina', () => {
+    // Découpé en mots, `[Discover](https://…)` ne commence pas par « http » :
+    // le filtre d'URL nues le laissait passer. D'où une passe dédiée.
+    const t = `Toiture en bac acier. [Discover](${DISCOVER}) [Ajouter comme source préférée](${SOURCE}) Fin.`;
+    const r = stripNonEditorialUrlsFromText(t);
+    expect(r).not.toContain('profile.google.com');
+    expect(r).not.toContain('preferences/source');
+    expect(r).not.toContain('Discover');
+    expect(r).toContain('Toiture en bac acier.');
+    expect(r).toContain('Fin.');
+  });
+
+  test('un lien markdown ÉDITORIAL est conservé en entier', () => {
+    const t = `Voir [les tôles](${EDITORIAL}) chez le partenaire.`;
+    const r = stripNonEditorialUrlsFromText(t);
+    expect(r).toContain(`[les tôles](${EDITORIAL})`);
+  });
+
   test('entrées dégénérées', () => {
     expect(stripNonEditorialUrlsFromText('')).toBe('');
     expect(stripNonEditorialUrlsFromText(null)).toBe('');
