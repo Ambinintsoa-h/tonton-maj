@@ -3932,6 +3932,9 @@ export default function ArticleResult() {
               onSaveTemplate={() => enregistrerModele('verification', verifPrompt, setSavingVerifTemplate)}
               savingTemplate={savingVerifTemplate}
               onRun={handleVerify}
+              // Même mécanique qu'en phase 4 : remplacement direct du passage,
+              // avec un message clair si le texte n'est pas retrouvé tel quel.
+              onAccept={handleAcceptStyleFix}
             />
           )}
           {phase === PHASE_RELECTURE && (

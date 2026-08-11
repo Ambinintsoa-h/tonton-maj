@@ -15,7 +15,7 @@ import { useState, useMemo } from 'react';
 import { markSuggestions, MARK_CLASS } from '../../utils/markSuggestions';
 import { motion } from 'framer-motion';
 import {
-  Clock, Loader2, Copy, Check, FileText, RotateCcw, Save, ArrowRight, AlertTriangle,
+  Clock, Loader2, Copy, Check, FileText, RotateCcw, Save, ArrowRight, AlertTriangle, X,
 } from 'lucide-react';
 
 export default function PhaseObsolescence({
@@ -31,7 +31,12 @@ export default function PhaseObsolescence({
   onSaveTemplate,
   savingTemplate = false,
   onRun,
+  onAccept,
 }) {
+  // Suggestions déjà arbitrées (acceptées ou ignorées) — locales à la session.
+  // On les RETIRE de l'affichage sans réindexer : la suggestion 2 reste la n° 2,
+  // sinon les numéros ne correspondraient plus aux repères de l'article.
+  const [traitees, setTraitees] = useState([]);
   // { cle, ok } — `ok:false` = la copie a ÉCHOUÉ. L'ancienne version remettait
   // simplement l'état à null dans le catch : le rédacteur cliquait, rien ne se
   // passait, et il ne savait pas que le presse-papiers avait refusé. Constaté en
@@ -183,6 +188,7 @@ export default function PhaseObsolescence({
               <div className="space-y-2.5 max-h-[70vh] overflow-y-auto pr-1">
                 {suggestions.map((s, i) => {
                   const cle = `s${i}`;
+                  if (traitees.includes(cle)) return null;   // arbitrée : on la retire
                   const nouveau = s.updated || '';
                   return (
                     <div key={i} className="rounded-xl border border-gray-200 overflow-hidden">
@@ -229,6 +235,28 @@ export default function PhaseObsolescence({
                                   // rédacteur croit avoir copié et collera du vide.
                                   : <><AlertTriangle size={10} /> Refusé — sélectionnez le texte</>)
                               : <><Copy size={10} /> Copier</>}
+                          </button>
+                          {/* Accepter / Ignorer : le copier-coller reste possible, mais
+                              pour aller vite on applique en un clic. Accepter n'est
+                              proposé que s'il y a un passage d'origine à remplacer —
+                              sur un ajout pur, il n'y a rien à substituer. */}
+                          {s.original && onAccept && (
+                            <button
+                              type="button"
+                              onClick={() => { onAccept({ avant: s.original, apres: nouveau }); setTraitees((l) => [...l, cle]); }}
+                              title="Remplacer le passage dans l'article"
+                              className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-semibold hover:bg-emerald-700 transition-colors flex-shrink-0"
+                            >
+                              <Check size={10} /> Accepter
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setTraitees((l) => [...l, cle])}
+                            title="Écarter cette suggestion — l'article n'est pas modifié"
+                            className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white text-gray-500 border border-gray-200 text-[10px] font-semibold hover:text-gray-800 transition-colors flex-shrink-0"
+                          >
+                            <X size={10} /> Ignorer
                           </button>
                         </div>
                         <div className="md-content text-[12px] text-gray-800 leading-relaxed break-words [&_p]:!my-0.5"
