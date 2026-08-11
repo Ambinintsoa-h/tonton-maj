@@ -13,6 +13,7 @@
 import {
   saveArticleDraftRemote, getArticleDraftRemote, deleteArticleDraftRemote,
 } from './firebase';
+import { backendReady, isBackendResolved } from './backendMode';
 
 const KEY = (uid) => `tonton_article_draft_${uid || 'anon'}`;
 const MAX_REMOTE_HTML = 900_000;          // au-delà : pas d'écriture Firestore (limite doc 1 Mo)
@@ -93,10 +94,33 @@ export const loadDraftLocal = (uid) => {
   } catch { return null; }
 };
 
-/** Lecture distante (réconciliation cross-appareil). */
+/**
+ * Lecture distante (réconciliation cross-appareil, cache vidé).
+ *
+ * ATTEND la résolution du backend avant d'appeler. Sans cette attente, l'appel
+ * partait vers l'implémentation Firestore — le défaut du flag tant que
+ * GET /api/backend n'a pas répondu (~1,4 s) — alors que la production tourne sur
+ * MySQL et que Firebase n'y est même pas initialisé. L'échec était avalé par le
+ * `catch` ci-dessous : aucune requête, aucune erreur, et le rédacteur retrouvait
+ * un écran vide après un rechargement, son travail pourtant intact sur le
+ * serveur. Mesuré en production le 2026-08-11.
+ *
+ * Le plafond de 5 s garantit qu'un bootstrap anormal ne bloque pas la lecture
+ * pour toujours : passé ce délai on tente avec le flag tel qu'il est.
+ */
+const PLAFOND_ATTENTE_BACKEND_MS = 5000;
+
 export const loadDraftRemote = async (uid) => {
   if (!uid) return null;
-  try { return await getArticleDraftRemote(uid); } catch { return null; }
+  try {
+    if (!isBackendResolved()) {
+      await Promise.race([
+        backendReady(),
+        new Promise((r) => setTimeout(r, PLAFOND_ATTENTE_BACKEND_MS)),
+      ]);
+    }
+    return await getArticleDraftRemote(uid);
+  } catch { return null; }
 };
 
 /** Supprime le brouillon local + distant (MAJ publiée ou abandonnée). */
