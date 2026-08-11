@@ -163,10 +163,21 @@ export default function PhaseObsolescence({
               )}
             </h4>
             {/* Une suggestion sans ancre visible est ANNONCÉE : le rédacteur doit
-                savoir qu'elle n'a pas de repère à gauche, pas la chercher en vain. */}
+                savoir qu'elle n'a pas de repère à gauche, pas la chercher en vain.
+                Les deux causes sont SÉPARÉES : un ajout pur n'a rien à repérer,
+                c'est normal ; un passage cité mais introuvable est une anomalie.
+                Les confondre faisait lire 35 anomalies là où il y avait surtout
+                des ajouts — ou l'inverse. */}
+            {vue.ajouts.length > 0 && (
+              <p className="text-[10px] text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1">
+                Suggestion(s) {vue.ajouts.join(', ')} : <strong>ajout pur</strong>, sans passage à remplacer —
+                rien à repérer à gauche, c'est normal.
+              </p>
+            )}
             {vue.missed.length > 0 && (
               <p className="text-[10px] text-amber-700 bg-amber-50/70 border border-amber-200 rounded-lg px-2 py-1">
-                Suggestion(s) {vue.missed.join(', ')} sans repère dans le texte — passage introuvable ou ajout pur.
+                Suggestion(s) {vue.missed.join(', ')} : passage cité mais <strong>introuvable</strong> dans ce
+                texte. Copiez la suggestion et placez-la à la main.
               </p>
             )}
             <div className="md-content text-[12px] leading-relaxed max-h-[70vh] overflow-y-auto pr-1 border-t border-gray-100 pt-2"

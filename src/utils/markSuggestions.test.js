@@ -73,9 +73,24 @@ describe('ce qui n\'est pas retrouvé est SIGNALÉ', () => {
     expect(r.missed).toEqual([1]);
   });
 
-  test('une suggestion SANS passage d\'origine (une addition) part dans missed', () => {
+  // Un ajout pur n'a RIEN à repérer : ce n'est pas un echec, et le confondre
+  // avec un passage introuvable faisait lire une anomalie la ou tout va bien.
+  test('une suggestion SANS passage d\'origine (un ajout pur) part dans ajouts, pas dans missed', () => {
     const r = markSuggestions(ART, [{ updated: 'Nouveau paragraphe à ajouter.' }]);
-    expect(r.missed).toEqual([1]);
+    expect(r.ajouts).toEqual([1]);
+    expect(r.missed).toEqual([]);
+    expect(r.marked).toEqual([]);
+  });
+
+  test('les deux causes sont distinguees dans le meme lot', () => {
+    const r = markSuggestions(ART, [
+      { original: 'La pente minimale est de 5 % selon le DTU.' },  // repere
+      { updated: 'Un paragraphe entierement nouveau.' },            // ajout pur
+      { original: 'Cette phrase ne figure pas dans l\'article.' },  // introuvable
+    ]);
+    expect(r.marked).toEqual([1]);
+    expect(r.ajouts).toEqual([2]);
+    expect(r.missed).toEqual([3]);
   });
 
   test('numérotation conservée quand certaines échouent — le n°2 reste le n°2', () => {
@@ -105,7 +120,7 @@ describe('robustesse', () => {
   });
 
   test('entrées dégénérées', () => {
-    expect(markSuggestions('', [{ original: 'x' }])).toEqual({ html: '', marked: [], missed: [] });
+    expect(markSuggestions('', [{ original: 'x' }])).toEqual({ html: '', marked: [], missed: [], ajouts: [] });
     expect(markSuggestions(null, null).html).toBe('');
     expect(() => markSuggestions(ART, 'pas un tableau')).not.toThrow();
   });
