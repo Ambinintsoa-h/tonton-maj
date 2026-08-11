@@ -94,15 +94,26 @@ export const canEnterPhase = (id, statuses = {}) => {
 };
 
 /**
- * Reconstitue l'avancement d'un article qui n'en porte pas — tout ce qui a été
- * créé AVANT le passage au parcours en quatre phases (file d'attente, historique,
- * archives). On déduit l'avancement de ce que l'enregistrement contient déjà,
- * plutôt que de renvoyer le rédacteur à la phase 1 sur un article déjà travaillé.
+ * Reconstitue l'avancement d'un article à la réouverture, en croisant DEUX
+ * sources : l'avancement explicitement enregistré, et ce que l'enregistrement
+ * contient réellement (audit, article réécrit, rapport d'obsolescence).
+ *
+ * Le contenu a le dernier mot. Auparavant un `phaseStatus` présent était repris
+ * tel quel, ce qui ouvrait une régression en boucle : le lancement écrit
+ * `{ audit: done }` dans l'enregistrement et ne le complète plus jamais ensuite,
+ * si bien qu'une réouverture depuis « MAJ en attente » rabaissait la phase 2 à
+ * « à faire » ALORS QUE l'article réécrit était là, dans le même enregistrement.
+ * L'autosave qui suivait recopiait ce recul dans le brouillon : obsolescence et
+ * relecture restaient verrouillées, et le vidage du cache n'y changeait rien
+ * puisque la valeur fausse était désormais des deux côtés.
+ *
+ * Règle : une phase prouvée par le contenu est TERMINÉE, rien ne peut l'annuler.
+ * L'avancement explicite ne sert plus qu'à renseigner ce que le contenu ne dit
+ * pas — au premier chef la relecture, qui n'a pas d'artefact à elle.
  */
 export const derivePhaseStatus = (rec) => {
   const base = initialPhaseStatus();
   if (!rec) return base;
-  if (rec.phaseStatus) return { ...base, ...rec.phaseStatus };   // déjà au nouveau format
 
   const aUnAudit = !!(rec.auditJson || rec.audit);
   // `updatedContent` n'est PAS un signal de génération : depuis la séparation des
@@ -117,6 +128,12 @@ export const derivePhaseStatus = (rec) => {
   if (aUnAudit || aUneGenration) base[PHASE_AUDIT] = DONE;
   if (aUneGenration)             base[PHASE_GENERATION] = DONE;
   if (aUneVerif)                 base[PHASE_OBSOLESCENCE] = DONE;
+
+  const explicite = rec.phaseStatus || {};
+  PHASE_ORDER.forEach((id) => {
+    if (base[id] === DONE) return;                 // preuve au contenu : intouchable
+    if (explicite[id]) base[id] = explicite[id];
+  });
   return base;
 };
 
