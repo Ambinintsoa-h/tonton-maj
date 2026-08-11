@@ -1882,24 +1882,41 @@ export default function ArticleResult() {
     if (!agent.currentArticleId) { setTerminant(false); return; }
     try {
       const lastMod = { lastModifiedAt: Date.now(), lastModifiedBy: editorNameRef.current };
+      const titreFinal = editedTitle || extractH1FromHtml(agent.originalContent) || '';
+      // Le parcours s'achève ici : la phase 4 est terminée.
+      const avancement = { ...(agent.phaseStatus || {}), [PHASE_RELECTURE]: DONE };
+      // ── Ce qui doit atterrir EN BASE, et pas seulement dans Redux ──────────────
+      // Après un rechargement, c'est la base qui fait foi. L'écriture ne portait
+      // que le HTML et la trace de modification : l'archive conservait donc le
+      // titre du LANCEMENT (le slug d'URL, « toiture-en-bac-acier »), un
+      // avancement réduit à { audit: done } — d'où des phases 2 à 4 qui
+      // repassaient « à faire » à la réouverture — et perdait les métas de
+      // l'article réécrit (titre SEO, méta-description, chapô, ampleur appliquée).
+      // Constaté sur un article réel, archivé puis relu.
+      const archive = {
+        ...articleMetaRef.current(),
+        ...(titreFinal ? { title: titreFinal } : {}),
+        phaseStatus: avancement,
+        ...(agent.majScope ? { majScope: agent.majScope } : {}),
+        ...(auditJson  ? { auditJson } : {}),
+        // `qatArticle.html` est retiré : c'est déjà `updatedContent`.
+        ...(qatArticle ? { qatArticle: (({ html, ...rest }) => rest)(qatArticle) } : {}),
+        finishedAt: new Date().toISOString(),
+      };
       dispatch(updateInHistory({
         id:             agent.currentArticleId,
-        title:          editedTitle || extractH1FromHtml(agent.originalContent) || '',
         updatedContent: finalHtml,
         updates:        agent.diff    || [],
         sources:        agent.sources || [],
-        finishedAt:     new Date().toISOString(),
-        // Métadonnées d'édition — persistées avec l'article au Terminer
-        ...(seoTitle || seoDescription ? { seoMeta: { seoTitle, seoDescription } } : {}),
-        ...(publishDate ? { publishDate } : {}),
-        ...(agent.instruction ? { instruction: agent.instruction } : {}),
+        ...archive,
         ...lastMod,
       }));
-      // Persiste le HTML final + la trace de modification + les métadonnées côté
-      // base (non bloquant : l'autosave throttlé peut ne pas avoir eu le temps
-      // de pousser les derniers changements)
+      // Persiste le HTML final + la trace de modification + TOUTE l'archive côté
+      // base (non bloquant : l'autosave throttlé peut ne pas avoir eu le temps de
+      // pousser les derniers changements). La route range les colonnes connues
+      // (dont `title`) et fusionne le reste dans `data`.
       if (firebaseReady && finalHtml) {
-        updateArticleHtml(agent.currentArticleId, finalHtml, lastMod, articleMetaRef.current()).catch(() => {});
+        updateArticleHtml(agent.currentArticleId, finalHtml, lastMod, archive).catch(() => {});
       }
       dispatch(resetAgent());
       toast.success('Article archivé dans l\'historique !', { icon: <CheckCircle2 size={18} className="text-green-600" /> });
@@ -3603,18 +3620,25 @@ export default function ArticleResult() {
                   }
                   Enregistrer
                 </button>
-                <button
-                  onClick={handleTerminer}
-                  disabled={terminant || enregistrant}
-                  title="Enregistre, archive l'article dans l'Historique et quitte l'éditeur"
-                  className="btn-primary text-xs bg-gray-900 hover:bg-gray-700"
-                >
-                  {terminant
-                    ? <Loader size={13} className="animate-spin" />
-                    : <ShieldCheck size={13} />
-                  }
-                  Terminer
-                </button>
+                {/* « Terminer » n'apparaît QU'EN PHASE 4, comme « Publier ». Il
+                    archive l'article et quitte l'éditeur : cliqué en phase 1, il
+                    archivait un article dont rien n'avait encore été généré.
+                    « Enregistrer », lui, reste disponible à toutes les phases —
+                    sauvegarder son travail ne doit jamais être bridé. */}
+                {phase === PHASE_RELECTURE && (
+                  <button
+                    onClick={handleTerminer}
+                    disabled={terminant || enregistrant}
+                    title="Enregistre, archive l'article dans l'Historique et quitte l'éditeur"
+                    className="btn-primary text-xs bg-gray-900 hover:bg-gray-700"
+                  >
+                    {terminant
+                      ? <Loader size={13} className="animate-spin" />
+                      : <ShieldCheck size={13} />
+                    }
+                    Terminer
+                  </button>
+                )}
               </>
             )}
 
