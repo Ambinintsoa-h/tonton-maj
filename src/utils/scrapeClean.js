@@ -85,11 +85,18 @@ export const stripNonEditorialLinks = (html) => {
 const PONCTUATION_DEBUT = /^[([<«"'‘“]+/;
 const PONCTUATION_FIN   = /[)\]>»"'’”,.;:!?]+$/;
 
+// Lien markdown `[libellé](url)` — la forme rendue par le repli Jina. Une passe
+// dédiée est nécessaire : découpé en mots, `[Discover](https://…)` ne commence
+// pas par `http`, donc le filtre d'URL nues le laissait passer.
+const LIEN_MARKDOWN = /\[[^\]\n]*\]\((https?:\/\/[^)\s]+)\)/g;
+
 export const stripNonEditorialUrlsFromText = (texte) => {
   const s = typeof texte === 'string' ? texte : '';
   if (!s) return s;
-  return s
+  const sansMarkdown = s.replace(LIEN_MARKDOWN, (tout, url) => (isNonEditorialLink(url) ? '' : tout));
+  return sansMarkdown
     .split(/\s+/)
     .filter((mot) => !isNonEditorialLink(mot.replace(PONCTUATION_DEBUT, '').replace(PONCTUATION_FIN, '')))
-    .join(' ');
+    .join(' ')
+    .trim();
 };

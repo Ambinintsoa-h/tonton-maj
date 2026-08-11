@@ -18,6 +18,7 @@ import { addArticleStat } from '../store/slices/statsSlice';
 import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
+import { stripNonEditorialLinks, stripNonEditorialUrlsFromText } from '../utils/scrapeClean';
 import { runQatAudit } from '../services/agentQat';
 import QatBriefFields from '../components/agent/QatBriefFields';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
@@ -261,6 +262,28 @@ export default function Articles() {
       dispatch(addStep('Article chargé depuis le texte collé.'));
       dispatch(setProgress(5));
     }
+
+    // ── POINT DE PASSAGE UNIQUE des trois sources ─────────────────────────────
+    // WordPress MCP, scraping, collage manuel : tout converge ici. Les boutons de
+    // suivi Google (« Discover », « Ajouter comme source préférée ») sont retirés
+    // à cet endroit précis, et nulle part ailleurs.
+    //
+    // Le corriger dans le scraper seul ne servait à rien : un article WordPress
+    // connecté est lu par l'API (branche `wpFetched` ci-dessus) et NE PASSE PAS
+    // par le scraping — c'était justement le cas qui échouait. Mesuré en prod :
+    // « [refonte] 2 lien(s) externe(s) d'origine INTROUVABLE(s) → génération à
+    // rejeter », le verrou refusant les 3 essais puisqu'il exige de reproduire
+    // tout lien externe de l'original, boutons Google compris.
+    //
+    // Le verrou n'est pas touché : c'est ce qu'il voit comme « original » qu'on
+    // corrige, en amont de lui.
+    const ingestion = stripNonEditorialLinks(articleHtml);
+    if (ingestion.removed.length) {
+      dispatch(addStep(`${ingestion.removed.length} bouton(s) de suivi Google retiré(s) du contenu`));
+      console.warn('[ingestion] liens non éditoriaux retirés :', ingestion.removed);
+    }
+    articleHtml    = ingestion.html;
+    articleContent = stripNonEditorialUrlsFromText(articleContent);
 
     // originalContent stocke le HTML → affiché avec mise en page préservée
     dispatch(setOriginalContent(articleHtml));
