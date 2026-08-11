@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2 } from 'lucide-react';
-import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setPhase, setPhaseStatus, restorePhaseStatus, setMajScope, setAuditJson, setQatArticle, setLiveText, clearLiveText } from '../store/slices/agentSlice';
+import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setPhase, setPhaseStatus, restorePhaseStatus, setMajScope, setAuditJson, setQatArticle, setObsolescenceReport, setLiveText, clearLiveText } from '../store/slices/agentSlice';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
@@ -105,11 +105,16 @@ export default function Articles() {
         // ramenait le stepper à « phase 1 à faire » sur un article déjà généré,
         // en verrouillant les phases 2 à 4. Un brouillon antérieur ne porte pas
         // d'avancement : derivePhaseStatus le déduit alors de son contenu.
+        // Artefacts des phases 1 à 3 : sans eux les panneaux se rouvraient vides.
+        if (d.auditJson) dispatch(setAuditJson(d.auditJson));
+        if (d.qatArticle) dispatch(setQatArticle(d.qatArticle));
+        if (d.obsolescenceReport) dispatch(setObsolescenceReport(d.obsolescenceReport));
         const statuts = derivePhaseStatus({
           phaseStatus: d.phaseStatus,
           audit:       d.audit,
           auditJson:   d.auditJson,
           qatArticle:  d.qatArticle,
+          obsolescenceReport: d.obsolescenceReport,
           diff:        d.diff,
         });
         dispatch(restorePhaseStatus(statuts));

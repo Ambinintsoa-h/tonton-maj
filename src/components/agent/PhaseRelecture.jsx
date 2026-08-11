@@ -38,7 +38,14 @@ export default function PhaseRelecture({
   ).length, 0), [rapport.findings]);
 
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-5 space-y-3">
+    // Le panneau est ÉPINGLÉ par son parent (ArticleResult) : il flotte au-dessus
+    // de l'éditeur pendant qu'on corrige. D'où un fond opaque — sur du translucide
+    // le texte de l'article défilerait au travers et rendrait la liste illisible —
+    // et une hauteur bornée à la fenêtre, la liste défilant en interne.
+    <motion.div
+      initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+      className="glass-card p-5 space-y-3 bg-white/95 backdrop-blur-md shadow-lg max-h-[calc(100vh-190px)] overflow-y-auto"
+    >
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
           <ShieldCheck size={14} className={propre ? 'text-emerald-500' : 'text-amber-500'} />

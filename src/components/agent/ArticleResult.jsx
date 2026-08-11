@@ -28,7 +28,7 @@ import {
 } from '../../utils/faq';
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, tableBlockOf, unwrapTransparentDivs, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
 import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
-import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction,
+import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId,
   setQatArticle, setPhase, setPhaseStatus, setMajScope } from '../../store/slices/agentSlice';
 import { runQatRewrite } from '../../services/agentQat';
 import { runStyleFixAgent } from '../../services/agentStyle';
@@ -1009,6 +1009,16 @@ export default function ArticleResult() {
       // VERROUILLAIT les phases suivantes — le rédacteur ne pouvait plus rien
       // faire. Constaté en test fonctionnel sur un article de 37 modifications.
       phaseStatus:     agent.phaseStatus || null,
+      // Artefacts des phases 1 à 3. Sans eux, un vidage de cache rouvrait le
+      // parcours sur des panneaux VIDES : l'audit consultable, l'ampleur
+      // appliquée et les suggestions d'obsolescence ne vivaient qu'en mémoire.
+      // Ils servent aussi de preuve d'avancement à derivePhaseStatus, qui
+      // reconstitue les phases faites à partir de ce que le brouillon contient.
+      // `qatArticle.html` est écarté : c'est un doublon de `html` ci-dessus, et
+      // le brouillon a un plafond d'écriture distante (MAX_REMOTE_HTML).
+      auditJson:       agent.auditJson || null,
+      qatArticle:      agent.qatArticle ? (({ html, ...rest }) => rest)(agent.qatArticle) : null,
+      obsolescenceReport: agent.obsolescenceReport || null,
       majScope:        agent.majScope || null,
       currentArticleId: agent.currentArticleId || null,
       tokenUsage:      agent.tokenUsage || null,
@@ -1461,6 +1471,11 @@ export default function ArticleResult() {
   const [verifATourne, setVerifATourne] = useState(false);
   const [savingVerifTemplate, setSavingVerifTemplate] = useState(false);
   const [relectureTick, setRelectureTick] = useState(0);
+  // Bandeau d'ampleur (« Article réécrit entièrement… ») : replié par défaut.
+  // Il occupait une hauteur fixe au-dessus de l'éditeur sur toute la durée de la
+  // relecture, alors qu'il ne se lit qu'une fois. L'essentiel (l'ampleur
+  // appliquée, le nombre de mots) reste visible sur la ligne d'en-tête.
+  const [ampleurDepliee, setAmpleurDepliee] = useState(false);
 
   // ── PHASE 4 — appliquer une correction de style acceptée ────────────────────
   // Remplacement DIRECT, sans marqueur de diff : le rédacteur vient de valider la
@@ -3933,6 +3948,35 @@ export default function ArticleResult() {
             onSelect={(p) => dispatch(setPhase(p))}
           />
         </div>
+
+        {/* PHASE 4 — le relevé des patterns SUIT LE DÉFILEMENT, épinglé sous le
+            stepper. Il est rendu ICI, en frère du stepper, et non dans le
+            conteneur des autres phases : `sticky` est borné par la boîte du
+            PARENT, et ce conteneur s'arrête juste au-dessus de l'éditeur — le
+            panneau se serait décollé immédiatement. En frère du stepper il
+            partage son parent, qui court jusqu'au bas de l'éditeur.
+            66 points répartis sur 6 règles ne se corrigent pas en mémorisant la
+            liste : il faut l'avoir sous les yeux pendant qu'on édite. */}
+        {phase === PHASE_RELECTURE && (
+          // `key` force le recalcul sur le texte COURANT de l'editeur : le
+          // decompte doit refleter les corrections au fur et a mesure.
+          // top 150 = barre du haut (62) + bloc stepper (pt-4 16 + carte ~66 +
+          // pb-3 12 ~ 94) : le panneau s'arrete juste sous lui. z-index sous le
+          // stepper, qui reste le repere principal.
+          <div className="sticky z-[80] px-6 pt-4" style={{ top: 150 }}>
+            <PhaseRelecture
+              key={relectureTick}
+              html={contentRef.current || agent.updatedContent || ''}
+              onRefresh={() => setRelectureTick((t) => t + 1)}
+              onAccept={handleAcceptStyleFix}
+              onLocate={handleLocateStyle}
+              onRunStyleFix={handleRunStyleFix}
+              styleFixRunning={styleFixRunning}
+              styleFixStep={styleFixStep}
+              aiProposals={styleAiProposals}
+            />
+          </div>
+        )}
         <div className="px-6 pt-4 space-y-4">
           {phase === PHASE_GENERATION && (
             <PhaseGeneration
@@ -3970,21 +4014,6 @@ export default function ArticleResult() {
               // Même mécanique qu'en phase 4 : remplacement direct du passage,
               // avec un message clair si le texte n'est pas retrouvé tel quel.
               onAccept={handleAcceptStyleFix}
-            />
-          )}
-          {phase === PHASE_RELECTURE && (
-            // `key` force le recalcul sur le texte COURANT de l'editeur : le
-            // decompte doit refleter les corrections au fur et a mesure.
-            <PhaseRelecture
-              key={relectureTick}
-              html={contentRef.current || agent.updatedContent || ''}
-              onRefresh={() => setRelectureTick((t) => t + 1)}
-              onAccept={handleAcceptStyleFix}
-              onLocate={handleLocateStyle}
-              onRunStyleFix={handleRunStyleFix}
-              styleFixRunning={styleFixRunning}
-              styleFixStep={styleFixStep}
-              aiProposals={styleAiProposals}
             />
           )}
         </div>
@@ -4033,34 +4062,56 @@ export default function ArticleResult() {
 
           {activeTab === TAB_APRES && isQat && qatArticle && (
             <div className="px-6 pt-6 -mb-2">
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 space-y-1.5">
-                <p className="text-sm font-semibold text-emerald-800">
-                  {qatArticle.ampleurAppliquee === 'ciblee' ? 'Article mis à jour (MAJ ciblée)'
-                    : qatArticle.ampleurAppliquee === 'restructuration' ? 'Article restructuré (plan refait, fond conservé)'
-                    : 'Article réécrit entièrement (refonte totale)'}
-                </p>
-                <p className="text-xs text-emerald-700">
-                  Le mode « Audit QAT + Refonte » ne produit pas de modifications à valider une par une :
-                  comparez cette version à l'onglet « Avant », puis corrigez directement dans l'éditeur.
-                </p>
-                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-emerald-700 pt-0.5">
-                  <span><strong>{qatArticle.wordCount}</strong> mots</span>
-                  {qatArticle.motCleRetenu && <span>Mot-clé : <strong>{qatArticle.motCleRetenu}</strong></span>}
-                  {qatArticle.ancresPlacees?.length > 0 && (
-                    <span><strong>{qatArticle.ancresPlacees.length}</strong> lien(s) interne(s) placé(s)</span>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 overflow-hidden">
+                {/* En-tête toujours visible : l'ampleur appliquée et le nombre de
+                    mots — de quoi se repérer sans déplier. */}
+                <button
+                  type="button"
+                  onClick={() => setAmpleurDepliee(v => !v)}
+                  className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-emerald-100/50 transition-colors"
+                >
+                  <span className="text-sm font-semibold text-emerald-800 flex-1 min-w-0">
+                    {qatArticle.ampleurAppliquee === 'ciblee' ? 'Article mis à jour (MAJ ciblée)'
+                      : qatArticle.ampleurAppliquee === 'restructuration' ? 'Article restructuré (plan refait, fond conservé)'
+                      : 'Article réécrit entièrement (refonte totale)'}
+                  </span>
+                  <span className="text-[11px] text-emerald-700 shrink-0">
+                    <strong>{qatArticle.wordCount}</strong> mots
+                  </span>
+                  {/* Les avertissements ne doivent pas pouvoir se cacher derrière un
+                      panneau replié : on les signale sur l'en-tête. */}
+                  {(qatArticle.strippedExternalLinks?.length > 0
+                    || (qatArticle.ampleurSource === 'redacteur' && qatArticle.ampleurOverridden)) && (
+                    <AlertTriangle size={13} className="text-amber-600 shrink-0" title="Un point à lire dans ce panneau" />
                   )}
-                  {qatArticle.ampleurSource === 'redacteur' && qatArticle.ampleurOverridden && (
-                    <span className="text-amber-700">Ampleur imposée par le rédacteur, différente de l'audit</span>
-                  )}
-                </div>
-                {qatArticle.strippedExternalLinks?.length > 0 && (
-                  <p className="text-[11px] text-amber-700">
-                    {qatArticle.strippedExternalLinks.length} lien(s) externe(s) ajouté(s) par l'IA ont été retiré(s) —
-                    la règle interdit d'ajouter ou de supprimer un lien externe.
-                  </p>
-                )}
-                {qatArticle.notesRedaction && (
-                  <p className="text-[11px] text-emerald-600 italic">{qatArticle.notesRedaction}</p>
+                  {ampleurDepliee ? <ChevronUp size={14} className="text-emerald-600 shrink-0" />
+                                  : <ChevronDown size={14} className="text-emerald-600 shrink-0" />}
+                </button>
+                {ampleurDepliee && (
+                  <div className="px-4 pb-3 space-y-1.5 border-t border-emerald-200/70 pt-2.5">
+                    <p className="text-xs text-emerald-700">
+                      Le mode « Audit QAT + Refonte » ne produit pas de modifications à valider une par une :
+                      comparez cette version à l'onglet « Avant », puis corrigez directement dans l'éditeur.
+                    </p>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-emerald-700 pt-0.5">
+                      {qatArticle.motCleRetenu && <span>Mot-clé : <strong>{qatArticle.motCleRetenu}</strong></span>}
+                      {qatArticle.ancresPlacees?.length > 0 && (
+                        <span><strong>{qatArticle.ancresPlacees.length}</strong> lien(s) interne(s) placé(s)</span>
+                      )}
+                      {qatArticle.ampleurSource === 'redacteur' && qatArticle.ampleurOverridden && (
+                        <span className="text-amber-700">Ampleur imposée par le rédacteur, différente de l'audit</span>
+                      )}
+                    </div>
+                    {qatArticle.strippedExternalLinks?.length > 0 && (
+                      <p className="text-[11px] text-amber-700">
+                        {qatArticle.strippedExternalLinks.length} lien(s) externe(s) ajouté(s) par l'IA ont été retiré(s) —
+                        la règle interdit d'ajouter ou de supprimer un lien externe.
+                      </p>
+                    )}
+                    {qatArticle.notesRedaction && (
+                      <p className="text-[11px] text-emerald-600 italic">{qatArticle.notesRedaction}</p>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -4261,17 +4312,12 @@ export default function ArticleResult() {
                       )}
                     </div>
 
-                    {/* Instruction libre pour TONTON — influence l'analyse et la MAJ (passe 2, relances) */}
-                    <div className="flex items-start gap-2 pt-1">
-                      <span className="text-[10px] font-medium text-gray-400 w-20 shrink-0 pt-2">Instruction</span>
-                      <textarea
-                        value={agent.instruction || ''}
-                        onChange={e => dispatch(setInstruction(e.target.value.substring(0, 1500)))}
-                        placeholder="Consigne pour TONTON, appliquée en priorité à la prochaine analyse (passe 2) — ex. « concentre la MAJ sur la partie prix », « ne touche pas à la section garanties »…"
-                        rows={2}
-                        className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black/20 min-w-0 resize-none"
-                      />
-                    </div>
+                    {/* Le champ « Instruction » a été retiré d'ici : la consigne libre
+                        se saisit désormais dans le PROMPT de la phase 2, que le rédacteur
+                        édite directement. Deux endroits pour la même chose se
+                        contredisaient. La valeur (`agent.instruction`) reste en place :
+                        elle est encore pré-remplie par les Notes de la file d'attente et
+                        injectée dans le prompt. */}
 
                     {/* ── Analyse SEO réelle — critères Yoast/SEOPress, verdict STRICT ──
                         (remplace le faux signal « Généré » vert : ici chaque critère

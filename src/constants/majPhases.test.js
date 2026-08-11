@@ -5,7 +5,7 @@
 /* eslint-env jest */
 import {
   PHASE_AUDIT, PHASE_GENERATION, PHASE_OBSOLESCENCE, PHASE_RELECTURE, PHASE_ORDER,
-  PHASES, TODO, DONE, RUNNING, initialPhaseStatus,
+  PHASES, TODO, DONE, RUNNING, ERROR, initialPhaseStatus,
   phaseMeta, phaseIndex, nextPhase, prevPhase, maxReachablePhase, canEnterPhase, derivePhaseStatus,
   SCOPE_SIMPLE, SCOPE_REFONTE, MAJ_SCOPES, MIN_WORDS_ADDED_SIMPLE,
   scopeProposedByAudit, scopeRecommendationSource, wordCount, wordsAddedReport,
@@ -106,6 +106,54 @@ describe('derivePhaseStatus — rouvrir un article au bon endroit', () => {
     expect(s[PHASE_AUDIT]).toBe(DONE);
     expect(s[PHASE_GENERATION]).toBe(DONE);
     expect(s[PHASE_OBSOLESCENCE]).toBe(TODO);   // les clés absentes restent à faire
+  });
+
+  // Régression réelle : obsolescence et relecture restaient grisées après un
+  // vidage de cache. Le lancement écrit `{ audit: done }` dans l'enregistrement
+  // et ne le complète jamais ; ce statut partiel écrasait la preuve au contenu,
+  // puis l'autosave recopiait le recul dans le brouillon.
+  test('un avancement PARTIEL ne rabaisse pas une phase prouvée par le contenu', () => {
+    const s = derivePhaseStatus({
+      phaseStatus: { [PHASE_AUDIT]: DONE },        // périmé : écrit au lancement
+      auditJson: { scores: {} },
+      qatArticle: { wordCount: 2200 },             // la phase 2 a bel et bien tourné
+      obsolescenceReport: { suggestions: [{}] },   // et la phase 3 aussi
+    });
+    expect(s[PHASE_GENERATION]).toBe(DONE);
+    expect(s[PHASE_OBSOLESCENCE]).toBe(DONE);
+    expect(maxReachablePhase(s)).toBe(PHASE_RELECTURE);
+    PHASE_ORDER.forEach(id => expect(canEnterPhase(id, s)).toBe(true));
+  });
+
+  test('l\'avancement explicite renseigne ce que le contenu ne prouve pas', () => {
+    // La relecture n'a pas d'artefact : seul « Terminer » la marque faite.
+    const s = derivePhaseStatus({
+      phaseStatus: { [PHASE_RELECTURE]: DONE },
+      qatArticle: { wordCount: 900 },
+      obsolescenceReport: { suggestions: [] },
+    });
+    expect(s[PHASE_RELECTURE]).toBe(DONE);
+  });
+
+  test('un audit seul laisse la phase 2 à faire — on ne déverrouille rien à tort', () => {
+    // Sortie exacte du lancement : audit fait, aucune génération.
+    const s = derivePhaseStatus({
+      phaseStatus: { [PHASE_AUDIT]: DONE },
+      auditJson: { scores: {} }, qatArticle: null, diff: [],
+    });
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+    expect(s[PHASE_GENERATION]).toBe(TODO);
+    expect(maxReachablePhase(s)).toBe(PHASE_GENERATION);
+    expect(canEnterPhase(PHASE_OBSOLESCENCE, s)).toBe(false);
+  });
+
+  test('un statut d\'échec ne verrouille pas une génération déjà produite', () => {
+    // Un second essai en erreur ne doit pas condamner l'article réécrit du premier.
+    const s = derivePhaseStatus({
+      phaseStatus: { [PHASE_GENERATION]: ERROR },
+      qatArticle: { wordCount: 1500 },
+    });
+    expect(s[PHASE_GENERATION]).toBe(DONE);
   });
 
   test('article QAT ancien (audit + article réécrit) → phases 1 et 2 faites', () => {
