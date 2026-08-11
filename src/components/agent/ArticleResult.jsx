@@ -29,7 +29,7 @@ import {
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, tableBlockOf, unwrapTransparentDivs, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
 import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId,
-  setQatArticle, setPhase, setPhaseStatus, setMajScope } from '../../store/slices/agentSlice';
+  setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport } from '../../store/slices/agentSlice';
 import { runQatRewrite } from '../../services/agentQat';
 import { runStyleFixAgent } from '../../services/agentStyle';
 import {
@@ -1471,6 +1471,20 @@ export default function ArticleResult() {
   const [verifATourne, setVerifATourne] = useState(false);
   const [savingVerifTemplate, setSavingVerifTemplate] = useState(false);
   const [relectureTick, setRelectureTick] = useState(0);
+
+  // Reprise de la phase 3 apres un rechargement : le rapport est restaure depuis
+  // le brouillon dans Redux, mais les suggestions affichees sont un etat local.
+  // Sans cette resynchronisation la phase 3 se rouvrait vide alors qu'elle etait
+  // marquee terminee. On ne seme que si le local est vide : une session en cours
+  // ne doit pas se faire ecraser par le rapport enregistre.
+  const rapportObso = agent.obsolescenceReport;
+  useEffect(() => {
+    const s = rapportObso && Array.isArray(rapportObso.suggestions) ? rapportObso.suggestions : null;
+    if (!s) return;
+    setVerifSuggestions((prev) => (prev.length ? prev : s));
+    setVerifATourne(true);
+  }, [rapportObso]);
+
   // Bandeau d'ampleur (« Article réécrit entièrement… ») : replié par défaut.
   // Il occupait une hauteur fixe au-dessus de l'éditeur sur toute la durée de la
   // relecture, alors qu'il ne se lit qu'une fois. L'essentiel (l'ampleur
@@ -1598,6 +1612,11 @@ export default function ArticleResult() {
       const propositions = Array.isArray(res?.updates) ? res.updates : [];
       setVerifSuggestions(propositions);
       setVerifATourne(true);
+      // Le rapport passe aussi par Redux : c'est ce qui le fait entrer dans le
+      // brouillon. Sans ca il ne vivait que dans l'etat local du composant — la
+      // phase 3 se rouvrait VIDE au moindre rechargement, et son avancement
+      // n'etait deductible d'aucun artefact enregistre.
+      dispatch(setObsolescenceReport({ suggestions: propositions, at: Date.now() }));
       dispatch(setPhaseStatus({ phase: PHASE_OBSOLESCENCE, status: DONE }));
       if (res.tokenUsage) dispatch(setTokenUsage(res.tokenUsage));
       // Enregistrement par le circuit habituel : l'avancement de la phase 3 suit
