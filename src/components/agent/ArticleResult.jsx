@@ -1018,8 +1018,13 @@ export default function ArticleResult() {
       // reconstitue les phases faites à partir de ce que le brouillon contient.
       // `qatArticle.html` est écarté : c'est un doublon de `html` ci-dessus, et
       // le brouillon a un plafond d'écriture distante (MAX_REMOTE_HTML).
-      auditJson:       agent.auditJson || null,
-      qatArticle:      agent.qatArticle ? (({ html, ...rest }) => rest)(agent.qatArticle) : null,
+      // Valeurs RÉSOLUES (agent.* avec repli sur cqItem), pas les valeurs brutes
+      // du store : un article rouvert depuis la file d'attente porte ses artefacts
+      // dans `cqItem`, et `agent.qatArticle` y est nul. Relevé sur le brouillon
+      // réel en production : `qatArticle` et `auditJson` absents alors que la
+      // phase 2 était bel et bien terminée.
+      auditJson:       auditJson || null,
+      qatArticle:      qatArticle ? (({ html, ...rest }) => rest)(qatArticle) : null,
       obsolescenceReport: agent.obsolescenceReport || null,
       majScope:        agent.majScope || null,
       currentArticleId: agent.currentArticleId || null,
