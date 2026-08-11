@@ -86,9 +86,17 @@ export default function Articles() {
   useEffect(() => { agentRef.current = agent; }, [agent]);
 
   useEffect(() => {
-    if (restoredRef.current) return;
-    restoredRef.current = true;
     const uid = authUid || authUsername || null;
+    // L'AUTHENTIFICATION SE RÉSOUT APRÈS LE MONTAGE. Au premier passage `uid` est
+    // nul : `loadDraftLocal(null)` lit une clé « anon » vide et
+    // `loadDraftRemote(null)` renvoie null SANS MÊME APPELER LE SERVEUR — et le
+    // garde-fou interdisait tout nouvel essai quand l'uid arrivait enfin.
+    // Mesuré en production : après un rechargement complet (F5, vidage de cache),
+    // la requête `article-drafts` n'était jamais émise et le rédacteur retombait
+    // sur l'écran de lancement, son travail intact sur le serveur mais invisible.
+    // On attend donc d'avoir un uid ; l'effet est rejoué quand il arrive.
+    if (!uid || restoredRef.current) return;
+    restoredRef.current = true;
 
     const applyDraft = (d, full) => {
       if (!d || !d.html) return;
@@ -153,7 +161,7 @@ export default function Articles() {
         applyDraft(remote, true);
       }
     });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [authUid, authUsername]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Un skill cerveau (SKILL.md actif) est requis par le mode QAT : il porte la
   // méthode d'audit et les gabarits de rédaction.
