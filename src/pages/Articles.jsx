@@ -77,6 +77,14 @@ export default function Articles() {
   // Reprend automatiquement la MAJ en cours après rechargement / navigation /
   // changement d'appareil, sans rien demander à l'utilisateur.
   const restoredRef = useRef(false);
+  // Le fetch réseau de `loadDraftRemote` peut se résoudre bien après le montage —
+  // le temps que l'utilisateur audite et génère la MAJ. `agent` capturé par la
+  // closure de l'effet ci-dessous reste alors figé sur sa valeur au montage
+  // (typiquement 'idle'), et le `.then()` écraserait un travail déjà en cours
+  // avec un ancien brouillon. `agentRef` porte la valeur à jour à chaque rendu.
+  const agentRef = useRef(agent);
+  useEffect(() => { agentRef.current = agent; }, [agent]);
+
   useEffect(() => {
     if (restoredRef.current) return;
     restoredRef.current = true;
@@ -133,7 +141,9 @@ export default function Articles() {
 
     // 2. Réconciliation distante (cache vidé / autre appareil) — si plus récent
     loadDraftRemote(uid).then((remote) => {
-      if (remote?.html && agent.status === 'idle'
+      // `agentRef.current` (pas `agent`) : à ce moment, l'utilisateur a pu déjà
+      // auditer/générer pendant que ce fetch était en vol.
+      if (remote?.html && agentRef.current.status === 'idle'
           && (remote.savedAt || 0) > (local?.savedAt || 0)) {
         applyDraft(remote, true);
       }
