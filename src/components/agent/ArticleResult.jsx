@@ -1623,7 +1623,18 @@ export default function ArticleResult() {
       // brouillon. Sans ca il ne vivait que dans l'etat local du composant — la
       // phase 3 se rouvrait VIDE au moindre rechargement, et son avancement
       // n'etait deductible d'aucun artefact enregistre.
-      dispatch(setObsolescenceReport({ suggestions: propositions, at: Date.now() }));
+      // `texteVerifie` : le texte EXACT envoyé à l'agent. Indispensable au
+      // repérage des passages en phase 3. La vérification part de
+      // getFinalHtml({ pendingChanges: 'accept' }), qui SUPPRIME les <del> — donc
+      // l'ancien texte de chaque remplacement en attente. Le volet gauche
+      // affichait `updatedContent`, où les paires <del>ancien</del><mark>nouveau</mark>
+      // sont encore là : les passages cités par l'agent y étaient introuvables,
+      // ni dans un nœud texte ni par le repli au bloc (dont le textContent
+      // contient encore le texte supprimé). Mesuré sur un article à 52 diffs en
+      // attente : 35 suggestions sur 36 sans repère.
+      dispatch(setObsolescenceReport({
+        suggestions: propositions, texteVerifie: texte, at: Date.now(),
+      }));
       dispatch(setPhaseStatus({ phase: PHASE_OBSOLESCENCE, status: DONE }));
       if (res.tokenUsage) dispatch(setTokenUsage(res.tokenUsage));
       // Enregistrement par le circuit habituel : l'avancement de la phase 3 suit
@@ -4122,7 +4133,10 @@ export default function ArticleResult() {
           )}
           {phase === PHASE_OBSOLESCENCE && (
             <PhaseObsolescence
-              articleHtml={agent.updatedContent || ''}
+              /* Le texte SUR LEQUEL la vérification a porté, sinon les repères
+                 ne peuvent pas tomber juste (voir handleVerify). Repli sur
+                 updatedContent pour les rapports enregistrés avant ce champ. */
+              articleHtml={agent.obsolescenceReport?.texteVerifie || agent.updatedContent || ''}
               suggestions={verifSuggestions}
               running={verifRunning}
               step={verifStep}

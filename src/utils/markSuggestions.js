@@ -26,25 +26,32 @@ export const MARK_CLASS = 'sugg-repere';
 /**
  * @param {string} html         article issu de la phase 2
  * @param {Array}  suggestions  [{ original, updated, ... }]
- * @returns {{ html:string, marked:number[], missed:number[] }}
- *          `marked` / `missed` contiennent les NUMÉROS affichés (1-based).
+ * @returns {{ html:string, marked:number[], missed:number[], ajouts:number[] }}
+ *          Numéros AFFICHÉS (1-based). Trois cas distincts, à ne pas confondre :
+ *          `marked` repéré ; `ajouts` sans passage d'origine (ajout pur, il n'y a
+ *          rien à repérer, c'est normal) ; `missed` un passage est cité mais
+ *          introuvable dans le texte — là il y a un problème à comprendre.
  */
 export const markSuggestions = (html, suggestions = []) => {
   const src = typeof html === 'string' ? html : '';
   const liste = Array.isArray(suggestions) ? suggestions : [];
   if (!src || !liste.length || typeof document === 'undefined') {
-    return { html: src, marked: [], missed: [] };
+    return { html: src, marked: [], missed: [], ajouts: [] };
   }
 
   const box = document.createElement('div');
   box.innerHTML = src;
   const marked = [];
   const missed = [];
+  const ajouts = [];
 
   liste.forEach((s, i) => {
     const num = i + 1;
     const cible = norm(s && s.original);
-    if (!cible) { missed.push(num); return; }
+    // Aucun passage d'origine = ajout pur : il n'y a rien à repérer, ce n'est
+    // pas un échec. Les mélanger dans `missed` faisait passer une situation
+    // normale pour une anomalie.
+    if (!cible) { ajouts.push(num); return; }
 
     // 1) Le passage tient dans UN nœud texte : on encadre exactement la portion.
     const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
@@ -94,5 +101,5 @@ export const markSuggestions = (html, suggestions = []) => {
     (trouve ? marked : missed).push(num);
   });
 
-  return { html: marked.length ? box.innerHTML : src, marked, missed };
+  return { html: marked.length ? box.innerHTML : src, marked, missed, ajouts };
 };
