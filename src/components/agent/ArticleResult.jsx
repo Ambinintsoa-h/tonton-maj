@@ -29,16 +29,18 @@ import {
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, tableBlockOf, unwrapTransparentDivs, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
 import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId,
-  setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport } from '../../store/slices/agentSlice';
-import { runQatRewrite } from '../../services/agentQat';
+  setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport,
+  setAuditJson, setAnalysis } from '../../store/slices/agentSlice';
+import { runQatRewrite, runQatAudit } from '../../services/agentQat';
 import { runStyleFixAgent } from '../../services/agentStyle';
 import {
   PHASE_AUDIT, PHASE_GENERATION, PHASE_OBSOLESCENCE, PHASE_RELECTURE,
-  DONE, RUNNING, ERROR, SCOPE_SIMPLE, scopeProposedByAudit,
+  TODO, DONE, RUNNING, ERROR, SCOPE_SIMPLE, scopeProposedByAudit,
 } from '../../constants/majPhases';
 import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, DEFAULT_VERIFICATION_TEMPLATE } from '../../utils/generationPrompt';
 import { setProfile } from '../../store/slices/authSlice';
 import PhaseStepper from './PhaseStepper';
+import PhaseAudit from './PhaseAudit';
 import PhaseGeneration from './PhaseGeneration';
 import PhaseObsolescence from './PhaseObsolescence';
 import PhaseRelecture from './PhaseRelecture';
@@ -1636,6 +1638,90 @@ export default function ArticleResult() {
   const [generating, setGenerating]   = useState(false);
   const [genStep, setGenStep]         = useState('');
   const [genProgress, setGenProgress] = useState(0);
+
+  // ── PHASE 1 — (re)lancer l'audit ───────────────────────────────────────────
+  const [auditing, setAuditing]         = useState(false);
+  const [auditStep, setAuditStep]       = useState('');
+  const [auditProgress, setAuditProgress] = useState(0);
+
+  // Du travail repose-t-il sur l'audit courant ? Si oui, le refaire le rend
+  // caduc : PhaseAudit demande confirmation avant de lancer.
+  const travailEnAval = phaseStatus[PHASE_GENERATION] === DONE
+    || phaseStatus[PHASE_OBSOLESCENCE] === DONE
+    || !!agent.qatArticle;
+
+  const handleAudit = async () => {
+    // L'audit porte sur la version EN LIGNE, jamais sur le texte en cours
+    // d'edition : c'est tout son objet. Le contenu a deja ete nettoye a
+    // l'ingestion (boutons de suivi, liens non editoriaux) — on ne le refait pas.
+    const source = agent.originalContent || '';
+    if (!source.trim()) {
+      toast.error('Article d\'origine introuvable — rouvrez-le depuis « MAJ en attente ».');
+      return;
+    }
+    const brief = currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {};
+    setAuditing(true);
+    setAuditProgress(0);
+    setAuditStep('Audit QAT — preparation...');
+    dispatch(setPhaseStatus({ phase: PHASE_AUDIT, status: RUNNING }));
+    try {
+      const res = await runQatAudit({
+        content:        source,
+        contentHtml:    source,
+        skills,
+        knowledge,
+        articleUrl,
+        targetKeyword:  agent.targetKeyword || '',
+        articleType:    brief.articleType,
+        seoPlugin:      brief.seoPlugin,
+        targetWords:    brief.targetWords,
+        internalLinks:  brief.internalLinks || [],
+        wpSites,
+        // Les donnees WordPress deja recuperees evitent un second appel MCP.
+        existingWpData: agent.wpData || null,
+        modelPricing:   settings.modelPricing || null,
+        onStep:     (t) => setAuditStep(t),
+        onReplace:  (t) => setAuditStep(t),
+        onProgress: (p) => setAuditProgress(p),
+        onDelta:    () => {},
+      });
+      if (!res || !res.audit) throw new Error('audit vide renvoye par l\'IA');
+
+      const resume = typeof res.audit.executive_summary === 'string'
+        ? res.audit.executive_summary
+        : res.audit.executive_summary ? JSON.stringify(res.audit.executive_summary) : '';
+      dispatch(setAuditJson(res.audit));
+      dispatch(setAnalysis(resume));
+      dispatch(setPhaseStatus({ phase: PHASE_AUDIT, status: DONE }));
+      if (res.tokenUsage) dispatch(setTokenUsage(res.tokenUsage));
+
+      // Remise a zero des phases suivantes : elles reposaient sur l'audit qu'on
+      // vient de remplacer. Les ARTEFACTS partent avec les statuts — sans ca
+      // derivePhaseStatus re-deduirait « generation terminee » depuis qatArticle
+      // au prochain rechargement et annulerait la remise a zero. Le TEXTE de
+      // l'editeur n'est pas touche : le redacteur ne perd pas son travail, il
+      // relance seulement la generation sur la nouvelle base.
+      if (travailEnAval) {
+        [PHASE_GENERATION, PHASE_OBSOLESCENCE, PHASE_RELECTURE]
+          .forEach((p) => dispatch(setPhaseStatus({ phase: p, status: TODO })));
+        dispatch(setQatArticle(null));
+        dispatch(setObsolescenceReport(null));
+        dispatch(setMajScope(null));
+        dispatch(setDiff([]));
+        setVerifSuggestions([]);
+        setVerifATourne(false);
+      }
+      triggerAutosave();
+      toast.success(travailEnAval
+        ? 'Nouvel audit — les phases 2 a 4 sont a refaire, votre texte est intact.'
+        : 'Audit termine — passez a la phase 2.');
+    } catch (e) {
+      dispatch(setPhaseStatus({ phase: PHASE_AUDIT, status: ERROR }));
+      toast.error(`Audit en echec — ${e.message}`);
+    } finally {
+      setAuditing(false);
+    }
+  };
 
   const handleGenerate = async (scope) => {
     if (!auditJson) {
@@ -3997,6 +4083,16 @@ export default function ArticleResult() {
           </div>
         )}
         <div className="px-6 pt-4 space-y-4">
+          {phase === PHASE_AUDIT && (
+            <PhaseAudit
+              audit={auditJson}
+              onRun={handleAudit}
+              running={auditing}
+              step={auditStep}
+              progress={auditProgress}
+              travailEnAval={travailEnAval}
+            />
+          )}
           {phase === PHASE_GENERATION && (
             <PhaseGeneration
               audit={auditJson}
