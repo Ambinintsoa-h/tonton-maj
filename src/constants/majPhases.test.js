@@ -147,6 +147,23 @@ describe('derivePhaseStatus — rouvrir un article au bon endroit', () => {
     expect(canEnterPhase(PHASE_OBSOLESCENCE, s)).toBe(false);
   });
 
+  // Garde-fou pour « Relancer l'audit » (PhaseAudit) : la remise a zero des
+  // phases 2 a 4 ne tient QUE si les artefacts partent avec les statuts. Garder
+  // `qatArticle` ferait re-deduire « generation terminee » au rechargement, et
+  // annulerait silencieusement la remise a zero.
+  test('apres un nouvel audit, la remise à zéro survit au rechargement', () => {
+    const apresReAudit = {
+      phaseStatus: { [PHASE_AUDIT]: DONE, [PHASE_GENERATION]: TODO, [PHASE_OBSOLESCENCE]: TODO, [PHASE_RELECTURE]: TODO },
+      auditJson: { scores: { global: 5 } },
+      qatArticle: null, obsolescenceReport: null, diff: [],
+    };
+    const s = derivePhaseStatus(apresReAudit);
+    expect(s[PHASE_AUDIT]).toBe(DONE);
+    expect(s[PHASE_GENERATION]).toBe(TODO);
+    expect(maxReachablePhase(s)).toBe(PHASE_GENERATION);
+    expect(canEnterPhase(PHASE_RELECTURE, s)).toBe(false);
+  });
+
   test('un statut d\'échec ne verrouille pas une génération déjà produite', () => {
     // Un second essai en erreur ne doit pas condamner l'article réécrit du premier.
     const s = derivePhaseStatus({
