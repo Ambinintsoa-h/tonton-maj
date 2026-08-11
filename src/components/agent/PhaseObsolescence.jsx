@@ -11,7 +11,8 @@
  * l'obsolescence par le prompt du rédacteur — code déjà éprouvé plutôt qu'une
  * mécanique de fusion réécrite.
  */
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { markSuggestions, MARK_CLASS } from '../../utils/markSuggestions';
 import { motion } from 'framer-motion';
 import {
   Clock, Loader2, Copy, Check, FileText, RotateCcw, Save, ArrowRight, AlertTriangle,
@@ -36,6 +37,20 @@ export default function PhaseObsolescence({
   // passait, et il ne savait pas que le presse-papiers avait refusé. Constaté en
   // test : `clipboard.writeText` peut lever (permission, contexte non sécurisé).
   const [etatCopie, setEtatCopie] = useState(null);
+
+  // Repères visuels : chaque passage à remplacer est surligné en rouge dans
+  // l'article de gauche et porte LE MÊME numéro que dans la liste de droite.
+  // Sans ça, le rédacteur cherchait le passage à l'œil dans près de 3 000 mots.
+  const vue = useMemo(() => markSuggestions(articleHtml, suggestions), [articleHtml, suggestions]);
+
+  const allerAuRepere = (num) => {
+    const el = document.getElementById(`sugg-${num}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.style.transition = 'box-shadow .2s';
+    el.style.boxShadow = '0 0 0 3px rgba(239,68,68,.45)';
+    setTimeout(() => { el.style.boxShadow = ''; }, 1400);
+  };
 
   const copier = async (texte, cle) => {
     let ok = true;
@@ -113,12 +128,44 @@ export default function PhaseObsolescence({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
           <div className="glass-card p-4 space-y-2 min-w-0">
-            <h4 className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
-              <FileText size={12} className="text-gray-400" />
-              Article issu de la phase 2
+            {/* Surlignage rouge + pastille numérotée, posés par markSuggestions.
+                Styles locaux : la règle ne sert qu'ici et le numéro est rendu par
+                un ::before, donc rien à porter dans le HTML de l'article. */}
+            <style>{`
+              .${MARK_CLASS} {
+                background: rgba(239,68,68,.14);
+                box-shadow: inset 0 -2px 0 rgba(239,68,68,.55);
+                border-radius: 3px;
+                scroll-margin-top: 120px;
+              }
+              .${MARK_CLASS}::before {
+                content: attr(data-sugg);
+                display: inline-flex; align-items: center; justify-content: center;
+                min-width: 15px; height: 15px; margin-right: 4px;
+                border-radius: 999px; background: #ef4444; color: #fff;
+                font-size: 9px; font-weight: 700; line-height: 1; vertical-align: 1px;
+              }
+            `}</style>
+            <h4 className="text-xs font-semibold text-gray-700 flex items-center justify-between gap-1.5">
+              <span className="flex items-center gap-1.5">
+                <FileText size={12} className="text-gray-400" />
+                Article issu de la phase 2
+              </span>
+              {vue.marked.length > 0 && (
+                <span className="text-[10px] font-medium text-red-600">
+                  {vue.marked.length} passage(s) repéré(s)
+                </span>
+              )}
             </h4>
+            {/* Une suggestion sans ancre visible est ANNONCÉE : le rédacteur doit
+                savoir qu'elle n'a pas de repère à gauche, pas la chercher en vain. */}
+            {vue.missed.length > 0 && (
+              <p className="text-[10px] text-amber-700 bg-amber-50/70 border border-amber-200 rounded-lg px-2 py-1">
+                Suggestion(s) {vue.missed.join(', ')} sans repère dans le texte — passage introuvable ou ajout pur.
+              </p>
+            )}
             <div className="md-content text-[12px] leading-relaxed max-h-[70vh] overflow-y-auto pr-1 border-t border-gray-100 pt-2"
-                 dangerouslySetInnerHTML={{ __html: articleHtml }} />
+                 dangerouslySetInnerHTML={{ __html: vue.html }} />
           </div>
 
           <div className="glass-card p-4 space-y-2 min-w-0">
@@ -142,7 +189,21 @@ export default function PhaseObsolescence({
                       {/* Le texte à modifier — en haut */}
                       {s.original && (
                         <div className="px-3 py-2 bg-red-50/50 border-b border-gray-100">
-                          <p className="text-[9px] uppercase tracking-wide text-gray-400 font-bold mb-0.5">À remplacer</p>
+                          {/* Numéro IDENTIQUE à la pastille du texte surligné à
+                              gauche, et cliquable pour y sauter directement. */}
+                          <button
+                            type="button"
+                            onClick={() => allerAuRepere(i + 1)}
+                            title="Aller au passage surligné dans l'article, à gauche"
+                            className="flex items-center gap-1.5 mb-0.5 group"
+                          >
+                            <span className="flex items-center justify-center min-w-[15px] h-[15px] rounded-full bg-red-500 text-white text-[9px] font-bold leading-none">
+                              {i + 1}
+                            </span>
+                            <span className="text-[9px] uppercase tracking-wide text-gray-400 font-bold group-hover:text-red-600 transition-colors">
+                              À remplacer — cliquer pour situer
+                            </span>
+                          </button>
                           <p className="text-[11px] text-gray-500 line-through leading-relaxed break-words">{s.original}</p>
                         </div>
                       )}
