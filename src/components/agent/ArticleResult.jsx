@@ -3651,7 +3651,14 @@ export default function ArticleResult() {
               </AnimatePresence>
             </div>
 
-            {wpSites.length > 0 && (
+            {/* « Publier » N'APPARAÎT QU'EN PHASE 4 (relecture).
+                Il était visible dans LES QUATRE phases — vérifié en production, y
+                compris sur l'écran d'audit où rien n'est encore généré : on pouvait
+                donc publier un article non réécrit, en un clic, par erreur.
+                La publication est la SEULE action irréversible du parcours (elle
+                modifie un article public) : elle appartient à la dernière étape,
+                après la relecture humaine. */}
+            {wpSites.length > 0 && phase === PHASE_RELECTURE && (
               <div className="relative">
                 {/* « Publier » ouvre toujours le menu pour proposer les 2 choix
                     (sur le site / dans brouillons). Si le site est connu via MCP,
