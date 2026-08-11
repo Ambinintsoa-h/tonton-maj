@@ -3842,13 +3842,24 @@ export default function ArticleResult() {
         </div>,
         document.body)}
 
-        {/* ── Parcours en quatre phases — repere principal du redacteur ─────── */}
-        <div className="px-6 pt-6 space-y-4">
+        {/* ── Parcours en quatre phases — repère principal du rédacteur ─────── */}
+        {/* Le stepper SUIT LE DÉFILEMENT, épinglé juste sous la barre du haut
+            (celle de « Vider le cache ») : mesurée à 62 px, en z-index 100 — d'où
+            `top: 62` et un z-index inférieur, pour passer dessous et non dessus.
+            Sur un article de 13 000 px de haut, le rédacteur perdait tout repère
+            dès qu'il descendait. Le fond reprend celui de la page (#eceef1) afin
+            que le contenu ne défile pas au travers. */}
+        <div
+          className="sticky z-[90] px-6 pt-4 pb-3 bg-[#eceef1]/95 backdrop-blur-md border-b border-gray-200/70"
+          style={{ top: 62 }}
+        >
           <PhaseStepper
             phase={phase}
             phaseStatus={phaseStatus}
             onSelect={(p) => dispatch(setPhase(p))}
           />
+        </div>
+        <div className="px-6 pt-4 space-y-4">
           {phase === PHASE_GENERATION && (
             <PhaseGeneration
               audit={auditJson}
