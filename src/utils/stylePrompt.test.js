@@ -1,0 +1,128 @@
+// Phase 4, moitié IA de l'option C. Exigence : un contrat étroit et un
+// rattachement par NUMÉRO, jamais par correspondance de texte approximative.
+/* eslint-env jest */
+import {
+  flattenAiOccurrences, buildStyleFixPrompt, normalizeStyleProposals,
+} from './stylePrompt';
+
+const FINDINGS = [
+  { id: 'verbes', exemples: [
+    { terme: "s'impose", extrait: "La toiture bac acier s'impose comme une solution durable." },
+    { terme: 'offrent',  extrait: 'Les finitions laquées offrent une palette de coloris.' },
+  ] },
+  // Mécanique : ne doit PAS partir à l'IA
+  { id: 'adverbes', exemples: [{ terme: 'fortement', extrait: 'Le prix varie fortement selon la région.' }] },
+  { id: 'passive', exemples: [{ extrait: 'La page est indexée par Google en quelques heures.' }] },
+];
+
+describe('flattenAiOccurrences — seules les règles qui demandent du sens', () => {
+  test('les occurrences IA sont numérotées en continu', () => {
+    const o = flattenAiOccurrences(FINDINGS);
+    expect(o.map(x => x.n)).toEqual([1, 2, 3]);
+    expect(o.map(x => x.id)).toEqual(['verbes', 'verbes', 'passive']);
+  });
+
+  test('les règles MÉCANIQUES sont exclues — elles sont déjà traitées gratuitement', () => {
+    const o = flattenAiOccurrences(FINDINGS);
+    expect(o.some(x => x.id === 'adverbes')).toBe(false);
+    expect(o.some(x => /fortement/.test(x.extrait))).toBe(false);
+  });
+
+  test('les extraits vides sont ignorés', () => {
+    const o = flattenAiOccurrences([{ id: 'verbes', exemples: [{ extrait: '' }, { extrait: '   ' }, { extrait: 'Vrai.' }] }]);
+    expect(o).toHaveLength(1);
+  });
+
+  test('entrées dégénérées', () => {
+    expect(flattenAiOccurrences()).toEqual([]);
+    expect(flattenAiOccurrences(null)).toEqual([]);
+    expect(flattenAiOccurrences([{ id: 'verbes' }])).toEqual([]);
+    expect(flattenAiOccurrences('pas un tableau')).toEqual([]);
+  });
+});
+
+describe('buildStyleFixPrompt', () => {
+  test('les occurrences sont numérotées et regroupées par règle', () => {
+    const p = buildStyleFixPrompt(flattenAiOccurrences(FINDINGS));
+    expect(p).toContain("1. [s'impose] La toiture bac acier s'impose");
+    expect(p).toContain('2. [offrent] Les finitions laquées offrent');
+    expect(p).toContain('3. La page est indexée par Google');
+  });
+
+  test('chaque règle porte sa consigne, pas seulement son interdit', () => {
+    const p = buildStyleFixPrompt(flattenAiOccurrences(FINDINGS));
+    expect(p).toMatch(/verbe précis et concret/);
+    expect(p).toMatch(/Mets le sujet en action/);
+  });
+
+  test('les garde-fous du contenu sont explicites', () => {
+    const p = buildStyleFixPrompt(flattenAiOccurrences(FINDINGS));
+    expect(p).toMatch(/UNIQUEMENT la phrase fournie/);
+    expect(p).toMatch(/aucun chiffre, aucune date/);
+    expect(p).toMatch(/ni ne supprime aucun lien/);   // le verrou liens vaut aussi ici
+  });
+
+  test('aucune occurrence → prompt vide, donc aucun appel à faire', () => {
+    expect(buildStyleFixPrompt([])).toBe('');
+    expect(buildStyleFixPrompt()).toBe('');
+  });
+});
+
+describe('normalizeStyleProposals — rattachement par numéro', () => {
+  const occ = flattenAiOccurrences(FINDINGS);
+
+  test('les propositions valides sont rattachées à leur occurrence', () => {
+    const r = normalizeStyleProposals([
+      { n: 1, apres: 'La toiture bac acier domine les projets contemporains.' },
+      { n: 3, apres: 'Google indexe la page en quelques heures.' },
+    ], occ);
+    expect(r).toHaveLength(2);
+    expect(r[0]).toEqual({ n: 1, id: 'verbes', avant: occ[0].extrait, apres: 'La toiture bac acier domine les projets contemporains.' });
+    expect(r[1].id).toBe('passive');
+  });
+
+  test('un numéro inconnu est écarté', () => {
+    expect(normalizeStyleProposals([{ n: 99, apres: 'Hors sujet.' }], occ)).toEqual([]);
+  });
+
+  test('une proposition IDENTIQUE à l\'original est écartée — rien à accepter', () => {
+    expect(normalizeStyleProposals([{ n: 1, apres: occ[0].extrait }], occ)).toEqual([]);
+  });
+
+  test('une proposition vide est écartée', () => {
+    expect(normalizeStyleProposals([{ n: 1, apres: '' }, { n: 2, apres: '   ' }], occ)).toEqual([]);
+  });
+
+  test('un modèle qui réécrit tout le paragraphe est écarté', () => {
+    // La consigne dit « uniquement la phrase » ; une reponse demesurement longue
+    // signale qu'il a deborde, et l'accepter remplacerait une phrase par un pave.
+    const pave = 'x '.repeat(400);
+    expect(normalizeStyleProposals([{ n: 1, apres: pave }], occ)).toEqual([]);
+  });
+
+  test('doublons sur le même numéro : la dernière gagne, pas de duplication', () => {
+    const r = normalizeStyleProposals([
+      { n: 1, apres: 'Première version.' },
+      { n: 1, apres: 'Seconde version.' },
+    ], occ);
+    expect(r).toHaveLength(1);
+    expect(r[0].apres).toBe('Seconde version.');
+  });
+
+  test('accepte aussi la forme { propositions: [...] }', () => {
+    const r = normalizeStyleProposals({ propositions: [{ n: 2, apres: 'Les finitions laquées proposent des coloris.' }] }, occ);
+    expect(r).toHaveLength(1);
+    expect(r[0].n).toBe(2);
+  });
+
+  test('numéro en chaîne de caractères toléré', () => {
+    expect(normalizeStyleProposals([{ n: '1', apres: 'La toiture domine.' }], occ)).toHaveLength(1);
+  });
+
+  test('entrées dégénérées → aucun crash, tableau vide', () => {
+    expect(normalizeStyleProposals(null, occ)).toEqual([]);
+    expect(normalizeStyleProposals('pas du json', occ)).toEqual([]);
+    expect(normalizeStyleProposals([null, undefined, 42], occ)).toEqual([]);
+    expect(normalizeStyleProposals([{ n: 1, apres: 'x' }], null)).toEqual([]);
+  });
+});

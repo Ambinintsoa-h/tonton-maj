@@ -12,17 +12,30 @@
  */
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ShieldCheck, AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Check, X } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Check, X, Sparkles } from 'lucide-react';
 import { detectStylePatterns } from '../../utils/stylePatterns';
 import { proposeMechanicalFix } from '../../utils/styleFixes';
 
-export default function PhaseRelecture({ html = '', onRefresh, onAccept, onLocate }) {
+// Même clé que côté service (`stylePrompt.js` → `flattenAiOccurrences`) : le
+// texte de l'extrait, espaces normalisés. Content-addressé plutôt qu'indexé,
+// pour rester valide après un « Accepter » qui retire une occurrence de la
+// liste et décale les index des suivantes dans la même règle.
+const cleOccurrence = (id, extrait) => `${id}::${String(extrait || '').replace(/\s+/g, ' ').trim()}`;
+
+export default function PhaseRelecture({
+  html = '', onRefresh, onAccept, onLocate,
+  onRunStyleFix, styleFixRunning = false, styleFixStep = '', aiProposals = {},
+}) {
   const [ouvert, setOuvert] = useState(null);
   // Occurrences écartées par le rédacteur — locales à la session : « Ignorer »
   // n'écrit rien dans l'article, il retire simplement la ligne de la liste.
   const [ignores, setIgnores] = useState([]);
   const rapport = useMemo(() => detectStylePatterns(html), [html]);
   const propre = rapport.findings.length === 0;
+  // Occurrences sans correction mécanique : celles que seule l'IA peut traiter.
+  const aManquant = useMemo(() => rapport.findings.reduce((n, f) => n + f.exemples.filter(
+    (ex) => !proposeMechanicalFix(f.id, ex.extrait, ex.terme),
+  ).length, 0), [rapport.findings]);
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-5 space-y-3">
@@ -41,6 +54,18 @@ export default function PhaseRelecture({ html = '', onRefresh, onAccept, onLocat
               className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-gray-500 hover:text-gray-800 hover:bg-black/5 transition-colors"
             >
               <RefreshCw size={11} /> Recalculer
+            </button>
+          )}
+          {onRunStyleFix && aManquant > 0 && (
+            <button
+              type="button"
+              onClick={() => onRunStyleFix(rapport.findings)}
+              disabled={styleFixRunning}
+              title="Un seul appel IA pour proposer une réécriture de tous les passages qui demandent de comprendre la phrase"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-violet-600 hover:text-violet-800 hover:bg-violet-50 transition-colors disabled:opacity-50 disabled:cursor-wait"
+            >
+              <Sparkles size={11} />
+              {styleFixRunning ? (styleFixStep || 'Correction en cours...') : `Corriger ${aManquant} passage(s) avec l'IA`}
             </button>
           )}
         </div>
@@ -84,8 +109,9 @@ export default function PhaseRelecture({ html = '', onRefresh, onAccept, onLocat
                           if (ignores.includes(cle)) return null;
                           // Correction MÉCANIQUE quand elle est sûre (tirets, adverbes).
                           // `null` pour tout ce qui demande de comprendre la phrase :
-                          // la proposition viendra alors de l'IA.
-                          const prop = proposeMechanicalFix(f.id, ex.extrait, ex.terme);
+                          // la proposition vient alors de l'IA, si elle a tourné.
+                          const prop = proposeMechanicalFix(f.id, ex.extrait, ex.terme)
+                            || aiProposals[cleOccurrence(f.id, ex.extrait)];
                           return (
                             <li key={i} className="text-[11px] leading-relaxed border-l-2 border-amber-200 pl-2 space-y-1">
                               <button
@@ -125,7 +151,9 @@ export default function PhaseRelecture({ html = '', onRefresh, onAccept, onLocat
                                 // On le DIT plutôt que de laisser une ligne muette :
                                 // le rédacteur doit savoir pourquoi il n'a pas de bouton.
                                 <p className="text-[10px] text-gray-400 italic">
-                                  Correction à écrire à la main : elle dépend du sens de la phrase.
+                                  {styleFixRunning
+                                    ? 'Correction IA en cours...'
+                                    : 'Correction à écrire à la main : elle dépend du sens de la phrase.'}
                                 </p>
                               )}
                             </li>

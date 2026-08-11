@@ -31,6 +31,7 @@ import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId, setInstruction,
   setQatArticle, setPhase, setPhaseStatus, setMajScope } from '../../store/slices/agentSlice';
 import { runQatRewrite } from '../../services/agentQat';
+import { runStyleFixAgent } from '../../services/agentStyle';
 import {
   PHASE_AUDIT, PHASE_GENERATION, PHASE_OBSOLESCENCE, PHASE_RELECTURE,
   DONE, RUNNING, ERROR, SCOPE_SIMPLE, scopeProposedByAudit,
@@ -1481,6 +1482,40 @@ export default function ArticleResult() {
     triggerAutosave();
     setRelectureTick((t) => t + 1);   // le décompte se recalcule sur le texte corrigé
     toast.success('Correction appliquée.');
+  };
+
+  // ── PHASE 4 — corrections de style proposées par l'IA ───────────────────────
+  // Un seul appel pour tout l'article (voir services/agentStyle.js) ; les
+  // propositions sont indexées par (règle, extrait normalisé) pour rester
+  // valides même après qu'un « Accepter » ait fait disparaître une occurrence.
+  const [styleFixRunning, setStyleFixRunning]     = useState(false);
+  const [styleFixStep, setStyleFixStep]           = useState('');
+  const [styleAiProposals, setStyleAiProposals]   = useState({});
+
+  const handleRunStyleFix = async (findings) => {
+    setStyleFixRunning(true);
+    setStyleFixStep('Préparation...');
+    try {
+      const { proposals, occurrences, tokenUsage } = await runStyleFixAgent({
+        findings,
+        onStep: (t) => setStyleFixStep(t),
+      });
+      const proposalsByN = new Map(proposals.map((p) => [p.n, p]));
+      const map = {};
+      occurrences.forEach((occ) => {
+        const p = proposalsByN.get(occ.n);
+        if (p) map[`${occ.id}::${occ.extrait}`] = p;
+      });
+      setStyleAiProposals(map);
+      if (tokenUsage) dispatch(setTokenUsage(tokenUsage));
+      toast.success(proposals.length
+        ? `${proposals.length} correction(s) de style proposée(s).`
+        : 'Aucune correction de style à proposer sur ces passages.');
+    } catch (e) {
+      toast.error(`Corrections de style en échec — ${e.message}`);
+    } finally {
+      setStyleFixRunning(false);
+    }
   };
 
   // Situer une occurrence dans l'article : même mécanique que le navigateur de
@@ -3946,6 +3981,10 @@ export default function ArticleResult() {
               onRefresh={() => setRelectureTick((t) => t + 1)}
               onAccept={handleAcceptStyleFix}
               onLocate={handleLocateStyle}
+              onRunStyleFix={handleRunStyleFix}
+              styleFixRunning={styleFixRunning}
+              styleFixStep={styleFixStep}
+              aiProposals={styleAiProposals}
             />
           )}
         </div>
