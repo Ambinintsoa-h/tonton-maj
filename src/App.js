@@ -39,7 +39,7 @@ import {
   getPendingItems, getStats, savePendingList, saveStats, getKnowledge,
   subscribeToNotifications, subscribeToPending,
 } from './services/firebase';
-import { setBackend, getBackend } from './services/backendMode';
+import { setBackend, getBackend, markBackendResolved } from './services/backendMode';
 import tracker from './services/activityTracker';
 import { setNotifications } from './store/slices/notificationsSlice';
 import toast from 'react-hot-toast';
@@ -106,6 +106,9 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     const r = await fetch('/api/backend');
     if (r.ok) { const d = await r.json(); if (d && d.backend) setBackend(d.backend); }
   } catch { /* défaut firestore — comportement historique */ }
+  // Le flag est désormais arrêté, valeur lue ou défaut assumé : on débloque ceux
+  // qui l'attendent (voir backendReady) même si le fetch a échoué.
+  markBackendResolved();
 
   // Config Firebase : localStorage en priorité, sinon config par défaut
   const fbConfig = (parsed.firebaseConfig?.apiKey)
