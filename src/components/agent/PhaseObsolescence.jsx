@@ -31,16 +31,21 @@ export default function PhaseObsolescence({
   savingTemplate = false,
   onRun,
 }) {
-  const [copie, setCopie] = useState(null);
+  // { cle, ok } — `ok:false` = la copie a ÉCHOUÉ. L'ancienne version remettait
+  // simplement l'état à null dans le catch : le rédacteur cliquait, rien ne se
+  // passait, et il ne savait pas que le presse-papiers avait refusé. Constaté en
+  // test : `clipboard.writeText` peut lever (permission, contexte non sécurisé).
+  const [etatCopie, setEtatCopie] = useState(null);
 
   const copier = async (texte, cle) => {
+    let ok = true;
     try {
       await navigator.clipboard.writeText(texte);
-      setCopie(cle);
-      setTimeout(() => setCopie((c) => (c === cle ? null : c)), 1800);
     } catch {
-      setCopie(null);
+      ok = false;
     }
+    setEtatCopie({ cle, ok });
+    setTimeout(() => setEtatCopie((e) => (e && e.cle === cle ? null : e)), 2600);
   };
 
   return (
@@ -151,10 +156,18 @@ export default function PhaseObsolescence({
                             disabled={!nouveau}
                             title="Copier la suggestion dans le presse-papiers"
                             className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold transition-colors flex-shrink-0 disabled:opacity-40 ${
-                              copie === cle ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-gray-500 hover:text-gray-800 border border-gray-200'
+                              etatCopie?.cle === cle
+                                ? (etatCopie.ok ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800')
+                                : 'bg-white text-gray-500 hover:text-gray-800 border border-gray-200'
                             }`}
                           >
-                            {copie === cle ? <><Check size={10} /> Copié</> : <><Copy size={10} /> Copier</>}
+                            {etatCopie?.cle === cle
+                              ? (etatCopie.ok
+                                  ? <><Check size={10} /> Copié</>
+                                  // Échec annoncé, avec la marche à suivre : sans ça le
+                                  // rédacteur croit avoir copié et collera du vide.
+                                  : <><AlertTriangle size={10} /> Refusé — sélectionnez le texte</>)
+                              : <><Copy size={10} /> Copier</>}
                           </button>
                         </div>
                         <div className="md-content text-[12px] text-gray-800 leading-relaxed break-words [&_p]:!my-0.5"
