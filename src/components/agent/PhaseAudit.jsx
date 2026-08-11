@@ -27,6 +27,12 @@ const LIBELLE_DECISION = {
 
 export default function PhaseAudit({
   audit,
+  // Audit du flux PRÉCÉDENT : un rapport markdown, sans scores structurés. Un
+  // article peut être audité sans porter `audit` (l'objet QAT). Sans ce second
+  // signal, le panneau annonçait « aucun audit » sur un article dont le stepper
+  // affichait « Audit terminée » — relevé en production sur un rapport de 31 000
+  // caractères.
+  rapportMarkdown = '',
   onRun,
   running = false,
   step = '',
@@ -36,7 +42,7 @@ export default function PhaseAudit({
   travailEnAval = false,
 }) {
   const [confirmation, setConfirmation] = useState(false);
-  const dejaAudite = !!audit;
+  const dejaAudite = !!audit || !!rapportMarkdown;
   const propose = dejaAudite ? scopeProposedByAudit(audit) : null;
   const source  = dejaAudite ? scopeRecommendationSource(audit) : null;
   const decision = audit && audit.ampleur && audit.ampleur.decision;
@@ -54,7 +60,13 @@ export default function PhaseAudit({
           <ClipboardCheck size={14} className="text-sage-500" />
           Audit QAT de l'article en ligne
         </h3>
-        {dejaAudite ? (
+        {dejaAudite && !audit ? (
+          <p className="text-[11px] text-gray-500">
+            Cet article porte un audit au format <strong className="text-gray-700">rapport</strong> (flux précédent),
+            sans scores structurés : la phase 2 ne peut donc pas s'appuyer dessus pour proposer une ampleur.
+            Le relancer produira l'audit structuré. Le rapport actuel se lit dans l'onglet « Audit ».
+          </p>
+        ) : dejaAudite ? (
           <p className="text-[11px] text-gray-500">
             {Number.isFinite(global) && global > 0 && (
               <>Score global <strong className="text-gray-700">{global}/10</strong>. </>
@@ -84,7 +96,8 @@ export default function PhaseAudit({
           <p className="text-[11px] text-amber-800">
             La génération de la phase 2 a été produite à partir de l'audit actuel. En le refaisant, les
             phases 2 à 4 repassent à « à faire » et vous devrez relancer la génération.
-            <strong> Votre texte reste dans l'éditeur</strong> — seul l'avancement est remis à zéro.
+            <strong> Rien n'est supprimé</strong> : votre texte, vos suggestions en attente et le rapport
+            d'obsolescence restent en place. Seul l'avancement est remis à zéro.
           </p>
           <div className="flex items-center gap-1.5">
             <button

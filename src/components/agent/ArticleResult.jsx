@@ -1701,20 +1701,22 @@ export default function ArticleResult() {
       if (res.tokenUsage) dispatch(setTokenUsage(res.tokenUsage));
 
       // Remise a zero des phases suivantes : elles reposaient sur l'audit qu'on
-      // vient de remplacer. Les ARTEFACTS partent avec les statuts — sans ca
-      // derivePhaseStatus re-deduirait « generation terminee » depuis qatArticle
-      // au prochain rechargement et annulerait la remise a zero. Le TEXTE de
-      // l'editeur n'est pas touche : le redacteur ne perd pas son travail, il
-      // relance seulement la generation sur la nouvelle base.
+      // vient de remplacer.
+      //
+      // On NE DETRUIT AUCUN CONTENU. Une premiere version vidait aussi `diff` et
+      // le rapport d'obsolescence pour que la remise a zero survive a un
+      // rechargement (derivePhaseStatus re-deduit sinon « generation terminee »).
+      // Constate en production sur un article reel : cela aurait efface 52
+      // suggestions en attente, du travail paye que le redacteur n'avait pas
+      // encore arbitre. Une incoherence d'affichage se rattrape ; du travail
+      // supprime, non.
+      //
+      // `majScope` est la seule valeur remise a zero : c'est un CHOIX, pas un
+      // contenu, et le nouvel audit doit pouvoir en proposer un autre.
       if (travailEnAval) {
         [PHASE_GENERATION, PHASE_OBSOLESCENCE, PHASE_RELECTURE]
           .forEach((p) => dispatch(setPhaseStatus({ phase: p, status: TODO })));
-        dispatch(setQatArticle(null));
-        dispatch(setObsolescenceReport(null));
         dispatch(setMajScope(null));
-        dispatch(setDiff([]));
-        setVerifSuggestions([]);
-        setVerifATourne(false);
       }
       triggerAutosave();
       toast.success(travailEnAval
@@ -4091,6 +4093,7 @@ export default function ArticleResult() {
           {phase === PHASE_AUDIT && (
             <PhaseAudit
               audit={auditJson}
+              rapportMarkdown={auditReport}
               onRun={handleAudit}
               running={auditing}
               step={auditStep}
