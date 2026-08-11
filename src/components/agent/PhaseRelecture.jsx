@@ -12,11 +12,15 @@
  */
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ShieldCheck, AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Check } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Check, X } from 'lucide-react';
 import { detectStylePatterns } from '../../utils/stylePatterns';
+import { proposeMechanicalFix } from '../../utils/styleFixes';
 
-export default function PhaseRelecture({ html = '', onRefresh }) {
+export default function PhaseRelecture({ html = '', onRefresh, onAccept, onLocate }) {
   const [ouvert, setOuvert] = useState(null);
+  // Occurrences écartées par le rédacteur — locales à la session : « Ignorer »
+  // n'écrit rien dans l'article, il retire simplement la ligne de la liste.
+  const [ignores, setIgnores] = useState([]);
   const rapport = useMemo(() => detectStylePatterns(html), [html]);
   const propre = rapport.findings.length === 0;
 
@@ -74,14 +78,59 @@ export default function PhaseRelecture({ html = '', onRefresh }) {
                   {deplie && (
                     <div className="px-3 py-2.5 space-y-2 bg-white">
                       <p className="text-[11px] text-gray-500 italic">{f.hint}</p>
-                      <ul className="space-y-1.5">
-                        {f.exemples.map((ex, i) => (
-                          <li key={i} className="text-[11px] text-gray-700 leading-relaxed border-l-2 border-amber-200 pl-2">
-                            {ex.terme && <strong className="text-amber-800">« {ex.terme} » — </strong>}
-                            {ex.mots && <span className="text-gray-400">({ex.mots} mots) </span>}
-                            {ex.extrait}
-                          </li>
-                        ))}
+                      <ul className="space-y-2">
+                        {f.exemples.map((ex, i) => {
+                          const cle = `${f.id}-${i}`;
+                          if (ignores.includes(cle)) return null;
+                          // Correction MÉCANIQUE quand elle est sûre (tirets, adverbes).
+                          // `null` pour tout ce qui demande de comprendre la phrase :
+                          // la proposition viendra alors de l'IA.
+                          const prop = proposeMechanicalFix(f.id, ex.extrait, ex.terme);
+                          return (
+                            <li key={i} className="text-[11px] leading-relaxed border-l-2 border-amber-200 pl-2 space-y-1">
+                              <button
+                                type="button"
+                                onClick={() => onLocate?.(ex.extrait)}
+                                title="Situer ce passage dans l'article"
+                                className="text-left text-gray-700 hover:text-amber-800 transition-colors"
+                              >
+                                {ex.terme && <strong className="text-amber-800">« {ex.terme} » — </strong>}
+                                {ex.mots && <span className="text-gray-400">({ex.mots} mots) </span>}
+                                {ex.extrait}
+                              </button>
+                              {prop ? (
+                                <div className="rounded-lg bg-emerald-50/70 border border-emerald-200 px-2 py-1.5 space-y-1">
+                                  <p className="text-[10px] text-emerald-900">
+                                    <span className="uppercase tracking-wide font-bold text-emerald-700 text-[9px]">Proposition </span>
+                                    {prop.apres}
+                                  </p>
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => onAccept?.(prop)}
+                                      className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-semibold hover:bg-emerald-700 transition-colors"
+                                    >
+                                      <Check size={10} /> Accepter
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setIgnores((l) => [...l, cle])}
+                                      className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white text-gray-500 border border-gray-200 text-[10px] font-semibold hover:text-gray-800 transition-colors"
+                                    >
+                                      <X size={10} /> Ignorer
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                // On le DIT plutôt que de laisser une ligne muette :
+                                // le rédacteur doit savoir pourquoi il n'a pas de bouton.
+                                <p className="text-[10px] text-gray-400 italic">
+                                  Correction à écrire à la main : elle dépend du sens de la phrase.
+                                </p>
+                              )}
+                            </li>
+                          );
+                        })}
                       </ul>
                       {f.count > f.exemples.length && (
                         <p className="text-[10px] text-gray-400">

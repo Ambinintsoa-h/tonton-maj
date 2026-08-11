@@ -1461,6 +1461,45 @@ export default function ArticleResult() {
   const [savingVerifTemplate, setSavingVerifTemplate] = useState(false);
   const [relectureTick, setRelectureTick] = useState(0);
 
+  // ── PHASE 4 — appliquer une correction de style acceptée ────────────────────
+  // Remplacement DIRECT, sans marqueur de diff : le rédacteur vient de valider la
+  // proposition, il n'a pas à la réarbitrer ensuite dans la vue diff.
+  const handleAcceptStyleFix = ({ avant, apres }) => {
+    const el = articleRef.current;
+    const src = el ? el.innerHTML : (contentRef.current || '');
+    if (!avant || !src.includes(avant)) {
+      // Le passage vient du TEXTE de l'article ; s'il traverse du balisage (gras,
+      // lien), il n'apparaît pas tel quel dans le HTML. On le dit plutôt que de
+      // ne rien faire en silence.
+      toast.error('Passage introuvable tel quel — déjà modifié, ou coupé par du balisage. À corriger à la main.');
+      return;
+    }
+    const nouveau = src.replace(avant, apres);
+    if (el) { el.innerHTML = nouveau; lockMedia(el); }
+    contentRef.current = nouveau;
+    humanEditRef.current = true;
+    triggerAutosave();
+    setRelectureTick((t) => t + 1);   // le décompte se recalcule sur le texte corrigé
+    toast.success('Correction appliquée.');
+  };
+
+  // Situer une occurrence dans l'article : même mécanique que le navigateur de
+  // structure (scroll multi-niveaux), qui fonctionne.
+  const handleLocateStyle = (extrait) => {
+    const el = articleRef.current;
+    if (!el) {
+      toast('Ouvrez la vue « Après » pour situer le passage.', { icon: 'ℹ️' });
+      return;
+    }
+    const amorce = String(extrait || '').slice(0, 40);
+    if (!amorce) return;
+    const bloc = [...el.querySelectorAll('p, li, h2, h3, h4, td, blockquote')]
+      .find((b) => (b.textContent || '').includes(amorce));
+    if (!bloc) { toast('Passage non localisé dans l\'éditeur.', { icon: 'ℹ️' }); return; }
+    scrollBlockIntoView(el, bloc);
+    flashBlock(bloc, { color: '#d97706' });
+  };
+
   const reconstruireVerifPrompt = useCallback(() => {
     const mc = agent.targetKeyword ? `\n\nMot-cle de l'article : « ${agent.targetKeyword} ».` : '';
     setVerifPrompt(`${monModeleVerif}${mc}`);
@@ -3902,6 +3941,8 @@ export default function ArticleResult() {
               key={relectureTick}
               html={contentRef.current || agent.updatedContent || ''}
               onRefresh={() => setRelectureTick((t) => t + 1)}
+              onAccept={handleAcceptStyleFix}
+              onLocate={handleLocateStyle}
             />
           )}
         </div>
