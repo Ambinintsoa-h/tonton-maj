@@ -78,6 +78,9 @@ export const buildStyleFixPrompt = (occurrences = []) => {
   ].join('\n');
 };
 
+/** Toute URL présente dans un texte, pour comparer avant/après. */
+const urlsDe = (s) => String(s || '').match(/(?:https?:\/\/|www\.)[^\s<>"')]+/gi) || [];
+
 /**
  * Rattache les réponses de l'IA aux occurrences, par NUMÉRO.
  *
@@ -85,7 +88,21 @@ export const buildStyleFixPrompt = (occurrences = []) => {
  * vide, ou proposition identique à l'original (rien à accepter). Une proposition
  * absurdement plus longue que la phrase d'origine est aussi écartée : c'est le
  * signe que le modèle a réécrit le paragraphe malgré la consigne.
+ *
+ * VERROU LIENS (règle 8 du projet). Le prompt interdit déjà d'ajouter ou de
+ * retirer un lien, mais une consigne de prompt N'EST PAS un verrou : la règle 8
+ * exige du code. Et la proposition retenue ici part directement dans
+ * `innerHTML` via handleAcceptStyleFix, un chemin qui ne passe NI par
+ * `enforceExternalLinkPolicy` NI par `balanceFragment`. Deux rejets donc :
+ *   - tout balisage (`<`, `href=`) : les extraits sont du TEXTE NU (texteDe
+ *     retire les balises), une proposition n'a jamais de raison légitime d'en
+ *     porter — et du balisage déséquilibré casserait en plus le HTML ;
+ *   - toute URL ABSENTE de l'original : c'est un lien ajouté. Une URL déjà
+ *     présente dans `avant` reste autorisée, sinon on écarterait des
+ *     corrections légitimes sur une phrase qui cite une adresse.
  */
+const PORTE_BALISAGE = /<|href\s*=/i;
+
 export const normalizeStyleProposals = (brut, occurrences = []) => {
   const parNum = new Map((Array.isArray(occurrences) ? occurrences : []).map((o) => [o.n, o]));
   const items = Array.isArray(brut) ? brut : (brut && Array.isArray(brut.propositions) ? brut.propositions : []);
@@ -98,6 +115,9 @@ export const normalizeStyleProposals = (brut, occurrences = []) => {
     if (!occ || !apres) return;
     if (apres === occ.extrait) return;                      // rien à corriger
     if (apres.length > occ.extrait.length * 2.5 + 40) return; // le modèle a débordé
+    if (PORTE_BALISAGE.test(apres)) return;                 // verrou liens : balisage
+    const dejaLa = new Set(urlsDe(occ.extrait).map((u) => u.toLowerCase()));
+    if (urlsDe(apres).some((u) => !dejaLa.has(u.toLowerCase()))) return; // lien ajouté
     out.set(n, { n, id: occ.id, avant: occ.extrait, apres });
   });
   return [...out.values()];

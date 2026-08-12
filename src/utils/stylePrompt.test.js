@@ -119,6 +119,37 @@ describe('normalizeStyleProposals — rattachement par numéro', () => {
     expect(normalizeStyleProposals([{ n: '1', apres: 'La toiture domine.' }], occ)).toHaveLength(1);
   });
 
+  // VERROU LIENS (règle 8). Le prompt l'interdit déjà, mais une consigne n'est
+  // pas un verrou : la proposition part directement dans innerHTML sans passer
+  // par enforceExternalLinkPolicy. Reproduit sur le vrai code : une proposition
+  // porteuse d'une ancre s'insérait telle quelle dans l'article publié.
+  test('une proposition porteuse de BALISAGE est écartée', () => {
+    expect(normalizeStyleProposals([
+      { n: 1, apres: 'La toiture domine, voir <a href="https://source-x.com">cette étude</a>.' },
+    ], occ)).toEqual([]);
+    expect(normalizeStyleProposals([{ n: 1, apres: 'Toiture <strong>bac acier</strong> partout.' }], occ)).toEqual([]);
+  });
+
+  test('une proposition qui AJOUTE une URL est écartée, même sans balise', () => {
+    expect(normalizeStyleProposals([
+      { n: 1, apres: 'La toiture domine, source : https://concurrent.com/etude' },
+    ], occ)).toEqual([]);
+    expect(normalizeStyleProposals([{ n: 1, apres: 'La toiture domine, voir www.concurrent.com' }], occ)).toEqual([]);
+  });
+
+  test('une URL DÉJÀ présente dans l\'original reste autorisée — sinon on écarterait une correction légitime', () => {
+    const source = [{
+      id: 'verbes',
+      exemples: [{ extrait: 'Le site https://ademe.fr/guide est une ressource qui est utile.', terme: 'est' }],
+    }];
+    const o = flattenAiOccurrences(source);
+    const r = normalizeStyleProposals([
+      { n: 1, apres: 'Le site https://ademe.fr/guide reste une ressource utile.' },
+    ], o);
+    expect(r).toHaveLength(1);
+    expect(r[0].apres).toContain('ademe.fr/guide');
+  });
+
   test('entrées dégénérées → aucun crash, tableau vide', () => {
     expect(normalizeStyleProposals(null, occ)).toEqual([]);
     expect(normalizeStyleProposals('pas du json', occ)).toEqual([]);
