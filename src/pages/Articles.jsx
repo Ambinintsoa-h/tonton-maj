@@ -174,6 +174,15 @@ export default function Articles() {
     && targetKeyword.trim()
     && hasBrainSkill;
 
+  // Un bouton grisé muet est un cul-de-sac : on nomme ce qui manque, au survol du
+  // bouton comme sous le formulaire. Même ordre que `canRun` ci-dessus.
+  const raisonsBlocage = [
+    ...(!(settings.aiConfigured || settings.useLocalProxy || settings.anthropicKey) ? ['clé API Anthropic'] : []),
+    ...(!(tab === TAB_URL ? url.trim() : text.trim()) ? [tab === TAB_URL ? 'URL de l\'article' : 'contenu de l\'article'] : []),
+    ...(!targetKeyword.trim() ? ['mot-clé cible'] : []),
+    ...(!hasBrainSkill ? ['skill cerveau actif'] : []),
+  ];
+
   const handleRun = async () => {
     if (!settings.aiConfigured && !settings.useLocalProxy && !settings.anthropicKey) {
       toast.error('Clé API Anthropic manquante — vérifiez les Paramètres');
@@ -311,6 +320,33 @@ export default function Articles() {
     // originalContent stocke le HTML → affiché avec mise en page préservée
     dispatch(setOriginalContent(articleHtml));
 
+    // ── Titre de l'article : DÉDUIT ici, jamais saisi ─────────────────────────
+    // Cet écran ne demande pas de titre — il le tire du H1 de l'article récupéré
+    // (WordPress MCP, scraping ou collage), avec repli sur le slug d'URL. Ajouter
+    // un champ n'aurait rien fiabilisé : on ferait retaper une valeur que l'on
+    // connaît déjà, et le vrai titre reste éditable dans l'éditeur après l'audit.
+    // La règle « titre obligatoire » se traduit donc ici par « titre déduit NON
+    // VIDE » : sans titre, l'audit n'a pas de H1 à confronter au mot-clé cible.
+    // (Le mot-clé, lui, est saisi et déjà exigé par `canRun`.)
+    const extractH1 = (html) => {
+      try {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        return tmp.querySelector('h1')?.textContent?.trim() || '';
+      } catch { return ''; }
+    };
+    const articleTitle = (extractH1(articleHtml)
+      || (articleUrl ? (articleUrl.replace(/\/$/, '').split('/').pop() || articleUrl)
+                     : articleContent.substring(0, 60) + '...')).trim();
+    if (!articleTitle) {
+      // Même traitement qu'un scraping en échec : message + sortie, sans lancer
+      // l'appel IA (qui auditerait un article sans titre).
+      const msg = 'Titre de l\'article introuvable — le contenu récupéré n\'a ni H1 ni URL exploitable. Vérifiez l\'URL ou collez le contenu complet.';
+      toast.error(msg, { duration: 6000 });
+      dispatch(setError(msg));
+      return;
+    }
+
     try {
       // PHASE 1 — AUDIT SEUL. La génération est désormais une étape distincte,
       // déclenchée par le rédacteur en phase 2 une fois l'audit lu : c'est tout
@@ -373,17 +409,8 @@ export default function Articles() {
       dispatch(setAudit(auditMarkdown));
       dispatch(setStatus('done'));
 
-      // Save to history — extraire le H1 comme titre (pas le slug d'URL)
-      const extractH1 = (html) => {
-        try {
-          const tmp = document.createElement('div');
-          tmp.innerHTML = html;
-          return tmp.querySelector('h1')?.textContent?.trim() || '';
-        } catch { return ''; }
-      };
-      const articleTitle = extractH1(articleHtml)
-        || (articleUrl ? (articleUrl.replace(/\/$/, '').split('/').pop() || articleUrl)
-                       : articleContent.substring(0, 60) + '...');
+      // Save to history — `articleTitle` (H1, jamais le slug d'URL) est déduit et
+      // vérifié NON VIDE avant le lancement, plus haut dans cette fonction.
       const articleData = {
         title: articleTitle,
         originalContent: articleHtml,   // HTML pour affichage fidèle (tableaux, titres…)
@@ -744,9 +771,20 @@ export default function Articles() {
                 </div>
               )}
 
+              {/* Ce qui bloque le lancement, écrit noir sur blanc sous le bouton */}
+              {!canRun && raisonsBlocage.length > 0 && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 flex items-start gap-2">
+                  <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                  <span>À renseigner avant de lancer : <strong>{raisonsBlocage.join(', ')}</strong>.</span>
+                </p>
+              )}
+
               <motion.button
                 onClick={handleRun}
                 disabled={!canRun || scraping}
+                title={canRun
+                  ? 'Lancer l\'audit de l\'article (phase 1)'
+                  : `Lancement impossible — il manque : ${raisonsBlocage.join(', ')}`}
                 whileHover={{ scale: canRun ? 1.01 : 1 }}
                 whileTap={{ scale: canRun ? 0.99 : 1 }}
                 className="btn-primary w-full justify-center py-3 disabled:opacity-40 disabled:cursor-not-allowed"

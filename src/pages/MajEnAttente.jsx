@@ -97,6 +97,29 @@ const extractDomain = (url) => {
   catch { return url; }
 };
 
+// ── Prérequis d'une analyse : TITRE + MOT-CLÉ CIBLE ──────────────────────────
+// L'audit QAT juge un H1 face à une intention de recherche : sans mot-clé il n'a
+// aucune cible à évaluer, sans titre il n'a rien à juger. runQatAudit accepte
+// pourtant les deux vides sans broncher (aucun garde-fou côté service) — le
+// contrôle vit donc dans l'UI, au même endroit pour tous les points de lancement.
+// `title` retombe sur l'URL quand il n'a pas été fourni (ajout manuel, import) :
+// `title === url` signifie donc « pas de vrai titre », convention déjà admise par
+// l'enrichissement automatique (handleParsed) et par processItem.
+const champsManquantsPourAnalyse = (item) => {
+  const titre = (item?.title || '').trim();
+  const url   = (item?.url   || '').trim();
+  const manquants = [];
+  if (!titre || titre === url) manquants.push('titre');
+  if (!(item?.keyword || '').trim()) manquants.push('mot-clé cible');
+  return manquants;
+};
+
+// « titre et mot-clé cible manquants » — formulation partagée par le tooltip du
+// bouton grisé, le bandeau de complétion et les toasts, pour que l'utilisateur
+// lise partout la même cause.
+const libelleManquants = (manquants) =>
+  `${manquants.join(' et ')} manquant${manquants.length > 1 ? 's' : ''}`;
+
 // ── Composants visuels ────────────────────────────────────────────────────────
 
 function StatusBadge({ status }) {
@@ -241,7 +264,11 @@ function UploadZone({ onParsed }) {
         </div>
         <div className="flex items-center gap-4 text-[11px] text-gray-400 mt-1">
           <span className="flex items-center gap-1"><CheckCircle2 size={11} className="text-green-500" /> Colonne URL obligatoire</span>
-          <span className="flex items-center gap-1"><CheckCircle2 size={11} className="text-green-500" /> Titre, Mot-clé, Priorité (optionnels)</span>
+          {/* L'import reste tolérant (il n'est pas un point de lancement : durcir
+              ferait échouer des fichiers qui passent aujourd'hui), mais il ne
+              promet plus que Titre et Mot-clé sont dispensables — le bouton MAJ
+              les exige, et ils se complètent ligne par ligne dans la file. */}
+          <span className="flex items-center gap-1"><AlertTriangle size={11} className="text-amber-500" /> Titre + Mot-clé requis pour lancer la MAJ</span>
         </div>
       </div>
     </div>
@@ -264,9 +291,22 @@ function AddManualPanel({ open, onAdd, onClose, teamMembers }) {
     if (open) { setUrl(''); setTitle(''); setKeyword(''); setPriority('normale'); setDepth(DEFAULT_DEPTH); setNotes(''); setAssigneeId(''); }
   }, [open]);
 
+  // Prérequis de l'analyse qui suivra : le titre et le mot-clé cible ne sont plus
+  // facultatifs. Les exiger ICI est le seul moment où l'information est à portée
+  // de main — une fois la ligne en file, plus rien ne les redemande.
+  const manquants = [
+    ...(!title.trim() ? ['titre'] : []),
+    ...(!keyword.trim() ? ['mot-clé cible'] : []),
+  ];
+  const urlValide  = url.trim().startsWith('http');
+  const peutAjouter = urlValide && manquants.length === 0;
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!url.trim() || !url.startsWith('http')) { toast.error('URL invalide'); return; }
+    // Second rideau : le bouton est hors du <form> (footer), donc la touche Entrée
+    // dans un champ arrive ici SANS passer par l'état `disabled` du bouton.
+    if (manquants.length) { toast.error(`Ajout impossible — ${libelleManquants(manquants)}`); return; }
     onAdd({
       id: uid(), url: url.trim(), title: title.trim() || url.trim(),
       keyword: keyword.trim(), priority, depth, notes: notes.trim(),
@@ -323,21 +363,26 @@ function AddManualPanel({ open, onAdd, onClose, teamMembers }) {
                 />
               </div>
 
-              {/* Titre */}
-              <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">Titre</label>
-                <input
-                  type="text" value={title} onChange={e => setTitle(e.target.value)}
-                  placeholder="Titre de l'article (facultatif)"
-                  className="input-field w-full text-sm"
-                />
-                <p className="text-[11px] text-gray-400 mt-1">Récupéré automatiquement si vide</p>
-              </div>
-
-              {/* Mot-clé */}
+              {/* Titre — requis : l'audit n'a pas de H1 à juger sans lui. L'ajout
+                  manuel ne déclenche AUCUN enrichissement (seul l'import scrape les
+                  titres absents), l'ancien « récupéré automatiquement si vide » ne
+                  correspondait donc à rien sur ce panneau. */}
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">
-                  <span className="flex items-center gap-1.5"><Tag size={10} /> Mot-clé cible</span>
+                  Titre <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text" value={title} onChange={e => setTitle(e.target.value)}
+                  placeholder="Titre de l'article"
+                  className="input-field w-full text-sm"
+                />
+              </div>
+
+              {/* Mot-clé — requis : c'est la cible autour de laquelle tout l'audit
+                  puis la MAJ sont construits. */}
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">
+                  <span className="flex items-center gap-1.5"><Tag size={10} /> Mot-clé cible <span className="text-red-400">*</span></span>
                 </label>
                 <input
                   type="text" value={keyword} onChange={e => setKeyword(e.target.value)}
@@ -417,17 +462,34 @@ function AddManualPanel({ open, onAdd, onClose, teamMembers }) {
             </form>
 
             {/* Footer */}
-            <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
-              <button type="button" onClick={onClose} className="flex-1 btn-ghost text-sm">
-                Annuler
-              </button>
-              <button
-                onClick={handleSubmit}
-                className="flex-1 btn-primary text-sm flex items-center justify-center gap-2"
-              >
-                <Plus size={13} />
-                Ajouter
-              </button>
+            <div className="px-6 py-4 border-t border-gray-100 space-y-2.5">
+              {/* Un bouton grisé muet est un cul-de-sac : on nomme ce qui manque. */}
+              {!peutAjouter && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-1.5">
+                  <AlertCircle size={12} className="flex-shrink-0 mt-0.5" />
+                  <span>
+                    {!urlValide
+                      ? 'URL requise (elle doit commencer par http).'
+                      : <>Renseignez le <strong>{manquants.join(' et le ')}</strong> pour pouvoir ajouter l'article — l'analyse s'appuie dessus.</>}
+                  </span>
+                </p>
+              )}
+              <div className="flex gap-3">
+                <button type="button" onClick={onClose} className="flex-1 btn-ghost text-sm">
+                  Annuler
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={!peutAjouter}
+                  title={peutAjouter
+                    ? 'Ajouter cet article à la file'
+                    : (!urlValide ? 'URL requise' : `Ajout impossible — ${libelleManquants(manquants)}`)}
+                  className="flex-1 btn-primary text-sm flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Plus size={13} />
+                  Ajouter
+                </button>
+              </div>
             </div>
           </motion.div>
         </>
@@ -490,6 +552,10 @@ function ImportPanel({ open, onClose, onParsed }) {
                   ))}
                 </div>
                 <p className="text-[11px] text-gray-400">Les doublons d'URL sont ignorés automatiquement.</p>
+                <p className="text-[11px] text-amber-700">
+                  Le <strong>titre</strong> (récupéré automatiquement quand la colonne est vide) et le <strong>mot-clé cible</strong> sont
+                  exigés pour lancer la MAJ : les lignes incomplètes restent importées et se complètent dans la file.
+                </p>
               </div>
 
               {/* Liens utiles */}
@@ -702,9 +768,15 @@ function DepthPicker({ value, onChange }) {
 }
 
 // ── Ligne article ─────────────────────────────────────────────────────────────
-function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onDepthChange, onViewDiff, running, queuedPos = null, onDequeue, isMine = false, teamMembers }) {
+function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onDepthChange, onViewDiff, onComplete, running, queuedPos = null, onDequeue, isMine = false, teamMembers }) {
   const [expanded, setExpanded] = useState(false);
   const [showSynthese, setShowSynthese] = useState(false); // Synthèse TONTON AI — repliée par défaut
+  // Complétion des prérequis manquants (titre / mot-clé cible) directement sur la
+  // ligne : sans elle, les articles déjà en file sans mot-clé — ajouts manuels
+  // antérieurs et imports XLSX, où la colonne reste optionnelle — auraient un
+  // bouton MAJ grisé et AUCUN moyen de le débloquer.
+  const [compTitre, setCompTitre]   = useState('');
+  const [compMotCle, setCompMotCle] = useState('');
   const assignee    = teamMembers.find(m => m.id === item.assigneeId) || null;
   const domain      = extractDomain(item.url);
   const initial     = domain[0]?.toUpperCase() || '?';
@@ -712,6 +784,22 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onDe
   const pMeta       = PRIORITY_META[item.priority || 'normale'];
   const isAValider  = item.status === 'a_valider';
   const isEditable  = !isAValider && item.status !== 'in_progress';
+  const manquants   = champsManquantsPourAnalyse(item);
+  const manqueTitre  = manquants.includes('titre');
+  const manqueMotCle = manquants.includes('mot-clé cible');
+  // Le bouton n'est débloqué que si TOUT ce qui manque a été saisi : compléter à
+  // moitié laisserait l'analyse repartir sans sa cible.
+  const completable = (!manqueTitre || compTitre.trim()) && (!manqueMotCle || compMotCle.trim());
+
+  const enregistrerComplements = () => {
+    if (!completable) return;
+    onComplete?.(item.id, {
+      ...(manqueTitre  ? { title:   compTitre.trim() }  : {}),
+      ...(manqueMotCle ? { keyword: compMotCle.trim() } : {}),
+    });
+    setCompTitre(''); setCompMotCle('');
+    toast.success('Article complété — la MAJ peut être lancée');
+  };
 
   return (
     <>
@@ -745,6 +833,22 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onDe
                   <Sparkles size={8} className="flex-shrink-0" />
                   {item.keyword}
                 </span>
+              </>
+            )}
+            {/* Marqueur VISIBLE sans survol : le bouton MAJ grisé se comprend
+                depuis la ligne elle-même, pas seulement en le pointant. */}
+            {isEditable && manquants.length > 0 && (
+              <>
+                <span className="text-gray-200 select-none">·</span>
+                <button
+                  type="button"
+                  onClick={() => setExpanded(true)}
+                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 leading-none hover:bg-amber-100 transition-colors whitespace-nowrap"
+                  title={`${libelleManquants(manquants)} — cliquez pour compléter`}
+                >
+                  <AlertTriangle size={9} className="flex-shrink-0" />
+                  {libelleManquants(manquants)}
+                </button>
               </>
             )}
           </div>
@@ -812,7 +916,11 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onDe
           {(item.status === 'pending' || item.status === 'error') && !running && !queuedPos && (
             <button
               onClick={() => onRunMaj(item)}
-              className={`text-xs px-3 py-1.5 flex items-center gap-1.5 whitespace-nowrap ${item.status === 'error' ? 'btn-secondary !text-red-600 !border-red-200 hover:!bg-red-50' : 'btn-primary'}`}
+              disabled={manquants.length > 0}
+              title={manquants.length > 0
+                ? `MAJ impossible — ${libelleManquants(manquants)}. Dépliez la ligne pour compléter.`
+                : (item.status === 'error' ? 'Relancer l\'analyse' : 'Lancer la MAJ de cet article')}
+              className={`text-xs px-3 py-1.5 flex items-center gap-1.5 whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${item.status === 'error' ? 'btn-secondary !text-red-600 !border-red-200 hover:!bg-red-50' : 'btn-primary'}`}
             >
               {item.status === 'error' ? <RefreshCw size={11} /> : <Sparkles size={11} />}
               {item.status === 'error' ? 'Relancer' : 'MAJ'}
@@ -911,6 +1019,48 @@ function PendingRow({ item, onDelete, onRunMaj, onAssign, onPriorityChange, onDe
                 <ExternalLink size={11} className="flex-shrink-0" />
                 {item.url}
               </a>
+
+              {/* Prérequis de l'analyse à compléter — seule porte de sortie d'un
+                  bouton MAJ grisé : la ligne n'offre sinon que priorité,
+                  profondeur et assignation. */}
+              {isEditable && manquants.length > 0 && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-3 space-y-2">
+                  <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1.5">
+                    <AlertTriangle size={12} className="flex-shrink-0" />
+                    À compléter avant de lancer la MAJ — {libelleManquants(manquants)}
+                  </p>
+                  <p className="text-[11px] text-amber-700">
+                    L'audit compare le titre au mot-clé cible : sans eux, l'analyse partirait sans objectif.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {manqueTitre && (
+                      <input
+                        type="text" value={compTitre} onChange={e => setCompTitre(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') enregistrerComplements(); }}
+                        placeholder="Titre de l'article"
+                        className="input-field w-full text-xs"
+                      />
+                    )}
+                    {manqueMotCle && (
+                      <input
+                        type="text" value={compMotCle} onChange={e => setCompMotCle(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') enregistrerComplements(); }}
+                        placeholder="Mot-clé cible — ex : référencement naturel"
+                        className="input-field w-full text-xs"
+                      />
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={enregistrerComplements}
+                    disabled={!completable}
+                    title={completable ? 'Enregistrer et débloquer la MAJ' : `Renseignez le ${manquants.join(' et le ')}`}
+                    className="text-xs px-3 py-1.5 rounded-xl font-semibold bg-amber-600 text-white hover:bg-amber-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Enregistrer
+                  </button>
+                </div>
+              )}
 
               {/* Résultat MAJ — visible uniquement si à valider */}
               {isAValider && item.majResult && (
@@ -1541,6 +1691,14 @@ export default function MajEnAttente() {
   // la file → jamais de navigation ni d'écriture dans l'état global de l'agent
   // (ne pas arracher l'utilisateur ni écraser une review en cours).
   const startAnalysis = async (item, { interactive = false } = {}) => {
+    // Second rideau, AVANT d'occuper un créneau : pumpQueue appelle startAnalysis
+    // sans repasser par handleRunMaj, un item mis en file puis vidé de son mot-clé
+    // échapperait à un contrôle posé uniquement au clic.
+    const manquants = champsManquantsPourAnalyse(item);
+    if (manquants.length) {
+      toast.error(`« ${item.title || item.url} » — ${libelleManquants(manquants)} : MAJ non lancée`);
+      return;
+    }
     liveRuns.add(item.id);
 
     // Feedback visuel immédiat — le bouton MAJ disparaît dès le clic
@@ -1641,6 +1799,13 @@ export default function MajEnAttente() {
       toast.error('Clé API Anthropic manquante — vérifiez les Paramètres');
       return;
     }
+    // Contrôle des prérequis AVANT la mise en file : refuser une heure plus tard,
+    // au démarrage automatique, serait incompréhensible.
+    const manquants = champsManquantsPourAnalyse(item);
+    if (manquants.length) {
+      toast.error(`MAJ impossible — ${libelleManquants(manquants)}. Dépliez la ligne pour compléter.`);
+      return;
+    }
     if (liveRuns.has(item.id) || launchQueue.includes(item.id)) return; // déjà lancé/en file
     if (liveRuns.size >= CONCURRENCY) {
       launchQueue.push(item.id);
@@ -1676,6 +1841,8 @@ export default function MajEnAttente() {
     }
   };
   const handleAssign         = (id, assigneeId) => dispatch(updatePendingItem({ id, assigneeId }));
+  // Complétion des prérequis d'analyse depuis la ligne (titre / mot-clé cible).
+  const handleComplete       = (id, patch) => dispatch(updatePendingItem({ id, ...patch }));
   const handlePriorityChange = (id, priority) => dispatch(updatePendingItem({ id, priority }));
   const handleDepthChange    = (id, depth) => dispatch(updatePendingItem({ id, depth }));
 
@@ -2006,6 +2173,7 @@ export default function MajEnAttente() {
                     onPriorityChange={handlePriorityChange}
                     onDepthChange={handleDepthChange}
                     onViewDiff={handleViewDiff}
+                    onComplete={handleComplete}
                     running={runStates.get(item.id) || null}
                     queuedPos={queuedIds.indexOf(item.id) + 1 || null}
                     onDequeue={dequeueItem}

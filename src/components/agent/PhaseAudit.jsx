@@ -40,8 +40,13 @@ export default function PhaseAudit({
   // Vrai dès qu'un travail repose sur l'audit courant (génération, vérification).
   // Refaire l'audit le rendrait caduc : on prévient AVANT, pas après.
   travailEnAval = false,
+  // Prérequis absents (titre, mot-clé cible) : l'audit confronte le H1 à la cible,
+  // sans eux il tournerait à vide. Le parent les calcule, le panneau les nomme.
+  champsManquants = [],
 }) {
   const [confirmation, setConfirmation] = useState(false);
+  const bloque = champsManquants.length > 0;
+  const libelleManquants = `${champsManquants.join(' et ')} manquant${champsManquants.length > 1 ? 's' : ''}`;
   const dejaAudite = !!audit || !!rapportMarkdown;
   const propose = dejaAudite ? scopeProposedByAudit(audit) : null;
   const source  = dejaAudite ? scopeRecommendationSource(audit) : null;
@@ -49,6 +54,7 @@ export default function PhaseAudit({
   const global = Number(audit && audit.scores && audit.scores.global);
 
   const demander = () => {
+    if (bloque) return;               // bouton déjà désactivé — ceinture et bretelles
     if (travailEnAval) { setConfirmation(true); return; }
     onRun?.();
   };
@@ -118,11 +124,28 @@ export default function PhaseAudit({
         </div>
       )}
 
+      {/* Prérequis absents — nommés AVANT le bouton grisé, sinon il est muet */}
+      {bloque && !running && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 space-y-1">
+          <p className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
+            <AlertTriangle size={12} />
+            Audit impossible — {libelleManquants}
+          </p>
+          <p className="text-[11px] text-amber-800">
+            L'audit confronte le titre de l'article à son mot-clé cible.
+            {champsManquants.includes('titre') && <> Renseignez le <strong>titre</strong> dans la barre d'édition, en haut de l'article.</>}
+            {champsManquants.includes('mot-clé cible') && <> Le <strong>mot-clé cible</strong> se saisit au lancement de la MAJ (« Faire une MAJ ») ou sur la ligne de la file.</>}
+          </p>
+        </div>
+      )}
+
       {!running && !confirmation && (
         <button
           type="button"
           onClick={demander}
-          className="flex items-center gap-2 px-4 py-2.5 bg-black text-white rounded-xl text-sm font-semibold hover:bg-gray-800 transition-colors shadow-sm"
+          disabled={bloque}
+          title={bloque ? `Audit impossible — ${libelleManquants}` : (dejaAudite ? 'Relancer l\'audit de la version en ligne' : 'Lancer l\'audit de la version en ligne')}
+          className="flex items-center gap-2 px-4 py-2.5 bg-black text-white rounded-xl text-sm font-semibold hover:bg-gray-800 transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-black"
         >
           {dejaAudite ? <RotateCcw size={14} /> : <ClipboardCheck size={14} />}
           {dejaAudite ? 'Relancer l\'audit' : 'Lancer l\'audit'}
