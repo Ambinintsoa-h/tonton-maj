@@ -1052,6 +1052,21 @@ export default function ArticleResult() {
     ...(publishDate ? { publishDate } : {}),
     ...(agent.instruction ? { instruction: agent.instruction } : {}),
     ...(titleDirty && editedTitle ? { editedTitle } : {}),
+    // AVANCEMENT DU PARCOURS — écrit à CHAQUE enregistrement, plus seulement au
+    // « Terminer ». C'était la cause du grisage : entre la génération (phase 2)
+    // et le clic sur « Terminer », `phaseStatus` ne vivait QUE dans Redux et le
+    // brouillon. Cache vidé (le brouillon local disparaît) ou réouverture depuis
+    // l'Historique, et l'article revenait avec un avancement vide : toutes les
+    // phases retombaient à « à faire », donc obsolescence ET relecture grisées
+    // (canEnterPhase s'arrête à la première phase non DONE).
+    // Aucun changement de backend nécessaire : `PUT /articles/:id/html` fusionne
+    // dans `data` tout champ qui n'est pas une colonne (data-api.js), et
+    // `articleToObj` réétale `data` à la lecture — le champ fait donc
+    // l'aller-retour MySQL intact. Volontairement limité à deux valeurs
+    // MINUSCULES : ce bloc part à chaque autosave, y mettre `auditJson` ou
+    // `qatArticle` pousserait tout l'article à chaque frappe.
+    ...(agent.phaseStatus ? { phaseStatus: agent.phaseStatus } : {}),
+    ...(agent.majScope ? { majScope: agent.majScope } : {}),
   });
 
   // Abonnement au statut d'enregistrement → reflété dans le header (Enregistrement…/Enregistré)
