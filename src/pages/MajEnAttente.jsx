@@ -24,21 +24,20 @@ import {
   setAuditJson, setQatArticle, restorePhaseStatus, setPhase, setMajScope, setObsolescenceReport,
 } from '../store/slices/agentSlice';
 import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
-import { derivePhaseStatus, maxReachablePhase } from '../constants/majPhases';
+import { derivePhaseStatus, maxReachablePhase, PHASE_AUDIT, DONE } from '../constants/majPhases';
+import { DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS } from '../constants/majMode';
 import { addArticleStat } from '../store/slices/statsSlice';
 import { addToHistory } from '../store/slices/articlesSlice';
 import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
-import { runAgent } from '../services/agent';
+import { runQatAudit } from '../services/agentQat';
+import { stripNonEditorialLinks, stripNonEditorialUrlsFromText } from '../utils/scrapeClean';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts, createNotification, fetchArticleHtml, getArticle } from '../services/firebase';
 import store from '../store';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Pagination, { pageSlice } from '../components/common/Pagination';
 import ListFilters, { EMPTY_FILTERS, hasActiveFilters, buildMemberMatcher, buildDateMatcher } from '../components/common/ListFilters';
-import { applyAllDiffs, moveFaqToEnd } from '../utils/diff';
-import { normalizeFaqToAccordion } from '../utils/faq';
-import { makeTablesResponsive } from '../utils/blocks';
 import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
 import { detectAgent } from '../constants/agents';
@@ -1288,27 +1287,52 @@ export default function MajEnAttente() {
         articleContent = scrapeResult.textContent || scrapeResult.content;
       }
 
-      // ── Étape 2 : Agent IA ────────────────────────────────────────────────
-      const result = await runAgent({
+      // ── POINT DE PASSAGE UNIQUE — même choke point que Articles.jsx. Un
+      // article WordPress connecté (branche wpFetched ci-dessus) ne passe PAS
+      // par le scraper : sans ce nettoyage ICI, les boutons de suivi Google
+      // ("Discover", etc.) restaient dans le HTML envoyé à l'audit, et le
+      // verrou liens externes les traitait comme des liens d'origine à
+      // reproduire — cause exacte du bug corrigé côté Articles.jsx, jamais
+      // reporté ici puisque la file ne passait pas par ce fichier.
+      const ingestion = stripNonEditorialLinks(articleHtml);
+      if (ingestion.removed.length) {
+        step(`${ingestion.removed.length} bouton(s) de suivi Google retiré(s) du contenu`);
+      }
+      articleHtml    = ingestion.html;
+      articleContent = stripNonEditorialUrlsFromText(articleContent);
+
+      // ── Étape 2 : AUDIT QAT SEUL ───────────────────────────────────────────
+      // La file s'arrête à la phase 1 : aucune génération automatique. Un
+      // rédacteur doit choisir l'ampleur (phase 2) depuis « Faire une MAJ » —
+      // même principe que le lancement manuel (Articles.jsx), qui produit
+      // uniquement un audit et laisse la suite à une décision humaine.
+      //
+      // Le panneau « Ajouter un article » de cette file ne collecte pas
+      // articleType/seoPlugin/targetWords/internalLinks (contrairement à
+      // l'écran de lancement manuel) : le brief retombe sur les valeurs par
+      // défaut. Le rédacteur qui reprend l'article en phase 2 peut affiner.
+      const result = await runQatAudit({
         content:      articleContent,
-        contentHtml:  articleHtml,   // HTML (avec liens) pour l'analyse du maillage
+        contentHtml:  articleHtml,
         skills,
         knowledge,
         articleUrl:   item.url || '',
+        targetKeyword: (item.keyword || '').trim(),
+        articleType:   DEFAULT_ARTICLE_TYPE,
+        seoPlugin:     DEFAULT_SEO_PLUGIN,
+        targetWords:   DEFAULT_TARGET_WORDS,
+        internalLinks: [],
         wpSites,
+        existingWpData: item._wpData || null, // déjà lu ci-dessus (wpFetched) → évite un 2e appel MCP
         modelPricing: settings.modelPricing || null,
-        depth:        item.depth || DEFAULT_DEPTH,  // profondeur choisie sur la ligne
-        instruction:  (item.notes || '').trim(),    // Notes de la ligne = consigne de la passe 1 (et des relances)
         onStep:     (s) => { if (mirrorGlobal) dispatch(addStep(s)); step(s); },
         onProgress: (p) => { if (mirrorGlobal) dispatch(setProgress(p)); progress(p); },
+        onDelta:    () => {},
       });
 
-      // ── Étape 3 : Application des diffs ───────────────────────────────────
-      const { html: rawHtml, updates: allUpdatesWithStatus } = applyAllDiffs(articleHtml, result.updates, 1, item.url || '');
-      const hasBlockStructure = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(rawHtml);
-      // FAQ : fin d'article + normalisation en accordéon (structure unique pour toutes les FAQ)
-      // Tableaux : enveloppés dans un conteneur responsive (défilement horizontal sur mobile)
-      const updatedHtml = makeTablesResponsive(normalizeFaqToAccordion(moveFaqToEnd(hasBlockStructure ? rawHtml : rawHtml.replace(/\n/g, '<br>'))));
+      // Tant que la phase 2 n'a pas tourné, l'éditeur affiche l'article
+      // D'ORIGINE inchangé — même règle que le lancement manuel.
+      const updatedHtml = articleHtml;
 
       // ── Étape 4 : Stats tokens ────────────────────────────────────────────
       const extractH1 = (html) => {
@@ -1363,7 +1387,25 @@ export default function MajEnAttente() {
         } catch { /* non bloquant */ }
       }
 
+      // `executive_summary` vient d'un JSON libre : un objet ou un tableau ferait
+      // planter renderMarkdown (text.trimStart) — même garde que Articles.jsx.
+      const rawSummary = result.audit?.executive_summary;
+      const analysisText = typeof rawSummary === 'string'
+        ? rawSummary
+        : rawSummary ? JSON.stringify(rawSummary) : '';
+
+      // Brief de lancement : sans lui, impossible de rejouer un audit à
+      // l'identique depuis la phase 2 (même raison que Articles.jsx).
+      const qatBrief = {
+        articleType: DEFAULT_ARTICLE_TYPE, seoPlugin: DEFAULT_SEO_PLUGIN,
+        targetWords: DEFAULT_TARGET_WORDS, internalLinks: [],
+      };
+
       // ── Étape 6 : Passer en statut "À valider" ────────────────────────────
+      // SEULE la phase 1 est faite : l'item attend qu'un rédacteur ouvre
+      // « Faire une MAJ », choisisse l'ampleur (phase 2) et lance la
+      // génération — même principe que le lancement manuel. La file ne
+      // produit plus de texte régénéré automatiquement.
       dispatch(updatePendingItem({
         id:     item.id,
         status: 'a_valider',
@@ -1373,12 +1415,15 @@ export default function MajEnAttente() {
           articleTitle,
           originalContent: articleHtml,
           updatedContent:  updatedHtml,
-          updates:         allUpdatesWithStatus,
           sources:         result.sources || [],
-          analysis:        result.analysis || '',
+          analysis:        analysisText,
           seoTracking:     capturedSeoTracking,   // transféré vers articleData à la validation
           wpData:          item._wpData || result.wpData || null,  // post cible (postId) — pour rebinder à la réouverture
-          audit:           result.audit || '',     // rapport d'audit complet — onglet AUDIT
+          auditJson:       result.audit || null,   // audit structuré — consulté en phase 1
+          qatArticle:      null,                   // rien n'est encore généré
+          qatBrief,
+          phaseStatus:     { [PHASE_AUDIT]: DONE },
+          majScope:        null,
           majDepth:        item.depth || DEFAULT_DEPTH,  // profondeur — réutilisée par la passe 2
         },
       }));
@@ -1396,7 +1441,7 @@ export default function MajEnAttente() {
             fromUsername: authUsername || '',
             type:         'maj_ready',
             majItemId:    item.id,
-            message:      `Analyse terminée : « ${articleTitle} » est prêt à valider`,
+            message:      `Audit terminé : « ${articleTitle} » — ampleur à choisir en phase 2`,
           });
         }
       } catch { /* non bloquant */ }
@@ -1415,10 +1460,13 @@ export default function MajEnAttente() {
           title:           articleTitle,
           originalContent: articleHtml,
           updatedContent:  updatedHtml,
-          updates:         allUpdatesWithStatus,
           sources:         result.sources || [],
-          analysis:        result.analysis || '',
-          audit:           result.audit || '',
+          analysis:        analysisText,
+          auditJson:       result.audit || null,
+          qatArticle:      null,
+          qatBrief,
+          phaseStatus:     { [PHASE_AUDIT]: DONE },
+          majScope:        null,
           url:             item.url || '',
           keyword:         item.keyword || '',
           priority:        item.priority || 'normale',
@@ -1461,19 +1509,19 @@ export default function MajEnAttente() {
         console.error('[maj] Archivage automatique échoué :', archiveErr);
       }
 
-      const applied = allUpdatesWithStatus.filter(u => u.applied).length;
-      const total   = allUpdatesWithStatus.length;
-      toast.success(`MAJ prête — ${applied}/${total} modif. appliquées et archivées dans l'Historique`, { icon: <Search size={18} /> });
+      toast.success('Audit prêt — ouvrez « Faire une MAJ » pour choisir l\'ampleur et lancer la génération', { icon: <Search size={18} /> });
 
       return {
         originalContent: articleHtml,
         updatedContent:  updatedHtml,
-        updates:         allUpdatesWithStatus,
         sources:         result.sources || [],
-        analysis:        result.analysis || '',
+        analysis:        analysisText,
         parseFailed:     result.parseFailed === true,
         wpData:          item._wpData || result.wpData || null,
-        audit:           result.audit || '',
+        auditJson:       result.audit || null,
+        qatBrief,
+        phaseStatus:     { [PHASE_AUDIT]: DONE },
+        majScope:        null,
       };
 
     } catch (e) {
@@ -1544,14 +1592,21 @@ export default function MajEnAttente() {
     if (canNavigate) {
       dispatch(setOriginalContent(data.originalContent || ''));
       dispatch(setUpdatedContent(data.updatedContent   || ''));
-      dispatch(setDiff(data.updates   || []));
+      dispatch(setDiff([]));
       dispatch(setSources(data.sources || []));
       dispatch(setAnalysis(data.analysis || ''));
       dispatch(setParseFailed(data.parseFailed === true));
       // TOUJOURS rebinder (null si absent) : sinon le wpData de l'article PRÉCÉDENT
       // reste en mémoire → publication proposée sur le mauvais site (confusion de sites).
       dispatch(setWpData(data.wpData || null));
-      dispatch(setAudit(data.audit || ''));
+      dispatch(setAudit(''));
+      // Parcours en 4 phases — seule la phase 1 est faite (même règle que le
+      // lancement manuel) : audit structuré, phase 2 encore à faire.
+      dispatch(setAuditJson(data.auditJson || null));
+      dispatch(setQatArticle(null));
+      dispatch(restorePhaseStatus(data.phaseStatus || { [PHASE_AUDIT]: DONE }));
+      dispatch(setPhase(maxReachablePhase(data.phaseStatus || { [PHASE_AUDIT]: DONE })));
+      dispatch(setMajScope(null));
       dispatch(setMajDepth(data.majDepth || item.depth || DEFAULT_DEPTH));
       // Les Notes de la ligne pré-remplissent le champ « Instruction » de
       // l'éditeur → la passe 2 en hérite (modifiable par le CQ avant relance).
