@@ -43,9 +43,16 @@ export default function PhaseAudit({
   // Prérequis absents (titre, mot-clé cible) : l'audit confronte le H1 à la cible,
   // sans eux il tournerait à vide. Le parent les calcule, le panneau les nomme.
   champsManquants = [],
+  // Saisie du mot-clé cible ICI, quand il manque. Indispensable : le mot-clé n'est
+  // porté par AUCUN champ de l'éditeur, il vient du lancement — un article rouvert
+  // depuis l'Historique sans mot-clé enregistré (entrées antérieures à son
+  // archivage) laisserait sinon un bouton grisé que RIEN ne peut débloquer.
+  onMotCleChange,
 }) {
   const [confirmation, setConfirmation] = useState(false);
+  const [motCleSaisi, setMotCleSaisi] = useState('');
   const bloque = champsManquants.length > 0;
+  const manqueMotCle = champsManquants.includes('mot-clé cible');
   const libelleManquants = `${champsManquants.join(' et ')} manquant${champsManquants.length > 1 ? 's' : ''}`;
   const dejaAudite = !!audit || !!rapportMarkdown;
   const propose = dejaAudite ? scopeProposedByAudit(audit) : null;
@@ -57,6 +64,15 @@ export default function PhaseAudit({
     if (bloque) return;               // bouton déjà désactivé — ceinture et bretelles
     if (travailEnAval) { setConfirmation(true); return; }
     onRun?.();
+  };
+
+  // Le parent enregistre la valeur (état global de l'agent) : le champ local se
+  // vide, et `champsManquants` rétrécit → le bandeau disparaît de lui-même.
+  const enregistrerMotCle = () => {
+    const valeur = motCleSaisi.trim();
+    if (!valeur) return;              // espaces seuls : rien à enregistrer
+    onMotCleChange?.(valeur);
+    setMotCleSaisi('');
   };
 
   return (
@@ -133,9 +149,32 @@ export default function PhaseAudit({
           </p>
           <p className="text-[11px] text-amber-800">
             L'audit confronte le titre de l'article à son mot-clé cible.
-            {champsManquants.includes('titre') && <> Renseignez le <strong>titre</strong> dans la barre d'édition, en haut de l'article.</>}
-            {champsManquants.includes('mot-clé cible') && <> Le <strong>mot-clé cible</strong> se saisit au lancement de la MAJ (« Faire une MAJ ») ou sur la ligne de la file.</>}
+            {champsManquants.includes('titre') && <> Renseignez le <strong>titre</strong> dans le champ « Titre » de l'onglet <strong>Après</strong>.</>}
+            {manqueMotCle && <> Saisissez le <strong>mot-clé cible</strong> ci-dessous — il servira aussi de focus keyphrase à la publication.</>}
           </p>
+          {/* Saisie sur place : sans elle, le bouton grisé serait un cul-de-sac sur
+              tout article rouvert dont le mot-clé n'a pas été archivé. */}
+          {manqueMotCle && onMotCleChange && (
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                type="text"
+                value={motCleSaisi}
+                onChange={e => setMotCleSaisi(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); enregistrerMotCle(); } }}
+                placeholder="Mot-clé cible — ex : isolation phonique plafond"
+                className="flex-1 min-w-0 bg-white border border-amber-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
+              />
+              <button
+                type="button"
+                onClick={enregistrerMotCle}
+                disabled={!motCleSaisi.trim()}
+                title={motCleSaisi.trim() ? 'Enregistrer le mot-clé cible' : 'Saisissez le mot-clé cible'}
+                className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-[11px] font-semibold hover:bg-amber-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                Enregistrer
+              </button>
+            </div>
+          )}
         </div>
       )}
 

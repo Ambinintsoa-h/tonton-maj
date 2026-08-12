@@ -30,7 +30,7 @@ import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive,
 import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId,
   setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport,
-  setAuditJson, setAnalysis } from '../../store/slices/agentSlice';
+  setAuditJson, setAnalysis, setTargetKeyword } from '../../store/slices/agentSlice';
 import { runQatRewrite, runQatAudit } from '../../services/agentQat';
 import { runStyleFixAgent } from '../../services/agentStyle';
 import {
@@ -1709,8 +1709,13 @@ export default function ArticleResult() {
   // Le titre, lui, EST saisissable ici (champ « Titre de l'article ») et se
   // preremplit du titre WP puis du H1 : on exige seulement qu'il ne soit pas vide.
   const titreAudit = (editedTitle || extractH1FromHtml(agent.originalContent) || '').trim();
+  // Article d'origine absent (HTML introuvable a la reouverture) : ne PAS parler
+  // de titre manquant — c'en est la consequence, pas la cause. Le bouton reste
+  // actif pour que handleAudit affiche le vrai diagnostic (« Article d'origine
+  // introuvable »), seul message sur lequel l'utilisateur peut agir.
+  const contenuOrigine = (agent.originalContent || '').trim();
   const champsManquantsAudit = [
-    ...(!titreAudit  ? ['titre'] : []),
+    ...(contenuOrigine && !titreAudit ? ['titre'] : []),
     ...(!motCleAudit ? ['mot-clé cible'] : []),
   ];
 
@@ -4167,6 +4172,14 @@ export default function ArticleResult() {
               progress={auditProgress}
               travailEnAval={travailEnAval}
               champsManquants={champsManquantsAudit}
+              // Le mot-cle cible se saisit dans le panneau quand il manque : c'est
+              // la SEULE porte de sortie ici (aucun champ de l'editeur ne le porte)
+              // pour les articles rouverts sans mot-cle archive. Meme valeur que
+              // celle lue par motCleAudit et par le focus keyphrase a la publication.
+              onMotCleChange={(mc) => {
+                dispatch(setTargetKeyword(mc));
+                toast.success('Mot-clé cible enregistré — l\'audit peut être lancé');
+              }}
             />
           )}
           {phase === PHASE_GENERATION && (
