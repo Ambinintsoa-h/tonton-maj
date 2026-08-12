@@ -291,7 +291,17 @@ export default function PhaseObsolescence({
                               type="button"
                               // L'index part avec : c'est lui qui permet au volet
                               // de gauche de repasser CE passage-là en vert.
-                              onClick={() => { onAccept({ avant: s.original, apres: nouveau, index: i }); setTraitees((l) => [...l, cle]); }}
+                              // On ne retire la ligne que si le remplacement a
+                              // RÉELLEMENT eu lieu : quand le passage est
+                              // introuvable dans l'éditeur, l'ancienne version
+                              // affichait l'erreur ET faisait disparaître la
+                              // suggestion — plus moyen ni de réessayer ni même de
+                              // la copier à la main. `!== false` : un appelant qui
+                              // ne renvoie rien garde l'ancien comportement.
+                              onClick={() => {
+                                if (onAccept({ avant: s.original, apres: nouveau, index: i }) === false) return;
+                                setTraitees((l) => [...l, cle]);
+                              }}
                               title="Remplacer le passage dans l'article"
                               className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-semibold hover:bg-emerald-700 transition-colors flex-shrink-0"
                             >

@@ -1562,11 +1562,14 @@ export default function ArticleResult() {
   // L'ordre compte : si le remplacement échoue (passage introuvable dans
   // l'éditeur), on ne marque RIEN — afficher en vert un passage jamais modifié
   // serait pire que l'absence de retour.
+  // Renvoie `false` sur échec : la liste de droite s'en sert pour GARDER la
+  // suggestion à l'écran (sinon elle disparaissait malgré le message d'erreur).
   const handleAcceptObsolescence = ({ avant, apres, index }) => {
-    if (!handleAcceptStyleFix({ avant, apres })) return;
+    if (!handleAcceptStyleFix({ avant, apres })) return false;
     // L'autosave déclenchée juste avant est différée d'une seconde et reconstruit
     // le brouillon à ce moment-là : elle emportera donc ce rapport à jour.
     dispatch(appliquerSuggestionObsolescence({ index, avant, apres }));
+    return true;
   };
 
   // Référence STABLE tant que le rapport ne change pas : `?? []` fabriquerait un
