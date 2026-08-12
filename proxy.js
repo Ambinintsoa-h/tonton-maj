@@ -1942,21 +1942,36 @@ const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, rejec
         if (res.statusCode !== 200) return reject(new Error(json.error?.message || `HTTP ${res.statusCode}`));
         const text = json.content?.[0]?.text || '';
         const usage = json.usage || {};
-        // ── DIAGNOSTIC TEMPORAIRE — prompt caching ────────────────────────────
+        // ── DIAGNOSTIC TEMPORAIRE (2) — le bloc 0 est-il VRAIMENT identique ? ──
+        // Deux audits reels, memes longueurs de bloc 0 (28057), meme
+        // cache_creation_input_tokens (9674) a chaque fois : le second n'a PAS
+        // lu le cache ecrit par le premier. Un test controle a longueur egale a
+        // pourtant bien LU le cache. Donc soit le bloc 0 n'est pas identique a
+        // l'octet malgre une longueur egale, soit autre chose distingue les
+        // deux requetes. On empreinte le bloc 0 et on compare a l'empreinte du
+        // dernier appel — le serveur tranche, pas moi a l'oeil sur 28 Ko.
+        const s = requestBody.system;
+        const b0 = Array.isArray(s) && s[0] ? String(s[0].text || '') : (typeof s === 'string' ? s : '');
+        const empreinteB0 = sha256Hex(b0);
         // Le client envoie bien `system` en deux blocs avec `cache_control`
         // (capture reseau a l'appui), et un test controle sur ce meme endpoint a
         // mis 4081 tokens en cache. Pourtant les audits reels ne cachent rien.
-        // On journalise donc ce que le serveur envoie REELLEMENT, au moment de
-        // l'envoi, plutot que de continuer a deviner. A retirer une fois la
-        // cause identifiee.
-        const s = requestBody.system;
+        // Deux audits reels de meme longueur de bloc 0 (28057) ont chacun ECRIT
+        // le cache (jamais lu) : soit le bloc 0 n'est pas identique a l'octet
+        // malgre une longueur egale, soit autre chose distingue les requetes.
+        // On empreinte le bloc 0 et on compare au dernier appel — le serveur
+        // tranche, plutot que de comparer 28 Ko a l'oeil.
         usage.__debug = {
           systemType: Array.isArray(s) ? 'array' : typeof s,
           blocs: Array.isArray(s) ? s.length : null,
-          b0Len: Array.isArray(s) && s[0] ? String(s[0].text || '').length : (typeof s === 'string' ? s.length : null),
+          b0Len: b0.length,
           b0Cc: Array.isArray(s) && s[0] ? JSON.stringify(s[0].cache_control || null) : null,
           modelEnvoye: requestBody.model,
+          empreinteB0,
+          identiqueAuPrecedent: global.__lastB0Hash ? (empreinteB0 === global.__lastB0Hash) : null,
+          precedentPresent: !!global.__lastB0Hash,
         };
+        global.__lastB0Hash = empreinteB0;
         console.log('[cache-debug]', JSON.stringify(usage.__debug), '→ usage',
           JSON.stringify({ i: usage.input_tokens, w: usage.cache_creation_input_tokens, r: usage.cache_read_input_tokens }));
         resolve({ text, modelUsed: json.model || bodyObj.model, usage });
