@@ -265,9 +265,25 @@ const callWithLiveText = async ({ params, label, onStep, onReplace, onDelta, onP
 
 // ── Étape A — Audit QAT (sortie JSON) ─────────────────────────────────────────
 
+/**
+ * Prompt système de l'AUDIT, en deux blocs pour le PROMPT CACHING.
+ *
+ * Le cache d'Anthropic est un appariement de PRÉFIXE : le moindre octet modifié
+ * invalide tout ce qui suit. Le brief (type d'article, plugin SEO, longueur
+ * cible, liens internes) change à CHAQUE article ; il était placé juste avant le
+ * skill principal, les règles d'équipe et la base de connaissances — de loin la
+ * plus grosse partie du prompt. Résultat : ces blocs volumineux étaient
+ * retraités intégralement à chaque appel, y compris lors des 3 tentatives de
+ * relance d'un même audit.
+ *
+ * On renvoie donc le SOCLE STABLE d'abord, marqué `cache_control`, puis le brief.
+ * Le contenu envoyé à l'IA est identique — seul l'ordre change. Les dates
+ * interpolées dans le socle (`fr`, `cutoffIso`) ne changent qu'une fois par
+ * jour : elles restent stables à l'échelle de vie d'un cache.
+ */
 const buildAuditSystem = (brainSkills, skills, knowledge, brief) => {
   const { fr, cutoffIso } = getDateContext();
-  return `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous.
+  const socle = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous.
 
 Tu exécutes l'**ÉTAPE A — AUDIT** de ce skill, et RIEN d'autre : tu n'écris pas
 l'article, tu produis l'audit. Applique sa méthode et son schéma de sortie à la
@@ -280,14 +296,18 @@ vérifiée ou signalée dans freshness_checks.
 Renseigne IMPÉRATIVEMENT, en plus du reste : « ampleur » (la décision la plus
 structurante), « keyword_repositioning » (ou null) et « a_supprimer » (ou []).
 
-${brief}
-
 ## ═══ SKILL PRINCIPAL — MÉTHODE & CRITÈRES (à appliquer intégralement) ═══
 ${buildSkillMethodBlock(brainSkills)}${buildSkillsBlock(
     skills,
     'Règles éditées par l\'équipe dans le menu SKILLS IA. Vérifie chacune d\'elles et signale tout manquement dans priority_actions.',
     'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — À AUDITER AUSSI'
   )}${buildKnowledgeBlock(knowledge, '', 'BASE DE CONNAISSANCES — À VÉRIFIER AUSSI')}`;
+
+  const briefTexte = String(brief || '').trim();
+  return [
+    { type: 'text', text: socle, cache_control: { type: 'ephemeral' } },
+    ...(briefTexte ? [{ type: 'text', text: briefTexte }] : []),
+  ];
 };
 
 /**

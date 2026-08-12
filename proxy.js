@@ -2366,6 +2366,11 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
             }
           } else if (event.type === 'message_start' && event.message?.usage) {
             usage.input_tokens = event.message.usage.input_tokens || 0;
+            // Compteurs de PROMPT CACHING. Ils n'arrivent que dans message_start ;
+            // les omettre rendait le cache invisible — et `input_tokens` seul est
+            // trompeur, puisqu'il ne compte que le reste NON caché.
+            usage.cache_creation_input_tokens = event.message.usage.cache_creation_input_tokens || 0;
+            usage.cache_read_input_tokens = event.message.usage.cache_read_input_tokens || 0;
           } else if (event.type === 'message_delta' && event.usage) {
             usage.output_tokens = event.usage.output_tokens || 0;
           }
@@ -2383,6 +2388,8 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
         usage: {
           input_tokens:  usage.input_tokens  || 0,
           output_tokens: usage.output_tokens || Math.round(charCount / 4),
+          cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+          cache_read_input_tokens:     usage.cache_read_input_tokens     || 0,
           model: requestedModel,
         },
       });

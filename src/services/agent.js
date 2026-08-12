@@ -743,12 +743,24 @@ const parseJsonResponse = (text, fallback = {}, warnLabel = '') => {
 
 /** Crée un accumulateur de tokens avec sa fonction de suivi. */
 export const makeTokenTracker = () => {
-  const acc = { input: 0, output: 0, calls: [] };
+  const acc = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, calls: [] };
   const track = (usage) => {
     if (!usage) return;
     acc.input += usage.input_tokens || 0;
     acc.output += usage.output_tokens || 0;
-    acc.calls.push({ model: usage.model, input: usage.input_tokens || 0, output: usage.output_tokens || 0 });
+    // Prompt caching. Sans ces deux compteurs il est IMPOSSIBLE de vérifier que
+    // le cache fonctionne : `input_tokens` ne compte que le reste NON caché, si
+    // bien qu'un cache efficace ressemble à un prompt qui aurait maigri tout
+    // seul. La taille réelle du prompt est la somme des trois.
+    acc.cacheWrite += usage.cache_creation_input_tokens || 0;
+    acc.cacheRead += usage.cache_read_input_tokens || 0;
+    acc.calls.push({
+      model: usage.model,
+      input: usage.input_tokens || 0,
+      output: usage.output_tokens || 0,
+      cacheWrite: usage.cache_creation_input_tokens || 0,
+      cacheRead: usage.cache_read_input_tokens || 0,
+    });
   };
   return { acc, track };
 };
