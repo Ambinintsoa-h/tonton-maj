@@ -22,19 +22,35 @@ const norm = (s) => String(s || '')
 const AMORCE = 45;
 
 export const MARK_CLASS = 'sugg-repere';
+/** Posée EN PLUS de MARK_CLASS sur une suggestion déjà appliquée → surlignage vert. */
+export const MARK_CLASS_OK = 'sugg-applique';
+
+/** Texte nu d'un fragment : une suggestion peut contenir du balisage
+ *  (`<p>`, `<strong>`), alors qu'on cherche dans des NŒUDS TEXTE — comparer avec
+ *  les balises ne trouverait jamais rien. */
+const texteNu = (frag) => {
+  const d = document.createElement('div');
+  d.innerHTML = String(frag || '');
+  return d.textContent || '';
+};
 
 /**
  * @param {string} html         article issu de la phase 2
  * @param {Array}  suggestions  [{ original, updated, ... }]
+ * @param {number[]} appliquees index (0-based, comme dans la liste) des suggestions
+ *          DÉJÀ ACCEPTÉES : leur passage d'origine n'existe plus dans le texte, on y
+ *          cherche donc le texte NOUVEAU et on le montre en vert. Paramètre optionnel
+ *          — sans lui, comportement strictement inchangé.
  * @returns {{ html:string, marked:number[], missed:number[], ajouts:number[] }}
  *          Numéros AFFICHÉS (1-based). Trois cas distincts, à ne pas confondre :
  *          `marked` repéré ; `ajouts` sans passage d'origine (ajout pur, il n'y a
  *          rien à repérer, c'est normal) ; `missed` un passage est cité mais
  *          introuvable dans le texte — là il y a un problème à comprendre.
  */
-export const markSuggestions = (html, suggestions = []) => {
+export const markSuggestions = (html, suggestions = [], appliquees = []) => {
   const src = typeof html === 'string' ? html : '';
   const liste = Array.isArray(suggestions) ? suggestions : [];
+  const faites = Array.isArray(appliquees) ? appliquees : [];
   if (!src || !liste.length || typeof document === 'undefined') {
     return { html: src, marked: [], missed: [], ajouts: [] };
   }
@@ -45,13 +61,15 @@ export const markSuggestions = (html, suggestions = []) => {
   const missed = [];
   const ajouts = [];
 
-  liste.forEach((s, i) => {
-    const num = i + 1;
-    const cible = norm(s && s.original);
-    // Aucun passage d'origine = ajout pur : il n'y a rien à repérer, ce n'est
-    // pas un échec. Les mélanger dans `missed` faisait passer une situation
-    // normale pour une anomalie.
-    if (!cible) { ajouts.push(num); return; }
+  /**
+   * Repère UNE cible dans le document de travail. Extrait tel quel de la boucle
+   * pour pouvoir être rejoué sur une seconde cible (cas des suggestions
+   * appliquées, ci-dessous) ; rien n'est écrit tant que rien n'est trouvé, donc
+   * un essai infructueux se rattrape sans dégât.
+   * @returns {boolean} vrai si un repère a été posé.
+   */
+  const reperer = (cible, num, vert) => {
+    const classes = vert ? [MARK_CLASS, MARK_CLASS_OK] : [MARK_CLASS];
 
     // 1) Le passage tient dans UN nœud texte : on encadre exactement la portion.
     const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
@@ -73,7 +91,9 @@ export const markSuggestions = (html, suggestions = []) => {
       range.setStart(n, pos);
       range.setEnd(n, fin);
       const marque = document.createElement('mark');
-      marque.className = MARK_CLASS;
+      // MARK_CLASS est TOUJOURS posée, même en vert : c'est elle qui porte la
+      // pastille numérotée et qui sert de garde anti-imbrication ci-dessus.
+      marque.className = classes.join(' ');
       marque.setAttribute('data-sugg', String(num));
       marque.setAttribute('id', `sugg-${num}`);
       try { range.surroundContents(marque); trouve = true; } catch { /* bornes invalides */ }
@@ -91,14 +111,39 @@ export const markSuggestions = (html, suggestions = []) => {
         && !b.querySelector(`.${MARK_CLASS}`)
         && norm(b.textContent).includes(cible.slice(0, AMORCE)));
       if (bloc) {
-        bloc.classList.add(MARK_CLASS);
+        bloc.classList.add(...classes);
         bloc.setAttribute('data-sugg', String(num));
         bloc.setAttribute('id', `sugg-${num}`);
         trouve = true;
       }
     }
+    return trouve;
+  };
 
-    (trouve ? marked : missed).push(num);
+  liste.forEach((s, i) => {
+    const num = i + 1;
+    const applique = faites.includes(i);
+    // Une suggestion acceptée a déjà remplacé son passage d'origine : chercher
+    // `original` ne donnerait plus rien et la classerait « introuvable » — la
+    // fausse alerte exactement à l'envers de la réalité. On vise donc le texte
+    // NOUVEAU en priorité, avec l'ancien en repli : le volet de gauche est un
+    // instantané qui n'a pas toujours pu être réécrit (le rédacteur a pu retoucher
+    // le passage entre-temps). Dans les deux cas c'est VERT et jamais une anomalie.
+    const cibles = (applique
+      ? [norm(texteNu(s && s.updated)), norm(s && s.original)]
+      : [norm(s && s.original)]).filter(Boolean);
+    // Aucun passage d'origine = ajout pur : il n'y a rien à repérer, ce n'est
+    // pas un échec. Les mélanger dans `missed` faisait passer une situation
+    // normale pour une anomalie.
+    if (!cibles.length) { if (!applique) ajouts.push(num); return; }
+
+    const trouve = cibles.some((cible) => reperer(cible, num, applique));
+
+    // Une suggestion appliquée n'est jamais une anomalie : si son texte n'est pas
+    // retrouvé (reformulé à la main, coupé par du balisage), on se tait plutôt que
+    // d'alerter à tort sur un travail qui vient justement d'être fait.
+    if (trouve) marked.push(num);
+    else if (!applique) missed.push(num);
   });
 
   return { html: marked.length ? box.innerHTML : src, marked, missed, ajouts };

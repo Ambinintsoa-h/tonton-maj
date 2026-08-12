@@ -131,6 +131,29 @@ const agentSlice = createSlice({
     setMajScope: (state, action) => { state.majScope = action.payload || null; },
     setLinkAudit: (state, action) => { state.linkAudit = action.payload || null; },
     setObsolescenceReport: (state, action) => { state.obsolescenceReport = action.payload || null; },
+    // PHASE 3 — répercuter une suggestion ACCEPTÉE dans le volet de gauche.
+    // Ce volet affiche `texteVerifie`, un INSTANTANÉ figé au moment de la
+    // vérification : accepter ne touchait que l'éditeur, et le passage traité
+    // restait surligné en rouge « à remplacer » — impossible de distinguer d'un
+    // coup d'œil ce qui était fait de ce qui restait à arbitrer.
+    // Les deux écritures vont ENSEMBLE : remplacer le texte sans mémoriser
+    // l'index ferait chercher à markSuggestions un `original` qui n'existe plus,
+    // et la suggestion qu'on vient d'appliquer serait annoncée « introuvable ».
+    appliquerSuggestionObsolescence: (state, action) => {
+      const rapport = state.obsolescenceReport;
+      if (!rapport) return;   // rapport absent (jamais lancé, ou réinitialisé) : rien à répercuter
+      const { index, avant, apres } = action.payload || {};
+      // Remplacement de la PREMIÈRE occurrence, comme dans l'éditeur. La fonction
+      // de remplacement évite que `$&` ou `$'` présents dans le texte suggéré
+      // soient interprétés comme des motifs par String.replace.
+      if (typeof rapport.texteVerifie === 'string' && avant && rapport.texteVerifie.includes(avant)) {
+        rapport.texteVerifie = rapport.texteVerifie.replace(avant, () => (apres || ''));
+      }
+      if (!Array.isArray(rapport.appliquees)) rapport.appliquees = [];
+      if (Number.isInteger(index) && index >= 0 && !rapport.appliquees.includes(index)) {
+        rapport.appliquees.push(index);
+      }
+    },
     setAuditJson: (state, action) => { state.auditJson = action.payload || null; },
     setQatArticle: (state, action) => { state.qatArticle = action.payload || null; },
     setLiveText: (state, action) => {
@@ -153,6 +176,7 @@ export const {
   setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
   setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword, setMajDepth, setInstruction, setAudit, setEditorMeta, setDraftStatus,
   setPhase, setPhaseStatus, restorePhaseStatus, setMajScope, setLinkAudit, setObsolescenceReport,
+  appliquerSuggestionObsolescence,
   setAuditJson, setQatArticle, setLiveText, clearLiveText,
 } = agentSlice.actions;
 export default agentSlice.reducer;
