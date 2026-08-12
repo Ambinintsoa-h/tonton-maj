@@ -2318,6 +2318,19 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
   const requestBody = { model: requestedModel, max_tokens, messages, stream: true };
   if (system) requestBody.system = system;
   const payload = JSON.stringify(requestBody);
+  // DIAGNOSTIC TEMPORAIRE — c'est CETTE voie qu'emprunte l'audit (les voies job
+  // et OAuth n'ont jamais ete atteintes : leur `__debug` revenait a null).
+  const sS = requestBody.system;
+  const debugCache = {
+    voie: 'stream',
+    systemType: Array.isArray(sS) ? 'array' : typeof sS,
+    blocs: Array.isArray(sS) ? sS.length : null,
+    b0Len: Array.isArray(sS) && sS[0] ? String(sS[0].text || '').length : (typeof sS === 'string' ? sS.length : null),
+    b0Cc: Array.isArray(sS) && sS[0] ? JSON.stringify(sS[0].cache_control || null) : null,
+    modelEnvoye: requestedModel,
+    payloadKo: Math.round(payload.length / 1024),
+  };
+  console.log('[cache-debug stream]', JSON.stringify(debugCache));
 
   // ── Auth : clé API fournie par le client OU token OAuth serveur ───────────────
   let authHeaders;
@@ -2420,6 +2433,9 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
           cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
           cache_read_input_tokens:     usage.cache_read_input_tokens     || 0,
           model: requestedModel,
+          // DIAGNOSTIC TEMPORAIRE — sa seule presence prouve deja que le proxy
+          // deploye est bien celui-ci, et non une version anterieure.
+          __debug: { ...debugCache, usageBrut: JSON.stringify(usage).slice(0, 300) },
         },
       });
       res.end();
