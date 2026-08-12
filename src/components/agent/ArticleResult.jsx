@@ -4163,33 +4163,26 @@ export default function ArticleResult() {
           />
         </div>
 
-        {/* PHASE 4 — le relevé des patterns SUIT LE DÉFILEMENT, épinglé sous le
-            stepper. Il est rendu ICI, en frère du stepper, et non dans le
-            conteneur des autres phases : `sticky` est borné par la boîte du
-            PARENT, et ce conteneur s'arrête juste au-dessus de l'éditeur — le
-            panneau se serait décollé immédiatement. En frère du stepper il
-            partage son parent, qui court jusqu'au bas de l'éditeur.
-            66 points répartis sur 6 règles ne se corrigent pas en mémorisant la
-            liste : il faut l'avoir sous les yeux pendant qu'on édite. */}
+        {/* PHASE 4 — le relevé des patterns est un WIDGET FLOTTANT : il se place
+            lui-même (position: fixed + portal document.body, cf. PhaseRelecture)
+            et n'occupe donc AUCUNE place dans le flux. Il était `sticky` ici, en
+            frère du stepper, mais une bande pleine largeur au-dessus de l'éditeur
+            rognait la hauteur utile et imposait un aller-retour par point.
+            Flottant et repliable, il reste sous les yeux pendant qu'on édite. */}
         {phase === PHASE_RELECTURE && (
           // `key` force le recalcul sur le texte COURANT de l'editeur : le
           // decompte doit refleter les corrections au fur et a mesure.
-          // top 150 = barre du haut (62) + bloc stepper (pt-4 16 + carte ~66 +
-          // pb-3 12 ~ 94) : le panneau s'arrete juste sous lui. z-index sous le
-          // stepper, qui reste le repere principal.
-          <div className="sticky z-[80] px-6 pt-4" style={{ top: 150 }}>
-            <PhaseRelecture
-              key={relectureTick}
-              html={contentRef.current || agent.updatedContent || ''}
-              onRefresh={() => setRelectureTick((t) => t + 1)}
-              onAccept={handleAcceptStyleFix}
-              onLocate={handleLocateStyle}
-              onRunStyleFix={handleRunStyleFix}
-              styleFixRunning={styleFixRunning}
-              styleFixStep={styleFixStep}
-              aiProposals={styleAiProposals}
-            />
-          </div>
+          <PhaseRelecture
+            key={relectureTick}
+            html={contentRef.current || agent.updatedContent || ''}
+            onRefresh={() => setRelectureTick((t) => t + 1)}
+            onAccept={handleAcceptStyleFix}
+            onLocate={handleLocateStyle}
+            onRunStyleFix={handleRunStyleFix}
+            styleFixRunning={styleFixRunning}
+            styleFixStep={styleFixStep}
+            aiProposals={styleAiProposals}
+          />
         )}
         <div className="px-6 pt-4 space-y-4">
           {phase === PHASE_AUDIT && (
