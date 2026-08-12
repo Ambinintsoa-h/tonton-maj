@@ -280,10 +280,30 @@ const callWithLiveText = async ({ params, label, onStep, onReplace, onDelta, onP
  * Le contenu envoyé à l'IA est identique — seul l'ordre change. Les dates
  * interpolées dans le socle (`fr`, `cutoffIso`) ne changent qu'une fois par
  * jour : elles restent stables à l'échelle de vie d'un cache.
+ *
+ * TTL 1 HEURE plutôt que le défaut 5 minutes. Diagnostiqué en production par
+ * empreinte SHA-256 du socle : deux audits réels avaient un socle IDENTIQUE à
+ * l'octet, et pourtant chacun ÉCRIVAIT le cache sans jamais le LIRE. Cause :
+ * un audit n'est pas un appel isolé mais un PIPELINE (extraction de requêtes,
+ * recherche web, rédaction) qui dure souvent plus de 5 minutes de bout en
+ * bout — le TTL par défaut expirait avant même la fin du premier appel qui
+ * l'utilise.
+ *
+ * Le socle mis en cache est le SKILL SEUL (`buildSkillMethodBlock`), pas les
+ * règles d'équipe ni la base de connaissances : leur cadrage (« à auditer »
+ * en phase 1, « à appliquer » en phase 2) diffère légitimement d'une phase à
+ * l'autre, donc leurs octets ne coïncideraient jamais. Le skill, lui, est
+ * OCTET POUR OCTET le même en phase 1 et en phase 2 (runQatRewrite reprend le
+ * même `buildSkillMethodBlock(brainSkills)` en tête de son propre socle) :
+ * c'est la seule portion pour laquelle un partage entre phases a un sens, et
+ * c'est aussi la plus grosse (skill + ressources : ~19 000 caractères sur
+ * l'article de référence testé).
  */
 const buildAuditSystem = (brainSkills, skills, knowledge, brief) => {
   const { fr, cutoffIso } = getDateContext();
-  const socle = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill ci-dessous.
+  const socle = buildSkillMethodBlock(brainSkills);
+
+  const consigne = `Nous sommes le ${fr}. Tu es l'expert décrit par le skill fourni.
 
 Tu exécutes l'**ÉTAPE A — AUDIT** de ce skill, et RIEN d'autre : tu n'écris pas
 l'article, tu produis l'audit. Applique sa méthode et son schéma de sortie à la
@@ -296,8 +316,8 @@ vérifiée ou signalée dans freshness_checks.
 Renseigne IMPÉRATIVEMENT, en plus du reste : « ampleur » (la décision la plus
 structurante), « keyword_repositioning » (ou null) et « a_supprimer » (ou []).
 
-## ═══ SKILL PRINCIPAL — MÉTHODE & CRITÈRES (à appliquer intégralement) ═══
-${buildSkillMethodBlock(brainSkills)}${buildSkillsBlock(
+## ═══ RÈGLES COMPLÉMENTAIRES ═══
+${buildSkillsBlock(
     skills,
     'Règles éditées par l\'équipe dans le menu SKILLS IA. Vérifie chacune d\'elles et signale tout manquement dans priority_actions.',
     'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — À AUDITER AUSSI'
@@ -305,7 +325,8 @@ ${buildSkillMethodBlock(brainSkills)}${buildSkillsBlock(
 
   const briefTexte = String(brief || '').trim();
   return [
-    { type: 'text', text: socle, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: socle, cache_control: { type: 'ephemeral', ttl: '1h' } },
+    { type: 'text', text: consigne },
     ...(briefTexte ? [{ type: 'text', text: briefTexte }] : []),
   ];
 };
@@ -611,7 +632,25 @@ valables de l'ancien texte. Aucune tournure générique conservée.`;
     ? `\n⚠️ Le rédacteur a IMPOSÉ cette ampleur, différente de celle recommandée par l'audit (${audit?.ampleur?.decision || 'non renseignée'}). Respecte le choix du rédacteur.`
     : '';
 
-  const system = `Nous sommes le ${fr}. Tu es l'experte décrite par le skill ci-dessous.
+  // Prompt système en deux blocs pour le PROMPT CACHING.
+  //
+  // TTL 1 HEURE plutôt que le défaut 5 minutes : diagnostiqué en production, le
+  // cache ecrivait a chaque appel sans jamais etre lu. Cause reelle — confirmee
+  // par empreinte SHA-256 du bloc stable, identique entre deux audits reels et
+  // pourtant jamais relu : un audit complet est un PIPELINE de plusieurs
+  // appels (extraction de requetes, recherche web, redaction) qui dure souvent
+  // plus de 5 minutes de bout en bout. Le TTL par defaut expirait donc avant
+  // meme la fin du PREMIER appel qui l'utilise, et a fortiori avant le second.
+  // Le socle mis en cache est le SKILL SEUL (`buildSkillMethodBlock`),
+  // OCTET POUR OCTET identique à celui de l'audit (buildAuditSystem) — c'est
+  // ce qui permet une lecture de cache CROISEE entre phases, pas seulement
+  // entre relances d'un meme appel. Les regles d'equipe et la base de
+  // connaissances restent dans le bloc volatil : leur cadrage differe
+  // legitimement de l'audit (« a appliquer » ici, « a auditer » la-bas), donc
+  // leurs octets ne coincideraient jamais.
+  const socle = buildSkillMethodBlock(brainSkills);
+
+  const consigne = `Nous sommes le ${fr}. Tu es l'experte décrite par le skill fourni.
 
 Tu exécutes l'**ÉTAPE B — RÉFECTION** de ce skill. Applique intégralement la
 ressource « refonte-integrale.md » et les autres ressources (gabarits de
@@ -632,14 +671,19 @@ article_html : même href, même texte d'ancre. Un lien externe manquant fait
 REJETER toute la génération par le contrôle technique. Les seuls liens que tu
 ajoutes sont les liens INTERNES du brief.
 
-${brief}
-
-## ═══ SKILL PRINCIPAL — MÉTHODE & GABARITS (à appliquer intégralement) ═══
-${buildSkillMethodBlock(brainSkills)}${buildSkillsBlock(
+## ═══ RÈGLES COMPLÉMENTAIRES ═══
+${buildSkillsBlock(
     skills,
     'Règles éditées par l\'équipe dans le menu SKILLS IA — complémentaires à la méthode du skill principal.\nTu DOIS les respecter dans CHAQUE phrase écrite ou réécrite.',
     'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — OBLIGATOIRES'
-  )}${buildKnowledgeBlock(knowledge)}${instruction?.trim() ? `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instruction.trim().slice(0, 1500)}\nElle prime sur les règles générales, sauf le verrou liens externes.` : ''}`;
+  )}${buildKnowledgeBlock(knowledge)}
+
+${brief}${instruction?.trim() ? `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instruction.trim().slice(0, 1500)}\nElle prime sur les règles générales, sauf le verrou liens externes.` : ''}`;
+
+  const system = [
+    { type: 'text', text: socle, cache_control: { type: 'ephemeral', ttl: '1h' } },
+    { type: 'text', text: consigne },
+  ];
 
   // Même source de vérité que le verrou : le HTML. Sur le chemin scraping,
   // `content` est du texte brut sans balises <a> — l'envoyer au modèle le
