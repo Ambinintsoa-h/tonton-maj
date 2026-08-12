@@ -2,7 +2,7 @@
 // Sans repère, le rédacteur devait chercher le passage à l'œil dans 2 900 mots.
 // Exigence : ce qui n'est pas retrouvé est SIGNALÉ, jamais ignoré en silence.
 /* eslint-env jest */
-import { markSuggestions, MARK_CLASS } from './markSuggestions';
+import { markSuggestions, MARK_CLASS, MARK_CLASS_OK } from './markSuggestions';
 
 const ART = '<h2>Prix de la toiture</h2>'
   + '<p>Comptez 60 EUR le mètre carré en 2026.</p>'
@@ -102,6 +102,116 @@ describe('ce qui n\'est pas retrouvé est SIGNALÉ', () => {
     expect(r.marked).toEqual([2]);
     expect(r.missed).toEqual([1, 3]);
     expect(r.html).toContain('data-sugg="2"');
+  });
+});
+
+// Une suggestion acceptée doit se voir A GAUCHE, en vert : sinon le passage
+// traité restait surligné en rouge « à remplacer », impossible de distinguer ce
+// qui était fait de ce qui restait à arbitrer.
+describe('suggestions déjà appliquées (surlignage vert)', () => {
+  // Le texte de gauche est mis à jour en même temps (appliquerSuggestionObsolescence) :
+  // on cherche donc le NOUVEAU texte, pas l'ancien.
+  const APPLIQUE = '<h2>Prix de la toiture</h2>'
+    + '<p>Comptez 75 EUR le mètre carré en 2027.</p>'
+    + '<p>La pente minimale est de 5 % selon le DTU.</p>';
+  const SUGG = {
+    original: 'Comptez 60 EUR le mètre carré en 2026.',
+    updated: 'Comptez 75 EUR le mètre carré en 2027.',
+  };
+
+  test('le passage appliqué est repéré sur son NOUVEAU texte, en vert, même numéro', () => {
+    const r = markSuggestions(APPLIQUE, [SUGG], [0]);
+    expect(r.marked).toEqual([1]);
+    expect(r.missed).toEqual([]);
+    expect(r.html).toContain(MARK_CLASS_OK);
+    expect(r.html).toContain('data-sugg="1"');
+    expect(r.html).toContain('id="sugg-1"');
+  });
+
+  test('la classe rouge reste posée : elle porte la pastille et la garde anti-imbrication', () => {
+    const r = markSuggestions(APPLIQUE, [SUGG], [0]);
+    expect(r.html).toContain(`${MARK_CLASS} ${MARK_CLASS_OK}`);
+  });
+
+  // LE piège : sans la liste des appliquées, l'ancien texte est introuvable (il
+  // vient d'être remplacé) et l'écran criait « passage introuvable » sur la
+  // suggestion qu'on venait justement d'appliquer.
+  test('sans la liste des appliquées, la même suggestion partirait à tort dans missed', () => {
+    expect(markSuggestions(APPLIQUE, [SUGG]).missed).toEqual([1]);
+    expect(markSuggestions(APPLIQUE, [SUGG], [0]).missed).toEqual([]);
+  });
+
+  test('une appliquée introuvable des DEUX côtés ne déclenche AUCUNE alerte', () => {
+    const r = markSuggestions(ART, [{
+      original: 'Ancienne phrase absente de cet article.',
+      updated: 'Nouvelle phrase absente elle aussi.',
+    }], [0]);
+    expect(r.missed).toEqual([]);
+    expect(r.marked).toEqual([]);
+    expect(r.ajouts).toEqual([]);
+  });
+
+  // Le volet de gauche est un instantané figé : il arrive qu'il n'ait pas pu être
+  // réécrit (passage retouché à la main entre-temps). Le repère doit quand même
+  // passer au vert plutôt que de disparaître — sinon la suggestion traitée perd
+  // son numéro et redevient invisible.
+  test('repli sur l\'ancien texte quand l\'instantané n\'a pas pu être réécrit', () => {
+    const r = markSuggestions(ART, [SUGG], [0]);   // ART porte encore l'ANCIEN texte
+    expect(r.marked).toEqual([1]);
+    expect(r.missed).toEqual([]);
+    expect(r.html).toContain(MARK_CLASS_OK);
+    expect(r.html).toContain('data-sugg="1"');
+  });
+
+  test('le balisage de la suggestion n\'empêche pas de la retrouver', () => {
+    const r = markSuggestions(
+      '<p>Comptez 75 EUR le mètre carré en 2027.</p>',
+      [{ original: 'peu importe', updated: '<p>Comptez <strong>75 EUR</strong> le mètre carré en 2027.</p>' }],
+      [0],
+    );
+    expect(r.marked).toEqual([1]);
+    expect(r.html).toContain(MARK_CLASS_OK);
+  });
+
+  // Suppression pure : le passage a été retiré du texte. Il n'y a plus rien à
+  // repérer, et surtout rien à SIGNALER — ce n'est ni un ajout ni une anomalie.
+  test('appliquée sans texte de remplacement : ni ajout, ni anomalie', () => {
+    const r = markSuggestions(
+      '<p>La pente minimale est de 5 % selon le DTU.</p>',
+      [{ original: 'Comptez 60 EUR le mètre carré en 2026.' }],
+      [0],
+    );
+    expect(r.ajouts).toEqual([]);
+    expect(r.missed).toEqual([]);
+    expect(r.marked).toEqual([]);
+  });
+
+  test('appliquées et restantes cohabitent, chacune sa couleur et son numéro', () => {
+    const r = markSuggestions(APPLIQUE, [
+      SUGG,                                                        // appliquée → verte
+      { original: 'La pente minimale est de 5 % selon le DTU.' },  // à arbitrer → rouge
+    ], [0]);
+    expect(r.marked).toEqual([1, 2]);
+    expect(r.missed).toEqual([]);
+    expect((r.html.match(new RegExp(MARK_CLASS_OK, 'g')) || []).length).toBe(1);
+    expect(r.html).toContain('data-sugg="2"');
+  });
+
+  test('le repli au bloc marque aussi en vert', () => {
+    const r = markSuggestions(
+      '<p>Le prix atteint <strong>210 EUR</strong> le mètre carré posé.</p>',
+      [{ original: 'ancien', updated: 'Le prix atteint 210 EUR le mètre carré posé.' }],
+      [0],
+    );
+    expect(r.marked).toEqual([1]);
+    expect(r.html).toContain(MARK_CLASS_OK);
+    expect(r.html).toContain('<strong>210 EUR</strong>');   // le balisage interne survit
+  });
+
+  test('liste d\'appliquées dégénérée : comportement d\'origine, sans planter', () => {
+    const attendu = markSuggestions(ART, [{ original: 'Comptez 60 EUR le mètre carré en 2026.' }]);
+    expect(markSuggestions(ART, [{ original: 'Comptez 60 EUR le mètre carré en 2026.' }], null)).toEqual(attendu);
+    expect(markSuggestions(ART, [{ original: 'Comptez 60 EUR le mètre carré en 2026.' }], 'pas un tableau')).toEqual(attendu);
   });
 });
 

@@ -29,7 +29,7 @@ import {
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, tableBlockOf, unwrapTransparentDivs, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
 import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId,
-  setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport,
+  setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport, appliquerSuggestionObsolescence,
   setAuditJson, setAnalysis, setTargetKeyword } from '../../store/slices/agentSlice';
 import { runQatRewrite, runQatAudit } from '../../services/agentQat';
 import { runStyleFixAgent } from '../../services/agentStyle';
@@ -1531,6 +1531,9 @@ export default function ArticleResult() {
   // ── PHASE 4 — appliquer une correction de style acceptée ────────────────────
   // Remplacement DIRECT, sans marqueur de diff : le rédacteur vient de valider la
   // proposition, il n'a pas à la réarbitrer ensuite dans la vue diff.
+  // Renvoie `true` si le remplacement a bien eu lieu — la phase 3 s'en sert pour
+  // ne marquer « appliquée » qu'une suggestion réellement passée dans le texte.
+  // Les autres appelants ignorent la valeur : leur comportement est inchangé.
   const handleAcceptStyleFix = ({ avant, apres }) => {
     const el = articleRef.current;
     const src = el ? el.innerHTML : (contentRef.current || '');
@@ -1539,7 +1542,7 @@ export default function ArticleResult() {
       // lien), il n'apparaît pas tel quel dans le HTML. On le dit plutôt que de
       // ne rien faire en silence.
       toast.error('Passage introuvable tel quel — déjà modifié, ou coupé par du balisage. À corriger à la main.');
-      return;
+      return false;
     }
     const nouveau = src.replace(avant, apres);
     if (el) { el.innerHTML = nouveau; lockMedia(el); }
@@ -1548,7 +1551,31 @@ export default function ArticleResult() {
     triggerAutosave();
     setRelectureTick((t) => t + 1);   // le décompte se recalcule sur le texte corrigé
     toast.success('Correction appliquée.');
+    return true;
   };
+
+  // ── PHASE 3 — accepter une suggestion : l'éditeur ET le volet de gauche ─────
+  // handleAcceptStyleFix ne touche que l'éditeur (onglet « Après »). Le volet
+  // gauche de la phase 3 affiche un INSTANTANÉ figé (`texteVerifie`) : sans cette
+  // seconde écriture, le passage accepté y restait surligné en ROUGE « à
+  // remplacer », comme s'il restait à faire.
+  // L'ordre compte : si le remplacement échoue (passage introuvable dans
+  // l'éditeur), on ne marque RIEN — afficher en vert un passage jamais modifié
+  // serait pire que l'absence de retour.
+  const handleAcceptObsolescence = ({ avant, apres, index }) => {
+    if (!handleAcceptStyleFix({ avant, apres })) return;
+    // L'autosave déclenchée juste avant est différée d'une seconde et reconstruit
+    // le brouillon à ce moment-là : elle emportera donc ce rapport à jour.
+    dispatch(appliquerSuggestionObsolescence({ index, avant, apres }));
+  };
+
+  // Référence STABLE tant que le rapport ne change pas : `?? []` fabriquerait un
+  // tableau neuf à chaque rendu et ferait rejouer le repérage (analyse DOM de
+  // tout l'article) sur la moindre frappe.
+  const appliqueesObso = useMemo(
+    () => agent.obsolescenceReport?.appliquees || [],
+    [agent.obsolescenceReport],
+  );
 
   // ── PHASE 4 — corrections de style proposées par l'IA ───────────────────────
   // Un seul appel pour tout l'article (voir services/agentStyle.js) ; les
@@ -4208,6 +4235,7 @@ export default function ArticleResult() {
                  updatedContent pour les rapports enregistrés avant ce champ. */
               articleHtml={agent.obsolescenceReport?.texteVerifie || agent.updatedContent || ''}
               suggestions={verifSuggestions}
+              appliquees={appliqueesObso}
               running={verifRunning}
               step={verifStep}
               progress={verifProgress}
@@ -4218,9 +4246,10 @@ export default function ArticleResult() {
               onSaveTemplate={() => enregistrerModele('verification', verifPrompt, setSavingVerifTemplate)}
               savingTemplate={savingVerifTemplate}
               onRun={handleVerify}
-              // Même mécanique qu'en phase 4 : remplacement direct du passage,
-              // avec un message clair si le texte n'est pas retrouvé tel quel.
-              onAccept={handleAcceptStyleFix}
+              // Même mécanique qu'en phase 4 (remplacement direct, message clair
+              // si le texte n'est pas retrouvé), PLUS la répercussion du passage
+              // en vert dans le volet de gauche.
+              onAccept={handleAcceptObsolescence}
             />
           )}
         </div>

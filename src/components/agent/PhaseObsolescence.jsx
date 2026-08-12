@@ -12,7 +12,7 @@
  * mécanique de fusion réécrite.
  */
 import { useState, useMemo } from 'react';
-import { markSuggestions, MARK_CLASS } from '../../utils/markSuggestions';
+import { markSuggestions, MARK_CLASS, MARK_CLASS_OK } from '../../utils/markSuggestions';
 import { motion } from 'framer-motion';
 import {
   Clock, Loader2, Copy, Check, FileText, RotateCcw, Save, ArrowRight, AlertTriangle, X,
@@ -21,6 +21,10 @@ import {
 export default function PhaseObsolescence({
   articleHtml = '',
   suggestions = [],
+  // Index (0-based) des suggestions DÉJÀ acceptées — voir agentSlice. Persistées
+  // avec le rapport, donc elles survivent à un rechargement, contrairement à
+  // `traitees` qui n'est qu'un filtre de session.
+  appliquees = [],
   running = false,
   step = '',
   progress = 0,
@@ -46,14 +50,25 @@ export default function PhaseObsolescence({
   // Repères visuels : chaque passage à remplacer est surligné en rouge dans
   // l'article de gauche et porte LE MÊME numéro que dans la liste de droite.
   // Sans ça, le rédacteur cherchait le passage à l'œil dans près de 3 000 mots.
-  const vue = useMemo(() => markSuggestions(articleHtml, suggestions), [articleHtml, suggestions]);
+  // Les passages acceptés passent au VERT (sur leur nouveau texte) : ce qui est
+  // traité se distingue alors d'un coup d'œil de ce qui reste à arbitrer.
+  const vue = useMemo(
+    () => markSuggestions(articleHtml, suggestions, appliquees),
+    [articleHtml, suggestions, appliquees],
+  );
+  // Combien de repères sont déjà en vert — annoncé à côté du décompte rouge.
+  const nbAppliques = vue.marked.filter((n) => appliquees.includes(n - 1)).length;
 
   const allerAuRepere = (num) => {
     const el = document.getElementById(`sugg-${num}`);
     if (!el) return;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.style.transition = 'box-shadow .2s';
-    el.style.boxShadow = '0 0 0 3px rgba(239,68,68,.45)';
+    // Halo de la même couleur que le repère : rouge tant qu'il reste à traiter,
+    // vert une fois appliqué — sinon le flash contredisait le surlignage.
+    el.style.boxShadow = el.classList.contains(MARK_CLASS_OK)
+      ? '0 0 0 3px rgba(16,185,129,.45)'
+      : '0 0 0 3px rgba(239,68,68,.45)';
     setTimeout(() => { el.style.boxShadow = ''; }, 1400);
   };
 
@@ -150,6 +165,15 @@ export default function PhaseObsolescence({
                 border-radius: 999px; background: #ef4444; color: #fff;
                 font-size: 9px; font-weight: 700; line-height: 1; vertical-align: 1px;
               }
+              /* Suggestion ACCEPTÉE : même repère, même numéro, mais en vert.
+                 Posée APRÈS la règle rouge et à specificité égale — c'est elle
+                 qui gagne, sans !important. Les deux classes cohabitent sur
+                 l'élément : la rouge continue de porter la pastille. */
+              .${MARK_CLASS_OK} {
+                background: rgba(16,185,129,.14);
+                box-shadow: inset 0 -2px 0 rgba(16,185,129,.55);
+              }
+              .${MARK_CLASS_OK}::before { background: #10b981; }
             `}</style>
             <h4 className="text-xs font-semibold text-gray-700 flex items-center justify-between gap-1.5">
               <span className="flex items-center gap-1.5">
@@ -157,8 +181,15 @@ export default function PhaseObsolescence({
                 Article issu de la phase 2
               </span>
               {vue.marked.length > 0 && (
-                <span className="text-[10px] font-medium text-red-600">
-                  {vue.marked.length} passage(s) repéré(s)
+                <span className="text-[10px] font-medium flex items-center gap-1.5">
+                  <span className="text-red-600">
+                    {vue.marked.length - nbAppliques} à traiter
+                  </span>
+                  {/* Ce qui est fait est ANNONCÉ : le rédacteur voit son avancement
+                      sans recompter les surlignages verts un par un. */}
+                  {nbAppliques > 0 && (
+                    <span className="text-emerald-600">{nbAppliques} appliquée(s)</span>
+                  )}
                 </span>
               )}
             </h4>
@@ -199,7 +230,11 @@ export default function PhaseObsolescence({
               <div className="space-y-2.5 max-h-[70vh] overflow-y-auto pr-1">
                 {suggestions.map((s, i) => {
                   const cle = `s${i}`;
-                  if (traitees.includes(cle)) return null;   // arbitrée : on la retire
+                  // Arbitrée : on la retire. `appliquees` prend le relais de
+                  // `traitees` après un rechargement — sinon une suggestion déjà
+                  // appliquée revenait avec son bouton « Accepter », qui ne
+                  // pouvait que retomber sur « passage introuvable ».
+                  if (traitees.includes(cle) || appliquees.includes(i)) return null;
                   const nouveau = s.updated || '';
                   return (
                     <div key={i} className="rounded-xl border border-gray-200 overflow-hidden">
@@ -254,7 +289,9 @@ export default function PhaseObsolescence({
                           {s.original && onAccept && (
                             <button
                               type="button"
-                              onClick={() => { onAccept({ avant: s.original, apres: nouveau }); setTraitees((l) => [...l, cle]); }}
+                              // L'index part avec : c'est lui qui permet au volet
+                              // de gauche de repasser CE passage-là en vert.
+                              onClick={() => { onAccept({ avant: s.original, apres: nouveau, index: i }); setTraitees((l) => [...l, cle]); }}
                               title="Remplacer le passage dans l'article"
                               className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-semibold hover:bg-emerald-700 transition-colors flex-shrink-0"
                             >
