@@ -1942,6 +1942,23 @@ const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, rejec
         if (res.statusCode !== 200) return reject(new Error(json.error?.message || `HTTP ${res.statusCode}`));
         const text = json.content?.[0]?.text || '';
         const usage = json.usage || {};
+        // ── DIAGNOSTIC TEMPORAIRE — prompt caching ────────────────────────────
+        // Le client envoie bien `system` en deux blocs avec `cache_control`
+        // (capture reseau a l'appui), et un test controle sur ce meme endpoint a
+        // mis 4081 tokens en cache. Pourtant les audits reels ne cachent rien.
+        // On journalise donc ce que le serveur envoie REELLEMENT, au moment de
+        // l'envoi, plutot que de continuer a deviner. A retirer une fois la
+        // cause identifiee.
+        const s = requestBody.system;
+        usage.__debug = {
+          systemType: Array.isArray(s) ? 'array' : typeof s,
+          blocs: Array.isArray(s) ? s.length : null,
+          b0Len: Array.isArray(s) && s[0] ? String(s[0].text || '').length : (typeof s === 'string' ? s.length : null),
+          b0Cc: Array.isArray(s) && s[0] ? JSON.stringify(s[0].cache_control || null) : null,
+          modelEnvoye: requestBody.model,
+        };
+        console.log('[cache-debug]', JSON.stringify(usage.__debug), '→ usage',
+          JSON.stringify({ i: usage.input_tokens, w: usage.cache_creation_input_tokens, r: usage.cache_read_input_tokens }));
         resolve({ text, modelUsed: json.model || bodyObj.model, usage });
       } catch (e) { reject(new Error('Réponse API invalide')); }
     });
@@ -2026,6 +2043,18 @@ const callWithModelCascade = async (token, bodyObj) => {
       // Extraire text + usage depuis la réponse complète
       const text = result.content?.[0]?.text || '';
       const usage = result.usage || {};
+      // DIAGNOSTIC TEMPORAIRE — voie OAuth (voir le bloc jumeau plus haut).
+      const sO = bodyObj.system;
+      usage.__debug = {
+        voie: 'oauth',
+        systemType: Array.isArray(sO) ? 'array' : typeof sO,
+        blocs: Array.isArray(sO) ? sO.length : null,
+        b0Len: Array.isArray(sO) && sO[0] ? String(sO[0].text || '').length : (typeof sO === 'string' ? sO.length : null),
+        b0Cc: Array.isArray(sO) && sO[0] ? JSON.stringify(sO[0].cache_control || null) : null,
+        modelEnvoye: model,
+      };
+      console.log('[cache-debug oauth]', JSON.stringify(usage.__debug), '→ usage',
+        JSON.stringify({ i: usage.input_tokens, w: usage.cache_creation_input_tokens, r: usage.cache_read_input_tokens }));
       if (model !== requestedModel) {
         console.log(`[proxy] Cascade : ${requestedModel} → ${model} (utilisé)`);
       } else {

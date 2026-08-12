@@ -760,6 +760,9 @@ export const makeTokenTracker = () => {
       output: usage.output_tokens || 0,
       cacheWrite: usage.cache_creation_input_tokens || 0,
       cacheRead: usage.cache_read_input_tokens || 0,
+      // DIAGNOSTIC TEMPORAIRE : ce que le proxy a REELLEMENT envoye a l'API.
+      // A retirer avec le bloc correspondant dans proxy.js.
+      debug: usage.__debug || null,
     });
   };
   return { acc, track };
