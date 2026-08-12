@@ -30,7 +30,7 @@ import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive,
 import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId,
   setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport,
-  setAuditJson, setAnalysis } from '../../store/slices/agentSlice';
+  setAuditJson, setAnalysis, setTargetKeyword } from '../../store/slices/agentSlice';
 import { runQatRewrite, runQatAudit } from '../../services/agentQat';
 import { runStyleFixAgent } from '../../services/agentStyle';
 import {
@@ -1696,6 +1696,29 @@ export default function ArticleResult() {
     || phaseStatus[PHASE_OBSOLESCENCE] === DONE
     || !!agent.qatArticle;
 
+  // ── Prerequis de l'audit : TITRE + MOT-CLE CIBLE ──────────────────────────
+  // L'audit confronte le H1 a l'intention de recherche : sans mot-cle il n'a pas
+  // de cible, sans titre rien a juger — et runQatAudit accepte les deux vides.
+  //
+  // Le mot-cle n'est PAS saisissable dans l'editeur : il vient du lancement
+  // (agent.targetKeyword), qu'aucune reouverture de review ne redispatche. On
+  // retombe donc sur le document lui-meme, avec les MEMES replis que la
+  // publication SEO plus bas (focusKw) : sans eux, « Relancer l'audit » serait
+  // grise a tort sur toute review rouverte depuis la file ou l'historique.
+  const motCleAudit = (agent.targetKeyword || currentArticle?.keyword || cqItem?.keyword || '').trim();
+  // Le titre, lui, EST saisissable ici (champ « Titre de l'article ») et se
+  // preremplit du titre WP puis du H1 : on exige seulement qu'il ne soit pas vide.
+  const titreAudit = (editedTitle || extractH1FromHtml(agent.originalContent) || '').trim();
+  // Article d'origine absent (HTML introuvable a la reouverture) : ne PAS parler
+  // de titre manquant — c'en est la consequence, pas la cause. Le bouton reste
+  // actif pour que handleAudit affiche le vrai diagnostic (« Article d'origine
+  // introuvable »), seul message sur lequel l'utilisateur peut agir.
+  const contenuOrigine = (agent.originalContent || '').trim();
+  const champsManquantsAudit = [
+    ...(contenuOrigine && !titreAudit ? ['titre'] : []),
+    ...(!motCleAudit ? ['mot-clé cible'] : []),
+  ];
+
   const handleAudit = async () => {
     // L'audit porte sur la version EN LIGNE, jamais sur le texte en cours
     // d'edition : c'est tout son objet. Le contenu a deja ete nettoye a
@@ -1703,6 +1726,11 @@ export default function ArticleResult() {
     const source = agent.originalContent || '';
     if (!source.trim()) {
       toast.error('Article d\'origine introuvable — rouvrez-le depuis « MAJ en attente ».');
+      return;
+    }
+    // Second rideau derriere le bouton desactive de PhaseAudit.
+    if (champsManquantsAudit.length) {
+      toast.error(`Audit impossible — ${champsManquantsAudit.join(' et ')} manquant${champsManquantsAudit.length > 1 ? 's' : ''}`);
       return;
     }
     const brief = currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {};
@@ -1717,7 +1745,10 @@ export default function ArticleResult() {
         skills,
         knowledge,
         articleUrl,
-        targetKeyword:  agent.targetKeyword || '',
+        // Le mot-cle VERIFIE non vide juste au-dessus, replis compris : envoyer
+        // `agent.targetKeyword` seul auditait sans cible toute review rouverte
+        // depuis la file ou l'historique, alors que la ligne porte le mot-cle.
+        targetKeyword:  motCleAudit,
         articleType:    brief.articleType,
         seoPlugin:      brief.seoPlugin,
         targetWords:    brief.targetWords,
@@ -4140,6 +4171,15 @@ export default function ArticleResult() {
               step={auditStep}
               progress={auditProgress}
               travailEnAval={travailEnAval}
+              champsManquants={champsManquantsAudit}
+              // Le mot-cle cible se saisit dans le panneau quand il manque : c'est
+              // la SEULE porte de sortie ici (aucun champ de l'editeur ne le porte)
+              // pour les articles rouverts sans mot-cle archive. Meme valeur que
+              // celle lue par motCleAudit et par le focus keyphrase a la publication.
+              onMotCleChange={(mc) => {
+                dispatch(setTargetKeyword(mc));
+                toast.success('Mot-clé cible enregistré — l\'audit peut être lancé');
+              }}
             />
           )}
           {phase === PHASE_GENERATION && (

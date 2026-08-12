@@ -287,9 +287,14 @@ function PendingSync() {
   const writeTimer = useRef(null);
 
   // Signature « métier » stable (ignore le HTML/ordre) : ce qui définit la file.
+  // `keyword` en fait partie depuis qu'il conditionne le lancement d'une MAJ :
+  // hors signature, la complétion d'un mot-clé sur une ligne déjà en file ne
+  // divergeait « pas » du serveur → aucune écriture, et le poll suivant (6 s)
+  // rendait la liste serveur SANS le mot-clé, effaçant la saisie et regrisant le
+  // bouton. Un champ ajouté ici ne peut que déclencher une écriture légitime.
   const sigOf = (list) => JSON.stringify(
     (list || [])
-      .map(i => [String(i.id), i.status || '', i.assigneeId || '', i.priority || '', i.title || '', i.url || ''])
+      .map(i => [String(i.id), i.status || '', i.assigneeId || '', i.priority || '', i.title || '', i.url || '', i.keyword || ''])
       .sort((a, b) => (a[0] < b[0] ? -1 : 1)),
   );
 
