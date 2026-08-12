@@ -1513,6 +1513,21 @@ export default function ArticleResult() {
   // appliquée, le nombre de mots) reste visible sur la ligne d'en-tête.
   const [ampleurDepliee, setAmpleurDepliee] = useState(false);
 
+  // ── Repérage des liens dans « Après » ──────────────────────────────────────
+  // Surlignage 100 % CSS (`:has()`), jamais de balise injectée dans l'éditeur :
+  // le HTML de l'article reste strictement intact, donc aucun risque qu'un
+  // marquage parte en publication (règle 8). En contrepartie, CSS ne sait
+  // cibler qu'un BLOC : c'est le paragraphe porteur qui est teinté, pas la
+  // phrase isolée — le lien lui-même est souligné pour pointer l'endroit exact.
+  const [reperesLiens, setReperesLiens] = useState(true);
+  // Domaine du site, pour séparer lien INTERNE et lien EXTERNE. Sans URL
+  // exploitable on ne devine rien : on s'abstient de teinter en « interne »
+  // plutôt que de colorier faux (un `[href*=""]` matcherait TOUT).
+  const siteHost = useMemo(() => {
+    try { return new URL(agent.wpData?.link || articleUrl).hostname.replace(/^www\./, ''); }
+    catch { return ''; }
+  }, [agent.wpData, articleUrl]);
+
   // ── PHASE 4 — appliquer une correction de style acceptée ────────────────────
   // Remplacement DIRECT, sans marqueur de diff : le rédacteur vient de valider la
   // proposition, il n'a pas à la réarbitrer ensuite dans la vue diff.
@@ -4288,6 +4303,61 @@ export default function ArticleResult() {
               initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}
               className="p-5 space-y-3"
             >
+              {/* ── Repérage des liens : teinte le BLOC porteur, sans toucher au HTML ── */}
+              {hasContent && (
+                <>
+                  <style>{`
+                    .liens-reperes :is(p,li,h2,h3,h4,td,blockquote):has(a[href]) {
+                      background: rgba(245,158,11,.13);
+                      box-shadow: inset 3px 0 0 rgba(245,158,11,.65);
+                      border-radius: 3px;
+                    }
+                    ${siteHost ? `
+                    .liens-reperes :is(p,li,h2,h3,h4,td,blockquote):has(a[href*="${siteHost}"]),
+                    .liens-reperes :is(p,li,h2,h3,h4,td,blockquote):has(a[href^="/"]) {
+                      background: rgba(16,185,129,.13);
+                      box-shadow: inset 3px 0 0 rgba(16,185,129,.65);
+                    }
+                    /* Un bloc qui porte AUSSI un lien externe repasse en ambre :
+                       c'est le point à surveiller, il ne doit pas être masqué par
+                       un lien interne présent dans le même paragraphe. */
+                    .liens-reperes :is(p,li,h2,h3,h4,td,blockquote):has(a[href^="http"]:not([href*="${siteHost}"])) {
+                      background: rgba(245,158,11,.13);
+                      box-shadow: inset 3px 0 0 rgba(245,158,11,.65);
+                    }` : ''}
+                    .liens-reperes a[href] { text-decoration-thickness: 2px; text-underline-offset: 2px; }
+                  `}</style>
+                  <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-2 text-xs flex-wrap">
+                    <Link size={14} className="shrink-0 text-gray-400" />
+                    <span className="text-[11px] font-medium text-gray-500 shrink-0">Repérer les liens</span>
+                    <button
+                      type="button"
+                      onClick={() => setReperesLiens((v) => !v)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-semibold transition-colors ${
+                        reperesLiens ? 'bg-black text-white' : 'bg-gray-100 text-gray-500 hover:text-gray-800'
+                      }`}
+                    >
+                      {reperesLiens ? 'Affiché' : 'Masqué'}
+                    </button>
+                    {reperesLiens && (
+                      <span className="flex items-center gap-3 text-[10px] text-gray-500 flex-wrap">
+                        {siteHost && (
+                          <span className="flex items-center gap-1">
+                            <span className="inline-block w-3 h-3 rounded" style={{ background: 'rgba(16,185,129,.35)' }} />
+                            lien interne
+                          </span>
+                        )}
+                        <span className="flex items-center gap-1">
+                          <span className="inline-block w-3 h-3 rounded" style={{ background: 'rgba(245,158,11,.35)' }} />
+                          {siteHost ? 'lien externe' : 'lien (domaine du site inconnu)'}
+                        </span>
+                        <span className="text-gray-400">le bloc porteur est teinté, le lien souligné</span>
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+
               {/* ── Champ titre — au-dessus de l'image à la une ─────────────── */}
               {(cqItem || agent.currentArticleId) && (
                 <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-xs">
@@ -4654,7 +4724,7 @@ export default function ArticleResult() {
                       {/* Contenu diff */}
                       <div
                         ref={setArticleRef}
-                        className="article-diff-content md-content text-sm leading-loose p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px] focus:outline-none focus:ring-2 focus:ring-black/10"
+                        className={`article-diff-content md-content text-sm leading-loose p-6 bg-white rounded-xl border border-gray-200 shadow-sm min-h-[300px] focus:outline-none focus:ring-2 focus:ring-black/10${reperesLiens ? ' liens-reperes' : ''}`}
                         onInput={handleInput}
                         onPaste={handlePaste}
                         onDragOver={(e) => {
