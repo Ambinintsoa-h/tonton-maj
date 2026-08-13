@@ -26,6 +26,33 @@ export const stripParasiticFontSize = (root) => {
   });
 };
 
+// ── R3 — DOFOLLOW : aucun lien publié ne doit bloquer le suivi des moteurs ───
+// Jetons rel qui bloquent le suivi et qui sont donc RETIRÉS : "nofollow", "ugc".
+// Jetons CONSERVÉS, volontairement :
+//   • "sponsored" — exigence Google sur les liens payants/affiliés. Le retirer
+//     exposerait le site à une pénalité manuelle : on ne le touche jamais.
+//   • "noopener" / "noreferrer" — garde-fous navigateur, PAS des directives de
+//     suivi. Les verrous liens externes attendent d'ailleurs rel="noopener" à
+//     l'identique (externalLinks.test.js, sanitizeFullArticle.test.js).
+//   • tout autre jeton (me, author, tag, alternate…) — hors du périmètre R3.
+// L'attribut rel est SUPPRIMÉ s'il ne reste plus aucun jeton.
+// Si rien n'est à retirer, l'attribut n'est PAS réécrit : casse, ordre et
+// espacement d'origine restent intacts (aucune churn sur le HTML publié).
+// Ne cible QUE les <a> : le rel d'un <link> (stylesheet, canonical…) est
+// structurant et n'a rien à voir avec le suivi des liens de contenu.
+const FOLLOW_BLOCKERS = new Set(['nofollow', 'ugc']);
+
+export const stripFollowBlockers = (root) => {
+  if (!root || typeof root.querySelectorAll !== 'function') return;
+  root.querySelectorAll('a[rel]').forEach((a) => {
+    const tokens = (a.getAttribute('rel') || '').split(/\s+/).filter(Boolean);
+    const kept = tokens.filter((t) => !FOLLOW_BLOCKERS.has(t.toLowerCase()));
+    if (kept.length === tokens.length) return;
+    if (kept.length === 0) a.removeAttribute('rel');
+    else a.setAttribute('rel', kept.join(' '));
+  });
+};
+
 // Convertit les sections FAQ au format h2/h3/p → <details>/<summary> pour WordPress.
 // Les sections déjà en <details>/<summary> (générées par l'IA) sont ignorées.
 // WordPress ≥ 5.9 préserve <details>/<summary> via wp_kses_post : comportement accordéon
@@ -297,6 +324,14 @@ export const exportAsHtml = (content) => {
       }
     }
   });
+
+  // R3 — DOFOLLOW : dernier filet avant publication. exportAsHtml est le point de
+  // passage OBLIGATOIRE et UNIQUE de tout ce qui sort (publication REST, export
+  // fichier, markdown) : cette passe couvre donc AUSSI les chemins d'écriture qui
+  // contournent les verrous amont (phases 3 et 4 d'obsolescence/relecture,
+  // "Appliquer" une suggestion en attente, collage, lien posé à la main).
+  // Un rel="nofollow" collé par un rédacteur est retiré ici, quoi qu'il arrive.
+  stripFollowBlockers(div);
 
   // Filet de sécurité regex — élimine tout résidu <del>/<mark>/<ins> non capturé par le DOM
   let html = div.innerHTML;
