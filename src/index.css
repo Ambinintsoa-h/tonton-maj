@@ -247,6 +247,30 @@ body {
   background-color: rgba(255, 126, 71, 0.50);
 }
 
+/* Clause RÉDIGÉE PAR LE CODE pour placer un lien interne du brief dont l'ancre
+   n'apparaissait nulle part (R2, src/utils/internalWeave.js).
+   C'est la CONTREPARTIE du forçage à 100 % : le rédacteur doit repérer d'un coup
+   d'œil le texte qu'il n'a pas écrit, et le reformuler. La classe était posée par
+   le code sans qu'aucune règle CSS existe — donc invisible, donc la contrepartie
+   n'était pas livrée. L'orange est déjà pris par les liens internes SUGGÉRÉS
+   (.il-highlight) : on prend le jaune + un soulignement pointillé, qui ne se
+   confond avec rien d'autre dans l'éditeur.
+   Rappel : cette marque est débalisée par exportAsHtml — elle ne part JAMAIS sur
+   le site ; le lien, lui, reste. */
+.lien-redige {
+  background-color: rgba(250, 204, 21, 0.35);   /* jaune ambre */
+  border-bottom: 2px dotted #b45309;
+  border-radius: 3px;
+  padding: 0 2px;
+  cursor: help;
+}
+/* Pas de ::before décoratif : ce texte vit dans un contenteditable, où un
+   pseudo-élément perturbe le placement du caret. Le fond + le pointillé suffisent
+   à repérer la clause, et c'est exactement le procédé de .il-highlight, éprouvé. */
+.lien-redige:hover {
+  background-color: rgba(250, 204, 21, 0.55);
+}
+
 /* Skills editor */
 .skill-editor-preview { line-height: 1.7; }
 .skill-editor-preview h1, .skill-editor-preview h2, .skill-editor-preview h3 {

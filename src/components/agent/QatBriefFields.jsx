@@ -7,6 +7,7 @@ import { FileText, Plug, Ruler, Link2, Plus, X as XIcon, AlertCircle } from 'luc
 import {
   ARTICLE_TYPES, SEO_PLUGINS, TARGET_WORDS_MIN, TARGET_WORDS_MAX,
   INTERNAL_LINK_ROWS_MAX, emptyLinkRow, cleanLinkRows,
+  offDomainLinkRows, unverifiableLinkRows,
 } from '../../constants/majMode';
 
 const Segmented = ({ options, value, onChange }) => (
@@ -32,8 +33,14 @@ const QatBriefFields = ({
   targetWords, setTargetWords,
   linkRows, setLinkRows,
   hasBrainSkill = true,
+  articleUrl = '',
 }) => {
   const filled = cleanLinkRows(linkRows).length;
+  // Le code PLACE lui-même ces liens depuis R2 : une URL hors domaine deviendrait
+  // un lien EXTERNE ajouté (règle 8), donc elle est écartée. Autant le dire ICI,
+  // pendant la saisie, plutôt qu'après une MAJ payée.
+  const horsDomaine = offDomainLinkRows(linkRows, articleUrl);
+  const nonVerifiables = unverifiableLinkRows(linkRows, articleUrl);
 
   const setRow = (i, patch) =>
     setLinkRows(rows => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -148,10 +155,33 @@ const QatBriefFields = ({
           </button>
         )}
 
+        {horsDomaine.length > 0 && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-[11px] text-red-700">
+            <AlertCircle size={13} className="shrink-0 mt-0.5" />
+            <span>
+              {horsDomaine.length} URL hors du domaine de l'article — elle{horsDomaine.length > 1 ? 's' : ''} sera
+              {horsDomaine.length > 1 ? 'ont' : ''} ÉCARTÉE{horsDomaine.length > 1 ? 'S' : ''} : le maillage interne ne
+              doit jamais ajouter de lien externe. {horsDomaine.map(r => r.url).join(', ')}
+            </span>
+          </div>
+        )}
+
+        {nonVerifiables.length > 0 && (
+          <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-[11px] text-amber-700">
+            <AlertCircle size={13} className="shrink-0 mt-0.5" />
+            <span>
+              Aucune URL d'article n'est renseignée (contenu collé) : une URL absolue ne peut alors être ni vérifiée ni
+              placée — le verrou liens externes la retirerait. Saisissez un chemin relatif (<code>/ma-page</code>) pour
+              ces {nonVerifiables.length} paire(s).
+            </span>
+          </div>
+        )}
+
         <p className="text-[11px] text-gray-400">
-          Ce sont les seuls liens que l'IA ajoutera : une ancre dans l'introduction, puis une par H2
-          différent, jamais dans un titre, le TL;DR, un tableau ou la FAQ. Les liens externes de
-          l'article d'origine sont conservés à l'identique et aucun n'est ajouté.
+          Toutes ces paires sont placées : celles que l'IA n'intègre pas d'elle-même, le code les place — en écrivant
+          au besoin une courte phrase, surlignée en jaune dans l'éditeur pour que vous la reformuliez. Jamais dans un
+          titre, le TL;DR, un tableau ou la FAQ. Les liens externes de l'article d'origine sont conservés à l'identique
+          et aucun n'est ajouté.
         </p>
       </div>
     </motion.div>

@@ -147,6 +147,65 @@ describe('carryOverInternalLinks — reprise des liens internes de l\'original',
     expect(r.missing).toEqual([{ href: '/prix', text: 'nos prix' }]);
   });
 
+  // ── EMPLACEMENTS : R1 respecte les MÊMES interdits que le maillage ───────────
+  // La version d'origine n'excluait que « déjà lié » et « <del> » : elle reposait
+  // donc les liens dans les tableaux, la FAQ, les titres, le TL;DR, le sommaire et
+  // les CITATIONS — tout ce que la règle affichée au rédacteur interdit, et ce que
+  // R2 s'interdisait déjà de son côté. Interdits partagés : src/utils/linkZones.js.
+  test('ancre présente UNIQUEMENT dans un titre → rien n\'est posé, seulement signalé', () => {
+    const original  = '<p>Voir <a href="/prix">nos prix</a>.</p>';
+    const rewritten = '<h2>Découvrez nos prix</h2><p>Comptez 55 €/m² pose comprise.</p>';
+    const r = carryOverInternalLinks(original, rewritten, ARTICLE_URL);
+    expect(r.html).toBe(rewritten);
+    expect(r.missing).toEqual([{ href: '/prix', text: 'nos prix' }]);
+  });
+
+  test('ancre présente UNIQUEMENT dans une CITATION → rien n\'est posé', () => {
+    const original  = '<p>Voir <a href="/prix">nos prix</a>.</p>';
+    const rewritten = '<blockquote><p>Vos nos prix sont scandaleux, dit-il.</p></blockquote>';
+    const r = carryOverInternalLinks(original, rewritten, ARTICLE_URL);
+    expect(r.html).toBe(rewritten);
+    expect(r.missing).toHaveLength(1);
+  });
+
+  test('ancre présente UNIQUEMENT dans la FAQ ou le TL;DR → rien n\'est posé', () => {
+    const original  = '<p>Voir <a href="/prix">nos prix</a>.</p>';
+    ['FAQ', 'Résumé de l\'article', 'Sommaire'].forEach((titre) => {
+      const rewritten = `<h2>${titre}</h2><p>Tout sur nos prix.</p>`;
+      const r = carryOverInternalLinks(original, rewritten, ARTICLE_URL);
+      expect(r.html).toBe(rewritten);
+      expect(r.missing).toHaveLength(1);
+    });
+  });
+
+  test('un TABLEAU reste un repli acceptable pour une REPRISE (le lien existait avant)', () => {
+    // Nuance volontaire : un lien PRÉEXISTANT a très bien pu vivre dans une
+    // cellule, et le perdre serait pire que de le remettre là où son texte est.
+    // Un lien NOUVEAU (maillage, R2) n'a pas ce droit.
+    const original  = '<p>Voir <a href="/prix">nos prix</a>.</p>';
+    const rewritten = '<table><tbody><tr><td>Grille : nos prix 2026</td></tr></tbody></table>';
+    const r = carryOverInternalLinks(original, rewritten, ARTICLE_URL);
+    expect(r.html).toContain('<a href="/prix">nos prix</a>');
+    expect(r.missing).toEqual([]);
+  });
+
+  test('le CORPS est préféré au tableau quand les deux portent l\'ancre', () => {
+    const original  = '<p><a href="/prix">nos prix</a></p>';
+    const rewritten = '<table><tbody><tr><td>nos prix</td></tr></tbody></table><p>Détail de nos prix pour 2026.</p>';
+    const r = carryOverInternalLinks(original, rewritten, ARTICLE_URL);
+    expect(r.html).toContain('<td>nos prix</td>');                       // cellule intacte
+    expect(r.html).toContain('Détail de <a href="/prix">nos prix</a>');   // posé dans le corps
+  });
+
+  test('href protocol-relative d\'un AUTRE domaine n\'est pas « interne » (règle 8)', () => {
+    const original  = '<p>Voir <a href="//evil.com/x">la page</a>.</p>';
+    const rewritten = '<p>Voir la page pour le détail.</p>';
+    const r = carryOverInternalLinks(original, rewritten, ARTICLE_URL);
+    expect(r.html).toBe(rewritten);          // hors périmètre de R1
+    expect(r.restored).toEqual([]);
+    expect(listInternalLinks(original, ARTICLE_URL)).toEqual([]);
+  });
+
   test('lien EXTERNE perdu → hors périmètre de R1 (le verrou règle 8 s\'en charge seul)', () => {
     const original  = '<p>Voir <a href="https://ademe.fr/guide">le guide</a>.</p>';
     const rewritten = '<p>Texte réécrit.</p>';

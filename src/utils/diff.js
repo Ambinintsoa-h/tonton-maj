@@ -1,5 +1,11 @@
 // ── Utilitaires de diff partagés entre Articles.jsx et ArticleResult.jsx ────
 
+// Emplacements interdits à un lien posé par du code (R1 ici, R2 dans
+// internalWeave.js) — règle écrite une seule fois, cf. src/utils/linkZones.js.
+import {
+  NEVER_LINK_TAG_SEL, TABLE_SEL, forbiddenLinkZones, isInForbiddenLinkZone,
+} from './linkZones';
+
 export const normalizeText = (str) =>
   str
     .replace(/ /g, " ")
@@ -960,12 +966,26 @@ const hostOf = (href) => {
  * ce serait un lien EXTERNE injecté par la feature maillage (violation de la
  * règle absolue). Sans URL d'article connue, seuls les chemins relatifs et
  * ancres passent — protection maximale, même philosophie que le verrou.
+ *
+ * ⚠️ RÈGLE 8 — les URL PROTOCOL-RELATIVE (`//autre-site.fr/page`) sont traitées
+ * comme des URL ABSOLUES, et non comme des chemins relatifs. Un `^[/#]` naïf les
+ * acceptait comme « même site » : le navigateur, lui, résout `//evil.com/x` en
+ * `https://evil.com/x`. Tant que ces paires ne nourrissaient qu'un prompt, le
+ * verrou aval désenveloppait ce que l'IA en aurait fait ; depuis R2 c'est le CODE
+ * qui pose le lien, donc une URL protocol-relative hors domaine devenait un LIEN
+ * EXTERNE DOFOLLOW AJOUTÉ PAR NOUS. Vecteur confirmé par exécution en relecture,
+ * fermé ici, au seul endroit que traversent les deux chemins (prompt et
+ * placement). C'est un RENFORCEMENT du verrou, jamais un assouplissement.
  */
 export const filterSameSiteLinks = (links = [], articleUrl = '') => {
   const articleHost = articleUrl ? hostOf(articleUrl) : null;
   return (links || []).filter((l) => {
     const u = String(l?.url || '').trim();
     if (!u) return false;
+    if (/^\/\/[^/]/.test(u)) {                            // `//host/...` = absolu déguisé
+      const ph = hostOf(`https:${u}`);
+      return !!articleHost && !!ph && ph === articleHost;
+    }
     if (!/^https?:\/\//i.test(u)) return /^[/#]/.test(u); // relatif ou ancre = même site ; mailto:/javascript: rejetés
     const h = hostOf(u);
     return !!articleHost && !!h && h === articleHost;
@@ -1318,8 +1338,12 @@ const isInternalHref = (href, articleHost) => {
   const h = String(href || '').trim();
   if (!h) return false;
   if (h.startsWith('#')) return false;                       // ancre locale du sommaire
-  if (/^\/\/[^/]/.test(h)) {                                 // protocol-relative
-    const host = hostOf(`https:${h}`);
+  // Protocol-relative, dans ses DEUX écritures : `//host` et `\\host`. Les
+  // navigateurs résolvent l'antislash comme le slash — `\\evil.com/x` mène bien
+  // sur evil.com. Sans ce cas, un tel href tombait dans « chemin relatif » et
+  // R1 le classait INTERNE, donc reproductible sans contrôle de domaine.
+  if (/^[\\/]{2}[^\\/]/.test(h)) {
+    const host = hostOf(`https://${h.replace(/^[\\/]{2}/, '')}`);
     return !!articleHost && !!host && host === articleHost;
   }
   if (/^https?:\/\//i.test(h)) {
@@ -1363,19 +1387,30 @@ export const listInternalLinks = (html = '', articleUrl = '') => {
     .map((info) => ({ href: info.href, text: info.text || '' }));
 };
 
-// Un titre est un emplacement de repli : on préfère toujours poser le lien dans
-// le corps du texte quand l'ancre y figure aussi.
-const HEADINGISH_SEL = 'h1,h2,h3,h4,h5,h6,summary';
-
 /**
  * Ré-enveloppe l'ancre de `info` dans `html`, à l'identique (mêmes attributs).
  * Ne triture aucune phrase : on n'enveloppe QUE du texte déjà présent.
- * @returns {string|null} le HTML modifié, ou null si l'ancre est introuvable.
+ *
+ * EMPLACEMENTS — mêmes interdits que le maillage (src/utils/linkZones.js), et
+ * non plus « pas déjà lié, pas dans un <del> » : la version précédente posait le
+ * lien dans un tableau, une FAQ, un titre, le TL;DR, le sommaire ou une CITATION
+ * dès que l'ancre n'apparaissait que là (constaté par exécution en relecture),
+ * en contradiction directe avec la règle affichée au rédacteur et envoyée au
+ * modèle. Deux niveaux, cf. linkZones :
+ *   • les interdits absolus écartent le candidat ;
+ *   • un tableau ne sert qu'en DERNIER RECOURS (rang 1) : le lien EXISTAIT
+ *     avant, et une cellule est un emplacement plausible pour lui — le perdre
+ *     serait pire.
+ * Plus de repli sur un titre : aucun emplacement autorisé → `null`, donc
+ * AVERTISSEMENT non bloquant, jamais un lien posé dans un h2 en silence.
+ *
+ * @returns {string|null} le HTML modifié, ou null si aucun emplacement autorisé.
  */
 const rewrapInternalAnchor = (html, info) => {
   if (!info.text || typeof document === 'undefined') return null;
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
+  const zones = forbiddenLinkZones(tmp);
   const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_TEXT);
   const candidates = [];
   let node;
@@ -1384,12 +1419,12 @@ const rewrapInternalAnchor = (html, info) => {
     if (idx === -1) continue;
     const parent = node.parentElement;
     if (!parent) continue;
-    if (parent.closest('a')) continue;      // déjà lié
-    if (parent.closest('del')) continue;    // texte en instance de suppression : il va disparaître
-    candidates.push({ node, idx, inHeading: !!parent.closest(HEADINGISH_SEL) });
+    // Interdits absolus (déjà lié, <del>/<ins>/<mark>, titre, FAQ, citation…)
+    if (isInForbiddenLinkZone(parent, zones, NEVER_LINK_TAG_SEL)) continue;
+    candidates.push({ node, idx, rank: parent.closest(TABLE_SEL) ? 1 : 0 });
   }
   if (!candidates.length) return null;
-  const pick = candidates.find((c) => !c.inHeading) || candidates[0];
+  const pick = candidates.find((c) => c.rank === 0) || candidates[0];
   const range = document.createRange();
   range.setStart(pick.node, pick.idx);
   range.setEnd(pick.node, pick.idx + info.text.length);

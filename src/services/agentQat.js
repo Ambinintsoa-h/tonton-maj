@@ -193,17 +193,34 @@ const buildSkillMethodBlock = (brainSkills, { resources = true } = {}) => {
   return bodies + resBlock;
 };
 
-/** Contexte de lancement saisi par le rédacteur — prioritaire sur les défauts. */
+/**
+ * Contexte de lancement saisi par le rédacteur — prioritaire sur les défauts.
+ *
+ * `redaction` — ce bloc est partagé par l'AUDIT et la REFONTE. L'appel d'audit ne
+ * produit AUCUN `article_html` : lui envoyer les consignes de rédaction du
+ * maillage (« EXHAUSTIVITÉ EXIGÉE », « le code place ensuite lui-même »…) est du
+ * bruit de prompt payé à chaque audit, sur un appel qui n'écrit pas une ligne
+ * d'article. L'audit reçoit donc la LISTE (il en a besoin pour recommander un
+ * plan qui fasse une place aux ancres), sans les consignes d'exécution.
+ */
 const buildBriefBlock = ({
   targetKeyword = '', articleType = DEFAULT_ARTICLE_TYPE, seoPlugin = DEFAULT_SEO_PLUGIN,
   targetWords = DEFAULT_TARGET_WORDS, internalLinks = [], articleUrl = '',
+  redaction = true,
 }) => {
   // `articleUrl` branche le filtre de domaine (règle 8) : une URL d'un AUTRE site
   // saisie par erreur dans le maillage n'est même pas proposée au modèle, car
   // depuis R2 le code la placerait lui-même — ce serait un lien EXTERNE AJOUTÉ.
   const links = cleanLinkRows(internalLinks, articleUrl);
-  const linkBlock = links.length
-    ? `${links.map((l, i) => `${i + 1}. Ancre : « ${l.anchor} » → URL : ${l.url}`).join('\n')}
+  const listeSeule = links.map((l, i) => `${i + 1}. Ancre : « ${l.anchor} » → URL : ${l.url}`).join('\n');
+  // ⚠️ NE PAS écrire « n'ajoute AUCUN lien » tout court : ce serait contradictoire
+  // avec l'obligation de REPRODUIRE les liens déjà présents dans l'article (R1).
+  // Le chemin « file d'attente » force internalLinks: [] et tombe exactement dans
+  // ce cas de figure.
+  let linkBlock = 'Aucune paire ancre + URL fournie : n\'ajoute AUCUN lien NOUVEAU.';
+  if (links.length) linkBlock = listeSeule;
+  if (links.length && redaction) {
+    linkBlock = `${listeSeule}
 
 ⚠️ EXHAUSTIVITÉ EXIGÉE — les ${links.length} paires ci-dessus, SANS EXCEPTION.
 Chacune doit figurer dans article_html sous la forme <a href="URL">ancre</a>, dans
@@ -216,12 +233,8 @@ titre, le TL;DR, le sommaire, un tableau ou la FAQ.
 Ce que tu laisses de côté n'est PAS perdu : le code le place ensuite lui-même, en
 RÉDIGEANT une clause d'appoint et en la marquant « à relire » pour le rédacteur.
 Un texte de ton cru vaut mieux que cette rustine : c'est tout l'intérêt de les
-placer toi-même.`
-    // ⚠️ NE PAS écrire « n'ajoute AUCUN lien » tout court : ce serait contradictoire
-    // avec l'obligation de REPRODUIRE les liens déjà présents dans l'article
-    // (R1). Le chemin « file d'attente » force internalLinks: [] et tombe
-    // exactement dans ce cas de figure.
-    : 'Aucune paire ancre + URL fournie : n\'ajoute AUCUN lien NOUVEAU.';
+placer toi-même.`;
+  }
   return `## ═══ BRIEF DU RÉDACTEUR (prioritaire sur les valeurs par défaut des ressources) ═══
 - Mot-clé cible (à respecter À LA LETTRE PRÈS) : « ${targetKeyword} »
 - Type d'article : ${ARTICLE_TYPES[articleType]?.label || articleType} — ${ARTICLE_TYPES[articleType]?.description || ''}
@@ -480,7 +493,8 @@ export const runQatAudit = async ({
   const rawText = stripHtml(sourceHtml || '').trim();
   const wordCount = rawText ? rawText.split(/\s+/).length : 0;
 
-  const brief = buildBriefBlock({ targetKeyword, articleType, seoPlugin, targetWords, internalLinks, articleUrl });
+  // `redaction: false` — l'audit ne produit aucun article_html (voir buildBriefBlock).
+  const brief = buildBriefBlock({ targetKeyword, articleType, seoPlugin, targetWords, internalLinks, articleUrl, redaction: false });
   const system = buildAuditSystem(brainSkills, skills, knowledge, brief);
   const user = `## ARTICLE À AUDITER (HTML)
 ${sourceHtml}
@@ -874,6 +888,9 @@ N'ajoute aucun AUTRE lien externe.`;
         briefWritten: woven.written,
         briefMissing: woven.missing,
         briefOffDomain: woven.offDomain,
+        briefUnverifiable: woven.unverifiable,
+        briefSelfLinks: woven.selfLinks,
+        briefReport: reportLine,
       };
     } catch (e) {
       console.warn(`[qat rewrite] essai ${attempt}/3:`, e.message);
@@ -919,7 +936,16 @@ N'ajoute aucun AUTRE lien externe.`;
       ancresRedigees:  sanitized.briefWritten   || [],   // écrites par le CODE → à relire
       ancresManquantes: sanitized.briefMissing  || [],   // aucun emplacement autorisé
       ancresHorsDomaine: sanitized.briefOffDomain || [], // écartées (règle 8)
+      // Écartées faute d'URL d'article (contenu collé) : ce n'est PAS « hors
+      // domaine », et le dire ainsi enverrait le rédacteur chercher un problème
+      // inexistant sur une URL de son propre site.
+      ancresNonVerifiables: sanitized.briefUnverifiable || [],
+      ancresAutoLien:  sanitized.briefSelfLinks || [],   // l'URL est celle de l'article
       ancresBrief:     sanitized.briefConstat   || [],   // le constat complet, placées ou non
+      // Placées, mais dans un emplacement que la règle interdit (titre, tableau,
+      // FAQ, TL;DR, citation) : le comptage ne doit pas valider ça en silence.
+      ancresMalPlacees: (sanitized.briefConstat || []).filter((l) => l.placed && l.misplaced),
+      ancresRapport:   sanitized.briefReport || '',      // la phrase de compte rendu, conservée
       ancresDeclareesIa: Array.isArray(article.ancres_placees) ? article.ancres_placees : [],
       notesRedaction:  String(article.notes_redaction || '').trim(),
       strippedExternalLinks: sanitized.stripped,
