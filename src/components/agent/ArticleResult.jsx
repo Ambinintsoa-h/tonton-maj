@@ -3359,7 +3359,6 @@ export default function ArticleResult() {
     // ORIGINAL aux endroits non acceptés. processAllSegments('accept') mute le DOM
     // de façon SYNCHRONE → getFinalHtml() ci-dessous reflète bien l'état accepté.
     if (countPendingChanges() > 0) processAllSegments('accept');
-    setPublishing(true);
 
     // ── R1 — FILET ULTIME : les liens INTERNES de l'article AVANT sont repris ───
     // C'est le SEUL endroit où la vraie référence « AVANT » (agent.originalContent,
@@ -3373,11 +3372,15 @@ export default function ArticleResult() {
     // contenu a été offloadé, `originalContent` vaut '' (Articles.jsx) : sans cette
     // garde, on croirait TOUS les liens perdus et on en ré-injecterait au hasard.
     let finalHtml = getFinalHtml();
+    let filetR1Restaures = 0;
+    let filetR1Manquants = [];
     {
       const reference = (agent.originalContent || '').trim();
       if (reference) {
         const carried = carryOverInternalLinks(reference, finalHtml, articleUrl);
         finalHtml = carried.html;
+        filetR1Restaures = carried.restored.length;
+        filetR1Manquants = carried.missing;
         if (carried.missing.length) {
           console.warn(`[R1 publication] ${carried.missing.length} lien(s) interne(s) de l'article d'origine absent(s) du texte publié :`, carried.missing.map((l) => l.href));
         }
@@ -3391,13 +3394,17 @@ export default function ArticleResult() {
     // portait un lien du brief → le lien disparaît, définitivement et en silence.
     // La garantie « 100 % » ne vaut que si elle est revérifiée ICI, au seul
     // passage obligatoire de la publication.
-    // NON BLOQUANT, comme R1 : on replace ce qui peut l'être, on avertit pour le
-    // reste. Le forçage rédigé s'applique aussi — c'est la décision assumée.
+    // Le forçage rédigé s'applique aussi — décision assumée — MAIS il n'est plus
+    // muet : voir le garde-fou de relecture juste en dessous.
+    let filetR2Redigees = [];
+    let filetR2Manquantes = [];
     {
       const briefLinks = (currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {}).internalLinks || [];
       if (briefLinks.length) {
         const woven = weaveBriefLinks(finalHtml, briefLinks, articleUrl);
         finalHtml = woven.html;
+        filetR2Redigees = woven.written;
+        filetR2Manquantes = woven.missing;
         if (woven.written.length) {
           console.warn(`[R2 publication] ${woven.written.length} lien(s) du brief RÉ-INSÉRÉ(S) par le code au moment de publier (perdu(s) en cours d'édition) :`, woven.written.map((l) => l.url));
         }
@@ -3407,6 +3414,49 @@ export default function ArticleResult() {
       }
     }
 
+    // ── GARDE-FOU DE RELECTURE — le code vient d'écrire dans l'article ─────────
+    // Le contrat passé avec le rédacteur est « le code marque ce qu'il écrit, tu
+    // le relis ». Sur CE chemin le contrat était structurellement intenable : la
+    // clause est écrite dans une variable locale, `exportAsHtml` en retire la
+    // marque dans la même foulée, et le texte partait sur le site sans avoir
+    // jamais été affiché — le seul signal étant un console.warn.
+    // On rétablit donc l'étape de relecture, au seul endroit où elle a un sens :
+    //   • ANNULER  → le HTML MARQUÉ est réinjecté dans l'éditeur, la publication
+    //     s'arrête, le rédacteur voit les clauses en jaune et les reformule ;
+    //   • PUBLIER  → décision explicite, prise en connaissance de cause.
+    // Rien ne se déclenche si le code n'a rien écrit : le chemin normal de
+    // publication est inchangé (aucune popup ajoutée au quotidien).
+    if (filetR2Redigees.length) {
+      const liste = filetR2Redigees.map((l) => `• ${l.anchor} → ${l.url}`).join('\n');
+      const ok = window.confirm(
+        `${filetR2Redigees.length} lien(s) du brief manquaient dans le texte : le code vient d'ÉCRIRE `
+        + `${filetR2Redigees.length} phrase(s) « À lire aussi : … » pour les placer.\n\n${liste}\n\n`
+        + 'Ce texte n\'a jamais été relu et il partira tel quel sur le site.\n\n'
+        + 'OK = publier quand même.\n'
+        + 'Annuler = arrêter ici et relire dans l\'éditeur (les phrases y seront surlignées en jaune).',
+      );
+      if (!ok) {
+        // Réinjection AVEC les marques : c'est tout l'intérêt de s'arrêter.
+        const el = articleRef.current;
+        if (el) { el.innerHTML = finalHtml; lockMedia(el); }
+        contentRef.current = finalHtml;
+        humanEditRef.current = true;
+        triggerAutosave();
+        toast('Publication annulée — les phrases écrites par le code sont surlignées en jaune dans l\'éditeur. Reformulez-les, puis publiez.', { icon: '✎', duration: 10000 });
+        return;
+      }
+    }
+    // Non bloquant, mais plus jamais silencieux : ce que le code a réparé ou n'a
+    // pas pu placer est DIT, à l'écran et pas seulement dans la console.
+    if (filetR1Restaures || filetR1Manquants.length || filetR2Manquantes.length) {
+      const bribes = [];
+      if (filetR1Restaures) bribes.push(`${filetR1Restaures} lien(s) interne(s) d'origine ré-enveloppé(s)`);
+      if (filetR1Manquants.length) bribes.push(`${filetR1Manquants.length} lien(s) interne(s) d'origine NON repris`);
+      if (filetR2Manquantes.length) bribes.push(`${filetR2Manquantes.length} lien(s) du brief sans emplacement autorisé`);
+      toast(`Contrôle des liens avant publication : ${bribes.join(' — ')}.`, { icon: '🔗', duration: 8000 });
+    }
+
+    setPublishing(true);
     const rawHtml = exportAsHtml(finalHtml);
 
     // ── Suppression SYSTÉMATIQUE de figure[data-featured] du contenu publié ──────
@@ -4361,7 +4411,18 @@ export default function ArticleResult() {
                   {/* Les avertissements ne doivent pas pouvoir se cacher derrière un
                       panneau replié : on les signale sur l'en-tête. */}
                   {(qatArticle.strippedExternalLinks?.length > 0
-                    || (qatArticle.ampleurSource === 'redacteur' && qatArticle.ampleurOverridden)) && (
+                    || (qatArticle.ampleurSource === 'redacteur' && qatArticle.ampleurOverridden)
+                    // R1/R2 — tout ce que le CODE a écrit ou n'a pas pu placer doit
+                    // armer le triangle : sans ça, la seule trace était un
+                    // console.warn que le rédacteur ne verra jamais.
+                    || qatArticle.ancresRedigees?.length > 0
+                    || qatArticle.ancresManquantes?.length > 0
+                    || qatArticle.ancresMalPlacees?.length > 0
+                    || qatArticle.ancresHorsDomaine?.length > 0
+                    || qatArticle.ancresNonVerifiables?.length > 0
+                    || qatArticle.ancresAutoLien?.length > 0
+                    || qatArticle.missingInternalLinks?.length > 0
+                    || qatArticle.restoredInternalLinks?.length > 0) && (
                     <AlertTriangle size={13} className="text-amber-600 shrink-0" title="Un point à lire dans ce panneau" />
                   )}
                   {ampleurDepliee ? <ChevronUp size={14} className="text-emerald-600 shrink-0" />
@@ -4375,7 +4436,19 @@ export default function ArticleResult() {
                     </p>
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-emerald-700 pt-0.5">
                       {qatArticle.motCleRetenu && <span>Mot-clé : <strong>{qatArticle.motCleRetenu}</strong></span>}
-                      {qatArticle.ancresPlacees?.length > 0 && (
+                      {/* Décompte RÉEL (recompté sur le HTML final), et affiché même
+                          à 0 dès qu'une paire a été saisie : « rien » ne se distinguait
+                          pas de « aucun lien placé ». */}
+                      {qatArticle.ancresBrief?.length > 0 && (
+                        <span>
+                          <strong>{qatArticle.ancresPlacees?.length || 0}</strong>
+                          /{qatArticle.ancresBrief.length} lien(s) interne(s) du brief placé(s)
+                        </span>
+                      )}
+                      {/* Brouillon enregistré AVANT ce constat (ancresBrief absent) :
+                          on garde l'affichage historique plutôt que de le faire
+                          disparaître d'un article déjà généré. */}
+                      {!qatArticle.ancresBrief && qatArticle.ancresPlacees?.length > 0 && (
                         <span><strong>{qatArticle.ancresPlacees.length}</strong> lien(s) interne(s) placé(s)</span>
                       )}
                       {qatArticle.ampleurSource === 'redacteur' && qatArticle.ampleurOverridden && (
@@ -4386,6 +4459,65 @@ export default function ArticleResult() {
                       <p className="text-[11px] text-amber-700">
                         {qatArticle.strippedExternalLinks.length} lien(s) externe(s) ajouté(s) par l'IA ont été retiré(s) —
                         la règle interdit d'ajouter ou de supprimer un lien externe.
+                      </p>
+                    )}
+
+                    {/* ── R1 / R2 — CE QUE LE CODE A FAIT DANS LE TEXTE ──────────────
+                        Ces compteurs n'étaient nulle part : le seul canal était
+                        console.warn, plus une ligne de progression écrasée par
+                        l'étape suivante. Un article dont du code a rédigé une phrase
+                        partait donc en production sans que personne ne le sache. */}
+                    {qatArticle.ancresRedigees?.length > 0 && (
+                      <p className="text-[11px] text-amber-800 font-medium">
+                        ✎ {qatArticle.ancresRedigees.length} clause(s) ÉCRITE(S) PAR LE CODE pour placer un lien du brief
+                        introuvable dans le texte — surlignées en jaune dans l'éditeur, À RELIRE et reformuler.
+                        La marque ne part pas sur le site ; le lien, si.
+                      </p>
+                    )}
+                    {qatArticle.ancresManquantes?.length > 0 && (
+                      <p className="text-[11px] text-amber-700">
+                        {qatArticle.ancresManquantes.length} lien(s) du brief NON placé(s) — aucun emplacement autorisé
+                        (article sans paragraphe éligible : tableau, FAQ, paragraphes trop courts) :{' '}
+                        {qatArticle.ancresManquantes.map(l => l.anchor).join(', ')}. À placer à la main.
+                      </p>
+                    )}
+                    {qatArticle.ancresMalPlacees?.length > 0 && (
+                      <p className="text-[11px] text-amber-700">
+                        {qatArticle.ancresMalPlacees.length} lien(s) du brief placé(s) dans un emplacement non conforme
+                        (titre, tableau, FAQ, TL;DR ou citation) : {qatArticle.ancresMalPlacees.map(l => l.anchor).join(', ')}.
+                      </p>
+                    )}
+                    {qatArticle.ancresHorsDomaine?.length > 0 && (
+                      <p className="text-[11px] text-red-700">
+                        {qatArticle.ancresHorsDomaine.length} paire(s) de maillage ÉCARTÉE(S) — l'URL saisie pointe hors du
+                        domaine de l'article : {qatArticle.ancresHorsDomaine.map(l => l.url).join(', ')}. La règle interdit
+                        d'ajouter un lien externe, même par le maillage.
+                      </p>
+                    )}
+                    {qatArticle.ancresAutoLien?.length > 0 && (
+                      <p className="text-[11px] text-amber-700">
+                        {qatArticle.ancresAutoLien.length} paire(s) écartée(s) : l'URL est celle de cet article — il ne peut
+                        pas se lier à lui-même.
+                      </p>
+                    )}
+                    {qatArticle.ancresNonVerifiables?.length > 0 && (
+                      <p className="text-[11px] text-amber-700">
+                        {qatArticle.ancresNonVerifiables.length} paire(s) écartée(s) : l'URL de l'article n'a pas été fournie
+                        (contenu collé), donc une URL absolue n'est ni vérifiable ni plaçable — saisissez un chemin relatif
+                        (/ma-page). Ce n'est pas un problème de domaine.
+                      </p>
+                    )}
+                    {qatArticle.restoredInternalLinks?.length > 0 && (
+                      <p className="text-[11px] text-emerald-700">
+                        {qatArticle.restoredInternalLinks.length} lien(s) interne(s) de l'article d'origine délié(s) par l'IA
+                        et RÉ-ENVELOPPÉ(S) automatiquement sur leur ancre.
+                      </p>
+                    )}
+                    {qatArticle.missingInternalLinks?.length > 0 && (
+                      <p className="text-[11px] text-amber-700">
+                        {qatArticle.missingInternalLinks.length} lien(s) interne(s) de l'article d'origine NON repris —
+                        leur ancre a disparu du nouveau texte, ou n'apparaît que dans un emplacement interdit :{' '}
+                        {qatArticle.missingInternalLinks.map(l => l.href).join(', ')}. Avertissement, la génération est conservée.
                       </p>
                     )}
                     {qatArticle.notesRedaction && (

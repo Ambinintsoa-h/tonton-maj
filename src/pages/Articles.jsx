@@ -695,6 +695,7 @@ export default function Articles() {
                     targetWords={targetWords} setTargetWords={setTargetWords}
                     linkRows={linkRows} setLinkRows={setLinkRows}
                     hasBrainSkill={hasBrainSkill}
+                    articleUrl={url}
                   />
                 )}
               </AnimatePresence>

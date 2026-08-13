@@ -22,8 +22,14 @@
 //          phrase existante : on AJOUTE une clause, on n'en réécrit aucune ;
 //        • MARQUÉ VISIBLEMENT — classe CSS + data-attribut + infobulle, pour que
 //          le rédacteur repère d'un coup d'œil le texte écrit par du code et le
-//          relise. La MARQUE ne part pas en production (débalisée par
+//          relise. La règle de style est `.lien-redige` dans src/index.css (fond
+//          jaune + soulignement pointillé) : SANS ELLE la classe ne fait rien et
+//          la contrepartie du forçage n'est pas livrée — c'était le cas jusqu'à la
+//          relecture. La MARQUE ne part pas en production (débalisée par
 //          `exportAsHtml`, comme [data-il-idx]) ; le LIEN, lui, reste.
+//          Au moment de PUBLIER, la marque disparaît dans la même foulée : il n'y
+//          a plus d'étape de relecture après. C'est pourquoi `handlePublish`
+//          (ArticleResult.jsx) DEMANDE CONFIRMATION quand le code a dû écrire.
 //
 // RÈGLE 8 — le placement refiltre TOUJOURS par domaine (`filterSameSiteLinks`) :
 // poser une URL hors domaine saisie par erreur dans le maillage serait un LIEN
@@ -35,6 +41,10 @@
 
 import { escRx, filterSameSiteLinks } from './diff';
 import { cleanLinkRows } from '../constants/majMode';
+import {
+  NO_LINK_TAG_SEL, MISPLACED_LINK_SEL,
+  forbiddenLinkZones, isInForbiddenLinkZone, hasBlockingDescendant,
+} from './linkZones';
 
 // ── Marque de rédaction automatique ───────────────────────────────────────────
 // Même mécanique que [data-il-idx] : un <span> porteur, débalisé à l'export
@@ -49,63 +59,15 @@ export const WRITTEN_MARK_TITLE =
 export const WRITTEN_CLAUSE_LEAD = ' À lire aussi : ';
 
 // ── Emplacements INTERDITS ────────────────────────────────────────────────────
-// `a`            un lien dans un lien n'existe pas ;
-// `del`          texte en instance de suppression : le lien disparaîtrait avec ;
-// `ins`, `mark`  diff non encore accepté : idem, et `ins.added-content` est
-//                purement et simplement supprimé à l'export ;
-// `[data-il-idx]` surlignage d'un lien interne SUGGÉRÉ non validé, débalisé à
-//                l'export → un lien posé dedans serait perdu ;
-// titres, `summary`, `table`* et `details` : interdits par la règle métier
-//                affichée au rédacteur (QatBriefFields) ;
-// `figure`, `figcaption`, `code`, `pre`, `blockquote` : une légende, un extrait
-//                de code ou une CITATION ne sont pas du texte rédactionnel — y
-//                glisser un lien (ou une clause) le mettrait dans la bouche de
-//                la source citée ;
-// `[data-media-*]` overlays et wrappers de l'éditeur, jamais publiés tels quels.
-export const EXCLUDE_SEL = [
-  'a', 'del', 'ins', 'mark', '[data-il-idx]', `[${WRITTEN_MARK_ATTR}]`,
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'summary', 'details',
-  'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption',
-  'figure', 'figcaption', 'code', 'pre', 'blockquote',
-  '[data-media-type]', '[data-media-overlay]',
-].join(',');
-
-// Titres des sections à emplacement imposé — MIROIR de diff.js:643-644
-// (`FAQ_TITLE_RX` / `TLDR_TITLE_RX`, privées à ce module) + le sommaire, qui
-// n'est qu'une liste d'ancres locales et n'accueille aucun lien de maillage.
-const ZONE_TITLE_RX = /faq|questions?\s+fr[ée]quentes|foire aux questions|r[ée]sum[ée] de l'article|tl\s*;?\s*dr|sommaire|table des mati[èe]res/i;
-
-/**
- * Éléments appartenant à une section INTERDITE (FAQ, TL;DR, sommaire).
- *
- * Ces sections ne sont pas des balises : ce sont des TITRES suivis de leur
- * contenu. On parcourt donc les enfants de premier niveau et on marque tout ce
- * qui suit un titre interdit, jusqu'au prochain titre de niveau supérieur ou
- * égal. Limite connue et assumée : un article dont le corps serait enveloppé
- * dans un conteneur intermédiaire masquerait ces zones — les exclusions par
- * BALISE (`details`, `table`…) restent alors la seule protection.
- */
-const forbiddenZones = (root) => {
-  const zones = new Set();
-  let openLvl = 0;
-  for (const el of Array.from(root.children)) {
-    const lvl = /^H[1-6]$/.test(el.tagName) ? Number(el.tagName[1]) : 0;
-    if (lvl) {
-      if (openLvl && lvl <= openLvl) openLvl = 0;              // la zone se referme
-      if (ZONE_TITLE_RX.test(el.textContent || '')) { openLvl = lvl; zones.add(el); continue; }
-    }
-    if (openLvl) zones.add(el);
-  }
-  return zones;
-};
+// La liste vit désormais dans src/utils/linkZones.js, PARTAGÉE avec R1
+// (`carryOverInternalLinks`, src/utils/diff.js) : deux mécanismes qui posent des
+// liens sans appel IA ne peuvent pas se donner chacun ses propres interdits — R1
+// posait des liens dans les tableaux, la FAQ, les titres et les citations que R2
+// s'interdisait. Réexporté ici pour ne pas casser un import existant.
+export const EXCLUDE_SEL = NO_LINK_TAG_SEL;
 
 /** L'élément est-il dans un emplacement interdit (balise ou zone) ? */
-const isBlocked = (el, zones) => {
-  if (!el) return true;
-  if (el.closest(EXCLUDE_SEL)) return true;
-  for (let n = el; n; n = n.parentElement) if (zones.has(n)) return true;
-  return false;
-};
+const isBlocked = (el, zones) => isInForbiddenLinkZone(el, zones, NO_LINK_TAG_SEL);
 
 // ── Identité d'une URL ────────────────────────────────────────────────────────
 const RELATIVE_BASE = 'https://article.local/';
@@ -126,22 +88,30 @@ const urlKey = (href = '', articleUrl = '') => {
 };
 
 /**
- * Un lien vers cette URL existe-t-il déjà dans `scope` ?
+ * Les `<a>` de `scope` qui pointent vers cette URL.
  * Les liens en instance de SUPPRESSION (`<del>`) ne comptent pas : ils sont sur
  * le départ, s'y fier laisserait le lien du brief absent de l'article publié.
  */
-const hasLinkTo = (scope, url, articleUrl = '') => {
+const findLinksTo = (scope, url, articleUrl = '') => {
   const key = urlKey(url, articleUrl);
-  return Array.from(scope.querySelectorAll('a[href]')).some(
+  return Array.from(scope.querySelectorAll('a[href]')).filter(
     (a) => !a.closest('del') && urlKey(a.getAttribute('href'), articleUrl) === key,
   );
 };
 
-/** Le lien vers cette URL a-t-il été RÉDIGÉ par le code (marque présente) ? */
-const hasWrittenLinkTo = (scope, url, articleUrl = '') => {
-  const key = urlKey(url, articleUrl);
-  return Array.from(scope.querySelectorAll(`[${WRITTEN_MARK_ATTR}] a[href]`)).some(
-    (a) => urlKey(a.getAttribute('href'), articleUrl) === key,
+/** Un lien vers cette URL existe-t-il déjà dans `scope` ? */
+const hasLinkTo = (scope, url, articleUrl = '') => findLinksTo(scope, url, articleUrl).length > 0;
+
+/**
+ * Un lien portant EXACTEMENT ce texte d'ancre existe-t-il déjà dans `scope` ?
+ * Sert à ne pas coller côte à côte, dans le même paragraphe, deux fois la même
+ * ancre pointant vers deux cibles différentes — le lecteur ne peut pas deviner
+ * laquelle mène où, et un moteur non plus.
+ */
+const hasAnchorTextLinked = (scope, anchorLc) => {
+  if (!anchorLc) return false;
+  return Array.from(scope.querySelectorAll('a')).some(
+    (a) => (a.textContent || '').trim().toLowerCase() === anchorLc,
   );
 };
 
@@ -199,28 +169,39 @@ const tokens = (s) => String(s || '')
 const MIN_PARAGRAPH_CHARS = 40;
 
 /**
- * Paragraphe d'accueil de la clause : celui dont le texte RECOUVRE le plus de
- * mots de l'ancre. À égalité, le premier — le choix doit être reproductible.
- * À défaut de tout recouvrement, le DERNIER paragraphe autorisé du corps.
+ * Paragraphe d'accueil de la clause. Tri DÉTERMINISTE, par priorités :
+ *   1. le moins de clauses déjà rédigées par le code — sans ce critère, un
+ *      article à un seul paragraphe éligible recevait jusqu'à 15 « À lire
+ *      aussi : » collés bout à bout (INTERNAL_LINK_ROWS_MAX), publiés tels
+ *      quels : constaté par exécution. `isBlocked` ne pouvait pas l'attraper,
+ *      la marque étant un ENFANT du `<p>` et `closest` ne descendant pas ;
+ *   2. le meilleur recouvrement de mots avec l'ancre (pertinence) ;
+ *   3. l'ordre du document, pour que le résultat soit reproductible.
+ *
+ * Écartés : les emplacements interdits, les paragraphes trop courts, ceux qui
+ * portent DÉJÀ un lien vers la même URL, ceux qui portent déjà la même ancre vers
+ * une AUTRE cible, et ceux qui contiennent un diff en attente (le paragraphe peut
+ * disparaître à l'export en ne laissant que la clause).
  * @returns {HTMLElement|null}
  */
 const pickParagraph = (root, link, zones, articleUrl) => {
   const wanted = new Set(tokens(link.anchor));
-  const candidates = Array.from(root.querySelectorAll('p')).filter((p) => {
-    if (isBlocked(p, zones)) return false;
-    if ((p.textContent || '').trim().length < MIN_PARAGRAPH_CHARS) return false;
-    return !hasLinkTo(p, link.url, articleUrl);   // jamais deux fois la même URL dans un bloc
-  });
-  if (!candidates.length) return null;
-  let best = null;
-  let bestScore = 0;
-  candidates.forEach((p) => {
+  const anchorLc = String(link.anchor || '').trim().toLowerCase();
+  const candidates = [];
+  Array.from(root.querySelectorAll('p')).forEach((p, index) => {
+    if (isBlocked(p, zones)) return;
+    if (hasBlockingDescendant(p)) return;
+    if ((p.textContent || '').trim().length < MIN_PARAGRAPH_CHARS) return;
+    if (hasLinkTo(p, link.url, articleUrl)) return;   // jamais deux fois la même URL dans un bloc
+    if (hasAnchorTextLinked(p, anchorLc)) return;     // même ancre, autre cible : illisible
     const have = new Set(tokens(p.textContent));
     let score = 0;
     wanted.forEach((w) => { if (have.has(w)) score++; });
-    if (score > bestScore) { bestScore = score; best = p; }
+    candidates.push({ p, index, score, clauses: p.querySelectorAll(`[${WRITTEN_MARK_ATTR}]`).length });
   });
-  return best || candidates[candidates.length - 1];
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => (a.clauses - b.clauses) || (b.score - a.score) || (a.index - b.index));
+  return candidates[0].p;
 };
 
 /** Écrit la clause marquée en FIN du paragraphe. Aucune phrase existante touchée. */
@@ -240,41 +221,93 @@ const writeClause = (p, link) => {
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
+/** Une URL absolue, dans ses trois écritures (`https://h`, `//h`, `\\h`). */
+const isAbsoluteUrl = (u = '') => /^https?:\/\//i.test(u) || /^[\\/]{2}[^\\/]/.test(u);
+
 /**
- * Paires de maillage réellement PLAÇABLES : complètes, dédoublonnées, et du même
- * domaine que l'article (règle 8). Ici le filtre s'applique TOUJOURS, même sans
- * `articleUrl` — contrairement à `cleanLinkRows`, qui ne fait qu'alimenter un
- * prompt : ce module POSE les liens, une URL absolue non vérifiable ne doit
- * jamais être écrite dans l'article.
+ * CLASSEMENT des paires du brief en catégories EXCLUSIVES. Une seule fonction,
+ * parce que le motif d'écart doit être DIT au rédacteur, et dit juste :
+ *
+ *   • `placeable`    — complète, même domaine que l'article : le code peut la poser ;
+ *   • `selfLinks`    — l'URL EST celle de l'article : un article qui se lie à
+ *                      lui-même n'a aucun sens, et rien ne l'écartait ;
+ *   • `offDomain`    — URL d'un AUTRE domaine, ou inexploitable en maillage
+ *                      (mailto:, javascript:) : la poser violerait la règle 8 ;
+ *   • `unverifiable` — URL de l'article NON FOURNIE (contenu collé) et paire à URL
+ *                      ABSOLUE : faute d'hôte de référence on ne peut ni la
+ *                      valider ni l'accuser. La version précédente les rangeait
+ *                      dans « hors domaine (règle 8) » et annonçait au rédacteur
+ *                      que l'URL de SON PROPRE SITE était hors domaine.
+ *
+ * Rappel : sur ce flux sans URL d'article, une URL absolue est de toute façon
+ * INPLAÇABLE — le verrou liens externes (`sanitizeFullArticle`, articleHost null)
+ * considère alors TOUT lien absolu comme externe et désenveloppe celui que l'IA
+ * aurait posé. Seuls les chemins relatifs (`/ma-page`) fonctionnent, et c'est ce
+ * que le message doit dire.
+ */
+export const classifyBriefLinks = (links = [], articleUrl = '') => {
+  const all = cleanLinkRows(links);
+  const selfKey = articleUrl ? urlKey(articleUrl, articleUrl) : null;
+  const placeable = []; const offDomain = []; const unverifiable = []; const selfLinks = [];
+  all.forEach((l) => {
+    if (selfKey && urlKey(l.url, articleUrl) === selfKey) { selfLinks.push(l); return; }
+    if (filterSameSiteLinks([l], articleUrl).length) { placeable.push(l); return; }
+    if (!articleUrl && isAbsoluteUrl(l.url)) { unverifiable.push(l); return; }
+    offDomain.push(l);
+  });
+  return { all, placeable, offDomain, unverifiable, selfLinks };
+};
+
+/**
+ * Paires de maillage réellement PLAÇABLES : complètes, dédoublonnées, du même
+ * domaine que l'article (règle 8) et différentes de l'article lui-même. Ici le
+ * filtre de domaine s'applique TOUJOURS, même sans `articleUrl` — contrairement à
+ * `cleanLinkRows`, qui ne fait qu'alimenter un prompt : ce module POSE les liens,
+ * une URL absolue non vérifiable ne doit jamais être écrite dans l'article.
  */
 export const placeableBriefLinks = (links = [], articleUrl = '') =>
-  filterSameSiteLinks(cleanLinkRows(links), articleUrl);
+  classifyBriefLinks(links, articleUrl).placeable;
 
 /** Paires écartées par le filtre de domaine — à DIRE au rédacteur, jamais à taire. */
-export const offDomainBriefLinks = (links = [], articleUrl = '') => {
-  const all = cleanLinkRows(links);
-  const kept = new Set(placeableBriefLinks(links, articleUrl).map((l) => l.url));
-  return all.filter((l) => !kept.has(l.url));
-};
+export const offDomainBriefLinks = (links = [], articleUrl = '') =>
+  classifyBriefLinks(links, articleUrl).offDomain;
 
 /**
  * CONSTAT — quelles paires du brief sont RÉELLEMENT dans le HTML produit.
  * Purement observationnel : ne fait aucune confiance ni au modèle (dont
  * `ancres_placees` est une auto-déclaration jamais vérifiée), ni au rapport du
  * tissage. C'est ce constat qui est affiché au rédacteur.
- * @returns {Array<{anchor:string,url:string,placed:boolean,written:boolean}>}
+ *
+ * Porte sur TOUTES les paires saisies, pas seulement les plaçables : COMPTER un
+ * lien que l'IA a posé n'écrit rien dans l'article, donc ne risque rien, alors
+ * que ne rien compter faisait disparaître le décompte affiché au rédacteur sur le
+ * flux « contenu collé » (régression d'affichage constatée en relecture). Le
+ * champ `placeable` dit si le CODE aurait le droit de la poser, lui.
+ *
+ * `misplaced` : le lien est bien là, mais uniquement dans un emplacement que la
+ * règle interdit (titre, tableau, FAQ, TL;DR, citation) — placé, non conforme.
+ *
+ * @returns {Array<{anchor:string,url:string,placed:boolean,placeable:boolean,written:boolean,misplaced:boolean}>}
  */
 export const countPlacedBriefLinks = (html = '', links = [], articleUrl = '') => {
-  const kept = placeableBriefLinks(links, articleUrl);
-  if (!kept.length || typeof document === 'undefined') return [];
+  const { all, placeable } = classifyBriefLinks(links, articleUrl);
+  if (!all.length || typeof document === 'undefined') return [];
+  const placeableUrls = new Set(placeable.map((l) => l.url));
   const root = document.createElement('div');
   root.innerHTML = html || '';
-  return kept.map((l) => ({
-    anchor: l.anchor,
-    url: l.url,
-    placed: hasLinkTo(root, l.url, articleUrl),
-    written: hasWrittenLinkTo(root, l.url, articleUrl),
-  }));
+  const zones = forbiddenLinkZones(root);
+  return all.map((l) => {
+    const found = findLinksTo(root, l.url, articleUrl);
+    return {
+      anchor: l.anchor,
+      url: l.url,
+      placed: found.length > 0,
+      placeable: placeableUrls.has(l.url),
+      written: found.some((a) => !!a.closest(`[${WRITTEN_MARK_ATTR}]`)),
+      misplaced: found.length > 0
+        && found.every((a) => isInForbiddenLinkZone(a.parentElement, zones, MISPLACED_LINK_SEL)),
+    };
+  });
 };
 
 /**
@@ -285,18 +318,21 @@ export const countPlacedBriefLinks = (html = '', links = [], articleUrl = '') =>
  *   html: string, total: number,
  *   placed: Array<{anchor,url,source:'existant'|'tisse'|'redige'}>,
  *   written: Array<{anchor,url}>, missing: Array<{anchor,url,reason:string}>,
- *   offDomain: Array<{anchor,url}>
+ *   offDomain: Array<{anchor,url}>, unverifiable: Array<{anchor,url}>,
+ *   selfLinks: Array<{anchor,url}>
  * }}
  */
 export const weaveBriefLinks = (html = '', links = [], articleUrl = '', { force = true } = {}) => {
-  const kept = placeableBriefLinks(links, articleUrl);
-  const offDomain = offDomainBriefLinks(links, articleUrl);
-  const empty = { html, total: kept.length, placed: [], written: [], missing: [], offDomain };
+  const { placeable: kept, offDomain, unverifiable, selfLinks } = classifyBriefLinks(links, articleUrl);
+  const empty = {
+    html, total: kept.length, placed: [], written: [], missing: [],
+    offDomain, unverifiable, selfLinks,
+  };
   if (!kept.length || !html || typeof document === 'undefined') return empty;
 
   const root = document.createElement('div');
   root.innerHTML = html;
-  const zones = forbiddenZones(root);
+  const zones = forbiddenLinkZones(root);
   const placed = [];
   const written = [];
   const missing = [];
@@ -325,16 +361,38 @@ export const weaveBriefLinks = (html = '', links = [], articleUrl = '', { force 
   if (offDomain.length) {
     console.warn(`[R2 maillage] ${offDomain.length} lien(s) du brief écarté(s) — URL hors du domaine de l'article (règle 8) :`, offDomain.map((l) => l.url));
   }
-  return { html: root.innerHTML, total: kept.length, placed, written, missing, offDomain };
+  if (unverifiable.length) {
+    console.warn(`[R2 maillage] ${unverifiable.length} lien(s) du brief écarté(s) — URL de l'article NON FOURNIE, une URL absolue n'est pas vérifiable (utilisez un chemin relatif) :`, unverifiable.map((l) => l.url));
+  }
+  if (selfLinks.length) {
+    console.warn(`[R2 maillage] ${selfLinks.length} lien(s) du brief écarté(s) — l'URL est celle de l'article lui-même :`, selfLinks.map((l) => l.url));
+  }
+  return {
+    html: root.innerHTML, total: kept.length, placed, written, missing,
+    offDomain, unverifiable, selfLinks,
+  };
 };
 
-/** Phrase de compte rendu au rédacteur : « 7 lien(s) … dont 2 rédigé(s) … ». */
-export const briefLinkReportLine = ({ total = 0, placed = [], written = [], offDomain = [] } = {}) => {
-  if (!total && !offDomain.length) return '';
-  const parts = [`Maillage interne : ${placed.length}/${total} lien(s) du brief placé(s)`];
-  if (written.length) parts.push(`dont ${written.length} rédigé(s) par le code, à relire`);
-  const miss = total - placed.length;
-  if (miss > 0) parts.push(`${miss} non plaçable(s)`);
-  if (offDomain.length) parts.push(`${offDomain.length} écarté(s) car hors domaine (règle 8)`);
+/**
+ * Phrase de compte rendu au rédacteur. Chaque motif d'écart est NOMMÉ : annoncer
+ * « 0/0 lien placé — 1 écarté car hors domaine (règle 8) » pour une URL du propre
+ * site du rédacteur, faute d'URL d'article, l'envoyait chercher un problème qui
+ * n'existait pas.
+ */
+export const briefLinkReportLine = ({
+  total = 0, placed = [], written = [], offDomain = [], unverifiable = [], selfLinks = [],
+} = {}) => {
+  const parts = [];
+  if (total) {
+    parts.push(`Maillage interne : ${placed.length}/${total} lien(s) du brief placé(s)`);
+    if (written.length) parts.push(`dont ${written.length} RÉDIGÉ(S) PAR LE CODE, à relire`);
+    const miss = total - placed.length;
+    if (miss > 0) parts.push(`${miss} sans emplacement autorisé`);
+  }
+  if (offDomain.length) parts.push(`${offDomain.length} écarté(s) : URL hors du domaine de l'article (règle 8)`);
+  if (selfLinks.length) parts.push(`${selfLinks.length} écarté(s) : l'article ne peut pas se lier à lui-même`);
+  if (unverifiable.length) {
+    parts.push(`${unverifiable.length} écarté(s) : URL de l'article non fournie, une URL absolue n'est ni vérifiable ni plaçable (saisissez un chemin relatif, /ma-page)`);
+  }
   return parts.join(' — ');
 };

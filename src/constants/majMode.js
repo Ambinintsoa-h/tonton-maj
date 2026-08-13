@@ -113,10 +113,29 @@ export const cleanLinkRows = (rows = [], articleUrl = '') => {
  * Lignes de maillage ÉCARTÉES parce qu'elles pointent hors du domaine de
  * l'article. Sert à le DIRE au rédacteur : sans ce retour, une URL mal collée
  * disparaîtrait en silence et il croirait son lien placé.
+ *
+ * Branchée dans QatBriefFields, donc AVANT le lancement : c'est le seul moment où
+ * la correction ne coûte rien. Le retour d'après-génération existe aussi
+ * (`weaveBriefLinks().offDomain`), mais il arrive une fois la MAJ payée.
  */
 export const offDomainLinkRows = (rows = [], articleUrl = '') => {
   if (!articleUrl) return [];
   const all = cleanLinkRows(rows);
   const kept = new Set(filterSameSiteLinks(all, articleUrl).map((r) => r.url));
   return all.filter((r) => !kept.has(r.url));
+};
+
+/**
+ * Lignes de maillage à URL ABSOLUE alors que l'URL de l'article est INCONNUE
+ * (lancement sur contenu collé). Ce n'est pas un problème de domaine : faute
+ * d'hôte de référence, le verrou liens externes considère alors TOUT lien absolu
+ * comme externe et le désenveloppe — ces paires ne peuvent donc pas être placées,
+ * quelle que soit leur cible. Seuls les chemins relatifs (`/ma-page`) marchent sur
+ * ce flux, et le rédacteur doit l'apprendre AVANT de lancer, pas après.
+ */
+export const unverifiableLinkRows = (rows = [], articleUrl = '') => {
+  if (articleUrl) return [];
+  return cleanLinkRows(rows).filter(
+    (r) => /^https?:\/\//i.test(r.url) || /^[\\/]{2}[^\\/]/.test(r.url),
+  );
 };
