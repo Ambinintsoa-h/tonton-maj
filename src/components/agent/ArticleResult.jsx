@@ -20,6 +20,7 @@ import DocNavigator from './DocNavigator';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, stripDiffDeletions, wrapLooseTextIntoParagraphs, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment, carryOverInternalLinks } from '../../utils/diff';
+import { weaveBriefLinks } from '../../utils/internalWeave';
 import { analyzeSeo } from '../../utils/seoCheck';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
@@ -3382,6 +3383,30 @@ export default function ArticleResult() {
         }
       }
     }
+
+    // ── R2 — FILET ULTIME : les liens du BRIEF sont TOUS dans le texte publié ───
+    // Même raison que le filet R1 juste au-dessus, et même nécessité : R2 est posé
+    // à la GÉNÉRATION, or six chemins d'écriture la contournent ensuite. Le cas
+    // concret : une suggestion de phase 3 acceptée remplace un paragraphe qui
+    // portait un lien du brief → le lien disparaît, définitivement et en silence.
+    // La garantie « 100 % » ne vaut que si elle est revérifiée ICI, au seul
+    // passage obligatoire de la publication.
+    // NON BLOQUANT, comme R1 : on replace ce qui peut l'être, on avertit pour le
+    // reste. Le forçage rédigé s'applique aussi — c'est la décision assumée.
+    {
+      const briefLinks = (currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {}).internalLinks || [];
+      if (briefLinks.length) {
+        const woven = weaveBriefLinks(finalHtml, briefLinks, articleUrl);
+        finalHtml = woven.html;
+        if (woven.written.length) {
+          console.warn(`[R2 publication] ${woven.written.length} lien(s) du brief RÉ-INSÉRÉ(S) par le code au moment de publier (perdu(s) en cours d'édition) :`, woven.written.map((l) => l.url));
+        }
+        if (woven.missing.length) {
+          console.warn(`[R2 publication] ${woven.missing.length} lien(s) du brief ABSENT(S) du texte publié :`, woven.missing);
+        }
+      }
+    }
+
     const rawHtml = exportAsHtml(finalHtml);
 
     // ── Suppression SYSTÉMATIQUE de figure[data-featured] du contenu publié ──────
