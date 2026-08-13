@@ -1260,6 +1260,220 @@ export const sanitizeFullArticle = (originalHtml = '', newHtml = '', articleUrl 
   return { html, stripped, missing };
 };
 
+// ── R1 — REPRISE DES LIENS INTERNES DE L'ARTICLE D'ORIGINE ────────────────────
+//
+// Règle métier : « tout lien présent dans l'article AVANT est repris et
+// réintégré dans le texte généré ». Le verrou de la règle 8 ne couvre QUE les
+// liens externes (voir les commentaires plus haut) : un lien INTERNE perdu ne
+// déclenchait rien du tout.
+//
+// Ce sont des fonctions SŒURS, pas des modifications du verrou : `externalLinksOf`,
+// `stripForeignExternalLinks`, `realignExternalHrefs` et `listExternalLinks` sont
+// partagés par `enforceExternalLinkPolicy` ET `sanitizeFullArticle` — les toucher
+// changerait la règle 8 dans TOUS les flux d'un coup.
+//
+// SANCTION ASYMÉTRIQUE, volontaire et testée :
+//   • lien EXTERNE perdu → REJET (règle 8, statu quo, inchangé) ;
+//   • lien INTERNE perdu → ré-enveloppé si son ancre existe encore, sinon
+//     AVERTISSEMENT NON BLOQUANT. Jamais un rejet : côté refonte, chaque rejet
+//     ÉCRASE le message utilisateur de l'essai suivant (agentQat), donc une 4e
+//     cause de rejet ferait perdre la consigne de reprise des liens externes —
+//     R1 sur les internes affaiblirait la règle 8 qu'elle complète.
+//
+// Périmètre « interne » : chemin relatif, ou absolu de même hôte que l'article.
+// Sont HORS périmètre :
+//   • les ancres purement locales `href="#..."` : le sommaire est régénéré à
+//     chaque refonte, les compter produirait des dizaines de faux « liens perdus » ;
+//   • `mailto:`, `tel:`, `javascript:` et tout autre schéma : pas du maillage ;
+//   • les absolus d'un AUTRE hôte : c'est le verrou externe qui les traite.
+// Sans `articleUrl`, `articleHost` vaut null et tout absolu est EXTERNE
+// (protection maximale, verrouillée par externalLinks.test.js) : seuls les
+// chemins relatifs sont alors internes.
+
+// Base fictive donnée à `new URL` pour normaliser un chemin relatif quand l'URL
+// de l'article est inconnue. Sert UNIQUEMENT à comparer, jamais à réécrire un
+// href : aucune de ces valeurs n'atteint le HTML publié.
+const RELATIVE_BASE = 'https://article.local/';
+
+/**
+ * Clé d'identité d'un lien interne. `/prix`, `/prix/`,
+ * `https://monsite.fr/prix` et `//www.monsite.fr/prix` désignent LE MÊME lien et
+ * donnent donc la même clé. Même modèle que `hrefKey` (hôte sans `www.`, sans
+ * slash final, fragment ignoré), mais résolue contre l'URL de l'article pour
+ * absorber le relatif — sinon `/x` et `https://monsite.fr/x` compteraient comme
+ * deux liens distincts et le contrôle signalerait des pertes imaginaires.
+ */
+const internalHrefKey = (href = '', articleUrl = '') => {
+  try {
+    const u = new URL(String(href), articleUrl || RELATIVE_BASE);
+    const host = u.hostname.replace(/^www\./i, '').toLowerCase();
+    return `${host}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+  } catch {
+    return String(href).trim().toLowerCase().replace(/\/+$/, '');
+  }
+};
+
+/** Un href pointe-t-il vers le MÊME site que l'article ? (voir périmètre ci-dessus) */
+const isInternalHref = (href, articleHost) => {
+  const h = String(href || '').trim();
+  if (!h) return false;
+  if (h.startsWith('#')) return false;                       // ancre locale du sommaire
+  if (/^\/\/[^/]/.test(h)) {                                 // protocol-relative
+    const host = hostOf(`https:${h}`);
+    return !!articleHost && !!host && host === articleHost;
+  }
+  if (/^https?:\/\//i.test(h)) {
+    const host = hostOf(h);
+    return !!articleHost && !!host && host === articleHost;
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(h)) return false;           // mailto:, tel:, javascript:…
+  return true;                                               // chemin relatif = même site
+};
+
+// Liens internes d'un fragment HTML : Map cléNormalisée → { href, text, attrs }.
+// Le href STOCKÉ est celui de l'original, restitué tel quel à la ré-enveloppe.
+const internalLinksOf = (fragmentHtml, articleHost, articleUrl) => {
+  const map = new Map();
+  if (!fragmentHtml || typeof document === 'undefined') return map;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = fragmentHtml;
+  tmp.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    if (!isInternalHref(href, articleHost)) return;
+    const key = internalHrefKey(href, articleUrl);
+    if (map.has(key)) return;
+    map.set(key, {
+      href,
+      text: (a.textContent || '').trim(),
+      attrs: Array.from(a.attributes).map(({ name, value }) => [name, value]),
+    });
+  });
+  return map;
+};
+
+/**
+ * Liens INTERNES d'un HTML, sous forme listable : [{ href, text }].
+ * Jumeau de `listExternalLinks` : sert à nommer au modèle, AVANT la génération,
+ * les liens internes qu'il doit reproduire — prévenir la perte coûte moins cher
+ * que de la réparer après coup.
+ */
+export const listInternalLinks = (html = '', articleUrl = '') => {
+  const articleHost = articleUrl ? hostOf(articleUrl) : null;
+  return [...internalLinksOf(html, articleHost, articleUrl).values()]
+    .map((info) => ({ href: info.href, text: info.text || '' }));
+};
+
+// Un titre est un emplacement de repli : on préfère toujours poser le lien dans
+// le corps du texte quand l'ancre y figure aussi.
+const HEADINGISH_SEL = 'h1,h2,h3,h4,h5,h6,summary';
+
+/**
+ * Ré-enveloppe l'ancre de `info` dans `html`, à l'identique (mêmes attributs).
+ * Ne triture aucune phrase : on n'enveloppe QUE du texte déjà présent.
+ * @returns {string|null} le HTML modifié, ou null si l'ancre est introuvable.
+ */
+const rewrapInternalAnchor = (html, info) => {
+  if (!info.text || typeof document === 'undefined') return null;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_TEXT);
+  const candidates = [];
+  let node;
+  while ((node = walker.nextNode())) {
+    const idx = node.textContent.indexOf(info.text);
+    if (idx === -1) continue;
+    const parent = node.parentElement;
+    if (!parent) continue;
+    if (parent.closest('a')) continue;      // déjà lié
+    if (parent.closest('del')) continue;    // texte en instance de suppression : il va disparaître
+    candidates.push({ node, idx, inHeading: !!parent.closest(HEADINGISH_SEL) });
+  }
+  if (!candidates.length) return null;
+  const pick = candidates.find((c) => !c.inHeading) || candidates[0];
+  const range = document.createRange();
+  range.setStart(pick.node, pick.idx);
+  range.setEnd(pick.node, pick.idx + info.text.length);
+  const a = document.createElement('a');
+  info.attrs.forEach(([name, value]) => { try { a.setAttribute(name, value); } catch { /* attribut invalide */ } });
+  // surroundContents échoue sur une sélection à cheval sur des balises : dans ce
+  // cas on ne force rien (R1 ne réécrit jamais une phrase existante).
+  try { range.surroundContents(a); } catch { return null; }
+  return tmp.innerHTML;
+};
+
+/**
+ * Reprend les liens INTERNES de l'original qui ont disparu du nouveau texte.
+ *
+ * Insertion DÉTERMINISTE et sans aucun appel IA : l'ancre d'origine est
+ * ré-enveloppée là où son texte figure encore en clair, avec les attributs
+ * d'origine. Rien n'est inventé, aucune phrase n'est réécrite.
+ *
+ * NO-OP STRICT si `originalHtml` est vide : après un F5 sur un article dont le
+ * contenu a été offloadé, la référence « AVANT » vaut '' — sans cette garde, on
+ * croirait TOUS les liens perdus.
+ *
+ * @returns {{ html: string, missing: Array<{href:string,text:string}>, restored: Array<{href:string,text:string}> }}
+ */
+export const carryOverInternalLinks = (originalHtml = '', newHtml = '', articleUrl = '') => {
+  if (!originalHtml || !newHtml || typeof document === 'undefined') {
+    return { html: newHtml, missing: [], restored: [] };
+  }
+  const articleHost = articleUrl ? hostOf(articleUrl) : null;
+  const before = internalLinksOf(originalHtml, articleHost, articleUrl);
+  if (!before.size) return { html: newHtml, missing: [], restored: [] };
+
+  const after = internalLinksOf(newHtml, articleHost, articleUrl);
+  let html = newHtml;
+  const missing = [];
+  const restored = [];
+  for (const [key, info] of before) {
+    if (after.has(key)) continue;                    // déjà là (forme d'URL indifférente)
+    const rewrapped = rewrapInternalAnchor(html, info);
+    if (rewrapped) { html = rewrapped; restored.push({ href: info.href, text: info.text }); }
+    else missing.push({ href: info.href, text: info.text });
+  }
+  if (restored.length) {
+    console.warn(`[R1 internes] ${restored.length} lien(s) interne(s) d'origine ré-enveloppé(s) :`, restored.map((l) => l.href));
+  }
+  if (missing.length) {
+    console.warn(`[R1 internes] ${missing.length} lien(s) interne(s) d'origine introuvable(s) (ancre disparue) — AVERTISSEMENT non bloquant :`, missing.map((l) => l.href));
+  }
+  return { html, missing, restored };
+};
+
+/**
+ * Volet R1 du flux updates (passe 2). Appelée À CÔTÉ de
+ * `enforceExternalLinkPolicy` dans `applyAllDiffs`, jamais dedans : le verrou de
+ * la règle 8 garde son contrat et ses tests inchangés.
+ *
+ * NE BLOQUE JAMAIS (pas de `blocked` dans le retour, par construction).
+ * @returns {{ update: object, missing: Array<{href:string,text:string}> }}
+ */
+export const enforceInternalLinkCarryOver = (update, articleUrl = '') => {
+  if (!update || typeof document === 'undefined') return { update, missing: [] };
+  const articleHost = articleUrl ? hostOf(articleUrl) : null;
+
+  // Une addition n'écrase rien : elle ne peut pas faire perdre un lien existant.
+  if (update.type === 'addition') return { update, missing: [] };
+
+  // Suppression pure : le passage disparaît avec ses liens. Rien à ré-envelopper
+  // dans un texte qui n'existera plus — on SIGNALE seulement (non bloquant :
+  // la suppression est une décision d'audit, et le filet de publication
+  // repassera sur l'article entier).
+  if (update.type === 'suppression') {
+    const lost = [...internalLinksOf(update.original || '', articleHost, articleUrl).values()]
+      .map((info) => ({ href: info.href, text: info.text }));
+    return { update, missing: lost };
+  }
+
+  if (!update.original || !update.updated) return { update, missing: [] };
+  const { html, missing } = carryOverInternalLinks(update.original, update.updated, articleUrl);
+  return {
+    update: html === update.updated ? update : { ...update, updated: html },
+    missing,
+  };
+};
+
 // ── Suppressions : absorber les petits mots orphelins ─────────────────────────
 // Quand l'IA barre « chats noirs » dans « voici les chats noirs », le
 // déterminant « les » reste orphelin après acceptation (« voici les . »).
@@ -1338,17 +1552,27 @@ export const applyAllDiffs = (html, updates, passNumber = 1, articleUrl = '') =>
       console.warn(`[diff p${passNumber}] Update BLOQUÉE (supprimerait un lien externe) :`, (policed.original || '').substring(0, 70));
       return { ...policed, applied: false, pass: passNumber, blockedReason: 'lien-externe' };
     }
+    // R1 — reprise des liens INTERNES (non bloquante), À CÔTÉ du verrou externe
+    // et jamais dedans. Placée ICI, donc AVANT `balanceFragment` ci-dessous :
+    // rien n'est ajouté au fragment après son équilibrage.
+    const { update: carried, missing: missingInternal } = enforceInternalLinkCarryOver(policed, articleUrl);
+    if (missingInternal.length) {
+      console.warn(`[diff p${passNumber}] ${missingInternal.length} lien(s) interne(s) d'origine non repris (AVERTISSEMENT, update conservée) :`, missingInternal.map((l) => l.href));
+    }
     // Garde-fou GRANULARITÉ : un remplacement qui fusionnerait plusieurs blocs ou
     // ferait disparaître un titre est refusé — il détruirait la structure de
     // l'article (mur de texte sans h2, sans liste, sans tableau).
-    const gran = guardBlockGranularity(policed);
+    const gran = guardBlockGranularity(carried);
     if (!gran.ok) {
-      console.warn(`[diff p${passNumber}] Update REFUSÉE (${gran.reason}) :`, (policed.original || '').substring(0, 70));
-      return { ...policed, applied: false, pass: passNumber, blockedReason: gran.reason };
+      console.warn(`[diff p${passNumber}] Update REFUSÉE (${gran.reason}) :`, (carried.original || '').substring(0, 70));
+      return { ...carried, applied: false, pass: passNumber, blockedReason: gran.reason };
     }
+    // Le champ n'est posé que s'il y a quelque chose à signaler : les updates
+    // saines gardent exactement la forme qu'elles avaient avant R1.
+    const flagged = missingInternal.length ? { ...carried, missingInternalLinks: missingInternal } : carried;
     // Sécurité structure : équilibrer le fragment inséré (updated) pour qu'aucune
     // balise non fermée ne fuie dans le document (cascade d'imbrication en Refonte).
-    const update = policed.updated ? { ...policed, updated: balanceFragment(policed.updated) } : policed;
+    const update = flagged.updated ? { ...flagged, updated: balanceFragment(flagged.updated) } : flagged;
     // Nouveau paragraphe (enrichissement actualités)
     if (update.type === 'addition') {
       if (!update.updated) return { ...update, applied: false, pass: passNumber };

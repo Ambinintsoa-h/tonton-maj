@@ -132,6 +132,58 @@ describe('runQatRewrite — verrou liens externes', () => {
   });
 });
 
+// R1 — volet INTERNE. Sanction ASYMÉTRIQUE : un lien interne perdu ne fait
+// JAMAIS rejeter la génération (un 4e motif de rejet écraserait le message de
+// reprise du verrou externe et affaiblirait la règle 8).
+describe('runQatRewrite — R1 liens internes', () => {
+  const withInternal = '<p>Voir <a href="/prix">nos prix</a> et <a href="https://isolation-phonique.com/faq">la FAQ</a>.</p>';
+
+  test('les liens internes existants sont NOMMÉS dans le prompt (prévenir plutôt que réparer)', async () => {
+    callClaudeWithProgress.mockResolvedValueOnce(reply({ article_html: withInternal }));
+    await runQatRewrite(baseArgs(withInternal));
+    const prompt = callClaudeWithProgress.mock.calls[0][1].messages[0].content;
+    expect(prompt).toContain('LIENS INTERNES DÉJÀ PRÉSENTS — À REPRODUIRE (2)');
+    expect(prompt).toContain('<a href="/prix">nos prix</a>');
+    expect(prompt).toContain('la FAQ');
+  });
+
+  test('lien interne délié par l\'IA → ré-enveloppé, UN SEUL appel (aucun rejet)', async () => {
+    callClaudeWithProgress.mockResolvedValueOnce(reply({
+      article_html: '<h2>Tarifs</h2><p>Consultez nos prix et la FAQ avant travaux.</p>',
+    }));
+    const { article } = await runQatRewrite(baseArgs(withInternal));
+    expect(article.html).toContain('href="/prix"');
+    expect(article.html).toContain('href="https://isolation-phonique.com/faq"');
+    expect(article.missingInternalLinks).toEqual([]);
+    expect(article.restoredInternalLinks.map(l => l.href))
+      .toEqual(['/prix', 'https://isolation-phonique.com/faq']);
+    expect(callClaudeWithProgress).toHaveBeenCalledTimes(1);   // jamais de relance
+  });
+
+  test('ancre disparue → AVERTISSEMENT non bloquant : l\'article est livré quand même', async () => {
+    callClaudeWithProgress.mockResolvedValueOnce(reply({
+      article_html: '<h2>Tarifs 2026</h2><p>Comptez 55 €/m² pose comprise.</p>',
+    }));
+    const { article } = await runQatRewrite(baseArgs(withInternal));
+    expect(article.html).toContain('55');
+    expect(article.missingInternalLinks.map(l => l.href))
+      .toEqual(['/prix', 'https://isolation-phonique.com/faq']);
+    expect(callClaudeWithProgress).toHaveBeenCalledTimes(1);   // aucun rejet déclenché
+  });
+
+  test('brief de maillage VIDE : la consigne distingue reproduire l\'existant d\'ajouter du neuf', async () => {
+    callClaudeWithProgress.mockResolvedValueOnce(reply({ article_html: '<p>Texte.</p>' }));
+    await runQatRewrite({ ...baseArgs('<p>x</p>'), internalLinks: [] });
+    const system = callClaudeWithProgress.mock.calls[0][1].system;
+    const consigne = system.map(b => b.text).join('\n');
+    expect(consigne).toContain('AUCUN lien NOUVEAU');
+    expect(consigne).toContain('REPRODUIRE L\'EXISTANT');
+    // L'ancienne formule, contradictoire avec R1, ne doit plus apparaître.
+    expect(consigne).not.toContain('n\'ajoute AUCUN lien.');
+    expect(consigne).not.toContain('les seuls liens que tu ajoutes sont les liens INTERNES du brief');
+  });
+});
+
 describe('runQatRewrite — réponses non conformes', () => {
   test('3 réponses illisibles → message clair, et non une TypeError opaque', async () => {
     callClaudeWithProgress.mockResolvedValue({ text: 'Voilà votre article !', usage: {} });

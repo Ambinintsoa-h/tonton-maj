@@ -1471,6 +1471,12 @@ export default function MajEnAttente() {
         articleType:   DEFAULT_ARTICLE_TYPE,
         seoPlugin:     DEFAULT_SEO_PLUGIN,
         targetWords:   DEFAULT_TARGET_WORDS,
+        // ⚠️ La file ne connaît aucune paire ancre + URL : aucun lien interne
+        // NOUVEAU ne sera donc suggéré par ce chemin (chantier produit à part —
+        // ne pas « corriger » ici sans décision). Cela ne touche PAS R1 : la
+        // reprise des liens DÉJÀ présents dans l'article est lue depuis le HTML
+        // d'origine (listInternalLinks / carryOverInternalLinks), pas depuis ce
+        // brief — voir le garde-fou de buildBriefBlock dans agentQat.js.
         internalLinks: [],
         wpSites,
         existingWpData: item._wpData || null, // déjà lu ci-dessus (wpFetched) → évite un 2e appel MCP
@@ -1548,6 +1554,9 @@ export default function MajEnAttente() {
       // l'identique depuis la phase 2 (même raison que Articles.jsx).
       const qatBrief = {
         articleType: DEFAULT_ARTICLE_TYPE, seoPlugin: DEFAULT_SEO_PLUGIN,
+        // ⚠️ Même remarque qu'à l'appel de runQatAudit ci-dessus : brief de
+        // maillage vide = aucun lien interne NOUVEAU par ce chemin. La reprise des
+        // liens existants (R1) reste assurée, elle ne dépend pas de ce brief.
         targetWords: DEFAULT_TARGET_WORDS, internalLinks: [],
       };
 

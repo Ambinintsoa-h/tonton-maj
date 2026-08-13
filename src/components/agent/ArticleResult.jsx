@@ -19,7 +19,7 @@ import TableToolbar from './TableToolbar';
 import DocNavigator from './DocNavigator';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
-import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, stripDiffDeletions, wrapLooseTextIntoParagraphs, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment } from '../../utils/diff';
+import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, stripDiffDeletions, wrapLooseTextIntoParagraphs, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment, carryOverInternalLinks } from '../../utils/diff';
 import { analyzeSeo } from '../../utils/seoCheck';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
@@ -3359,7 +3359,30 @@ export default function ArticleResult() {
     // de façon SYNCHRONE → getFinalHtml() ci-dessous reflète bien l'état accepté.
     if (countPendingChanges() > 0) processAllSegments('accept');
     setPublishing(true);
-    const rawHtml = exportAsHtml(getFinalHtml());
+
+    // ── R1 — FILET ULTIME : les liens INTERNES de l'article AVANT sont repris ───
+    // C'est le SEUL endroit où la vraie référence « AVANT » (agent.originalContent,
+    // figée au chargement de l'article) et le HTML final coexistent. Sans ce filet,
+    // tous les chemins d'écriture qui ne passent par aucun verrou contournent R1 :
+    // « Appliquer » une suggestion en attente, les correctifs de style des phases 3
+    // et 4, et les écritures humaines (collage, lien posé à la main).
+    // NON BLOQUANT : la publication n'est jamais empêchée, on se contente de
+    // ré-envelopper ce qui peut l'être et d'avertir en console pour le reste.
+    // NO-OP STRICT si la référence est vide — après un F5 sur un article dont le
+    // contenu a été offloadé, `originalContent` vaut '' (Articles.jsx) : sans cette
+    // garde, on croirait TOUS les liens perdus et on en ré-injecterait au hasard.
+    let finalHtml = getFinalHtml();
+    {
+      const reference = (agent.originalContent || '').trim();
+      if (reference) {
+        const carried = carryOverInternalLinks(reference, finalHtml, articleUrl);
+        finalHtml = carried.html;
+        if (carried.missing.length) {
+          console.warn(`[R1 publication] ${carried.missing.length} lien(s) interne(s) de l'article d'origine absent(s) du texte publié :`, carried.missing.map((l) => l.href));
+        }
+      }
+    }
+    const rawHtml = exportAsHtml(finalHtml);
 
     // ── Suppression SYSTÉMATIQUE de figure[data-featured] du contenu publié ──────
     // figure[data-featured] est un artefact interne TONTON AI : injecté par le proxy
