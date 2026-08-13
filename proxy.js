@@ -2836,6 +2836,39 @@ const processWpHtml = (html, siteUrl) => {
     el.setAttribute('contenteditable', 'false');
   });
 
+  /* R3-DOFOLLOW-WP:START */
+  // ── R3 — DOFOLLOW à l'ingestion WordPress ───────────────────────────────────
+  // C'est LA seule porte d'entrée d'un rel="nofollow" dans l'outil : le contenu
+  // de l'API REST arrivait ici INTACT, alors que le chemin scraping supprime
+  // déjà tout rel via sa liste blanche KEEP_ATTRS. Les deux chemins étaient
+  // incohérents — on les aligne.
+  // On normalise dès l'ingestion (et non à la sortie) pour que le lien reste
+  // IDENTIQUE de bout en bout à l'intérieur de l'outil : le verrou de la règle 8,
+  // qui promet une restitution du lien externe à l'identique, n'est pas effleuré.
+  // Retirés : "nofollow", "ugc", "sponsored" — DÉCISION EXPLICITE d'Andrianina
+  // (« tous, internes et externes »). "sponsored" a d'abord été conservé par
+  // précaution ; c'était une erreur de contexte : LES LIENS EXTERNES DE CES
+  // ARTICLES SONT LES ARTICLES SPONSORISÉS — PAYANTS. Conserver un
+  // rel="sponsored" posé par WordPress retire au client ce qu'il a payé.
+  // Conservés : "noopener"/"noreferrer" (sécurité navigateur, pas des directives
+  // de suivi) et tout autre jeton. rel supprimé s'il ne reste rien ; non réécrit
+  // si rien à retirer. Miroir de stripFollowBlockers (src/utils/export.js) — les
+  // deux implémentations doivent rester d'accord (voir dofollowRel.test.js, qui
+  // extrait ce bloc entre ses marqueurs et le rejoue).
+  const normalizeRelDofollowWp = (scope) => {
+    if (!scope || typeof scope.querySelectorAll !== 'function') return;
+    const BLOCKERS = new Set(['nofollow', 'ugc', 'sponsored']);
+    scope.querySelectorAll('a[rel]').forEach((a) => {
+      const tokens = (a.getAttribute('rel') || '').split(/\s+/).filter(Boolean);
+      const kept = tokens.filter((t) => !BLOCKERS.has(t.toLowerCase()));
+      if (kept.length === tokens.length) return;
+      if (kept.length === 0) a.removeAttribute('rel');
+      else a.setAttribute('rel', kept.join(' '));
+    });
+  };
+  /* R3-DOFOLLOW-WP:END */
+  normalizeRelDofollowWp(doc);
+
   return doc.body ? doc.body.innerHTML.trim() : html;
 };
 

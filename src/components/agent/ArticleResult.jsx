@@ -19,7 +19,8 @@ import TableToolbar from './TableToolbar';
 import DocNavigator from './DocNavigator';
 import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
-import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, stripDiffDeletions, wrapLooseTextIntoParagraphs, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment } from '../../utils/diff';
+import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, stripDiffDeletions, wrapLooseTextIntoParagraphs, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment, carryOverInternalLinks } from '../../utils/diff';
+import { weaveBriefLinks } from '../../utils/internalWeave';
 import { analyzeSeo } from '../../utils/seoCheck';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
@@ -3359,7 +3360,54 @@ export default function ArticleResult() {
     // de façon SYNCHRONE → getFinalHtml() ci-dessous reflète bien l'état accepté.
     if (countPendingChanges() > 0) processAllSegments('accept');
     setPublishing(true);
-    const rawHtml = exportAsHtml(getFinalHtml());
+
+    // ── R1 — FILET ULTIME : les liens INTERNES de l'article AVANT sont repris ───
+    // C'est le SEUL endroit où la vraie référence « AVANT » (agent.originalContent,
+    // figée au chargement de l'article) et le HTML final coexistent. Sans ce filet,
+    // tous les chemins d'écriture qui ne passent par aucun verrou contournent R1 :
+    // « Appliquer » une suggestion en attente, les correctifs de style des phases 3
+    // et 4, et les écritures humaines (collage, lien posé à la main).
+    // NON BLOQUANT : la publication n'est jamais empêchée, on se contente de
+    // ré-envelopper ce qui peut l'être et d'avertir en console pour le reste.
+    // NO-OP STRICT si la référence est vide — après un F5 sur un article dont le
+    // contenu a été offloadé, `originalContent` vaut '' (Articles.jsx) : sans cette
+    // garde, on croirait TOUS les liens perdus et on en ré-injecterait au hasard.
+    let finalHtml = getFinalHtml();
+    {
+      const reference = (agent.originalContent || '').trim();
+      if (reference) {
+        const carried = carryOverInternalLinks(reference, finalHtml, articleUrl);
+        finalHtml = carried.html;
+        if (carried.missing.length) {
+          console.warn(`[R1 publication] ${carried.missing.length} lien(s) interne(s) de l'article d'origine absent(s) du texte publié :`, carried.missing.map((l) => l.href));
+        }
+      }
+    }
+
+    // ── R2 — FILET ULTIME : les liens du BRIEF sont TOUS dans le texte publié ───
+    // Même raison que le filet R1 juste au-dessus, et même nécessité : R2 est posé
+    // à la GÉNÉRATION, or six chemins d'écriture la contournent ensuite. Le cas
+    // concret : une suggestion de phase 3 acceptée remplace un paragraphe qui
+    // portait un lien du brief → le lien disparaît, définitivement et en silence.
+    // La garantie « 100 % » ne vaut que si elle est revérifiée ICI, au seul
+    // passage obligatoire de la publication.
+    // NON BLOQUANT, comme R1 : on replace ce qui peut l'être, on avertit pour le
+    // reste. Le forçage rédigé s'applique aussi — c'est la décision assumée.
+    {
+      const briefLinks = (currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {}).internalLinks || [];
+      if (briefLinks.length) {
+        const woven = weaveBriefLinks(finalHtml, briefLinks, articleUrl);
+        finalHtml = woven.html;
+        if (woven.written.length) {
+          console.warn(`[R2 publication] ${woven.written.length} lien(s) du brief RÉ-INSÉRÉ(S) par le code au moment de publier (perdu(s) en cours d'édition) :`, woven.written.map((l) => l.url));
+        }
+        if (woven.missing.length) {
+          console.warn(`[R2 publication] ${woven.missing.length} lien(s) du brief ABSENT(S) du texte publié :`, woven.missing);
+        }
+      }
+    }
+
+    const rawHtml = exportAsHtml(finalHtml);
 
     // ── Suppression SYSTÉMATIQUE de figure[data-featured] du contenu publié ──────
     // figure[data-featured] est un artefact interne TONTON AI : injecté par le proxy

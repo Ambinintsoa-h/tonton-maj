@@ -11,7 +11,8 @@
 // SKILLS IA : la méthode et les gabarits vivent dans le skill, jamais ici.
 
 import { searchWeb } from './search';
-import { sanitizeFullArticle, listExternalLinks } from '../utils/diff';
+import { sanitizeFullArticle, listExternalLinks, listInternalLinks, carryOverInternalLinks } from '../utils/diff';
+import { weaveBriefLinks, countPlacedBriefLinks, briefLinkReportLine } from '../utils/internalWeave';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
@@ -197,10 +198,30 @@ const buildBriefBlock = ({
   targetKeyword = '', articleType = DEFAULT_ARTICLE_TYPE, seoPlugin = DEFAULT_SEO_PLUGIN,
   targetWords = DEFAULT_TARGET_WORDS, internalLinks = [], articleUrl = '',
 }) => {
-  const links = cleanLinkRows(internalLinks);
+  // `articleUrl` branche le filtre de domaine (règle 8) : une URL d'un AUTRE site
+  // saisie par erreur dans le maillage n'est même pas proposée au modèle, car
+  // depuis R2 le code la placerait lui-même — ce serait un lien EXTERNE AJOUTÉ.
+  const links = cleanLinkRows(internalLinks, articleUrl);
   const linkBlock = links.length
-    ? links.map((l, i) => `${i + 1}. Ancre : « ${l.anchor} » → URL : ${l.url}`).join('\n')
-    : 'Aucune paire ancre + URL fournie : n\'ajoute AUCUN lien.';
+    ? `${links.map((l, i) => `${i + 1}. Ancre : « ${l.anchor} » → URL : ${l.url}`).join('\n')}
+
+⚠️ EXHAUSTIVITÉ EXIGÉE — les ${links.length} paires ci-dessus, SANS EXCEPTION.
+Chacune doit figurer dans article_html sous la forme <a href="URL">ancre</a>, dans
+une phrase du corps de l'article. Pas « la plupart », pas « celles qui
+s'intègrent naturellement » : les ${links.length}. Si une ancre ne trouve pas sa
+place dans le plan que tu écris, c'est le PLAN qui doit lui faire une place —
+prévois la phrase qui la porte pendant que tu rédiges la section concernée.
+Une ancre par emplacement, jamais deux liens vers la même URL, et jamais dans un
+titre, le TL;DR, le sommaire, un tableau ou la FAQ.
+Ce que tu laisses de côté n'est PAS perdu : le code le place ensuite lui-même, en
+RÉDIGEANT une clause d'appoint et en la marquant « à relire » pour le rédacteur.
+Un texte de ton cru vaut mieux que cette rustine : c'est tout l'intérêt de les
+placer toi-même.`
+    // ⚠️ NE PAS écrire « n'ajoute AUCUN lien » tout court : ce serait contradictoire
+    // avec l'obligation de REPRODUIRE les liens déjà présents dans l'article
+    // (R1). Le chemin « file d'attente » force internalLinks: [] et tombe
+    // exactement dans ce cas de figure.
+    : 'Aucune paire ancre + URL fournie : n\'ajoute AUCUN lien NOUVEAU.';
   return `## ═══ BRIEF DU RÉDACTEUR (prioritaire sur les valeurs par défaut des ressources) ═══
 - Mot-clé cible (à respecter À LA LETTRE PRÈS) : « ${targetKeyword} »
 - Type d'article : ${ARTICLE_TYPES[articleType]?.label || articleType} — ${ARTICLE_TYPES[articleType]?.description || ''}
@@ -208,8 +229,13 @@ const buildBriefBlock = ({
 - Longueur cible : ${targetWords} mots
 - URL de l'article : ${articleUrl || 'non fournie'}
 
-### Liens INTERNES à placer (les seuls liens que tu ajoutes)
-${linkBlock}`;
+### Liens INTERNES à AJOUTER (nouveaux liens — les seuls que tu es autorisée à créer)
+${linkBlock}
+
+⚠️ Cette liste encadre les liens NOUVEAUX. Elle ne te dispense JAMAIS de
+REPRODUIRE les liens déjà présents dans l'article d'origine : reproduire
+l'existant est obligatoire et sans exception, y compris quand cette liste est
+vide. Voir les blocs « LIENS ... À REPRODUIRE » du message.`;
 };
 
 /** « 4 min 20 s » — durée écoulée, lisible par le rédacteur. */
@@ -664,12 +690,23 @@ ancres_placees, notes_redaction).
 
 ${depthBlock}${overrideNote}
 
-## ═══ VERROU ABSOLU — LIENS EXTERNES (prioritaire sur toute autre consigne) ═══
-Tu n'ajoutes AUCUN lien externe et tu n'en supprimes AUCUN. Chaque lien externe
-présent dans l'article d'origine doit réapparaître À L'IDENTIQUE dans
-article_html : même href, même texte d'ancre. Un lien externe manquant fait
-REJETER toute la génération par le contrôle technique. Les seuls liens que tu
-ajoutes sont les liens INTERNES du brief.
+## ═══ VERROU ABSOLU — LIENS (prioritaire sur toute autre consigne) ═══
+Deux obligations DISTINCTES, ne les confonds pas.
+
+1. REPRODUIRE L'EXISTANT — obligatoire, toujours, sans exception.
+   TOUT lien présent dans l'article d'origine, externe COMME interne, doit
+   réapparaître dans article_html avec le même href et le même texte d'ancre,
+   intégré dans une phrase du corps de l'article. Cette obligation vaut même si
+   le brief ne demande aucun lien nouveau.
+   • un lien EXTERNE manquant fait REJETER toute la génération par le contrôle
+     technique ;
+   • un lien INTERNE manquant est réparé automatiquement quand c'est possible, et
+     signalé au rédacteur sinon — ne compte pas sur ce filet, place-les toi-même.
+
+2. AJOUTER DU NEUF — strictement limité.
+   Tu n'ajoutes AUCUN lien externe nouveau, jamais, sous aucun prétexte. Les
+   seuls liens nouveaux que tu es autorisée à créer sont les liens INTERNES
+   listés dans le brief.
 
 ## ═══ RÈGLES COMPLÉMENTAIRES ═══
 ${buildSkillsBlock(
@@ -701,10 +738,26 @@ texte d'ancre. Il en manque un seul et toute la génération est rejetée.
 ${externalLinks.map((l, i) => `${i + 1}. <a href="${l.href}">${l.text}</a>`).join('\n')}`
     : '## ═══ LIENS EXTERNES ═══\nL\'article d\'origine n\'en contient aucun : n\'en ajoute aucun.';
 
+  // Jumeau du bloc ci-dessus pour les liens INTERNES (R1). Même motif, qui a fait
+  // ses preuves : les nommer un par un ÉVITE la perte, alors que la réparer coûte
+  // soit une passe déterministe, soit un avertissement au rédacteur.
+  // Les ancres purement locales (#sommaire) sont exclues par listInternalLinks.
+  const existingInternalLinks = listInternalLinks(sourceHtml, articleUrl);
+  const internalBlock = existingInternalLinks.length
+    ? `## ═══ LIENS INTERNES DÉJÀ PRÉSENTS — À REPRODUIRE (${existingInternalLinks.length}) ═══
+Ces liens existent DÉJÀ dans l'article : ce ne sont pas des liens nouveaux, et
+les reproduire n'est pas facultatif. Chacun doit figurer dans article_html avec
+le même href et le même texte d'ancre, dans une phrase du corps de l'article.
+Ne les mets ni dans un titre, ni dans le TL;DR, ni dans la FAQ.
+${existingInternalLinks.map((l, i) => `${i + 1}. <a href="${l.href}">${l.text}</a>`).join('\n')}`
+    : '## ═══ LIENS INTERNES DÉJÀ PRÉSENTS ═══\nL\'article d\'origine n\'en contient aucun.';
+
   const user = `## ARTICLE D'ORIGINE (HTML — à réécrire)
 ${sourceHtml}
 
 ${externalBlock}
+
+${internalBlock}
 
 ## CONCLUSIONS DE L'AUDIT (elles pilotent la réécriture)
 ${summarizeAuditForRewrite(audit)}
@@ -781,7 +834,47 @@ N'ajoute aucun AUTRE lien externe.`;
         article = null;
         continue;
       }
-      sanitized = check;
+
+      // ── R1, volet INTERNE : reprise DÉTERMINISTE et NON BLOQUANTE ───────────
+      // APRÈS sanitizeFullArticle, jamais avant : ré-envelopper des ancres en
+      // amont ferait échouer silencieusement Range.surroundContents sur une ancre
+      // à cheval sur des balises et augmenterait mécaniquement le taux de rejet
+      // du verrou externe.
+      // Champ SÉPARÉ (`missingInternal`) : la signature { html, stripped, missing }
+      // de sanitizeFullArticle et ses tests restent intacts.
+      // Sanction ASYMÉTRIQUE : on ne rejette JAMAIS sur un lien interne. Un 4e
+      // motif de rejet écraserait `currentUser` et ferait perdre la consigne de
+      // reprise du verrou externe — R1 affaiblirait alors la règle 8.
+      const carried = carryOverInternalLinks(sourceHtml, check.html, articleUrl);
+      if (carried.missing.length) {
+        onStep(`⚠️ ${carried.missing.length} lien(s) interne(s) d'origine non repris (ancre disparue) — signalés, génération conservée.`);
+      }
+      // ── R2 — TOUTES les suggestions de lien interne sont intégrées ──────────
+      // Même position et mêmes raisons que R1 : APRÈS sanitizeFullArticle (poser
+      // des ancres avant le verrou externe augmenterait son taux de rejet), et
+      // SANS jamais rejeter — un 4e motif de rejet écraserait `currentUser` et
+      // ferait perdre la consigne de reprise du verrou externe (règle 8).
+      //
+      // FORÇAGE À 100 % (décision explicite d'Andrianina) : ce que l'IA n'a pas
+      // placé, le code le place — en tissant l'ancre si son texte existe, sinon
+      // en RÉDIGEANT une clause d'appoint marquée « à relire ».
+      const woven = weaveBriefLinks(carried.html, internalLinks, articleUrl);
+      // CONSTAT : on ne croit ni le modèle (`ancres_placees` est une
+      // auto-déclaration jamais vérifiée) ni le rapport du tissage — on RECOMPTE
+      // sur le HTML final.
+      const briefConstat = countPlacedBriefLinks(woven.html, internalLinks, articleUrl);
+      const reportLine = briefLinkReportLine(woven);
+      if (reportLine) onStep(reportLine);
+      sanitized = {
+        ...check,
+        html: woven.html,
+        missingInternal: carried.missing,
+        restoredInternal: carried.restored,
+        briefConstat,
+        briefWritten: woven.written,
+        briefMissing: woven.missing,
+        briefOffDomain: woven.offDomain,
+      };
     } catch (e) {
       console.warn(`[qat rewrite] essai ${attempt}/3:`, e.message);
       if (attempt >= 3) throw e;
@@ -815,9 +908,25 @@ N'ajoute aucun AUTRE lien externe.`;
       motCleRetenu:    String(article.mot_cle_retenu || targetKeyword || '').trim(),
       elementsSupprimes: Array.isArray(article.elements_supprimes) ? article.elements_supprimes : [],
       motsClesSecondaires: Array.isArray(article.mots_cles_secondaires) ? article.mots_cles_secondaires : [],
-      ancresPlacees:   Array.isArray(article.ancres_placees) ? article.ancres_placees : [],
+      // ── R2 — CONSTAT, plus une auto-déclaration ─────────────────────────────
+      // `ancresPlacees` valait jusqu'ici `article.ancres_placees`, c'est-à-dire ce
+      // que le MODÈLE disait avoir fait, affiché au rédacteur sans le moindre
+      // contrôle : il pouvait annoncer 7 ancres et n'en poser aucune. C'est
+      // désormais le comptage RÉEL des paires du brief présentes dans le HTML
+      // final. La déclaration du modèle est conservée à part, pour pouvoir
+      // constater l'écart sans le confondre avec la réalité.
+      ancresPlacees:   (sanitized.briefConstat || []).filter((l) => l.placed),
+      ancresRedigees:  sanitized.briefWritten   || [],   // écrites par le CODE → à relire
+      ancresManquantes: sanitized.briefMissing  || [],   // aucun emplacement autorisé
+      ancresHorsDomaine: sanitized.briefOffDomain || [], // écartées (règle 8)
+      ancresBrief:     sanitized.briefConstat   || [],   // le constat complet, placées ou non
+      ancresDeclareesIa: Array.isArray(article.ancres_placees) ? article.ancres_placees : [],
       notesRedaction:  String(article.notes_redaction || '').trim(),
       strippedExternalLinks: sanitized.stripped,
+      // R1 — liens internes d'origine : ré-enveloppés automatiquement, ou non
+      // repris (avertissement, jamais un rejet).
+      restoredInternalLinks: sanitized.restoredInternal || [],
+      missingInternalLinks:  sanitized.missingInternal  || [],
     },
     articleRaw: raw,
     tokenUsage: { ...tokenAcc, costUsd: calcCost(tokenAcc.calls, modelPricing) },
