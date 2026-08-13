@@ -27,10 +27,18 @@ export const stripParasiticFontSize = (root) => {
 };
 
 // ── R3 — DOFOLLOW : aucun lien publié ne doit bloquer le suivi des moteurs ───
-// Jetons rel qui bloquent le suivi et qui sont donc RETIRÉS : "nofollow", "ugc".
+// Jetons rel qui bloquent le suivi et qui sont donc RETIRÉS : "nofollow", "ugc",
+// "sponsored" — DÉCISION EXPLICITE d'Andrianina : « tous, internes et externes ».
+//
+// "sponsored" a d'abord été conservé par précaution (exigence Google sur les
+// liens payants/affiliés). Erreur de lecture du contexte réel : LES LIENS
+// EXTERNES DE CES ARTICLES SONT LES ARTICLES SPONSORISÉS — PAYANTS. Un plugin
+// WordPress qui pose rel="sponsored" sur un lien qu'un client a payé pour
+// obtenir en dofollow retire au client exactement ce qu'il a acheté en le
+// conservant. Risque commercial assumé côté Google (lien payant non marqué =
+// exposition à une pénalité) — arbitrage d'Andrianina, pas un oubli.
+//
 // Jetons CONSERVÉS, volontairement :
-//   • "sponsored" — exigence Google sur les liens payants/affiliés. Le retirer
-//     exposerait le site à une pénalité manuelle : on ne le touche jamais.
 //   • "noopener" / "noreferrer" — garde-fous navigateur, PAS des directives de
 //     suivi. Les verrous liens externes attendent d'ailleurs rel="noopener" à
 //     l'identique (externalLinks.test.js, sanitizeFullArticle.test.js).
@@ -40,7 +48,7 @@ export const stripParasiticFontSize = (root) => {
 // espacement d'origine restent intacts (aucune churn sur le HTML publié).
 // Ne cible QUE les <a> : le rel d'un <link> (stylesheet, canonical…) est
 // structurant et n'a rien à voir avec le suivi des liens de contenu.
-const FOLLOW_BLOCKERS = new Set(['nofollow', 'ugc']);
+const FOLLOW_BLOCKERS = new Set(['nofollow', 'ugc', 'sponsored']);
 
 export const stripFollowBlockers = (root) => {
   if (!root || typeof root.querySelectorAll !== 'function') return;
@@ -269,6 +277,19 @@ export const exportAsHtml = (content) => {
   // Dépublier les surlignages de liens internes non appliqués : remplacer le <span>
   // par son contenu texte brut (le lien n'a pas été validé par l'utilisateur).
   div.querySelectorAll('[data-il-idx]').forEach(span => {
+    const frag = document.createDocumentFragment();
+    while (span.firstChild) frag.appendChild(span.firstChild);
+    if (span.parentNode) span.parentNode.replaceChild(frag, span);
+  });
+
+  // R2 — MARQUE des clauses RÉDIGÉES PAR LE CODE (data-lien-redige, voir
+  // src/utils/internalWeave.js) : elle sert au rédacteur dans l'éditeur, elle n'a
+  // rien à faire sur le site. Même traitement que [data-il-idx] juste au-dessus :
+  // le <span> porteur est débalisé, donc la classe, l'infobulle et le
+  // data-attribut partent — mais le TEXTE et le <a> restent. Le lien du brief est
+  // obligatoire (R2) : il doit survivre à la publication, contrairement à sa
+  // marque de relecture.
+  div.querySelectorAll('[data-lien-redige]').forEach(span => {
     const frag = document.createDocumentFragment();
     while (span.firstChild) frag.appendChild(span.firstChild);
     if (span.parentNode) span.parentNode.replaceChild(frag, span);

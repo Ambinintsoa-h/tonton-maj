@@ -8,10 +8,13 @@
  *   2. avant publication    — src/utils/export.js / stripFollowBlockers, appelé
  *      par exportAsHtml, point de passage OBLIGATOIRE de tout ce qui sort.
  *
- * Politique : on retire "nofollow" et "ugc". On CONSERVE "sponsored" (exigence
- * Google sur les liens payants/affiliés), "noopener"/"noreferrer" (sécurité
- * navigateur, pas des directives de suivi) et tout jeton inconnu. rel supprimé
- * s'il ne reste rien ; rel NON réécrit si rien n'est à retirer.
+ * Politique : on retire "nofollow", "ugc" ET "sponsored" — décision explicite
+ * d'Andrianina (« tous, internes et externes »). Les liens externes de ces
+ * articles SONT les articles sponsorisés, payants : conserver un rel="sponsored"
+ * posé par WordPress retirerait au client ce qu'il a acheté. On CONSERVE
+ * "noopener"/"noreferrer" (sécurité navigateur, pas des directives de suivi) et
+ * tout jeton inconnu. rel supprimé s'il ne reste rien ; rel NON réécrit si rien
+ * n'est à retirer.
  *
  * proxy.js ne peut pas être require() ici (il démarre le serveur), et le code
  * doit rester inline dans proxy.js (aucun nouveau module racine : la liste SCP
@@ -64,14 +67,14 @@ const CASES = [
     '<p><a href="/b">b</a></p>',
   ],
   [
-    'sponsored est CONSERVÉ (exigence Google, liens payants/affiliés)',
+    'sponsored est RETIRÉ (les liens externes sont les articles PAYANTS : le client a acheté du dofollow)',
     '<p><a href="/b" rel="sponsored">b</a></p>',
-    '<p><a href="/b" rel="sponsored">b</a></p>',
+    '<p><a href="/b">b</a></p>',
   ],
   [
-    'sponsored survit au retrait de nofollow',
+    'nofollow ET sponsored tombent ensemble → attribut supprimé',
     '<p><a href="/b" rel="nofollow sponsored">b</a></p>',
-    '<p><a href="/b" rel="sponsored">b</a></p>',
+    '<p><a href="/b">b</a></p>',
   ],
   [
     'noopener et noreferrer sont conservés',
@@ -94,9 +97,14 @@ const CASES = [
     '<p><a href="/b">b</a></p>',
   ],
   [
-    'casse mixte : la casse des jetons conservés n\'est pas modifiée',
+    'casse mixte : "Sponsored" est retiré comme "sponsored" (comparaison insensible à la casse)',
     '<p><a href="/b" rel="Sponsored   NOFOLLOW">b</a></p>',
-    '<p><a href="/b" rel="Sponsored">b</a></p>',
+    '<p><a href="/b">b</a></p>',
+  ],
+  [
+    'casse mixte : la casse des jetons CONSERVÉS n\'est pas modifiée',
+    '<p><a href="/b" rel="NoOpener   NOFOLLOW">b</a></p>',
+    '<p><a href="/b" rel="NoOpener">b</a></p>',
   ],
   [
     'lien sans rel : intact',
@@ -121,7 +129,7 @@ const CASES = [
   [
     'plusieurs liens, traitement indépendant',
     '<p><a href="/a" rel="nofollow">a</a> <a href="/b" rel="sponsored">b</a> <a href="/c">c</a></p>',
-    '<p><a href="/a">a</a> <a href="/b" rel="sponsored">b</a> <a href="/c">c</a></p>',
+    '<p><a href="/a">a</a> <a href="/b">b</a> <a href="/c">c</a></p>',
   ],
   [
     'le rel d\'un non-<a> n\'est jamais touché (structurant)',
@@ -194,12 +202,16 @@ describe('R3 — exportAsHtml : tout ce qui est publié est dofollow', () => {
     expect(html).toContain('nos tarifs');
   });
 
-  it('retire ugc et conserve sponsored + noopener sur un lien externe', () => {
+  it('retire ugc ET sponsored, conserve noopener, sur un lien externe payant', () => {
+    // Cas RÉEL du modèle d'Andrianina : ce lien externe EST un article sponsorisé
+    // payant. Le client a acheté un dofollow — le rel="sponsored" que WordPress
+    // pose dessus le lui retire, donc il tombe.
     const html = exportAsHtml(
       '<p>Via <a href="https://partenaire.fr/offre" rel="ugc sponsored noopener">cette offre</a>.</p>'
     );
     expect(html).not.toMatch(/\bugc\b/i);
-    expect(html).toContain('rel="sponsored noopener"');
+    expect(html).not.toMatch(/\bsponsored\b/i);
+    expect(html).toContain('rel="noopener"');
     expect(html).toContain('href="https://partenaire.fr/offre"');
     expect(html).toContain('cette offre');
   });

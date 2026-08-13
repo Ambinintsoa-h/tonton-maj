@@ -1,3 +1,6 @@
+// Verrou de domaine du maillage interne (règle 8) — voir cleanLinkRows plus bas.
+import { filterSameSiteLinks } from '../utils/diff';
+
 // ── Mode de MAJ ───────────────────────────────────────────────────────────────
 // DOUBLE FLUX TEMPORAIRE (décision équipe, août 2026) : le flux historique reste
 // intact et sélectionnable pendant que le nouveau flux « Audit QAT + Refonte »
@@ -72,10 +75,28 @@ export const INTERNAL_LINK_ROWS_MAX = 15;
 /** Ligne de maillage vide — { anchor, url } */
 export const emptyLinkRow = () => ({ anchor: '', url: '' });
 
-/** Ne garde que les paires complètes et dédoublonne par URL. */
-export const cleanLinkRows = (rows = []) => {
+/**
+ * Ne garde que les paires complètes et dédoublonne par URL.
+ *
+ * `articleUrl` (OPTIONNEL) — PRÉREQUIS DE LA RÈGLE 8. Le maillage est saisi à la
+ * main : rien n'empêchait d'y coller une URL d'un AUTRE site. Tant que ces
+ * paires ne servaient qu'à instruire le prompt, l'erreur restait rattrapée en
+ * aval par le verrou liens externes. Depuis R2, le code PLACE lui-même ces liens
+ * dans l'article : une URL hors domaine deviendrait un LIEN EXTERNE AJOUTÉ, soit
+ * une violation directe de la règle 8 par la porte du maillage. `articleUrl`
+ * branche donc `filterSameSiteLinks` (src/utils/diff.js), écrite exactement pour
+ * ça et jamais exécutée jusqu'ici (son seul appelant, `runAgent`, est du code
+ * mort).
+ *
+ * Sans `articleUrl`, on ne filtre RIEN : `filterSameSiteLinks` jetterait alors
+ * TOUTE URL absolue (protection maximale faute d'hôte de référence), ce qui
+ * viderait le maillage des appelants qui ne connaissent pas l'URL de l'article
+ * — un changement de comportement de l'existant (règle 7). Le placement
+ * physique, lui, refiltre TOUJOURS de son côté (voir src/utils/internalWeave.js).
+ */
+export const cleanLinkRows = (rows = [], articleUrl = '') => {
   const seen = new Set();
-  return (rows || [])
+  const clean = (rows || [])
     .map((r) => ({ anchor: String(r?.anchor || '').trim(), url: String(r?.url || '').trim() }))
     .filter((r) => {
       if (!r.anchor || !r.url) return false;
@@ -85,4 +106,17 @@ export const cleanLinkRows = (rows = []) => {
       return true;
     })
     .slice(0, INTERNAL_LINK_ROWS_MAX);
+  return articleUrl ? filterSameSiteLinks(clean, articleUrl) : clean;
+};
+
+/**
+ * Lignes de maillage ÉCARTÉES parce qu'elles pointent hors du domaine de
+ * l'article. Sert à le DIRE au rédacteur : sans ce retour, une URL mal collée
+ * disparaîtrait en silence et il croirait son lien placé.
+ */
+export const offDomainLinkRows = (rows = [], articleUrl = '') => {
+  if (!articleUrl) return [];
+  const all = cleanLinkRows(rows);
+  const kept = new Set(filterSameSiteLinks(all, articleUrl).map((r) => r.url));
+  return all.filter((r) => !kept.has(r.url));
 };

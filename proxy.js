@@ -2845,16 +2845,19 @@ const processWpHtml = (html, siteUrl) => {
   // On normalise dès l'ingestion (et non à la sortie) pour que le lien reste
   // IDENTIQUE de bout en bout à l'intérieur de l'outil : le verrou de la règle 8,
   // qui promet une restitution du lien externe à l'identique, n'est pas effleuré.
-  // Retirés : "nofollow", "ugc". Conservés : "sponsored" (exigence Google sur les
-  // liens payants/affiliés — le retirer exposerait le site à une pénalité),
-  // "noopener"/"noreferrer" (sécurité navigateur, pas des directives de suivi) et
-  // tout autre jeton. rel supprimé s'il ne reste rien ; non réécrit si rien à
-  // retirer. Miroir de stripFollowBlockers (src/utils/export.js) — les deux
-  // implémentations doivent rester d'accord (voir dofollowRel.test.js, qui extrait
-  // ce bloc entre ses marqueurs et le rejoue).
+  // Retirés : "nofollow", "ugc", "sponsored" — DÉCISION EXPLICITE d'Andrianina
+  // (« tous, internes et externes »). "sponsored" a d'abord été conservé par
+  // précaution ; c'était une erreur de contexte : LES LIENS EXTERNES DE CES
+  // ARTICLES SONT LES ARTICLES SPONSORISÉS — PAYANTS. Conserver un
+  // rel="sponsored" posé par WordPress retire au client ce qu'il a payé.
+  // Conservés : "noopener"/"noreferrer" (sécurité navigateur, pas des directives
+  // de suivi) et tout autre jeton. rel supprimé s'il ne reste rien ; non réécrit
+  // si rien à retirer. Miroir de stripFollowBlockers (src/utils/export.js) — les
+  // deux implémentations doivent rester d'accord (voir dofollowRel.test.js, qui
+  // extrait ce bloc entre ses marqueurs et le rejoue).
   const normalizeRelDofollowWp = (scope) => {
     if (!scope || typeof scope.querySelectorAll !== 'function') return;
-    const BLOCKERS = new Set(['nofollow', 'ugc']);
+    const BLOCKERS = new Set(['nofollow', 'ugc', 'sponsored']);
     scope.querySelectorAll('a[rel]').forEach((a) => {
       const tokens = (a.getAttribute('rel') || '').split(/\s+/).filter(Boolean);
       const kept = tokens.filter((t) => !BLOCKERS.has(t.toLowerCase()));
