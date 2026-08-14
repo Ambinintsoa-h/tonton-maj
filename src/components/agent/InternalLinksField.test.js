@@ -103,4 +103,19 @@ describe('PhaseGeneration — le maillage est saisissable AVANT de générer', (
     );
     expect(screen.queryByText(/aucun lien interne nouveau/)).not.toBeInTheDocument();
   });
+
+  it('DIT que les lignes viennent de l\'audit quand elles en viennent', () => {
+    render(
+      <PhaseGeneration {...base}
+        linkRows={[{ anchor: 'laine de roche', url: '/laine-de-roche' }]}
+        onLinkRowsChange={() => {}}
+        auditSuggestionsCount={4} />
+    );
+    expect(screen.getByText(/4 liens suggérés par l'audit/)).toBeInTheDocument();
+  });
+
+  it('ne parle pas de l\'audit quand il n\'a rien suggéré', () => {
+    render(<PhaseGeneration {...base} linkRows={[emptyLinkRow()]} onLinkRowsChange={() => {}} />);
+    expect(screen.queryByText(/suggéré.? par l'audit/)).not.toBeInTheDocument();
+  });
 });

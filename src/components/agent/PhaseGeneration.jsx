@@ -50,6 +50,10 @@ export default function PhaseGeneration({
   linkRows = [],
   onLinkRowsChange,
   articleUrl = '',
+  // Nombre de paires proposées par l'audit et versées dans le champ. Affiché
+  // pour que le rédacteur sache d'où viennent les lignes pré-remplies — sinon
+  // il ne peut pas distinguer sa propre saisie d'une proposition à relire.
+  auditSuggestionsCount = 0,
 }) {
   const propose  = scopeProposedByAudit(audit);
   const source   = scopeRecommendationSource(audit);
@@ -176,6 +180,15 @@ export default function PhaseGeneration({
           100 % par le code (weaveBriefLinks) : sans ce bloc, un article venu de
           la file d'attente ne pouvait recevoir aucun lien interne nouveau. */}
       <div className="border border-indigo-100 bg-indigo-50/40 rounded-xl p-4 space-y-3">
+        {auditSuggestionsCount > 0 && (
+          <div className="flex items-start gap-2 bg-white/70 border border-indigo-200 rounded-lg px-3 py-2 text-[11px] text-indigo-800">
+            <Check size={13} className="shrink-0 mt-0.5" />
+            <span>
+              Pré-rempli avec les <strong>{auditSuggestionsCount} lien{auditSuggestionsCount > 1 ? 's' : ''} suggéré{auditSuggestionsCount > 1 ? 's' : ''} par l'audit</strong>.
+              Corrigez une ancre, supprimez une ligne ou ajoutez les vôtres — c'est cette liste exacte qui sera placée.
+            </span>
+          </div>
+        )}
         <InternalLinksField
           linkRows={linkRows}
           setLinkRows={onLinkRowsChange}

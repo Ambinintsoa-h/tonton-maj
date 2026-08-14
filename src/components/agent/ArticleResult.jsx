@@ -40,6 +40,7 @@ import {
   TODO, DONE, RUNNING, ERROR, SCOPE_SIMPLE, scopeProposedByAudit,
 } from '../../constants/majPhases';
 import { cleanLinkRows, emptyLinkRow } from '../../constants/majMode';
+import { auditSuggestedLinkRows, mergeLinkRows } from '../../utils/auditSuggestions';
 import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, DEFAULT_VERIFICATION_TEMPLATE } from '../../utils/generationPrompt';
 import { setProfile } from '../../store/slices/authSlice';
 import PhaseStepper from './PhaseStepper';
@@ -1526,6 +1527,10 @@ export default function ArticleResult() {
   // Ces lignes sont la source de vérité de la session pour la génération ET
   // pour le filet de publication.
   const [briefLinkRows, setBriefLinkRows] = useState([emptyLinkRow()]);
+  // Suggestions de l'audit déjà versées dans le champ, par article : sans ce
+  // repère, une simple relecture de l'audit réinjecterait des paires que le
+  // rédacteur vient de supprimer volontairement.
+  const suggestionsVerseesRef = useRef(null);
   // Réamorçage à chaque changement d'article : sans la clé sur l'id, les paires
   // d'un article suivraient le rédacteur sur le suivant.
   useEffect(() => {
@@ -1533,10 +1538,25 @@ export default function ArticleResult() {
     setBriefLinkRows(stored.length
       ? stored.map(l => ({ anchor: l.anchor || '', url: l.url || '' }))
       : [emptyLinkRow()]);
+    suggestionsVerseesRef.current = null;
     // `currentArticle`/`cqItem` sont recalculés à chaque rendu : seul l'id doit
     // déclencher le réamorçage, sinon la saisie en cours serait écrasée.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent.currentArticleId]);
+
+  // ── PRÉ-REMPLISSAGE par les suggestions de l'AUDIT ─────────────────────────
+  // L'audit produit `internal_linking.liens_entrants` et le panneau QAT les
+  // affiche depuis toujours — mais elles n'allaient nulle part : il fallait les
+  // recopier à la main. Le travail était fait, puis jeté, et le brief partait
+  // vide. Elles sont désormais versées dans le champ de saisie de la phase 2.
+  // AJOUT SEULEMENT (mergeLinkRows) : la saisie du rédacteur prime toujours.
+  const auditLinkSuggestions = useMemo(() => auditSuggestedLinkRows(auditJson), [auditJson]);
+  useEffect(() => {
+    if (!auditLinkSuggestions.length) return;
+    if (suggestionsVerseesRef.current === agent.currentArticleId) return;
+    suggestionsVerseesRef.current = agent.currentArticleId;
+    setBriefLinkRows(rows => mergeLinkRows(rows, auditLinkSuggestions));
+  }, [auditLinkSuggestions, agent.currentArticleId]);
 
   // ── Repérage des liens dans « Après » ──────────────────────────────────────
   // Surlignage 100 % CSS (`:has()`), jamais de balise injectée dans l'éditeur :
@@ -4407,6 +4427,7 @@ export default function ArticleResult() {
               linkRows={briefLinkRows}
               onLinkRowsChange={setBriefLinkRows}
               articleUrl={articleUrl}
+              auditSuggestionsCount={auditLinkSuggestions.length}
             />
           )}
           {phase === PHASE_OBSOLESCENCE && (
