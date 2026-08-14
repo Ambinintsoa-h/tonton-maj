@@ -5,6 +5,9 @@
 import {
   NEVER_LINK_TAG_SEL, TABLE_SEL, forbiddenLinkZones, isInForbiddenLinkZone,
 } from './linkZones';
+// R4 — les images de l'article d'origine ne disparaissent pas (cf. imageCarry.js).
+// Module AUTONOME, comme linkZones : aucun cycle d'import possible.
+import { enforceImageCarryOver } from './imageCarry';
 
 export const normalizeText = (str) =>
   str
@@ -1594,17 +1597,30 @@ export const applyAllDiffs = (html, updates, passNumber = 1, articleUrl = '') =>
     if (missingInternal.length) {
       console.warn(`[diff p${passNumber}] ${missingInternal.length} lien(s) interne(s) d'origine non repris (AVERTISSEMENT, update conservée) :`, missingInternal.map((l) => l.href));
     }
+    // R4 — reprise des IMAGES (non bloquante), à côté du verrou externe et de R1,
+    // jamais dedans. Placée ICI, donc AVANT `balanceFragment` ci-dessous : rien
+    // n'est ajouté au fragment après son équilibrage.
+    // NO-OP STRICT quand le fragment remplacé ne contient aucune <img> : toutes
+    // les updates sans image gardent exactement la forme qu'elles avaient.
+    // C'est ce qui couvre les phases 3 (obsolescence) et 4 (relecture), où une
+    // suggestion acceptée remplaçait un bloc portant une image et la faisait
+    // disparaître en silence.
+    const { update: withImgs, missing: missingImages } = enforceImageCarryOver(carried);
+    if (missingImages.length) {
+      console.warn(`[diff p${passNumber}] ${missingImages.length} image(s) d'origine non reprise(s) (AVERTISSEMENT, update conservée) :`, missingImages.map((i) => i.src));
+    }
     // Garde-fou GRANULARITÉ : un remplacement qui fusionnerait plusieurs blocs ou
     // ferait disparaître un titre est refusé — il détruirait la structure de
     // l'article (mur de texte sans h2, sans liste, sans tableau).
-    const gran = guardBlockGranularity(carried);
+    const gran = guardBlockGranularity(withImgs);
     if (!gran.ok) {
-      console.warn(`[diff p${passNumber}] Update REFUSÉE (${gran.reason}) :`, (carried.original || '').substring(0, 70));
-      return { ...carried, applied: false, pass: passNumber, blockedReason: gran.reason };
+      console.warn(`[diff p${passNumber}] Update REFUSÉE (${gran.reason}) :`, (withImgs.original || '').substring(0, 70));
+      return { ...withImgs, applied: false, pass: passNumber, blockedReason: gran.reason };
     }
-    // Le champ n'est posé que s'il y a quelque chose à signaler : les updates
-    // saines gardent exactement la forme qu'elles avaient avant R1.
-    const flagged = missingInternal.length ? { ...carried, missingInternalLinks: missingInternal } : carried;
+    // Les champs ne sont posés que s'il y a quelque chose à signaler : les updates
+    // saines gardent exactement la forme qu'elles avaient avant R1 / R4.
+    let flagged = missingInternal.length ? { ...withImgs, missingInternalLinks: missingInternal } : withImgs;
+    if (missingImages.length) flagged = { ...flagged, missingImages };
     // Sécurité structure : équilibrer le fragment inséré (updated) pour qu'aucune
     // balise non fermée ne fuie dans le document (cascade d'imbrication en Refonte).
     const update = flagged.updated ? { ...flagged, updated: balanceFragment(flagged.updated) } : flagged;

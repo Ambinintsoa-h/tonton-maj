@@ -21,6 +21,7 @@ import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } fro
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, stripDiffDeletions, wrapLooseTextIntoParagraphs, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment, carryOverInternalLinks } from '../../utils/diff';
 import { weaveBriefLinks } from '../../utils/internalWeave';
+import { carryOverImages } from '../../utils/imageCarry';
 import { analyzeSeo } from '../../utils/seoCheck';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
@@ -3414,6 +3415,33 @@ export default function ArticleResult() {
       }
     }
 
+    // ── R4 — FILET ULTIME : les IMAGES de l'article AVANT sont dans le texte ───
+    // Même raison et même nécessité que les deux filets ci-dessus. R4 est posé à
+    // la GÉNÉRATION, or tous les chemins d'écriture qui suivent le contournent :
+    // « Appliquer » une suggestion en attente, les correctifs de style des phases
+    // 3 (obsolescence) et 4 (relecture), et les écritures humaines. C'est ICI, au
+    // seul passage obligatoire de la publication, que la garantie « toutes les
+    // images sont là » se vérifie une dernière fois.
+    // NON BLOQUANT : la publication n'est jamais empêchée.
+    // NO-OP STRICT si la référence est vide (F5 sur un article offloadé).
+    // L'image à la une (figure[data-featured]) est HORS PÉRIMÈTRE : elle est
+    // gérée à part et retirée du contenu publié quelques lignes plus bas — la
+    // réinjecter ici recréerait justement le doublon que ce retrait évite.
+    let filetR4Restaurees = [];
+    let filetR4Manquantes = [];
+    {
+      const reference = (agent.originalContent || '').trim();
+      if (reference) {
+        const imgs = carryOverImages(reference, finalHtml);
+        finalHtml = imgs.html;
+        filetR4Restaurees = imgs.restored;
+        filetR4Manquantes = imgs.missing;
+        if (imgs.missing.length) {
+          console.warn(`[R4 publication] ${imgs.missing.length} image(s) de l'article d'origine absente(s) du texte publié :`, imgs.missing.map((i) => i.src));
+        }
+      }
+    }
+
     // ── GARDE-FOU DE RELECTURE — le code vient d'écrire dans l'article ─────────
     // Le contrat passé avec le rédacteur est « le code marque ce qu'il écrit, tu
     // le relis ». Sur CE chemin le contrat était structurellement intenable : la
@@ -3454,6 +3482,19 @@ export default function ArticleResult() {
       if (filetR1Manquants.length) bribes.push(`${filetR1Manquants.length} lien(s) interne(s) d'origine NON repris`);
       if (filetR2Manquantes.length) bribes.push(`${filetR2Manquantes.length} lien(s) du brief sans emplacement autorisé`);
       toast(`Contrôle des liens avant publication : ${bribes.join(' — ')}.`, { icon: '🔗', duration: 8000 });
+    }
+    // R4 — dit à l'écran, pas seulement dans la console : une image remise par le
+    // code au niveau de la SECTION est à une place APPROXIMATIVE, et le rédacteur
+    // ne l'a pas vue dans l'éditeur (elle est remise dans le HTML publié).
+    if (filetR4Restaurees.length || filetR4Manquantes.length) {
+      const approx = filetR4Restaurees.filter((i) => i.how === 'section').length;
+      const bribes = [];
+      if (filetR4Restaurees.length) {
+        bribes.push(`${filetR4Restaurees.length} image(s) d'origine remise(s) dans le texte publié`
+          + (approx ? ` (dont ${approx} au niveau de la SECTION seulement — placement à vérifier sur le site)` : ''));
+      }
+      if (filetR4Manquantes.length) bribes.push(`${filetR4Manquantes.length} image(s) d'origine NON replacée(s) : leur contexte a disparu du texte`);
+      toast(`Contrôle des images avant publication : ${bribes.join(' — ')}.`, { icon: '🖼️', duration: 9000 });
     }
 
     setPublishing(true);
