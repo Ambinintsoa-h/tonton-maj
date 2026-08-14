@@ -23,7 +23,12 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { stripFollowBlockers, exportAsHtml, exportAsMarkdown } from './export';
+import { applyLinkFollowPolicy, exportAsHtml, exportAsMarkdown } from './export';
+
+// Les CASES ci-dessous utilisent des href RELATIFS (= internes) : la politique
+// de publication y retire les jetons bloquants, exactement comme avant. Seul le
+// cas au href absolu diverge — un lien EXTERNE reçoit désormais `nofollow`.
+const stripFollowBlockers = (root) => applyLinkFollowPolicy(root, '');
 
 // ── Récupération du verrou d'ingestion réellement présent dans proxy.js ───────
 const PROXY_PATH = path.join(__dirname, '..', '..', 'proxy.js');
@@ -77,9 +82,9 @@ const CASES = [
     '<p><a href="/b">b</a></p>',
   ],
   [
-    'noopener et noreferrer sont conservés',
+    'lien EXTERNE : noopener/noreferrer conservés, et nofollow AJOUTÉ',
     '<p><a href="https://ext.fr/x" rel="noopener noreferrer">x</a></p>',
-    '<p><a href="https://ext.fr/x" rel="noopener noreferrer">x</a></p>',
+    '<p><a href="https://ext.fr/x" rel="noopener noreferrer nofollow">x</a></p>',
   ],
   [
     'rel="nofollow" seul → attribut rel SUPPRIMÉ',
@@ -144,10 +149,17 @@ const CASES = [
 ];
 
 describe('R3 — export.js / stripFollowBlockers (filet avant publication)', () => {
-  CASES.forEach(([label, input, expected]) => {
+  // Cas à href ABSOLU exclus de la boucle partagée : ils relèvent maintenant de
+  // la politique externe (nofollow ajouté), testée explicitement plus bas.
+  CASES.filter(([, input]) => !/href="https?:/.test(input)).forEach(([label, input, expected]) => {
     it(label, () => {
       expect(run(stripFollowBlockers, input)).toBe(expected);
     });
+  });
+
+  it('lien EXTERNE : href et ancre intacts, nofollow AJOUTÉ, noopener conservé', () => {
+    expect(run(stripFollowBlockers, '<p>Voir <a href="https://ademe.fr/guide?a=1&amp;b=2" rel="noopener">le guide ADEME</a>.</p>'))
+      .toBe('<p>Voir <a href="https://ademe.fr/guide?a=1&amp;b=2" rel="noopener nofollow">le guide ADEME</a>.</p>');
   });
 
   it('ne plante pas sur null / undefined / objet sans querySelectorAll', () => {
@@ -173,10 +185,18 @@ describe('R3 — proxy.js / verrou d\'ingestion WordPress (bloc inline extrait)'
     expect(block).not.toMatch(/require\s*\(/);
   });
 
-  CASES.forEach(([label, input, expected]) => {
+  // Les cas à href ABSOLU sont exclus : leur attente porte désormais sur la
+  // politique de PUBLICATION (nofollow ajouté sur l'externe). L'ingestion, elle,
+  // continue de tout normaliser en dofollow à l'intérieur de l'outil.
+  CASES.filter(([, input]) => !/href="https?:/.test(input)).forEach(([label, input, expected]) => {
     it(label, () => {
       expect(run(wpNormalize, input)).toBe(expected);
     });
+  });
+
+  it('un lien externe est nettoyé à l\'ingestion (le nofollow revient à la publication)', () => {
+    expect(run(wpNormalize, '<p><a href="https://ext.fr/x" rel="nofollow noopener">x</a></p>'))
+      .toBe('<p><a href="https://ext.fr/x" rel="noopener">x</a></p>');
   });
 
   it('ne plante pas sur null / undefined / objet sans querySelectorAll', () => {
@@ -186,11 +206,21 @@ describe('R3 — proxy.js / verrou d\'ingestion WordPress (bloc inline extrait)'
   });
 });
 
-describe('R3 — parité stricte entre le verrou d\'ingestion et celui de publication', () => {
-  CASES.forEach(([label, input]) => {
-    it(`même résultat des deux côtés : ${label}`, () => {
+// Les deux verrous DIVERGENT désormais, volontairement : l'ingestion normalise
+// tout en dofollow À L'INTÉRIEUR de l'outil (le rédacteur voit des liens propres),
+// tandis que la publication applique la politique réelle — interne dofollow,
+// EXTERNE nofollow. La parité stricte d'avant serait donc un faux verrou.
+describe('R3 — ingestion et publication : identiques sur l\'INTERNE, divergentes sur l\'EXTERNE', () => {
+  CASES.filter(([, input]) => !/href="https?:/.test(input)).forEach(([label, input]) => {
+    it(`interne, même résultat des deux côtés : ${label}`, () => {
       expect(run(wpNormalize, input)).toBe(run(stripFollowBlockers, input));
     });
+  });
+
+  it('externe : l\'ingestion nettoie, la publication remet nofollow', () => {
+    const externe = '<p><a href="https://ext.fr/x" rel="nofollow">x</a></p>';
+    expect(run(wpNormalize, externe)).toBe('<p><a href="https://ext.fr/x">x</a></p>');
+    expect(run(stripFollowBlockers, externe)).toBe('<p><a href="https://ext.fr/x" rel="nofollow">x</a></p>');
   });
 });
 
@@ -202,23 +232,36 @@ describe('R3 — exportAsHtml : tout ce qui est publié est dofollow', () => {
     expect(html).toContain('nos tarifs');
   });
 
-  it('retire ugc ET sponsored, conserve noopener, sur un lien externe payant', () => {
-    // Cas RÉEL du modèle d'Andrianina : ce lien externe EST un article sponsorisé
-    // payant. Le client a acheté un dofollow — le rel="sponsored" que WordPress
-    // pose dessus le lui retire, donc il tombe.
+  it('un lien EXTERNE reçoit nofollow, et garde ses autres jetons', () => {
+    // CORRECTION D'ANDRIANINA : les liens externes de ces articles sont les
+    // articles sponsorisés payants. Un lien payant SUIVI expose le site à une
+    // pénalité Google — ils doivent donc être en nofollow.
     const html = exportAsHtml(
-      '<p>Via <a href="https://partenaire.fr/offre" rel="ugc sponsored noopener">cette offre</a>.</p>'
+      '<p>Via <a href="https://partenaire.fr/offre" rel="sponsored noopener">cette offre</a>.</p>'
     );
-    expect(html).not.toMatch(/\bugc\b/i);
-    expect(html).not.toMatch(/\bsponsored\b/i);
-    expect(html).toContain('rel="noopener"');
+    expect(html).toMatch(/rel="[^"]*\bnofollow\b/);
+    expect(html).toMatch(/rel="[^"]*\bnoopener\b/);   // garde-fou navigateur conservé
+    expect(html).toMatch(/rel="[^"]*\bsponsored\b/);  // va dans le même sens, conservé
     expect(html).toContain('href="https://partenaire.fr/offre"');
-    expect(html).toContain('cette offre');
   });
 
-  it('un lien déjà dofollow traverse la publication sans modification', () => {
-    const html = exportAsHtml('<p><a href="https://ademe.fr/guide" rel="noopener">le guide ADEME</a></p>');
-    expect(html).toContain('<a href="https://ademe.fr/guide" rel="noopener">le guide ADEME</a>');
+  it('un lien externe SANS rel se voit poser nofollow', () => {
+    const html = exportAsHtml('<p><a href="https://ademe.fr/guide">le guide ADEME</a></p>');
+    expect(html).toContain('<a href="https://ademe.fr/guide" rel="nofollow">le guide ADEME</a>');
+  });
+
+  it('avec articleUrl, un lien du MÊME domaine reste dofollow', () => {
+    const html = exportAsHtml(
+      '<p><a href="https://monsite.fr/tarifs" rel="nofollow">tarifs</a></p>',
+      'https://monsite.fr/guide',
+    );
+    expect(html).not.toMatch(/nofollow/i);
+    expect(html).toContain('href="https://monsite.fr/tarifs"');
+  });
+
+  it('mailto/tel/ancre : jamais touchés', () => {
+    const html = exportAsHtml('<p><a href="mailto:a@b.fr">mail</a><a href="#top">haut</a></p>');
+    expect(html).not.toMatch(/nofollow/i);
   });
 
   it('contenu vide ou null : aucun plantage', () => {
