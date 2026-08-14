@@ -50,14 +50,50 @@ export const stripParasiticFontSize = (root) => {
 // structurant et n'a rien à voir avec le suivi des liens de contenu.
 const FOLLOW_BLOCKERS = new Set(['nofollow', 'ugc', 'sponsored']);
 
-export const stripFollowBlockers = (root) => {
+/** Hôte d'une URL, sans `www.`. `null` si non analysable. */
+const hostDe = (u = '') => {
+  try { return new URL(String(u), 'https://x.invalid').hostname.replace(/^www\./, '') || null; }
+  catch { return null; }
+};
+
+/**
+ * POLITIQUE DE SUIVI DES LIENS — appliquée au point de sortie unique.
+ *
+ * INTERNE  (même domaine, ou href relatif) → DOFOLLOW : les jetons qui bloquent
+ *          le suivi sont retirés. C'est du maillage interne, il doit transmettre.
+ * EXTERNE  (autre domaine) → NOFOLLOW : le jeton est AJOUTÉ s'il manque.
+ *          Décision Andrianina : les liens externes de ces articles sont les
+ *          articles sponsorisés payants, et un lien payant suivi expose le site
+ *          à une pénalité Google.
+ *
+ * `noopener` / `noreferrer` sont conservés des deux côtés : ce sont des
+ * garde-fous navigateur, pas des directives de suivi. `sponsored` / `ugc`
+ * présents sur un lien externe sont conservés (ils vont dans le même sens).
+ *
+ * Sans `articleUrl` exploitable, tout href ABSOLU est traité comme externe :
+ * c'est la protection maximale, et c'est déjà la convention de `diff.js`.
+ */
+export const applyLinkFollowPolicy = (root, articleUrl = '') => {
   if (!root || typeof root.querySelectorAll !== 'function') return;
-  root.querySelectorAll('a[rel]').forEach((a) => {
+  const siteHost = hostDe(articleUrl);
+  root.querySelectorAll('a[href]').forEach((a) => {
+    const href = (a.getAttribute('href') || '').trim();
+    if (!href || /^(mailto:|tel:|javascript:|#)/i.test(href)) return;
+
+    const absolu = /^(https?:)?\/\//i.test(href);
+    const cible  = absolu ? hostDe(href.startsWith('//') ? `https:${href}` : href) : null;
+    const externe = absolu && (!siteHost || !cible || cible !== siteHost);
+
     const tokens = (a.getAttribute('rel') || '').split(/\s+/).filter(Boolean);
-    const kept = tokens.filter((t) => !FOLLOW_BLOCKERS.has(t.toLowerCase()));
-    if (kept.length === tokens.length) return;
-    if (kept.length === 0) a.removeAttribute('rel');
-    else a.setAttribute('rel', kept.join(' '));
+    if (externe) {
+      if (!tokens.some((t) => t.toLowerCase() === 'nofollow')) tokens.push('nofollow');
+      a.setAttribute('rel', tokens.join(' '));
+    } else {
+      const kept = tokens.filter((t) => !FOLLOW_BLOCKERS.has(t.toLowerCase()));
+      if (kept.length === tokens.length) return;      // rien à retirer : on ne réécrit pas
+      if (kept.length === 0) a.removeAttribute('rel');
+      else a.setAttribute('rel', kept.join(' '));
+    }
   });
 };
 
@@ -201,7 +237,11 @@ const applyFaqInlineTheme = (div) => {
   });
 };
 
-export const exportAsHtml = (content) => {
+// `articleUrl` est OPTIONNEL : sans lui, la politique de suivi ne peut pas
+// distinguer interne d'externe et traite tout absolu comme externe (protection
+// maximale). Paramètre ajouté en second pour que les appels existants restent
+// valides tels quels.
+export const exportAsHtml = (content, articleUrl = '') => {
   const div = document.createElement('div');
   div.innerHTML = content;
 
@@ -351,8 +391,8 @@ export const exportAsHtml = (content) => {
   // fichier, markdown) : cette passe couvre donc AUSSI les chemins d'écriture qui
   // contournent les verrous amont (phases 3 et 4 d'obsolescence/relecture,
   // "Appliquer" une suggestion en attente, collage, lien posé à la main).
-  // Un rel="nofollow" collé par un rédacteur est retiré ici, quoi qu'il arrive.
-  stripFollowBlockers(div);
+  // INTERNE → dofollow (jetons bloquants retirés) ; EXTERNE → nofollow AJOUTÉ.
+  applyLinkFollowPolicy(div, articleUrl);
 
   // Filet de sécurité regex — élimine tout résidu <del>/<mark>/<ins> non capturé par le DOM
   let html = div.innerHTML;
@@ -383,8 +423,8 @@ export const exportAsHtml = (content) => {
   return html;
 };
 
-export const exportAsMarkdown = (content) => {
-  const html = exportAsHtml(content);
+export const exportAsMarkdown = (content, articleUrl = '') => {
+  const html = exportAsHtml(content, articleUrl);
   // Basic HTML to Markdown conversion
   return html
     .replace(/<h1[^>]*>(.*?)<\/h1>/gi, '# $1\n')

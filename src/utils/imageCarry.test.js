@@ -298,3 +298,42 @@ describe('applyAllDiffs — R4 branche, sans toucher au reste', () => {
     expect(out).toContain(P2);
   });
 });
+
+// ── VIDÉOS ET IFRAMES — correction d'Andrianina ───────────────────────────────
+// Même défaut, même cause, même correctif que pour les images.
+describe('carryOverImages — iframes et vidéos', () => {
+  const AVANT = `<h2>Le prix</h2><p>Le prix moyen constate sur le marche francais atteint 60 euros.</p>`
+    + `<div data-media="iframe-wrapper"><iframe src="https://www.youtube.com/embed/abc"></iframe></div>`
+    + `<p>Ce tarif varie selon la region et la complexite de la charpente existante.</p>`
+    + `<video src="https://monsite.fr/demo.mp4" controls></video>`;
+
+  test('une iframe supprimee par l IA est reinseree AVEC son wrapper responsive', () => {
+    const apres = `<h2>Le prix</h2><p>Le prix moyen constate sur le marche francais atteint 60 euros.</p>`
+      + `<p>Ce tarif varie selon la region et la complexite de la charpente existante.</p>`;
+    const r = carryOverImages(AVANT, apres);
+    expect(r.html).toContain('data-media="iframe-wrapper"');
+    expect(r.html).toContain('youtube.com/embed/abc');
+    expect(r.missing).toHaveLength(0);
+  });
+
+  test('une video supprimee est reinseree', () => {
+    const apres = `<h2>Le prix</h2><p>Le prix moyen constate sur le marche francais atteint 60 euros.</p>`
+      + `<p>Ce tarif varie selon la region et la complexite de la charpente existante.</p>`;
+    const r = carryOverImages(AVANT, apres);
+    expect(r.html).toContain('demo.mp4');
+  });
+
+  test('une video dont le src vit sur un <source> enfant est vue', () => {
+    const avant = `<p>Le prix moyen constate sur le marche francais atteint 60 euros par metre.</p>`
+      + `<video controls><source src="https://monsite.fr/clip.webm" type="video/webm"></video>`;
+    const apres = `<p>Le prix moyen constate sur le marche francais atteint 60 euros par metre.</p>`;
+    const r = carryOverImages(avant, apres);
+    expect(r.html).toContain('clip.webm');
+  });
+
+  test('rien a reprendre : une iframe deja presente n est pas dupliquee', () => {
+    const r = carryOverImages(AVANT, AVANT);
+    expect((r.html.match(/youtube\.com\/embed\/abc/g) || []).length).toBe(1);
+    expect((r.html.match(/demo\.mp4/g) || []).length).toBe(1);
+  });
+});

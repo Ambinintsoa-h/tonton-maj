@@ -3217,8 +3217,10 @@ export default function ArticleResult() {
     const finalContent = getFinalHtml();
     let content = '';
     if (format === 'text') content = exportAsText(finalContent);
-    else if (format === 'html') content = exportAsHtml(finalContent);
-    else if (format === 'markdown') content = exportAsMarkdown(finalContent);
+    // `articleUrl` : sans lui, la politique de suivi ne peut pas distinguer un
+    // lien interne d'un lien externe et met du nofollow partout.
+    else if (format === 'html') content = exportAsHtml(finalContent, articleUrl);
+    else if (format === 'markdown') content = exportAsMarkdown(finalContent, articleUrl);
     await copyToClipboard(content);
     toast.success(`Copié en ${format.toUpperCase()} !`);
     setShowExport(false);
@@ -3498,7 +3500,7 @@ export default function ArticleResult() {
     }
 
     setPublishing(true);
-    const rawHtml = exportAsHtml(finalHtml);
+    const rawHtml = exportAsHtml(finalHtml, articleUrl);
 
     // ── Suppression SYSTÉMATIQUE de figure[data-featured] du contenu publié ──────
     // figure[data-featured] est un artefact interne TONTON AI : injecté par le proxy

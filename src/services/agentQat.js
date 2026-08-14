@@ -797,18 +797,19 @@ ${existingInternalLinks.map((l, i) => `${i + 1}. <a href="${l.href}">${l.text}</
     ? imageList
     : originalImages.map((im, i) => `${i + 1}. src="${im.src}" alt="${im.alt}"${im.caption ? ` — légende : « ${im.caption} »` : ''}\n   (recopie la balise EXACTE depuis le HTML d'origine ci-dessus)`).join('\n');
   const imageBlock = originalImages.length
-    ? `## ═══ IMAGES DE L'ARTICLE — À REPRODUIRE À L'IDENTIQUE (${originalImages.length}) ═══
-Ces images font PARTIE de l'article. Les reproduire n'est pas facultatif, et tu
-n'en inventes aucune autre.
+    ? `## ═══ MÉDIAS DE L'ARTICLE — À REPRODUIRE À L'IDENTIQUE (${originalImages.length}) ═══
+Images, vidéos et iframes (YouTube, Vimeo, cartes) font PARTIE de l'article. Les
+reproduire n'est pas facultatif, et tu n'en inventes aucun autre.
 • Recopie chaque balise TELLE QUELLE : même src, même srcset, même sizes, même
   alt, même title, mêmes width, height et loading. Tu ne réécris ni le fichier,
   ni la description alternative.
 • Une image dans un <figure> RESTE dans son <figure>, avec sa <figcaption> : la
-  légende ne se sépare jamais de son image.
-• Replace chaque image au même endroit du récit : même section, même
+  légende ne se sépare jamais de son image. Une <iframe> RESTE dans le <div> qui
+  l'enveloppe : c'est son cadre responsive, l'en sortir le casse.
+• Replace chaque média au même endroit du récit : même section, même
   enchaînement avec le texte qui l'entoure.
 ${imageBody}`
-    : '## ═══ IMAGES ═══\nL\'article d\'origine n\'en contient aucune : n\'en ajoute aucune.';
+    : '## ═══ MÉDIAS ═══\nL\'article d\'origine n\'en contient aucun : n\'en ajoute aucun.';
 
   const user = `## ARTICLE D'ORIGINE (HTML — à réécrire)
 ${sourceHtml}

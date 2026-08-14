@@ -68,9 +68,14 @@
 //     thème). La réinjecter serait une régression, pas une réparation.
 //   • `[data-media-overlay]` — décor d'éditeur (vignette YouTube posée par
 //     `lockMedia`), jamais publié : ce n'est pas une image de l'article.
-//   • Les `<iframe>` et les `<video>` : hors périmètre de cette tâche. Elles
-//     souffrent du MÊME défaut (le prompt de refonte n'en parle pas davantage) —
-//     c'est dit dans le rapport, ce n'est pas traité ici.
+//   • Les `<iframe>` et les `<video>` sont DÉSORMAIS REPRISES (correction
+//     d'Andrianina) : elles souffraient exactement du même défaut, pour la même
+//     raison — le prompt de refonte n'en parlait pas davantage. Elles empruntent
+//     le même inventaire, le même ancrage et la même sanction que les images.
+//     Une `<iframe>` YouTube vit dans le wrapper responsive `div[data-media=
+//     "iframe-wrapper"]` posé à l'ingestion : c'est CE wrapper qui est réinséré,
+//     sinon la vidéo reviendrait sans son cadre 16:9. Une `<video>` peut porter
+//     son `src` sur un `<source>` enfant — d'où `srcDe`.
 
 /** Blocs porteurs de texte, utilisés comme points d'ancrage. */
 const BLOCK_SEL = 'p,h1,h2,h3,h4,h5,h6,li,blockquote,figcaption,pre,dd,dt,td,th';
@@ -128,9 +133,26 @@ export const imageKey = (src = '') => {
 };
 
 /** L'image est-elle hors périmètre (image à la une, décor d'éditeur, sans src) ? */
+/**
+ * MÉDIAS repris : images, mais aussi iframes (YouTube, Vimeo, cartes) et vidéos.
+ * Même cause, même défaut, même correctif — `agentQat.js` ne demandait de les
+ * reproduire nulle part, et le modèle les laissait tomber en réécrivant.
+ */
+export const MEDIA_SEL = 'img, iframe, video';
+
+/** `src` d'un média — pour une `<video>`, il peut vivre sur un `<source>` enfant. */
+const srcDe = (el) => {
+  const direct = el.getAttribute && el.getAttribute('src');
+  if (direct) return direct;
+  const s = typeof el.querySelector === 'function' ? el.querySelector('source[src]') : null;
+  return (s && s.getAttribute('src')) || '';
+};
+
 const isOutOfScope = (img) => {
-  if (!img.getAttribute('src')) return true;
+  if (!srcDe(img)) return true;
   if (typeof img.closest !== 'function') return false;
+  // Un <source> vit DANS son <video> : il serait compté deux fois.
+  if (img.closest('video') && img.tagName && img.tagName.toLowerCase() === 'source') return true;
   return !!img.closest('[data-featured],[data-media-overlay]');
 };
 
@@ -144,6 +166,10 @@ const isOutOfScope = (img) => {
  *   • sinon l'`<img>` elle-même.
  */
 const unitOf = (img) => {
+  // Wrapper responsive des iframes (posé à l'ingestion, proxy.js) : réinsérer
+  // l'iframe seule la sortirait de son cadre 16:9.
+  const wrap = typeof img.closest === 'function' ? img.closest('[data-media="iframe-wrapper"]') : null;
+  if (wrap) return wrap;
   const fig = typeof img.closest === 'function' ? img.closest('figure') : null;
   if (fig && !fig.hasAttribute('data-featured')) return fig;
   const a = img.parentElement;
@@ -220,9 +246,9 @@ export const listArticleImages = (html = '') => {
   root.innerHTML = html;
   const seen = new Set();
   const out = [];
-  Array.from(root.querySelectorAll('img')).forEach((img) => {
+  Array.from(root.querySelectorAll(MEDIA_SEL)).forEach((img) => {
     if (isOutOfScope(img)) return;
-    const key = imageKey(img.getAttribute('src'));
+    const key = imageKey(srcDe(img));
     if (!key || seen.has(key)) return;
     seen.add(key);
     const unit = unitOf(img);
@@ -230,7 +256,7 @@ export const listArticleImages = (html = '') => {
     const cap = unit.querySelector ? unit.querySelector('figcaption') : null;
     out.push({
       key,
-      src: img.getAttribute('src') || '',
+      src: srcDe(img),
       alt: img.getAttribute('alt') || '',
       html: unit.outerHTML,
       tag: img.outerHTML,
@@ -244,9 +270,9 @@ export const listArticleImages = (html = '') => {
 /** Clés des images RÉELLEMENT présentes dans un HTML (hors périmètre exclu). */
 const imageKeysIn = (root) => {
   const keys = new Set();
-  Array.from(root.querySelectorAll('img')).forEach((img) => {
+  Array.from(root.querySelectorAll(MEDIA_SEL)).forEach((img) => {
     if (isOutOfScope(img)) return;
-    const k = imageKey(img.getAttribute('src'));
+    const k = imageKey(srcDe(img));
     if (k) keys.add(k);
   });
   return keys;
@@ -345,12 +371,15 @@ const place = (root, unit, ctx) => {
  */
 export const carryOverImages = (originalHtml = '', newHtml = '', { appendIfNoAnchor = false } = {}) => {
   if (!originalHtml || !newHtml || typeof document === 'undefined'
-      || originalHtml.indexOf('<img') === -1) {
+      // Sortie rapide : aucun MÉDIA dans l'original. Doit couvrir les trois
+      // balises, sinon un article qui ne contient qu'une iframe ou qu'une vidéo
+      // sortirait ici sans jamais être examiné.
+      || !/<(?:img|iframe|video)\b/i.test(originalHtml)) {
     return { html: newHtml, restored: [], missing: [] };
   }
   const src = document.createElement('div');
   src.innerHTML = originalHtml;
-  const imgs = Array.from(src.querySelectorAll('img')).filter((i) => !isOutOfScope(i));
+  const imgs = Array.from(src.querySelectorAll(MEDIA_SEL)).filter((i) => !isOutOfScope(i));
   if (!imgs.length) return { html: newHtml, restored: [], missing: [] };
 
   const root = document.createElement('div');
@@ -362,7 +391,7 @@ export const carryOverImages = (originalHtml = '', newHtml = '', { appendIfNoAnc
   const done = new Set();
 
   imgs.forEach((img) => {
-    const key = imageKey(img.getAttribute('src'));
+    const key = imageKey(srcDe(img));
     if (!key || done.has(key)) return;
     done.add(key);
     if (present.has(key)) return;                       // déjà là : on n'en met pas une seconde
@@ -375,7 +404,7 @@ export const carryOverImages = (originalHtml = '', newHtml = '', { appendIfNoAnc
     let how = place(root, clone, ctx);
     if (!how && appendIfNoAnchor) { root.appendChild(clone); how = 'fragment'; }
 
-    const entry = { src: img.getAttribute('src') || '', alt: img.getAttribute('alt') || '' };
+    const entry = { src: srcDe(img), alt: img.getAttribute('alt') || '' };
     if (how) { present.add(key); restored.push({ ...entry, how }); }
     else missing.push({ ...entry, reason: 'aucun-ancrage' });
   });
@@ -413,7 +442,9 @@ export const enforceImageCarryOver = (update) => {
   // Une addition n'écrase rien : elle ne peut pas faire perdre une image.
   if (update.type === 'addition') return none;
   const original = update.original || '';
-  if (original.indexOf('<img') === -1) return none;      // NO-OP strict
+  // Mêmes trois balises qu'à la sortie rapide de carryOverImages : ne chercher
+  // que `<img` ferait sortir ici toute update portant une iframe ou une vidéo.
+  if (!/<(?:img|iframe|video)\b/i.test(original)) return none;   // NO-OP strict
 
   // Suppression pure : le passage disparaît AVEC ses images. Rien à replacer dans
   // un texte qui n'existera plus — on SIGNALE seulement (non bloquant : la
