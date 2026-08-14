@@ -13,6 +13,7 @@
 import { searchWeb } from './search';
 import { sanitizeFullArticle, listExternalLinks, listInternalLinks, carryOverInternalLinks } from '../utils/diff';
 import { weaveBriefLinks, countPlacedBriefLinks, briefLinkReportLine } from '../utils/internalWeave';
+import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
@@ -766,12 +767,49 @@ Ne les mets ni dans un titre, ni dans le TL;DR, ni dans la FAQ.
 ${existingInternalLinks.map((l, i) => `${i + 1}. <a href="${l.href}">${l.text}</a>`).join('\n')}`
     : '## ═══ LIENS INTERNES DÉJÀ PRÉSENTS ═══\nL\'article d\'origine n\'en contient aucun.';
 
+  // ── R4 — IMAGES : bloc JUMEAU des deux précédents ───────────────────────────
+  // Ce prompt ne disait RIEN des images : il détaillait longuement la reprise de
+  // chaque lien externe et interne, et le modèle laissait tomber les <img> sans
+  // qu'aucun verrou s'en aperçoive. Les nommer une par une ÉVITE la perte, alors
+  // que la réparer coûte une passe déterministe dont le placement ne peut être
+  // qu'approximatif (cf. src/utils/imageCarry.js).
+  // Ce bloc vit dans le message UTILISATEUR : le socle du système est marqué
+  // `cache_control` et doit rester identique OCTET POUR OCTET entre l'audit et la
+  // refonte, sans quoi le cache de préfixe est invalidé à chaque appel.
+  const originalImages = listArticleImages(sourceHtml);
+  const imageList = originalImages
+    .map((im, i) => `${i + 1}. ${im.html}${im.lead ? `\n   (dans l'article d'origine, elle vient après : « …${im.lead} »)` : ''}`)
+    .join('\n');
+  // Garde-fou de volume : un srcset WordPress complet fait plusieurs centaines de
+  // caractères par image. Au-delà du seuil, on ne recopie plus les balises — le
+  // HTML d'origine COMPLET est de toute façon déjà dans ce même message, juste
+  // au-dessus : le modèle y prend les balises exactes.
+  const IMAGE_BLOCK_MAX = 12000;
+  const imageBody = imageList.length <= IMAGE_BLOCK_MAX
+    ? imageList
+    : originalImages.map((im, i) => `${i + 1}. src="${im.src}" alt="${im.alt}"${im.caption ? ` — légende : « ${im.caption} »` : ''}\n   (recopie la balise EXACTE depuis le HTML d'origine ci-dessus)`).join('\n');
+  const imageBlock = originalImages.length
+    ? `## ═══ IMAGES DE L'ARTICLE — À REPRODUIRE À L'IDENTIQUE (${originalImages.length}) ═══
+Ces images font PARTIE de l'article. Les reproduire n'est pas facultatif, et tu
+n'en inventes aucune autre.
+• Recopie chaque balise TELLE QUELLE : même src, même srcset, même sizes, même
+  alt, même title, mêmes width, height et loading. Tu ne réécris ni le fichier,
+  ni la description alternative.
+• Une image dans un <figure> RESTE dans son <figure>, avec sa <figcaption> : la
+  légende ne se sépare jamais de son image.
+• Replace chaque image au même endroit du récit : même section, même
+  enchaînement avec le texte qui l'entoure.
+${imageBody}`
+    : '## ═══ IMAGES ═══\nL\'article d\'origine n\'en contient aucune : n\'en ajoute aucune.';
+
   const user = `## ARTICLE D'ORIGINE (HTML — à réécrire)
 ${sourceHtml}
 
 ${externalBlock}
 
 ${internalBlock}
+
+${imageBlock}
 
 ## CONCLUSIONS DE L'AUDIT (elles pilotent la réécriture)
 ${summarizeAuditForRewrite(audit)}
@@ -879,9 +917,33 @@ N'ajoute aucun AUTRE lien externe.`;
       const briefConstat = countPlacedBriefLinks(woven.html, internalLinks, articleUrl);
       const reportLine = briefLinkReportLine(woven);
       if (reportLine) onStep(reportLine);
+
+      // ── R4 — les IMAGES d'origine sont remises, DÉTERMINISTE et NON BLOQUANT ──
+      // EN DERNIER, et pour une raison précise : R1 et R2 posent des liens dans
+      // la PROSE, et ils doivent travailler sur celle du modèle, pas sur du HTML
+      // que le code vient de réinjecter. Une <figure>/<figcaption> réinsérée est
+      // de toute façon un emplacement interdit aux liens (linkZones.js), donc
+      // l'ordre inverse ne changerait rien — mais l'invariant reste plus simple à
+      // tenir ainsi.
+      // Champs SÉPARÉS (`restoredImages`, `missingImages`) : la signature
+      // { html, stripped, missing } de sanitizeFullArticle et ses tests restent
+      // intacts, exactement comme pour R1.
+      // JAMAIS un rejet : un 4e motif écraserait `currentUser` et ferait perdre la
+      // consigne de reprise du verrou externe (règle 8).
+      const withImages = carryOverImages(sourceHtml, woven.html);
+      if (withImages.restored.length) {
+        const approx = withImages.restored.filter((i) => i.how === 'section').length;
+        onStep(`🖼️ ${withImages.restored.length} image(s) d'origine oubliée(s) par l'IA et réinsérée(s)${approx ? ` — dont ${approx} au niveau de la SECTION seulement, placement à vérifier` : ''}.`);
+      }
+      if (withImages.missing.length) {
+        onStep(`⚠️ ${withImages.missing.length} image(s) d'origine non replacée(s) (le texte qui les entourait a disparu) — signalées, génération conservée.`);
+      }
+
       sanitized = {
         ...check,
-        html: woven.html,
+        html: withImages.html,
+        restoredImages: withImages.restored,
+        missingImages: withImages.missing,
         missingInternal: carried.missing,
         restoredInternal: carried.restored,
         briefConstat,
@@ -953,6 +1015,11 @@ N'ajoute aucun AUTRE lien externe.`;
       // repris (avertissement, jamais un rejet).
       restoredInternalLinks: sanitized.restoredInternal || [],
       missingInternalLinks:  sanitized.missingInternal  || [],
+      // R4 — images d'origine : réinsérées automatiquement (`how` dit comment :
+      // 'contexte' = place exacte retrouvée, 'section' = APPROXIMATIF), ou non
+      // replacées (avertissement, jamais un rejet).
+      restoredImages: sanitized.restoredImages || [],
+      missingImages:  sanitized.missingImages  || [],
     },
     articleRaw: raw,
     tokenUsage: { ...tokenAcc, costUsd: calcCost(tokenAcc.calls, modelPricing) },
