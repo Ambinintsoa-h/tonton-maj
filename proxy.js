@@ -1440,7 +1440,7 @@ app.post('/api/settings', requireAuth, requireRole('super_admin'), (req, res) =>
 // ─── Tarification modèles Anthropic (auto depuis LiteLLM) ───────────────────
 // LiteLLM maintient une base JSON publique (mise à jour par la communauté).
 // Rafraîchie côté serveur toutes les 6h — aucune action manuelle requise.
-const ANTHROPIC_MODELS  = ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'];
+const ANTHROPIC_MODELS  = ['claude-opus-4-5', 'claude-sonnet-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'];
 const PRICING_TTL_MS    = 6 * 60 * 60 * 1000; // 6h
 const _pricingCache     = { data: null, fetchedAt: 0 };
 
@@ -1900,8 +1900,14 @@ function getOAuthToken() {
 }
 
 // ─── Catalogue de modèles ─────────────────────────────────────────────────────
+// ORDRE = PRÉFÉRENCE : le repli emprunte `MODEL_CASCADE.slice(idx)`, donc un
+// modèle absent de cette liste retombe SILENCIEUSEMENT sur MODEL_FALLBACK
+// (Haiku) — aucune erreur, juste des articles nettement moins bons. Tout
+// changement de modèle côté client DOIT donc passer par ici, et par un
+// redéploiement serveur.
 const MODEL_CASCADE = [
   'claude-opus-4-5',
+  'claude-sonnet-5',
   'claude-sonnet-4-5',
   'claude-haiku-4-5',
 ];
@@ -1919,6 +1925,13 @@ const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, rejec
   };
   if (bodyObj.system) requestBody.system = bodyObj.system;
   if (bodyObj.tools?.length) requestBody.tools = bodyObj.tools;
+  // Le corps est reconstruit champ par champ : tout paramètre non recopié ICI
+  // est SILENCIEUSEMENT perdu. `thinking` et `output_config` gouvernent le
+  // raisonnement et l'effort des modèles récents — sans ce passe-plat, le
+  // client n'a aucun levier dessus (Sonnet 5 raisonne par défaut, et ce
+  // raisonnement partage le plafond `max_tokens` avec le texte de l'article).
+  if (bodyObj.thinking) requestBody.thinking = bodyObj.thinking;
+  if (bodyObj.output_config) requestBody.output_config = bodyObj.output_config;
   const payload = JSON.stringify(requestBody);
   const req = https.request({
     hostname: 'api.anthropic.com',
@@ -1997,6 +2010,13 @@ const callAnthropicDirect = (token, bodyObj) => new Promise((resolve, reject) =>
   };
   if (bodyObj.system) requestBody.system = bodyObj.system;
   if (bodyObj.tools?.length) requestBody.tools = bodyObj.tools;
+  // Le corps est reconstruit champ par champ : tout paramètre non recopié ICI
+  // est SILENCIEUSEMENT perdu. `thinking` et `output_config` gouvernent le
+  // raisonnement et l'effort des modèles récents — sans ce passe-plat, le
+  // client n'a aucun levier dessus (Sonnet 5 raisonne par défaut, et ce
+  // raisonnement partage le plafond `max_tokens` avec le texte de l'article).
+  if (bodyObj.thinking) requestBody.thinking = bodyObj.thinking;
+  if (bodyObj.output_config) requestBody.output_config = bodyObj.output_config;
 
   const payload = JSON.stringify(requestBody);
   const req = https.request({
@@ -2308,7 +2328,7 @@ app.get('/api/claude-job/:id', requireAuth, (req, res) => {
 //   data: {"type":"done","text":"…","usage":{…}}   ← fin de génération
 //   data: {"type":"error","error":"…"}        ← erreur
 app.post('/api/claude-stream', requireAuth, (req, res) => {
-  const { system, messages, max_tokens = 32000, model } = req.body;
+  const { system, messages, max_tokens = 32000, model, thinking, output_config } = req.body;
   const bodyApiKey = null; // clé API jamais acceptée depuis le client — lire uniquement settings.json
   if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
 
@@ -2332,6 +2352,11 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
   const requestedModel = MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK;
   const requestBody = { model: requestedModel, max_tokens, messages, stream: true };
   if (system) requestBody.system = system;
+  // Voie réellement empruntée par l'audit et la refonte (cf. diagnostic ci-dessous) :
+  // c'est ICI que le passe-plat compte. Sans lui, `thinking` est perdu et Sonnet 5
+  // raisonne sur le budget `max_tokens` destiné à l'article.
+  if (thinking) requestBody.thinking = thinking;
+  if (output_config) requestBody.output_config = output_config;
   const payload = JSON.stringify(requestBody);
   // DIAGNOSTIC TEMPORAIRE — c'est CETTE voie qu'emprunte l'audit (les voies job
   // et OAuth n'ont jamais ete atteintes : leur `__debug` revenait a null).

@@ -526,7 +526,15 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
       const { text } = await callWithLiveText({
         // Le schéma d'audit est volumineux ; 12 000 tokens tronquaient la réponse
         // sur les articles longs, et un JSON tronqué est illisible.
-        params: { system, max_tokens: 20000, model: selectModel('update_generation'), messages: [{ role: 'user', content: currentUser }] },
+        // `thinking: disabled` — ÉTAPE 1 DE LA BASCULE SONNET 5, choix délibéré.
+        // Sur Sonnet 4.5, ne rien passer signifiait « pas de raisonnement ». Sur
+        // Sonnet 5, ne rien passer l'ACTIVE, et ce raisonnement partage le plafond
+        // `max_tokens` avec le texte produit : un audit long se ferait tronquer.
+        // On reproduit donc à l'identique l'enveloppe de fonctionnement actuelle.
+        // Activer le raisonnement adaptatif est l'étape 2, APRÈS mesure du coût et
+        // de la longueur réelle sur de vrais articles (le tokenizer de Sonnet 5
+        // compte ~30 % de tokens en plus pour le même texte).
+        params: { system, max_tokens: 20000, model: selectModel('update_generation'), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
         label: attempt === 1 ? 'Audit QAT' : `Audit QAT — essai ${attempt}/3`,
         onStep, onReplace, onProgress, onDelta, trackCall,
         progressFrom: 25, progressTo: 40,
@@ -833,7 +841,9 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
   for (let attempt = 1; attempt <= 3 && !sanitized; attempt++) {
     try {
       const { text } = await callWithLiveText({
-        params: { system, max_tokens: 32000, model: selectModel('update_generation'), messages: [{ role: 'user', content: currentUser }] },
+        // Voir le commentaire de l'audit : raisonnement désactivé pour la bascule,
+        // sinon il mangerait le budget de 32 000 tokens destiné à l'article.
+        params: { system, max_tokens: 32000, model: selectModel('update_generation'), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
         label: attempt === 1 ? 'Rédaction de l\'article' : `Rédaction — essai ${attempt}/3`,
         onStep, onReplace, onProgress, onDelta, trackCall,
         progressFrom: 55, progressTo: 88,

@@ -70,7 +70,10 @@ export const callWpTool = async (toolName, toolInput, wpSites) => {
 // ── Catalogue de modèles ──────────────────────────────────────────────────────
 const MODELS = {
   FAST: 'claude-haiku-4-5',
-  SMART: 'claude-sonnet-4-5',
+  // Tout changement ici DOIT être répercuté dans `MODEL_CASCADE` (proxy.js) ET
+  // suivi d'un redéploiement serveur : un modèle absent de cette liste blanche
+  // retombe SILENCIEUSEMENT sur Haiku, sans la moindre erreur.
+  SMART: 'claude-sonnet-5',
   BEST: 'claude-opus-4-5',
 };
 
@@ -100,7 +103,8 @@ export const getDateContext = () => {
 // ── Pricing tokens ────────────────────────────────────────────────────────────
 // Valeurs de fallback (écrasées par modelPricing depuis settings.json via Redux).
 const TOKEN_PRICING_FALLBACK = {
-  'claude-haiku-4-5':  { input: 0.80,  output: 4.00  }, // USD/MTok
+  'claude-haiku-4-5':  { input: 1.00,  output: 5.00  }, // USD/MTok (corrigé : 0.80/4.00 sous-estimait)
+  'claude-sonnet-5':   { input: 3.00,  output: 15.00 }, // USD/MTok
   'claude-sonnet-4-5': { input: 3.00,  output: 15.00 }, // USD/MTok
   'claude-opus-4-5':   { input: 15.00, output: 75.00 }, // USD/MTok
 };
@@ -199,7 +203,11 @@ const isDefinitiveAiError = (msg = '') => {
 const STREAM_STALL_MS = 120000;
 
 export const callClaudeStream = async (params, onDelta, signal) => {
-  const { system, messages, max_tokens = 32000, model } = params || {};
+  // `thinking` / `output_config` : le corps est reconstruit champ par champ plus
+  // bas, donc tout paramètre absent de cette destructuration est SILENCIEUSEMENT
+  // perdu avant même d'atteindre le proxy. Même piège qu'à l'autre bout de la
+  // chaîne (cf. proxy.js) — y ajouter tout nouveau paramètre d'appel.
+  const { system, messages, max_tokens = 32000, model, thinking, output_config } = params || {};
 
   let token = null;
   try { token = sessionStorage.getItem(AUTH_TOKEN_KEY); } catch { /* storage indisponible */ }
@@ -233,7 +241,11 @@ export const callClaudeStream = async (params, onDelta, signal) => {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       credentials: 'same-origin',
-      body: JSON.stringify({ system, messages, max_tokens, model }),
+      body: JSON.stringify({
+        system, messages, max_tokens, model,
+        ...(thinking ? { thinking } : {}),
+        ...(output_config ? { output_config } : {}),
+      }),
       signal: ctrl.signal,
     });
   } catch (e) {
