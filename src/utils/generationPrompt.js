@@ -55,6 +55,43 @@ const actionsDeLAudit = (audit) => {
     });
 };
 
+/**
+ * Champs d'audit qui NE nourrissent PAS le prompt du rédacteur, mais qui partent
+ * quand même au modèle : `summarizeAuditForRewrite` (services/agentQat.js) les
+ * injecte dans la refonte.
+ *
+ * Ils servent ici à une seule chose, et elle compte : ne plus écrire « aucune
+ * recommandation exploitable » quand l'audit en contient. Le verdict était rendu
+ * sur TROIS champs alors que le modèle en reçoit DIX — un audit sans action
+ * prioritaire mais riche en manques SEO ou en recommandations stratégiques était
+ * donc annoncé vide au rédacteur, qui pouvait croire l'analyse ratée.
+ *
+ * On les NOMME sans recopier leur contenu : le dupliquer dans `instruction`
+ * l'enverrait deux fois au modèle et surpondérerait l'audit face aux directives.
+ */
+const AUTRES_APPORTS = [
+  ['a_supprimer',              'passages à supprimer'],
+  ['keyword_repositioning',    'repositionnement du mot-clé'],
+  ['seo_geo_gaps',             'manques SEO / GEO'],
+  ['eeat_recommendations',     'recommandations EEAT'],
+  ['strategic_recommendation', 'recommandation stratégique'],
+  ['sources_check',            'affirmations à sourcer'],
+];
+
+/** Compte ce qui est réellement rempli — tableau non vide ou objet non vide. */
+const rempli = (v) => {
+  if (Array.isArray(v)) return v.length > 0;
+  if (v && typeof v === 'object') return Object.keys(v).length > 0;
+  return !!ligne(v);
+};
+
+const autresApportsDeLAudit = (audit) => AUTRES_APPORTS
+  .filter(([cle]) => rempli(audit?.[cle]))
+  .map(([cle, libelle]) => {
+    const v = audit[cle];
+    return Array.isArray(v) ? `${libelle} (${v.length})` : libelle;
+  });
+
 /** Données que l'audit signale comme périmées. */
 const obsoletesDeLAudit = (audit) => {
   const src = audit?.recent_context?.donnees_obsoletes;
@@ -115,8 +152,19 @@ export const buildGenerationPrompt = ({
   const resume = ligne(audit?.executive_summary);
 
   if (!actions.length && !obsoletes.length && !resume) {
-    bloc.push('', '## Audit',
-      'Aucune recommandation exploitable dans l\'audit de cet article — appuie-toi sur mes directives seules.');
+    // L'audit n'a rien d'ACTIONNABLE au sens de ce prompt. Ça ne veut pas dire
+    // qu'il est vide : le dire à tort ferait douter le rédacteur d'une analyse
+    // qui a bel et bien tourné, et qu'il paie.
+    const autres = autresApportsDeLAudit(audit);
+    if (autres.length) {
+      bloc.push('', '## Audit — aucune action prioritaire',
+        'L\'audit ne liste ni action prioritaire, ni donnée obsolète, ni résumé.',
+        `Il contient en revanche : ${autres.join(', ')}.`,
+        'Ces éléments partent au modèle avec l\'audit complet — ne les recopie pas ici.');
+    } else {
+      bloc.push('', '## Audit',
+        'Aucune recommandation exploitable dans l\'audit de cet article — appuie-toi sur mes directives seules.');
+    }
   } else {
     bloc.push('', '## Ce que l\'audit demande de corriger');
     if (resume) bloc.push(resume);
