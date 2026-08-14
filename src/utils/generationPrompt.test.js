@@ -148,6 +148,49 @@ describe('audit vide ou absent — on le DIT, on ne comble pas', () => {
     });
   });
 
+  // Le verdict « rien d'exploitable » était rendu sur TROIS champs
+  // (priority_actions, donnees_obsoletes, executive_summary) alors que le modèle
+  // en reçoit DIX via summarizeAuditForRewrite. Un audit sans action prioritaire
+  // mais riche par ailleurs était donc annoncé VIDE au rédacteur.
+  test('audit sans action prioritaire MAIS avec d\'autres apports → on ne dit plus « vide »', () => {
+    const p = buildGenerationPrompt({ audit: {
+      seo_geo_gaps: ['manque un tableau comparatif', 'pas de données 2026'],
+      strategic_recommendation: ['Ajouter un comparatif'],
+    } });
+    expect(p).not.toMatch(/Aucune recommandation exploitable/);
+    expect(p).toContain('## Audit — aucune action prioritaire');
+    expect(p).toContain('manques SEO / GEO (2)');
+    expect(p).toContain('recommandation stratégique (1)');
+  });
+
+  test('le CONTENU des autres apports n\'est PAS recopié — il part déjà avec l\'audit', () => {
+    const p = buildGenerationPrompt({ audit: { seo_geo_gaps: ['manque un tableau comparatif'] } });
+    expect(p).not.toContain('manque un tableau comparatif');
+    expect(p).toContain('ne les recopie pas ici');
+  });
+
+  test('un champ objet non vide compte aussi (keyword_repositioning)', () => {
+    const p = buildGenerationPrompt({ audit: { keyword_repositioning: { cible: 'prix isolation' } } });
+    expect(p).toContain('repositionnement du mot-clé');
+    expect(p).not.toMatch(/Aucune recommandation exploitable/);
+  });
+
+  test('champs présents mais VIDES → l\'audit est bien annoncé vide', () => {
+    [{ seo_geo_gaps: [] }, { strategic_recommendation: null }, { keyword_repositioning: {} },
+     { a_supprimer: [], sources_check: [] }].forEach((a) => {
+      expect(buildGenerationPrompt({ audit: a })).toMatch(/Aucune recommandation exploitable/);
+    });
+  });
+
+  test('une action prioritaire reprend le dessus sur la mention « aucune action »', () => {
+    const p = buildGenerationPrompt({ audit: {
+      priority_actions: [{ priority: 'P1', title: 'Actualiser les tarifs' }],
+      seo_geo_gaps: ['manque un tableau'],
+    } });
+    expect(p).toContain('## Ce que l\'audit demande de corriger');
+    expect(p).not.toContain('## Audit — aucune action prioritaire');
+  });
+
   test('les actions sans titre ni détail sont ignorées, pas rendues vides', () => {
     const p = buildGenerationPrompt({ audit: { priority_actions: [{ priority: 'P1' }, { priority: 'P1', title: 'Vraie action' }] } });
     expect(p).toContain('Vraie action');
