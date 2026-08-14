@@ -17,6 +17,8 @@ import { Sparkles, Loader2, Check, AlertTriangle, ArrowRight, FileText, RotateCc
 import {
   MAJ_SCOPES, SCOPE_SIMPLE, scopeProposedByAudit, scopeRecommendationSource, wordsAddedReport,
 } from '../../constants/majPhases';
+import { cleanLinkRows } from '../../constants/majMode';
+import InternalLinksField from './InternalLinksField';
 
 const LIBELLE_DECISION = {
   maj_ciblee:      'MAJ ciblée',
@@ -41,6 +43,13 @@ export default function PhaseGeneration({
   onResetPrompt,
   onSaveTemplate,
   savingTemplate = false,
+  // Maillage interne — saisissable ICI, et pas seulement à l'écran de lancement.
+  // C'est le seul point de passage commun à TOUS les articles : ceux ouverts
+  // depuis « MAJ en attente » n'ont jamais vu le formulaire de lancement et
+  // partaient donc avec un brief vide.
+  linkRows = [],
+  onLinkRowsChange,
+  articleUrl = '',
 }) {
   const propose  = scopeProposedByAudit(audit);
   const source   = scopeRecommendationSource(audit);
@@ -159,6 +168,31 @@ export default function PhaseGeneration({
           Pré-rempli avec vos directives permanentes et ce que l'audit demande de corriger. Ajustez-le pour CET
           article — c'est ce texte exact qui part à l'IA.
         </p>
+      </div>
+
+      {/* ── Maillage interne — dernière occasion de le renseigner ─────────────
+          Rendu ici parce que c'est le seul écran que TOUS les articles
+          traversent avant la génération. Les paires saisies sont placées à
+          100 % par le code (weaveBriefLinks) : sans ce bloc, un article venu de
+          la file d'attente ne pouvait recevoir aucun lien interne nouveau. */}
+      <div className="border border-indigo-100 bg-indigo-50/40 rounded-xl p-4 space-y-3">
+        <InternalLinksField
+          linkRows={linkRows}
+          setLinkRows={onLinkRowsChange}
+          articleUrl={articleUrl}
+          disabled={generating}
+        />
+        {/* Le silence était le vrai défaut : un brief vide produisait une MAJ sans
+            AUCUN lien interne nouveau, sans que rien ne le signale. */}
+        {cleanLinkRows(linkRows).length === 0 && (
+          <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-[11px] text-amber-800">
+            <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+            <span>
+              Aucune paire saisie : cette mise à jour ne recevra <strong>aucun lien interne nouveau</strong>.
+              Les liens déjà présents dans l'article d'origine sont repris quoi qu'il arrive.
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Lancement */}

@@ -39,6 +39,7 @@ import {
   PHASE_AUDIT, PHASE_GENERATION, PHASE_OBSOLESCENCE, PHASE_RELECTURE,
   TODO, DONE, RUNNING, ERROR, SCOPE_SIMPLE, scopeProposedByAudit,
 } from '../../constants/majPhases';
+import { cleanLinkRows, emptyLinkRow } from '../../constants/majMode';
 import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, DEFAULT_VERIFICATION_TEMPLATE } from '../../utils/generationPrompt';
 import { setProfile } from '../../store/slices/authSlice';
 import PhaseStepper from './PhaseStepper';
@@ -1515,6 +1516,28 @@ export default function ArticleResult() {
   // appliquée, le nombre de mots) reste visible sur la ligne d'en-tête.
   const [ampleurDepliee, setAmpleurDepliee] = useState(false);
 
+  // ── Maillage interne du brief, éditable en PHASE 2 ─────────────────────────
+  // Le formulaire de lancement (QatBriefFields) n'est traversé que par les
+  // articles lancés à la main. Ceux qui arrivent par « MAJ en attente » se
+  // voient imposer `internalLinks: []` (MajEnAttente.jsx), valeur ENREGISTRÉE
+  // dans leur qatBrief : la génération recevait donc un brief vide, et le
+  // forçage à 100 % de weaveBriefLinks s'appliquait à zéro paire — garantie
+  // exacte, effet nul, sans recours possible depuis l'interface.
+  // Ces lignes sont la source de vérité de la session pour la génération ET
+  // pour le filet de publication.
+  const [briefLinkRows, setBriefLinkRows] = useState([emptyLinkRow()]);
+  // Réamorçage à chaque changement d'article : sans la clé sur l'id, les paires
+  // d'un article suivraient le rédacteur sur le suivant.
+  useEffect(() => {
+    const stored = (currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {}).internalLinks || [];
+    setBriefLinkRows(stored.length
+      ? stored.map(l => ({ anchor: l.anchor || '', url: l.url || '' }))
+      : [emptyLinkRow()]);
+    // `currentArticle`/`cqItem` sont recalculés à chaque rendu : seul l'id doit
+    // déclencher le réamorçage, sinon la saisie en cours serait écrasée.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent.currentArticleId]);
+
   // ── Repérage des liens dans « Après » ──────────────────────────────────────
   // Surlignage 100 % CSS (`:has()`), jamais de balise injectée dans l'éditeur :
   // le HTML de l'article reste strictement intact, donc aucun risque qu'un
@@ -1840,6 +1863,18 @@ export default function ArticleResult() {
       return;
     }
     const brief = currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {};
+    // Le maillage saisi en phase 2 PRIME sur celui du lancement : c'est le
+    // dernier état relu par le rédacteur, et le seul dont disposent les articles
+    // venus de la file d'attente.
+    const maillage = cleanLinkRows(briefLinkRows);
+    // Enregistré dans le qatBrief pour que le filet de publication et une
+    // réouverture ultérieure voient les mêmes paires que la génération.
+    if (agent.currentArticleId) {
+      dispatch(updateInHistory({
+        id: agent.currentArticleId,
+        qatBrief: { ...brief, internalLinks: maillage },
+      }));
+    }
     const source = agent.originalContent || '';
     setGenerating(true);
     setGenProgress(0);
@@ -1857,7 +1892,7 @@ export default function ArticleResult() {
         articleType:    brief.articleType,
         seoPlugin:      brief.seoPlugin,
         targetWords:    brief.targetWords,
-        internalLinks:  brief.internalLinks || [],
+        internalLinks:  maillage,
         // L'ampleur tranchee en phase 2 pilote la profondeur : un choix explicite
         // du redacteur prime toujours sur la recommandation de l'audit.
         depth:          scope === SCOPE_SIMPLE ? 'ciblee' : 'refonte',
@@ -3402,7 +3437,13 @@ export default function ArticleResult() {
     let filetR2Redigees = [];
     let filetR2Manquantes = [];
     {
-      const briefLinks = (currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {}).internalLinks || [];
+      // Mêmes paires que la génération : la saisie de phase 2 prime sur le brief
+      // de lancement, sinon le filet réparerait un maillage qui n'est plus celui
+      // que le rédacteur a validé.
+      const saisies = cleanLinkRows(briefLinkRows);
+      const briefLinks = saisies.length
+        ? saisies
+        : (currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {}).internalLinks || [];
       if (briefLinks.length) {
         const woven = weaveBriefLinks(finalHtml, briefLinks, articleUrl);
         finalHtml = woven.html;
@@ -4363,6 +4404,9 @@ export default function ArticleResult() {
               onResetPrompt={reconstruirePrompt}
               onSaveTemplate={handleSaveTemplate}
               savingTemplate={savingTemplate}
+              linkRows={briefLinkRows}
+              onLinkRowsChange={setBriefLinkRows}
+              articleUrl={articleUrl}
             />
           )}
           {phase === PHASE_OBSOLESCENCE && (
