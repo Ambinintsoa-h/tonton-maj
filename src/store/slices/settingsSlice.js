@@ -15,7 +15,8 @@ export const DEFAULT_FIREBASE_CONFIG = {
 // Prix officiels Anthropic par défaut (USD / million de tokens).
 // Modifiables via Paramètres → Tarification sans toucher au code.
 export const DEFAULT_MODEL_PRICING = {
-  'claude-haiku-4-5':  { input: 0.80,  output: 4.00  },
+  'claude-haiku-4-5':  { input: 1.00,  output: 5.00  },
+  'claude-sonnet-5':   { input: 3.00,  output: 15.00 },
   'claude-sonnet-4-5': { input: 3.00,  output: 15.00 },
   'claude-opus-4-5':   { input: 15.00, output: 75.00 },
 };
