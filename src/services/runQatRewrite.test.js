@@ -63,6 +63,57 @@ beforeEach(() => {
   scrapeSource.mockResolvedValue(null);
 });
 
+// ── Contraintes rédactionnelles tenues EN DUR (demande d'Andrianina) ──────────
+// Elles vivaient côté skill sous une forme trop molle pour tenir : « MAJORITÉ de
+// phrases sous 20 mots » autorise explicitement le dépassement, et le gras
+// sémantique n'était nulle part dans le prompt de refonte. Un test les verrouille
+// donc côté code, qu'une édition de skill ne peut plus contredire.
+describe('contraintes rédactionnelles en dur dans le prompt de refonte', () => {
+  const promptDeRefonte = async () => {
+    callClaudeWithProgress.mockResolvedValueOnce(reply({
+      h1: 'T', article_html: '<h2>A</h2><p>B</p>', mot_cle_retenu: 'x',
+    }));
+    await runQatRewrite(baseArgs('<p>Ancien texte.</p>'));
+    return callClaudeWithProgress.mock.calls[0][1].messages[0].content;
+  };
+
+  test('le plafond de 20 mots est un PLAFOND, pas une moyenne', async () => {
+    const p = await promptDeRefonte();
+    expect(p).toMatch(/AUCUNE phrase de plus de 20 mots/);
+    expect(p).toMatch(/C'est un PLAFOND, pas une moyenne/);
+    // La nuance qui faisait échouer la version « skill » : autoriser la variation
+    // de rythme SOUS le plafond, jamais au-dessus.
+    expect(p).toMatch(/EN DESSOUS de 20 mots/);
+  });
+
+  test('le gras sémantique nomme le mot-clé — sinon la consigne ne guide rien', async () => {
+    const p = await promptDeRefonte();
+    expect(p).toMatch(/Mets en GRAS les mots importants liés au mot-clé/);
+    expect(p).toContain('isolation phonique plafond');   // le mot-clé du brief
+    expect(p).toMatch(/<strong>/);
+  });
+
+  test('le gras est BORNÉ — un texte tout en gras ne met plus rien en avant', async () => {
+    const p = await promptDeRefonte();
+    expect(p).toMatch(/2 à 4 passages en gras par section H2/);
+    expect(p).toMatch(/JAMAIS une phrase entière/);
+    expect(p).toMatch(/jamais\*\* de gras dans un titre/);
+  });
+
+  test('les contraintes sont dans le message UTILISATEUR, pas dans le socle caché', async () => {
+    // Le socle système porte `cache_control` et doit rester identique octet pour
+    // octet entre l'audit et la refonte : y mettre le mot-clé invaliderait le cache
+    // de préfixe à chaque article.
+    callClaudeWithProgress.mockResolvedValueOnce(reply({
+      h1: 'T', article_html: '<h2>A</h2><p>B</p>', mot_cle_retenu: 'x',
+    }));
+    await runQatRewrite(baseArgs('<p>Ancien texte.</p>'));
+    const params = callClaudeWithProgress.mock.calls[0][1];
+    const socle = JSON.stringify(params.system);
+    expect(socle).not.toMatch(/AUCUNE phrase de plus de/);
+  });
+});
+
 describe('runQatRewrite — cas nominal', () => {
   test('retourne l\'article assaini, avec le chapô replacé en tête du corps', async () => {
     callClaudeWithProgress.mockResolvedValueOnce(reply({

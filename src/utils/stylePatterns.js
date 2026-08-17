@@ -88,8 +88,26 @@ const META = [
   'comme nous l\'avons vu', 'il faut savoir que', 'notons que',
 ];
 
-const MOTS_MAX_PHRASE = 20;
+/**
+ * Plafond de longueur d'une phrase. EXPORTÉ depuis le 2026-08-17 : le même nombre
+ * doit piloter la CONSIGNE donnée à la génération (agentQat.js) et la DÉTECTION
+ * faite ensuite. Deux littéraux séparés auraient fini par divergerdiscrètement, et
+ * on aurait signalé au rédacteur des phrases qu'on n'avait jamais interdites.
+ */
+export const MOTS_MAX_PHRASE = 20;
 const MOTS_MAX_TITRE  = 10;
+
+/**
+ * Phrases dépassant le plafond, dans un fragment HTML. Sert à VÉRIFIER après la
+ * génération ce que le prompt a exigé : une consigne qu'on n'a jamais mesurée est
+ * une consigne dont on ne sait rien. Non bloquant — c'est un constat affiché au
+ * rédacteur, jamais un motif de rejet de la génération.
+ */
+export const phrasesTropLongues = (html = '') =>
+  phrasesDe(texteDe(html))
+    .map((p) => ({ extrait: p, mots: p.split(/\s+/).length }))
+    .filter((o) => o.mots > MOTS_MAX_PHRASE)
+    .sort((a, b) => b.mots - a.mots);
 
 const echappe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Apostrophe droite ou typographique : le texte publié porte souvent la seconde.
