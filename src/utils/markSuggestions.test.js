@@ -9,6 +9,62 @@ const ART = '<h2>Prix de la toiture</h2>'
   + '<p>La pente minimale est de 5 % selon le DTU.</p>'
   + '<ul><li>Acier laqué</li><li>Zinc</li></ul>';
 
+// ── DEUX suggestions dans LE MÊME paragraphe ──────────────────────────────────
+// La limite qui restait après #293 : le repli marquait tout le bloc, donc il
+// refusait un bloc portant déjà un repère, et la SECONDE suggestion était
+// déclarée « introuvable » alors que son texte était bien là. On marque désormais
+// la PORTION EXACTE, même quand elle traverse des balises inline.
+describe('deux suggestions dans le même paragraphe', () => {
+  const P2 = '<p>Le prix <em>moyen</em> atteint 60 EUR. La pose <strong>complète</strong> dure trois jours.</p>';
+
+  test('les DEUX sont repérées, aucune déclarée introuvable', () => {
+    const r = markSuggestions(P2, [
+      { original: 'Le prix moyen atteint 60 EUR.' },
+      { original: 'La pose complète dure trois jours.' },
+    ]);
+    expect(r.marked).toEqual([1, 2]);
+    expect(r.missed).toEqual([]);
+    expect(r.html).toContain('data-sugg="1"');
+    expect(r.html).toContain('data-sugg="2"');
+  });
+
+  test('chaque repère porte SA portion, pas tout le paragraphe', () => {
+    const r = markSuggestions(P2, [
+      { original: 'Le prix moyen atteint 60 EUR.' },
+      { original: 'La pose complète dure trois jours.' },
+    ]);
+    const box = document.createElement('div');
+    box.innerHTML = r.html;
+    const marques = [...box.querySelectorAll(`.${MARK_CLASS}`)];
+    expect(marques).toHaveLength(2);
+    // Aucune marque ne couvre le paragraphe entier.
+    marques.forEach((m) => {
+      expect(m.textContent.length).toBeLessThan(box.textContent.length);
+    });
+    expect(marques[0].textContent).toContain('60 EUR');
+    expect(marques[1].textContent).toContain('trois jours');
+  });
+
+  test('les repères ne s\'imbriquent pas l\'un dans l\'autre', () => {
+    const r = markSuggestions(P2, [
+      { original: 'Le prix moyen atteint 60 EUR.' },
+      { original: 'La pose complète dure trois jours.' },
+    ]);
+    const box = document.createElement('div');
+    box.innerHTML = r.html;
+    box.querySelectorAll(`.${MARK_CLASS}`).forEach((m) => {
+      expect(m.querySelector(`.${MARK_CLASS}`)).toBeNull();
+    });
+  });
+
+  test('un passage coupé par un `<br>` est repéré sur sa portion', () => {
+    const r = markSuggestions('<p>Le prix moyen<br>atteint 60 EUR. Autre chose ici.</p>',
+      [{ original: 'Le prix moyen atteint 60 EUR.' }]);
+    expect(r.marked).toEqual([1]);
+    expect(r.missed).toEqual([]);
+  });
+});
+
 describe('repérage dans un seul nœud texte', () => {
   test('le passage est encadré et porte le numéro de la liste', () => {
     const r = markSuggestions(ART, [{ original: 'Comptez 60 EUR le mètre carré en 2026.' }]);
@@ -50,13 +106,20 @@ describe('repérage dans un seul nœud texte', () => {
 });
 
 describe('repli sur le bloc quand le passage chevauche des balises', () => {
-  test('un passage coupé par du gras est repéré au niveau du bloc', () => {
+  test('un passage coupé par du gras est repéré sur sa PORTION, pas sur le bloc', () => {
+    // Comportement changé : on marquait tout le <p> (classe posée dessus), on
+    // encadre maintenant la portion exacte dans un <mark> À L'INTÉRIEUR du <p>.
+    // C'est ce qui permet à deux suggestions de cohabiter dans un paragraphe.
     const html = '<p>Le prix atteint <strong>180 EUR</strong> le mètre carré posé.</p>';
     const r = markSuggestions(html, [{ original: 'Le prix atteint 180 EUR le mètre carré posé.' }]);
     expect(r.marked).toEqual([1]);
-    expect(r.html).toContain(`class="${MARK_CLASS}"`);   // classe posée sur le <p>
+    expect(r.html).toContain(`<mark class="${MARK_CLASS}"`);
     expect(r.html).toContain('data-sugg="1"');
     expect(r.html).toContain('<strong>180 EUR</strong>'); // le balisage interne survit
+    // Le <p> lui-même ne porte plus la classe.
+    const box = document.createElement('div');
+    box.innerHTML = r.html;
+    expect(box.querySelector('p').classList.contains(MARK_CLASS)).toBe(false);
   });
 
   test('un passage dans une cellule de tableau est repéré', () => {
@@ -197,7 +260,7 @@ describe('suggestions déjà appliquées (surlignage vert)', () => {
     expect(r.html).toContain('data-sugg="2"');
   });
 
-  test('le repli au bloc marque aussi en vert', () => {
+  test('une portion traversant du gras est marquée en vert elle aussi', () => {
     const r = markSuggestions(
       '<p>Le prix atteint <strong>210 EUR</strong> le mètre carré posé.</p>',
       [{ original: 'ancien', updated: 'Le prix atteint 210 EUR le mètre carré posé.' }],
