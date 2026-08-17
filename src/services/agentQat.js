@@ -22,6 +22,7 @@ import {
   suroptimisationMotCle, MAX_H2_AVEC_MOT_CLE, elisionsOrphelines,
 } from '../utils/stylePatterns';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
+import { auditAmpleurDecision } from '../constants/majPhases';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
   ARTICLE_TYPES, SEO_PLUGINS, cleanLinkRows,
@@ -749,7 +750,13 @@ export const resolveQatDepth = (depth, audit) => {
   // Trois ampleurs : le fond est en cause (refonte), le plan seul est en cause
   // (restructuration : on garde la matière et on refond la hiérarchie des H2),
   // ou tout tient (MAJ ciblée). Défaut prudent en l'absence d'audit : refonte.
-  const decision = audit?.ampleur?.decision;
+  // `auditAmpleurDecision` et non `audit?.ampleur?.decision` : l'audit rend parfois
+  // ce champ en TEXTE LIBRE (« Refonte structurelle prioritaire : … », constaté en
+  // production le 2026-08-17), et la lecture directe donnait alors `undefined`.
+  // C'est ici que ça comptait le plus : cette valeur décide COMMENT l'article est
+  // réécrit, et on retombait sur « refonte » par défaut alors que l'audit avait
+  // tranché — y compris quand il demandait une simple MAJ ciblée.
+  const decision = auditAmpleurDecision(audit);
   const fromAudit = decision === 'maj_ciblee' ? 'ciblee'
     : decision === 'restructuration' ? 'restructuration'
     : 'refonte';

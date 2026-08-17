@@ -183,8 +183,55 @@ export const MAJ_SCOPES = {
  */
 export const SCORE_ARTICLE_SAIN = 7;
 
+/**
+ * Motifs de reconnaissance d'une ampleur écrite EN TEXTE LIBRE.
+ *
+ * L'ORDRE est un choix de prudence, pas un détail : on cherche d'abord les
+ * ampleurs LOURDES. Un texte comme « refonte ciblée sur la partie prix » contient
+ * les deux mots ; se tromper vers « MAJ ciblée » ferait sous-traiter un article à
+ * refondre, alors que se tromper vers la refonte ne fait que proposer trop de
+ * travail — et le rédacteur tranche toujours en phase 2.
+ */
+const AMPLEUR_TEXTE = [
+  [/restructur/i,             'restructuration'],
+  [/refonte|r[ée]{1,2}crire/i, 'refonte_totale'],
+  [/cibl/i,                   'maj_ciblee'],
+];
+
+/**
+ * Décision d'ampleur de l'audit, quelle que soit la FORME rendue par le modèle.
+ *
+ * Le schéma demande `ampleur: { decision, justification }`. En production
+ * (2026-08-17), l'audit a rendu une simple CHAÎNE : « Refonte structurelle
+ * prioritaire : dédupliquer entièrement le texte… ». Les trois lecteurs de ce
+ * champ faisaient `audit.ampleur.decision` — `undefined` sur une chaîne, sans
+ * erreur. Résultat : la phase 2 affichait « Ni ampleur ni score exploitable » et
+ * `resolveQatDepth` retombait sur « refonte » par défaut, alors que l'audit
+ * AVAIT tranché et l'avait écrit noir sur blanc.
+ *
+ * On ne dépend donc plus de la forme choisie par le modèle : c'est au code de lire
+ * ce qui est là, pas au modèle de devenir déterministe.
+ *
+ * @returns {string|null} 'maj_ciblee' | 'restructuration' | 'refonte_totale' | autre valeur explicite | null
+ */
+export const auditAmpleurDecision = (audit) => {
+  const a = audit && audit.ampleur;
+  if (!a) return null;
+  // Forme ATTENDUE — inchangée, elle reste prioritaire.
+  if (typeof a === 'object' && typeof a.decision === 'string' && a.decision.trim()) {
+    return a.decision.trim();
+  }
+  // Forme DÉGRADÉE : texte libre, dans le champ lui-même ou dans sa justification.
+  const texte = typeof a === 'string'
+    ? a
+    : String((a && (a.justification || a.texte || a.text)) || '');
+  if (!texte.trim()) return null;
+  const trouve = AMPLEUR_TEXTE.find(([rx]) => rx.test(texte));
+  return trouve ? trouve[1] : null;
+};
+
 export const scopeProposedByAudit = (audit) => {
-  const d = audit && audit.ampleur && audit.ampleur.decision;
+  const d = auditAmpleurDecision(audit);
   if (d) return d === 'maj_ciblee' ? SCOPE_SIMPLE : SCOPE_REFONTE;
   // `ampleur` est réclamée « IMPÉRATIVEMENT » à l'audit (agentQat), mais le modèle
   // l'omet parfois — constaté en test sur un audit par ailleurs complet. Plutôt
@@ -201,7 +248,9 @@ export const scopeProposedByAudit = (audit) => {
  * la justification — ne jamais présenter une déduction comme une décision.
  */
 export const scopeRecommendationSource = (audit) => {
-  if (audit && audit.ampleur && audit.ampleur.decision) return 'ampleur';
+  // Une ampleur écrite en texte libre EST une décision de l'audit : la présenter
+  // comme une déduction sur les scores serait mentir au rédacteur.
+  if (auditAmpleurDecision(audit)) return 'ampleur';
   const g = Number(audit && audit.scores && audit.scores.global);
   return (Number.isFinite(g) && g > 0) ? 'scores' : 'defaut';
 };
