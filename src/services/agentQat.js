@@ -17,6 +17,7 @@ import {
   unwrapForbiddenInternalLinks,
 } from '../utils/internalWeave';
 import { listArticleImages, carryOverImages } from '../utils/imageCarry';
+import { phrasesTropLongues, MOTS_MAX_PHRASE } from '../utils/stylePatterns';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
@@ -64,6 +65,58 @@ const MAX_LIENS_ENTRANTS = 10;
  * dans le skill (`maillage-interne-ancres.md`).
  */
 const MIN_LIENS_ENTRANTS = 6;
+
+/**
+ * CONTRAINTES RÉDACTIONNELLES TENUES EN DUR — demande explicite d'Andrianina,
+ * 17 août 2026 : « il faut mettre en dur aussi ».
+ *
+ * Exception assumée à la règle « les règles rédactionnelles s'éditent dans SKILLS
+ * IA ». Motif : ces deux-là étaient DÉJÀ écrites côté skill, mais trop molles pour
+ * tenir, et le résultat se voyait dans les articles produits.
+ *
+ *   • 20 MOTS. Le skill disait « Majorité de phrases sous 20 mots, mais varie les
+ *     rythmes » — une formulation qui autorise explicitement le dépassement. Le
+ *     seuil n'existait durement QUE dans deux endroits inutiles ici : la détection
+ *     APRÈS coup (`MOTS_MAX_PHRASE`, stylePatterns.js, phase 4) et le prompt de
+ *     correction de style (agent.js), qui ne tourne que sur les passages déjà
+ *     signalés. La GÉNÉRATION, elle, n'en portait aucune trace. On corrigeait donc
+ *     à la main ce qu'on n'avait jamais demandé d'éviter.
+ *   • GRAS SÉMANTIQUE. Nulle part dans le prompt de refonte.
+ *
+ * Le mot-clé est injecté pour que la consigne de gras soit ACTIONNABLE : « les mots
+ * importants » sans dire de quoi ne guide rien.
+ *
+ * Ce bloc vit dans le message UTILISATEUR, jamais dans le socle système : celui-ci
+ * porte `cache_control` et doit rester identique OCTET POUR OCTET entre l'audit et
+ * la refonte, sinon le cache de préfixe est invalidé à chaque appel.
+ */
+const redactionConstraintsBlock = (targetKeyword = '') => `## ═══ CONTRAINTES RÉDACTIONNELLES — NON NÉGOCIABLES ═══
+
+### 1. AUCUNE phrase de plus de ${MOTS_MAX_PHRASE} mots
+C'est un PLAFOND, pas une moyenne. Compte les mots de chaque phrase avant de
+passer à la suivante. Une phrase qui dépasse se coupe en deux — c'est toujours
+possible, et le texte y gagne.
+
+Ce n'est pas une préférence de style : les phrases longues sont le premier défaut
+relevé sur les articles publiés, et elles sont corrigées à la main ensuite. Varie
+les rythmes EN DESSOUS de ${MOTS_MAX_PHRASE} mots (5, 12, 18), jamais au-dessus.
+
+### 2. Mets en GRAS les mots importants liés au mot-clé
+${targetKeyword
+    ? `Mot-clé principal : « ${targetKeyword} ».`
+    : 'Mot-clé principal : celui du brief ci-dessus.'}
+
+Enveloppe dans \`<strong>\` les termes qui portent le sens pour ce mot-clé : ses
+variantes, ses termes sémantiquement voisins, le vocabulaire technique du sujet,
+et les données chiffrées décisives (prix, normes, délais, pourcentages).
+
+Bornes, à respecter — un texte tout en gras ne met plus rien en avant :
+- **2 à 4 passages en gras par section H2**, pas davantage ;
+- un groupe de **1 à 4 mots** à la fois, JAMAIS une phrase entière ni un paragraphe ;
+- **jamais** de gras dans un titre (h1-h6), ni à l'intérieur du texte d'un lien
+  \`<a>\` — le lien a déjà son propre repère visuel ;
+- le même terme n'est pas mis en gras à chacune de ses occurrences : la première
+  fois qu'il compte, dans la section où il compte.`;
 
 /**
  * Extrait un objet JSON d'une réponse Claude, même entourée de texte ou de
@@ -878,6 +931,8 @@ ${summarizeAuditForRewrite(audit)}
 ## SOURCES WEB DISPONIBLES (pour les données récentes — ne cite jamais une source non listée ici)
 ${formatSourcesForPrompt(sources)}
 
+${redactionConstraintsBlock(targetKeyword)}
+
 Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
 
   const AMPLEUR_LABEL = { ciblee: 'MAJ ciblée', restructuration: 'restructuration du plan', refonte: 'refonte totale' };
@@ -1005,6 +1060,16 @@ N'ajoute aucun AUTRE lien externe.`;
       // intacts, exactement comme pour R1.
       // JAMAIS un rejet : un 4e motif écraserait `currentUser` et ferait perdre la
       // consigne de reprise du verrou externe (règle 8).
+      // ── CONSTAT — les phrases trop longues sont COMPTÉES, pas seulement interdites
+      // Le prompt exige un plafond de 20 mots (voir redactionConstraintsBlock) ;
+      // sans cette mesure, on ne saurait jamais s'il est respecté. Non bloquant :
+      // un 4e motif de rejet écraserait `currentUser` et ferait perdre la consigne
+      // de reprise du verrou externe (règle 8).
+      const tropLongues = phrasesTropLongues(woven.html);
+      if (tropLongues.length) {
+        onStep(`✏️ ${tropLongues.length} phrase(s) de plus de ${MOTS_MAX_PHRASE} mots (la plus longue : ${tropLongues[0].mots} mots) — à couper en relecture.`);
+      }
+
       const withImages = carryOverImages(sourceHtml, woven.html);
       if (withImages.restored.length) {
         const approx = withImages.restored.filter((i) => i.how === 'section').length;
