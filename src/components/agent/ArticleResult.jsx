@@ -792,6 +792,24 @@ export default function ArticleResult() {
     setFeaturedImgUrl(url);
   }, [agent.updatedContent, wpMcpData]);
 
+  // Nombre d'images DANS LE CORPS de l'article, image à la une exclue.
+  //
+  // Sert uniquement à ne plus mentir dans le panneau : « Aucune image définie »
+  // laissait croire que l'article n'avait aucune image, alors que 9 des 222
+  // articles archivés portent de 1 à 9 images sans `figure[data-featured]`. On
+  // n'affiche PAS une de ces images comme si elle était l'image à la une — ce
+  // serait publier la mauvaise — on dit seulement qu'elles existent.
+  const nbImagesCorps = useMemo(() => {
+    const h = agent.updatedContent || '';
+    if (!h) return 0;
+    try {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = h;
+      tmp.querySelectorAll('figure[data-featured]').forEach(f => f.remove());
+      return tmp.querySelectorAll('img').length;
+    } catch { return 0; }
+  }, [agent.updatedContent]);
+
   // Remplace l'image à la une :
   // 1. Upload vers la médiathèque WP via MCP (si site connecté) → met à jour featured_media
   // 2. Met à jour la preview dans le diff (figure data-featured)
@@ -1088,6 +1106,18 @@ export default function ArticleResult() {
     // `qatArticle` pousserait tout l'article à chaque frappe.
     ...(agent.phaseStatus ? { phaseStatus: agent.phaseStatus } : {}),
     ...(agent.majScope ? { majScope: agent.majScope } : {}),
+    // CIBLE WORDPRESS — dont `featuredMediaUrl`, la SEULE source fiable de l'image
+    // à la une. Elle ne vivait que dans Redux et le brouillon (privé, un seul par
+    // membre) : rouvrir l'article depuis l'Historique, ou depuis un autre poste,
+    // rendait `wpData` nul. Le panneau « Image à la une » retombait alors sur la
+    // seule `figure[data-featured]` du HTML — et affichait « Aucune image définie »
+    // sur les 9 articles qui portent des images sans cette figure. Relevé sur les
+    // 332 articles réels : `wpData` était absent de 100 % des enregistrements.
+    // Même mécanique que `phaseStatus` ci-dessus : `PUT /articles/:id/html` fusionne
+    // dans `data` tout champ qui n'est pas une colonne, et `articleToObj` le
+    // réétale à la lecture. Objet PLAT d'une dizaine de scalaires — le bloc part à
+    // chaque autosave, il doit rester minuscule.
+    ...(agent.wpData ? { wpData: agent.wpData } : {}),
   });
 
   // Abonnement au statut d'enregistrement → reflété dans le header (Enregistrement…/Enregistré)
@@ -4784,7 +4814,16 @@ export default function ArticleResult() {
                           />
                         )}
                         <span className="flex-1 text-gray-400 truncate font-mono text-[10px]">
-                          {featuredImgUrl || <em className="not-italic text-gray-300">Aucune image définie</em>}
+                          {featuredImgUrl || (
+                            <em className="not-italic text-gray-300">
+                              Aucune image à la une
+                              {nbImagesCorps > 0 && (
+                                <span className="text-amber-600">
+                                  {' '}— l'article en contient {nbImagesCorps} dans son texte, non définie{nbImagesCorps > 1 ? 's' : ''} comme image à la une
+                                </span>
+                              )}
+                            </em>
+                          )}
                         </span>
                         <button
                           onClick={() => { setNewImgInput(featuredImgUrl); setShowImgReplace(true); }}
