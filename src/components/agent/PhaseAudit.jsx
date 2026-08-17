@@ -17,7 +17,9 @@ import { motion } from 'framer-motion';
 import {
   ClipboardCheck, Loader2, ArrowRight, AlertTriangle, RotateCcw, X,
 } from 'lucide-react';
-import { scopeProposedByAudit, scopeRecommendationSource, MAJ_SCOPES } from '../../constants/majPhases';
+import {
+  scopeProposedByAudit, scopeRecommendationSource, MAJ_SCOPES, auditAmpleurDecision,
+} from '../../constants/majPhases';
 
 const LIBELLE_DECISION = {
   maj_ciblee:      'MAJ ciblée',
@@ -63,7 +65,11 @@ export default function PhaseAudit({
   const dejaAudite = !!audit || !!rapportMarkdown;
   const propose = dejaAudite ? scopeProposedByAudit(audit) : null;
   const source  = dejaAudite ? scopeRecommendationSource(audit) : null;
-  const decision = audit && audit.ampleur && audit.ampleur.decision;
+  // `auditAmpleurDecision` et non `audit.ampleur.decision` : l'audit rend parfois
+  // ce champ en TEXTE LIBRE. Avec la lecture directe, `scopeRecommendationSource`
+  // annonçait « L'audit recommande une » et le libellé sortait VIDE — pire que
+  // l'ancien message, qui au moins ne promettait rien.
+  const decision = auditAmpleurDecision(audit);
   const global = Number(audit && audit.scores && audit.scores.global);
 
   const demander = () => {

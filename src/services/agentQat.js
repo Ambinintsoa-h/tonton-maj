@@ -821,7 +821,7 @@ Réécris l'intégralité de l'article, en intégrant toutes les informations en
 valables de l'ancien texte. Aucune tournure générique conservée.`;
 
   const overrideNote = resolved.overridden
-    ? `\n⚠️ Le rédacteur a IMPOSÉ cette ampleur, différente de celle recommandée par l'audit (${audit?.ampleur?.decision || 'non renseignée'}). Respecte le choix du rédacteur.`
+    ? `\n⚠️ Le rédacteur a IMPOSÉ cette ampleur, différente de celle recommandée par l'audit (${auditAmpleurDecision(audit) || 'non renseignée'}). Respecte le choix du rédacteur.`
     : '';
 
   // Prompt système en deux blocs pour le PROMPT CACHING.

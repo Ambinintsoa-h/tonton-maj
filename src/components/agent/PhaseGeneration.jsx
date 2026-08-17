@@ -16,6 +16,7 @@ import { motion } from 'framer-motion';
 import { Sparkles, Loader2, Check, AlertTriangle, ArrowRight, FileText, RotateCcw, Save } from 'lucide-react';
 import {
   MAJ_SCOPES, SCOPE_SIMPLE, scopeProposedByAudit, scopeRecommendationSource, wordsAddedReport,
+  auditAmpleurDecision,
 } from '../../constants/majPhases';
 import { cleanLinkRows } from '../../constants/majMode';
 import InternalLinksField from './InternalLinksField';
@@ -57,7 +58,9 @@ export default function PhaseGeneration({
 }) {
   const propose  = scopeProposedByAudit(audit);
   const source   = scopeRecommendationSource(audit);
-  const decision = audit && audit.ampleur && audit.ampleur.decision;
+  // Voir PhaseAudit : lecture tolérante à l'ampleur rendue en texte libre, sinon
+  // le libellé sort vide alors que la phrase annonce une recommandation.
+  const decision = auditAmpleurDecision(audit);
   const retenu   = scope || propose;
   const contredit = !!scope && scope !== propose;
   const dejaGenere = !!generatedHtml && !!qatArticle;

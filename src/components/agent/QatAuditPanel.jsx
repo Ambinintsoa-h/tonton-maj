@@ -7,6 +7,7 @@ import {
   Gauge, AlertTriangle, CheckCircle2, XCircle, Info, Tag, Trash2,
   Clock, Link2, ShieldCheck, Target, ListChecks, Copy,
 } from 'lucide-react';
+import { auditAmpleurDecision } from '../../constants/majPhases';
 
 // ── Helpers d'affichage ───────────────────────────────────────────────────────
 
@@ -81,7 +82,12 @@ const QatAuditPanel = ({ audit }) => {
 
   const s = audit.scores || {};
   const qat = audit.qat_assessment || {};
-  const ampleur = audit.ampleur || {};
+  // Normalisé : quand l'audit rend `ampleur` en CHAÎNE, ce texte EST la
+  // justification. Sans ça le bandeau s'affichait sans un mot d'explication.
+  const ampleurBrute = audit.ampleur;
+  const ampleur = typeof ampleurBrute === 'string'
+    ? { justification: ampleurBrute }
+    : (ampleurBrute || {});
   // Trois ampleurs possibles : le fond est en cause, le plan seul est en cause,
   // ou tout tient. Chacune a son code couleur pour être lue d'un coup d'œil.
   const AMPLEUR_UI = {
@@ -89,7 +95,9 @@ const QatAuditPanel = ({ audit }) => {
     restructuration:  { label: 'Restructuration recommandée', hint: 'le fond tient, le plan est à refaire', box: 'bg-amber-50 border-amber-200', title: 'text-amber-800', text: 'text-amber-700', icon: 'text-amber-600' },
     maj_ciblee:       { label: 'MAJ ciblée recommandée', hint: 'le fond et le plan tiennent', box: 'bg-sky-50 border-sky-200', title: 'text-sky-800', text: 'text-sky-700', icon: 'text-sky-600' },
   };
-  const amp = AMPLEUR_UI[ampleur.decision];
+  // Lecture TOLÉRANTE : l'audit rend parfois `ampleur` en texte libre, et le bandeau
+  // coloré disparaissait alors entièrement (voir auditAmpleurDecision).
+  const amp = AMPLEUR_UI[auditAmpleurDecision(audit)];
   const repo = audit.keyword_repositioning;
   const toRemove = asArray(audit.a_supprimer);
   const recent = audit.recent_context || {};
