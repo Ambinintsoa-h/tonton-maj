@@ -9,7 +9,9 @@ import {
   phaseMeta, phaseIndex, nextPhase, prevPhase, maxReachablePhase, canEnterPhase, derivePhaseStatus,
   SCOPE_SIMPLE, SCOPE_REFONTE, MAJ_SCOPES, MIN_WORDS_ADDED_SIMPLE,
   scopeProposedByAudit, scopeRecommendationSource, wordCount, wordsAddedReport,
+  auditAmpleurDecision,
 } from './majPhases';
+import { resolveQatDepth } from '../services/agentQat';
 
 describe('ordre et métadonnées des phases', () => {
   test('quatre phases, numérotées 1 à 4 dans l\'ordre du parcours', () => {
@@ -97,6 +99,67 @@ describe('ampleur décidée en phase 2', () => {
     expect(MAJ_SCOPES[SCOPE_SIMPLE].label).toBe('MAJ simple');
     expect(MAJ_SCOPES[SCOPE_REFONTE].label).toBe('Refonte');
     Object.values(MAJ_SCOPES).forEach(s => expect(s.description).toBeTruthy());
+  });
+});
+
+// ── L'ampleur rendue en TEXTE LIBRE est tout de même une décision ─────────────
+// Constaté en production : l'audit a rendu `ampleur: "Refonte structurelle
+// prioritaire : dédupliquer entièrement le texte…"` au lieu de
+// `{ decision, justification }`. Les trois lecteurs faisaient `.decision` —
+// undefined sur une chaîne, sans erreur — et la phase 2 annonçait « Ni ampleur ni
+// score exploitable » alors que l'audit avait tranché.
+describe('auditAmpleurDecision — lire l\'ampleur quelle que soit sa forme', () => {
+  test('forme attendue { decision } : inchangée, et prioritaire', () => {
+    expect(auditAmpleurDecision({ ampleur: { decision: 'maj_ciblee' } })).toBe('maj_ciblee');
+    expect(auditAmpleurDecision({ ampleur: { decision: 'refonte_totale' } })).toBe('refonte_totale');
+  });
+
+  test('LE CAS RÉEL — chaîne libre commençant par « Refonte structurelle »', () => {
+    const audit = { ampleur: 'Refonte structurelle prioritaire : dédupliquer entièrement le texte.' };
+    expect(auditAmpleurDecision(audit)).toBe('refonte_totale');
+    expect(scopeProposedByAudit(audit)).toBe(SCOPE_REFONTE);
+    // Et la source doit dire « ampleur », pas « scores » : c'est une décision.
+    expect(scopeRecommendationSource(audit)).toBe('ampleur');
+  });
+
+  test('une MAJ ciblée décrite en texte libre est reconnue', () => {
+    const audit = { ampleur: 'Une MAJ ciblée suffit : seuls les prix sont à revoir.' };
+    expect(auditAmpleurDecision(audit)).toBe('maj_ciblee');
+    expect(scopeProposedByAudit(audit)).toBe(SCOPE_SIMPLE);
+  });
+
+  test('la justification est lue quand `decision` manque', () => {
+    expect(auditAmpleurDecision({ ampleur: { justification: 'Il faut une restructuration du plan.' } }))
+      .toBe('restructuration');
+  });
+
+  test('PRUDENCE — un texte ambigu penche vers le PLUS de travail', () => {
+    // « refonte ciblée » contient les deux mots. Se tromper vers « ciblée » ferait
+    // sous-traiter un article à refondre ; se tromper vers la refonte ne propose
+    // que trop de travail, et le rédacteur tranche en phase 2.
+    expect(auditAmpleurDecision({ ampleur: 'Refonte ciblée de la partie prix.' })).toBe('refonte_totale');
+    expect(auditAmpleurDecision({ ampleur: 'Restructuration puis refonte des H2.' })).toBe('restructuration');
+  });
+
+  test('ampleur absente, vide ou inexploitable → null, et le repli sur le score joue', () => {
+    expect(auditAmpleurDecision(null)).toBeNull();
+    expect(auditAmpleurDecision({})).toBeNull();
+    expect(auditAmpleurDecision({ ampleur: '   ' })).toBeNull();
+    expect(auditAmpleurDecision({ ampleur: 'Rien de reconnaissable ici.' })).toBeNull();
+    // Score 8 → article sain → MAJ simple, sur SES chiffres.
+    expect(scopeRecommendationSource({ scores: { global: 8 } })).toBe('scores');
+    expect(scopeProposedByAudit({ scores: { global: 8 } })).toBe(SCOPE_SIMPLE);
+  });
+
+  test('resolveQatDepth suit l\'ampleur en texte libre', () => {
+    // C'est là que ça comptait le plus : cette valeur décide COMMENT on réécrit.
+    expect(resolveQatDepth('auto', { ampleur: 'Une MAJ ciblée suffit.' }))
+      .toEqual({ depth: 'ciblee', source: 'audit', overridden: false });
+    expect(resolveQatDepth('auto', { ampleur: 'Restructuration du plan.' }).depth)
+      .toBe('restructuration');
+    // Et un choix explicite du rédacteur prime toujours (item 11).
+    expect(resolveQatDepth('refonte', { ampleur: 'Une MAJ ciblée suffit.' }))
+      .toMatchObject({ source: 'redacteur', overridden: true });
   });
 });
 

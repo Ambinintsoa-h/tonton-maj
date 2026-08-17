@@ -111,6 +111,73 @@ export const LOCATABLE_BLOCK_SEL =
   'p, li, h1, h2, h3, h4, h5, h6, td, th, caption, blockquote, figcaption, dd, dt, div';
 
 /**
+ * PLAGE DOM exacte d'un passage, même s'il traverse plusieurs nœuds texte.
+ *
+ * Écrite une fois pour les trois usages qui en ont besoin : marquer une suggestion
+ * d'obsolescence, surligner un terme en relecture, et remplacer une phrase
+ * corrigée. Les trois avaient la même difficulté — les balises inline découpent les
+ * nœuds texte, donc aucun nœud ne contient la phrase entière.
+ *
+ * @param {Element} bloc     le bloc porteur (obtenu par findBlockForPassage)
+ * @param {string}  passage
+ * @param {string}  [ignorer] sélecteur : nœuds dont un ancêtre correspond → écartés
+ * @returns {Range|null}
+ */
+export const rangeForPassage = (bloc, passage, ignorer = '') => {
+  if (!bloc || typeof bloc.querySelectorAll !== 'function') return null;
+  const needle = passageSignature(passage);
+  if (!needle) return null;
+
+  const noeuds = [];
+  const walker = document.createTreeWalker(bloc, NodeFilter.SHOW_TEXT);
+  let n;
+  while ((n = walker.nextNode())) {
+    // Un nœud déjà marqué est sauté : sans ça, deux suggestions sur le même
+    // paragraphe se chevaucheraient et `surroundContents` échouerait.
+    if (ignorer && n.parentElement && n.parentElement.closest(ignorer)) continue;
+    noeuds.push(n);
+  }
+
+  let sig = '';
+  const map = [];
+  noeuds.forEach((node, ni) => {
+    const s = node.nodeValue || '';
+    for (let i = 0; i < s.length; i++) {
+      const piece = charSignature(s[i]);
+      for (let k = 0; k < piece.length; k++) { sig += piece[k]; map.push({ ni, off: i }); }
+    }
+  });
+
+  const at = sig.indexOf(needle);
+  if (at === -1) return null;
+  const debut = map[at];
+  const fin   = map[at + needle.length - 1];
+  if (!debut || !fin) return null;
+
+  const range = document.createRange();
+  try {
+    range.setStart(noeuds[debut.ni], debut.off);
+    range.setEnd(noeuds[fin.ni], fin.off + 1);
+  } catch { return null; }
+  return range;
+};
+
+/**
+ * Enveloppe une plage dans `el`, en retombant sur extract+insert quand
+ * `surroundContents` refuse (plage à cheval sur une balise).
+ * @returns {boolean}
+ */
+export const wrapRange = (range, el) => {
+  if (!range || !el) return false;
+  try { range.surroundContents(el); return true; } catch { /* plage partielle */ }
+  try {
+    el.appendChild(range.extractContents());
+    range.insertNode(el);
+    return true;
+  } catch { return false; }
+};
+
+/**
  * Marque de SURLIGNAGE TEMPORAIRE d'un passage visé en relecture.
  *
  * Même mécanique que `[data-il-idx]` et `[data-lien-redige]` : un `<mark>` porteur

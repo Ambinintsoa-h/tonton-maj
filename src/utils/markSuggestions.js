@@ -12,7 +12,9 @@
  * n'a pas d'ancre visible.
  */
 
-import { findPassageInText, findBlockForPassage, LOCATABLE_BLOCK_SEL } from './locatePassage';
+import {
+  findPassageInText, findBlockForPassage, rangeForPassage, wrapRange,
+} from './locatePassage';
 
 /** Compare deux textes en ignorant les différences d'espaces et d'apostrophes. */
 const norm = (s) => String(s || '')
@@ -101,26 +103,38 @@ export const markSuggestions = (html, suggestions = [], appliquees = []) => {
       break;
     }
 
-    // 2) Repli : le passage chevauche plusieurs balises → on repère le BLOC qui
-    //    le contient, sans tenter de découper le balisage.
+    // 2) Le passage TRAVERSE des balises inline : on marque quand même la PORTION
+    //    EXACTE, sur une plage qui enjambe plusieurs nœuds texte.
+    //
+    //    C'est ce qui règle le cas des DEUX SUGGESTIONS DANS LE MÊME PARAGRAPHE.
+    //    Avant, le repli marquait tout le bloc et refusait donc un bloc portant
+    //    déjà un repère : la seconde suggestion était déclarée « introuvable »
+    //    alors que son texte était bien là. En marquant la portion, les deux
+    //    cohabitent — et `ignorer` saute les nœuds déjà marqués, sans quoi les
+    //    plages se chevaucheraient.
+    let bloc = null;
     if (!trouve) {
-      // `findBlockForPassage` apparie sur la signature sans espaces — seul moyen de
-      // retrouver un passage coupé par un `<br>` (`A<br>B` donne le textContent
-      // "AB", mots COLLÉS) ou porteur d'une espace fantôme laissée par le retrait
-      // d'une balise inline. Il rend aussi le bloc le PLUS PETIT, jamais un `div`
-      // d'habillage qui apparierait tout l'article.
-      //
-      // Un bloc qui CONTIENT déjà un repère reste écarté : sans ce test, deux
-      // suggestions portant sur le même passage aboutissaient à marquer d'abord
-      // la portion exacte, puis tout le paragraphe par-dessus.
-      const bloc = findBlockForPassage(box, cible.slice(0, AMORCE), (b) =>
-        !!b.closest(`.${MARK_CLASS}`) || !!b.querySelector(`.${MARK_CLASS}`));
-      if (bloc) {
-        bloc.classList.add(...classes);
-        bloc.setAttribute('data-sugg', String(num));
-        bloc.setAttribute('id', `sugg-${num}`);
-        trouve = true;
+      bloc = findBlockForPassage(box, cible.slice(0, AMORCE));
+      const range = bloc && rangeForPassage(bloc, cible.slice(0, AMORCE), `.${MARK_CLASS}`);
+      if (range) {
+        const marque = document.createElement('mark');
+        marque.className = classes.join(' ');
+        marque.setAttribute('data-sugg', String(num));
+        marque.setAttribute('id', `sugg-${num}`);
+        if (wrapRange(range, marque)) trouve = true;
       }
+    }
+
+    // 3) Dernier recours : marquer le BLOC entier. Ne sert plus que lorsque la
+    //    portion est impossible à isoler (plage refusée par le DOM). Un bloc qui
+    //    porte déjà un repère reste écarté : empiler une marque de paragraphe
+    //    par-dessus une marque de portion rendrait les deux illisibles.
+    if (!trouve && bloc
+        && !bloc.closest(`.${MARK_CLASS}`) && !bloc.querySelector(`.${MARK_CLASS}`)) {
+      bloc.classList.add(...classes);
+      bloc.setAttribute('data-sugg', String(num));
+      bloc.setAttribute('id', `sugg-${num}`);
+      trouve = true;
     }
     return trouve;
   };
