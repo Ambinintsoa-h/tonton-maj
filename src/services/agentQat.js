@@ -30,6 +30,24 @@ const MAX_QAT_SEARCHES = 2;
 const MAX_SOURCES_INJECTED = 6;
 
 /**
+ * Plafond des liens internes SUGGÉRÉS par l'audit (`internal_linking.liens_entrants`).
+ *
+ * Pourquoi ici et pas dans le skill (règle habituelle : les règles rédactionnelles
+ * s'éditent depuis le menu SKILLS IA) — ce n'est PAS une règle rédactionnelle mais
+ * l'enveloppe technique de la réponse : au-delà, le JSON d'audit se fait tronquer
+ * par `max_tokens` et devient illisible. Le plafond de 5 qui vivait dans le skill
+ * a été levé le 2026-08-17 (« au moins 3 et pas de limite en nombre »), et
+ * l'absence de borne a immédiatement produit des audits tronqués. Décision
+ * Andrianina le même jour : 10, tenu côté code pour qu'une édition de skill ne
+ * puisse pas le supprimer par inadvertance. Le plancher de 3, lui, reste la
+ * demande métier — il est dit dans le même bloc de prompt.
+ *
+ * Sans rapport avec INTERNAL_LINK_ROWS_MAX (15) : celui-là borne ce que le
+ * RÉDACTEUR peut saisir à la main, pas ce que l'IA propose.
+ */
+const MAX_LIENS_ENTRANTS = 10;
+
+/**
  * Extrait un objet JSON d'une réponse Claude, même entourée de texte ou de
  * backticks. Le skill impose « JSON uniquement », mais on ne fait jamais
  * confiance au format : une génération à 12k tokens qui casse sur une virgule
@@ -508,6 +526,14 @@ ${sourceHtml}
 ## SOURCES WEB (vérification de fraîcheur — ${queries.length} recherche(s))
 ${formatSourcesForPrompt(sources)}
 
+## ENVELOPPE DE TAILLE — internal_linking.liens_entrants
+Donne **au moins 3** paires ancre + URL, et **au maximum ${MAX_LIENS_ENTRANTS}**.
+Ce plafond prime sur toute autre limite indiquée ailleurs : le JSON d'audit doit
+tenir en une seule réponse, et une liste sans borne le faisait tronquer — audit
+illisible, 3 essais facturés, phase 2 sans ampleur ni score. Mesuré en production
+le 2026-08-17. Classe par valeur SEO décroissante et garde les ${MAX_LIENS_ENTRANTS}
+meilleures plutôt que d'en lister davantage moins bonnes.
+
 Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d'autre que le JSON.`;
 
   onProgress(25);
@@ -534,7 +560,15 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
         // Activer le raisonnement adaptatif est l'étape 2, APRÈS mesure du coût et
         // de la longueur réelle sur de vrais articles (le tokenizer de Sonnet 5
         // compte ~30 % de tokens en plus pour le même texte).
-        params: { system, max_tokens: 20000, model: selectModel('update_generation'), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
+        //
+        // 20 000 → 32 000 (2026-08-17). Ce plafond avait été calibré sur Sonnet
+        // 4.5 ; le tokenizer de Sonnet 5 compte ~30 % de tokens en plus pour le
+        // MÊME texte, et le même audit ne rentrait plus. Constaté en production
+        // sur un article réel : 3 essais (17 450, 11 790 puis 12 096 tokens de
+        // sortie), tous tronqués donc illisibles, 0,55 $ dépensés pour un
+        // `auditJson` null. On s'aligne sur la refonte (32 000), très en dessous
+        // du maximum du modèle.
+        params: { system, max_tokens: 32000, model: selectModel('update_generation'), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
         label: attempt === 1 ? 'Audit QAT' : `Audit QAT — essai ${attempt}/3`,
         onStep, onReplace, onProgress, onDelta, trackCall,
         progressFrom: 25, progressTo: 40,

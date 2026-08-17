@@ -22,6 +22,7 @@ import {
   setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
   setWpData, setMajDepth, setInstruction, setAudit, setEditorMeta,
   setAuditJson, setQatArticle, restorePhaseStatus, setPhase, setMajScope, setObsolescenceReport,
+  setTargetKeyword,
 } from '../store/slices/agentSlice';
 import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import { derivePhaseStatus, maxReachablePhase, PHASE_AUDIT, DONE } from '../constants/majPhases';
@@ -1514,6 +1515,25 @@ export default function MajEnAttente() {
         }));
       }
 
+      // ── Étape 4bis : AUDIT VIDE = ÉCHEC, jamais « phase 1 faite » ────────────
+      // `runQatAudit` rend `audit: null` quand ses 3 essais ont tourné sans
+      // produire de JSON exploitable. Le code continuait quand même et écrivait
+      // `phaseStatus: { audit: DONE }` — le pire des deux mondes : la phase 1
+      // s'affichait terminée, la phase 2 s'ouvrait sans ampleur ni score
+      // exploitable, et RIEN n'indiquait qu'il fallait relancer l'audit. Constaté
+      // en production le 2026-08-17 sur un article réel (`auditJson` null,
+      // `audit: done`, 0,55 $ d'appels facturés).
+      //
+      // Placé APRÈS la comptabilité des tokens ci-dessus, volontairement : les
+      // essais ont bel et bien été payés, les masquer fausserait les statistiques.
+      // L'item part en `status: 'error'` avec son message (voir le catch) — il
+      // reste dans la file et se relance, au lieu de produire un faux terminé.
+      if (!result || !result.audit) {
+        throw new Error(result?.apiError?.message
+          ? `audit en échec — ${result.apiError.message}`
+          : 'audit illisible après 3 essais (réponse tronquée) — relancez l\'analyse');
+      }
+
       // ── Étape 5 : Suivi SEO Haloscan — snapshot J+0 avant publication ────────
       // Utilise item.keyword (mot-clé cible de la file d'attente) pour tracker
       // la position avant/après MAJ comparée à J+7 et J+30.
@@ -1778,6 +1798,11 @@ export default function MajEnAttente() {
       // Les Notes de la ligne pré-remplissent le champ « Instruction » de
       // l'éditeur → la passe 2 en hérite (modifiable par le CQ avant relance).
       dispatch(setInstruction(item.notes || ''));
+      // MOT-CLÉ CIBLE — la file le connaît (`item.keyword`), l'éditeur ne le
+      // recevait jamais. Sans lui, « Relancer l'audit » se grise sur toute review
+      // ouverte par ce chemin (« mot-clé cible manquant ») alors que la ligne le
+      // porte. Voir le même dispatch dans handleViewDiff.
+      dispatch(setTargetKeyword((item.keyword || '').trim()));
       dispatch(setCurrentArticleId(item.id));
       dispatch(setStatus('done'));
       navigate('/');
@@ -1962,6 +1987,14 @@ export default function MajEnAttente() {
     // Instruction : celle saisie dans l'éditeur (persistée) prime ; sinon les
     // Notes de la ligne pré-remplissent le champ → la passe 2 en hérite.
     dispatch(setInstruction(metaSrc.instruction || item.notes || ''));
+    // MOT-CLÉ CIBLE — prérequis de l'audit. Il vivait uniquement dans Redux depuis
+    // l'écran de lancement : toute review rouverte ici repartait sans cible et
+    // « Relancer l'audit » restait grisé. `item.keyword` est la valeur saisie à
+    // l'ajout dans la file ; l'archive prime si elle en porte une (le rédacteur a
+    // pu l'affiner). Dispatché MÊME À VIDE, comme `setWpData` juste au-dessus et
+    // pour la même raison : garder le mot-clé de l'article ouvert PRÉCÉDEMMENT
+    // auditerait celui-ci contre la cible d'un autre — pire qu'un bouton grisé.
+    dispatch(setTargetKeyword((arch?.keyword || item.keyword || '').trim()));
     dispatch(setCurrentArticleId(item.id)); // marque cet item comme "en cours de review"
     dispatch(setStatus('done'));
     navigate('/');

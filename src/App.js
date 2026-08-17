@@ -26,7 +26,7 @@ import Tickets from './pages/Tickets';
 import SupportDashboard from './pages/SupportDashboard';
 import Archives from './pages/Archives';
 import { setSettings, setFirebaseReady, DEFAULT_FIREBASE_CONFIG } from './store/slices/settingsSlice';
-import { setSkills } from './store/slices/skillsSlice';
+import { setSkills, setSkillsBootstrapped } from './store/slices/skillsSlice';
 import { countCustomSkills } from './constants/defaultSkills';
 import { setKnowledge } from './store/slices/knowledgeSlice';
 import { setHistory } from './store/slices/articlesSlice';
@@ -120,6 +120,10 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     dispatch(setFirebaseReady(ok));
     if (!ok) {
       console.error('[firebase] Échec de l\'initialisation');
+      // Sortie anticipée : le chargement des skills n'aura pas lieu. Le drapeau
+      // doit quand même tomber, sinon les écrans qui l'attendent restent bloqués
+      // sur « chargement des skills » indéfiniment.
+      dispatch(setSkillsBootstrapped(true));
       return;
     }
   } else {
@@ -161,6 +165,13 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
         safeSetItem(STORAGE_KEYS.skills, merged);
       }
     }
+    // Les skills du serveur sont arrivés et fusionnés : ce qui est dans le store
+    // est désormais la liste RÉELLE. Tant que ce drapeau est faux, un écran qui
+    // n'y trouve pas de skill cerveau doit dire « chargement » et non « absent »
+    // (voir skillsSlice). Posé ici, juste après la fusion, et AUSSI dans le catch
+    // ci-dessous : un chargement en échec doit débloquer l'interface, pas la
+    // laisser attendre pour toujours.
+    dispatch(setSkillsBootstrapped(true));
     if (articles.length > 0) {
       dispatch(setHistory(articles));
       persistHistory(articles); // cache local allégé (HTML exclu) — Firestore = source de vérité
@@ -186,6 +197,10 @@ window.__tontonBootstrapPromise = (async function bootstrapFirebase() {
     }
   } catch (e) {
     console.error('[firebase] Erreur chargement données :', e.message);
+    // Chargement KO : on ne fera pas mieux. Débloquer les écrans qui attendent la
+    // liste des skills — ils basculeront sur le message « absent », actionnable
+    // (aller en créer un), au lieu d'un « chargement » qui n'aboutira jamais.
+    dispatch(setSkillsBootstrapped(true));
   }
 })();
 

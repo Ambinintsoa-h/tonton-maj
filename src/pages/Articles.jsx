@@ -108,6 +108,13 @@ export default function Articles() {
         dispatch(setWpData(d.wpData || null));
         dispatch(setInternalLinks(d.internalLinks || []));
         dispatch(setAudit(d.audit || ''));
+        // MOT-CLÉ CIBLE — sans cette ligne, le brouillon avait beau le porter,
+        // Redux repartait vide après un rechargement et « Relancer l'audit »
+        // restait grisé (« mot-clé cible manquant ») sur un article dont la base
+        // connaît pourtant le mot-clé. Écrit par draftDataRef.build() dans
+        // ArticleResult ; les brouillons antérieurs ne le portent pas, d'où le
+        // `if` : ne rien dispatcher plutôt qu'écraser avec du vide.
+        if (d.targetKeyword) dispatch(setAgentTargetKeyword(d.targetKeyword));
         // Avancement du parcours en quatre phases. C'est le chemin d'entrée le PLUS
         // fréquent — il se déclenche à chaque chargement de page — et l'oublier
         // ramenait le stepper à « phase 1 à faire » sur un article déjà généré,
@@ -166,6 +173,12 @@ export default function Articles() {
   // Un skill cerveau (SKILL.md actif) est requis par le mode QAT : il porte la
   // méthode d'audit et les gabarits de rédaction.
   const hasBrainSkill = (skills || []).some(k => k?.format === 'skillmd' && k?.body && k?.active !== false);
+  // Le chargement serveur des skills a-t-il abouti ? Tant qu'il ne l'a pas fait,
+  // `skills` n'est que le cache localStorage — qui peut très bien ne pas porter le
+  // cerveau. Annoncer « aucun skill cerveau actif » à ce moment-là est FAUX et
+  // envoyait le rédacteur fouiller un menu où le skill était bien présent.
+  const skillsBootstrapped = useSelector(s => s.skills.bootstrapped);
+  const skillsEnChargement = !hasBrainSkill && !skillsBootstrapped;
 
   // Le skill cerveau porte la méthode d'audit : sans lui, le parcours n'a plus de
   // règles à appliquer. Il est donc requis, et non plus seulement pour un mode.
@@ -180,7 +193,8 @@ export default function Articles() {
     ...(!(settings.aiConfigured || settings.useLocalProxy || settings.anthropicKey) ? ['clé API Anthropic'] : []),
     ...(!(tab === TAB_URL ? url.trim() : text.trim()) ? [tab === TAB_URL ? 'URL de l\'article' : 'contenu de l\'article'] : []),
     ...(!targetKeyword.trim() ? ['mot-clé cible'] : []),
-    ...(!hasBrainSkill ? ['skill cerveau actif'] : []),
+    // « pas encore chargé » n'est pas « absent » : voir skillsBootstrapped ci-dessus.
+    ...(!hasBrainSkill ? [skillsBootstrapped ? 'skill cerveau actif' : 'chargement des skills'] : []),
   ];
 
   const handleRun = async () => {
@@ -695,6 +709,7 @@ export default function Articles() {
                     targetWords={targetWords} setTargetWords={setTargetWords}
                     linkRows={linkRows} setLinkRows={setLinkRows}
                     hasBrainSkill={hasBrainSkill}
+                    skillsEnChargement={skillsEnChargement}
                     articleUrl={url}
                   />
                 )}

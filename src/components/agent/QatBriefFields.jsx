@@ -3,7 +3,7 @@
 // formulaire inchangé (double flux temporaire — voir constants/majMode.js).
 import React from 'react';
 import { motion } from 'framer-motion';
-import { FileText, Plug, Ruler, AlertCircle } from 'lucide-react';
+import { FileText, Plug, Ruler, AlertCircle, Loader2 } from 'lucide-react';
 import {
   ARTICLE_TYPES, SEO_PLUGINS, TARGET_WORDS_MIN, TARGET_WORDS_MAX,
 } from '../../constants/majMode';
@@ -35,6 +35,12 @@ const QatBriefFields = ({
   targetWords, setTargetWords,
   linkRows, setLinkRows,
   hasBrainSkill = true,
+  // Liste des skills pas encore revenue du serveur : ne PAS annoncer une absence.
+  // Le bandeau « Aucun skill cerveau actif » s'affichait pendant la seconde du
+  // chargement et envoyait le rédacteur vérifier un menu où le skill était bien
+  // présent. Absence CONSTATÉE et absence PAS ENCORE VÉRIFIÉE ne se disent pas
+  // de la même façon.
+  skillsEnChargement = false,
   articleUrl = '',
 }) => {
   return (
@@ -44,7 +50,12 @@ const QatBriefFields = ({
       exit={{ opacity: 0, height: 0 }}
       className="border border-indigo-100 bg-indigo-50/40 rounded-xl p-4 space-y-4 overflow-hidden"
     >
-      {!hasBrainSkill && (
+      {skillsEnChargement ? (
+        <div className="flex items-start gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-600">
+          <Loader2 size={14} className="shrink-0 mt-0.5 animate-spin text-gray-400" />
+          <span>Chargement des skills… le bouton de lancement s'active dès que la liste est arrivée.</span>
+        </div>
+      ) : !hasBrainSkill && (
         <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
           <AlertCircle size={14} className="shrink-0 mt-0.5" />
           <span>
