@@ -30,6 +30,7 @@ import {
 } from '../../utils/faq';
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, tableBlockOf, unwrapTransparentDivs, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
 import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
+import { findBlockForPassage } from '../../utils/locatePassage';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId,
   setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport, appliquerSuggestionObsolescence,
   setAuditJson, setAnalysis, setTargetKeyword } from '../../store/slices/agentSlice';
@@ -1716,8 +1717,14 @@ export default function ArticleResult() {
     }
     const amorce = String(extrait || '').slice(0, 40);
     if (!amorce) return;
-    const bloc = [...el.querySelectorAll('p, li, h2, h3, h4, td, blockquote')]
-      .find((b) => (b.textContent || '').includes(amorce));
+    // `findBlockForPassage` (locatePassage.js) au lieu d'un `includes` brut. On
+    // cherchait une chaîne DÉJÀ normalisée par `texteDe` (stylePatterns.js :
+    // balises remplacées par une espace, `&nbsp;` converti, espaces réduits) dans
+    // un `textContent` qui, lui, ne l'est pas : espace insécable réelle, espace
+    // fantôme laissée par une balise inline, et surtout `<br>` qui COLLE les mots
+    // ("Ligne A<br>Ligne B" → "Ligne ALigne B"). L'appariement échouait sur une
+    // amorce de prose française sur deux.
+    const bloc = findBlockForPassage(el, amorce);
     if (!bloc) { toast('Passage non localisé dans l\'éditeur.', { icon: 'ℹ️' }); return; }
     scrollBlockIntoView(el, bloc);
     flashBlock(bloc, { color: '#d97706' });
