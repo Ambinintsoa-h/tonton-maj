@@ -153,6 +153,18 @@ export default function Articles() {
       applyDraft(local, true);
     } else if (agent.status === 'done' && local?.html
         && local.currentArticleId === agent.currentArticleId
+        // ── UN BROUILLON PÉRIMÉ NE REMPLACE JAMAIS UNE ARCHIVE ROUVERTE ────────
+        // Le rédacteur vient de demander explicitement l'ouverture d'un article
+        // archivé : le contenu chargé fait FOI. Un brouillon enregistré AVANT ce
+        // geste est, par construction, une version antérieure.
+        //
+        // Sans ce test, rouvrir un article « terminé » ramenait l'état figé au
+        // dernier autosave d'avant l'archivage — et l'autosave suivant réécrivait
+        // cette version périmée en base. Le travail était perdu pour de bon.
+        // Le brouillon est désormais purgé au « Terminer » (ArticleResult), mais
+        // celui d'une session antérieure ou d'un autre poste peut encore traîner :
+        // cet arbitrage par horodatage vaut dans tous les cas.
+        && (local.savedAt || 0) > (agent.archiveOpenedAt || 0)
         && (local.html !== agent.updatedContent || local.editorMeta)) {
       // Retour SPA : récupérer les éditions manuelles (contentRef) non reflétées
       // dans Redux — HTML édité ET métadonnées (titre, SEO, date, image, catégories)

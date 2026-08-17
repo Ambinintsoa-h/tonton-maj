@@ -30,7 +30,7 @@ import {
 } from '../../utils/faq';
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, tableBlockOf, unwrapTransparentDivs, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
 import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
-import { findBlockForPassage } from '../../utils/locatePassage';
+import { findBlockForPassage, replacePassageInDom } from '../../utils/locatePassage';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId,
   setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport, appliquerSuggestionObsolescence,
   setAuditJson, setAnalysis, setTargetKeyword } from '../../store/slices/agentSlice';
@@ -59,7 +59,7 @@ import {
   saveArticle, updateArticleHtml,
   acquireEditLock, heartbeatEditLock, releaseEditLock, watchEditLock, isLockActive, LOCK_HEARTBEAT_MS,
 } from '../../services/firebase';
-import { saveDraft, flushDraftRemote, onDraftStatus } from '../../services/articleDraft';
+import { saveDraft, flushDraftRemote, onDraftStatus, clearDraft } from '../../services/articleDraft';
 import articleTimeTracker from '../../services/articleTimeTracker';
 import { renderMarkdown, emojiToIcons, unwrapProseFences, trimAuditForDisplay } from '../../utils/markdown';
 import { validateImageFile } from '../../utils/uploadLimits';
@@ -1630,14 +1630,35 @@ export default function ArticleResult() {
   const handleAcceptStyleFix = ({ avant, apres }) => {
     const el = articleRef.current;
     const src = el ? el.innerHTML : (contentRef.current || '');
-    if (!avant || !src.includes(avant)) {
-      // Le passage vient du TEXTE de l'article ; s'il traverse du balisage (gras,
-      // lien), il n'apparaît pas tel quel dans le HTML. On le dit plutôt que de
-      // ne rien faire en silence.
-      toast.error('Passage introuvable tel quel — déjà modifié, ou coupé par du balisage. À corriger à la main.');
-      return false;
+    if (!avant) return false;
+
+    let nouveau = null;
+    if (src.includes(avant)) {
+      // Chemin RAPIDE, inchangé : le passage figure tel quel dans le HTML.
+      nouveau = src.replace(avant, apres);
+    } else {
+      // ── Le passage TRAVERSE DU BALISAGE — c'est le cas courant, pas l'exception
+      // `avant` est du texte NU (les extraits viennent de `texteDe`, qui retire les
+      // balises). Dès que la phrase contient un <em>, un <strong> ou un <br>, elle
+      // n'apparaît pas telle quelle dans innerHTML : la correction était REFUSÉE,
+      // et les phrases de plus de 20 mots — les plus longues, donc les plus
+      // susceptibles de porter une balise — échouaient précisément toutes.
+      // `replacePassageInDom` apparie sur une signature sans espaces et remplace
+      // une plage qui traverse plusieurs nœuds. Il REFUSE si un lien ou un média
+      // est dans la plage : le supprimer violerait la règle 8 sans qu'aucun verrou
+      // ne s'en aperçoive à ce stade.
+      const cible = document.createElement('div');
+      cible.innerHTML = src;
+      const r = replacePassageInDom(cible, avant, apres);
+      if (!r.ok) {
+        toast.error(r.reason === 'protege'
+          ? 'Ce passage contient un lien ou un média : la correction n\'est pas appliquée automatiquement (le lien serait perdu). À reformuler à la main.'
+          : 'Passage introuvable — il a déjà été modifié depuis l\'analyse. Relancez le décompte.');
+        return false;
+      }
+      nouveau = cible.innerHTML;
     }
-    const nouveau = src.replace(avant, apres);
+
     if (el) { el.innerHTML = nouveau; lockMedia(el); }
     contentRef.current = nouveau;
     humanEditRef.current = true;
@@ -2300,6 +2321,11 @@ export default function ArticleResult() {
           dispatch(addToHistory({ ...articleData, id: Date.now().toString(), ...(r.seoTracking ? { seoTracking: r.seoTracking } : {}) }));
         }
         dispatch(removePendingItem(cqItem.id));
+        // BROUILLON PURGÉ — il vient d'être archivé, le garder DÉTRUIT du travail.
+        // Voir le commentaire jumeau du flux normal ci-dessous : sans cet appel, le
+        // brouillon survivait au « Terminer » et écrasait le HTML final à la
+        // réouverture.
+        clearDraft(draftUserId);
         toast.success('Article validé et archivé dans l\'historique !', { icon: <CheckCircle2 size={18} className="text-green-600" /> });
         navigate('/maj-en-attente');
       } catch (e) {
@@ -2352,6 +2378,20 @@ export default function ArticleResult() {
       if (firebaseReady && finalHtml) {
         updateArticleHtml(agent.currentArticleId, finalHtml, lastMod, archive).catch(() => {});
       }
+      // ── BROUILLON PURGÉ — SINON IL DÉTRUIT LE TRAVAIL ARCHIVÉ ────────────────
+      // `clearDraft` n'était appelé NULLE PART dans cet écran. Le brouillon
+      // d'autosave survivait donc au « Terminer », figé sur le dernier
+      // enregistrement AVANT l'archivage. À la réouverture de ce même article
+      // depuis l'Historique, l'effet de restauration d'Articles.jsx retrouvait ce
+      // brouillon (même `currentArticleId`) et REMPLAÇAIT le HTML final par lui —
+      // puis l'autosave réécrivait cette version périmée en base. Le rédacteur
+      // retrouvait un article amputé de ses dernières corrections, et le travail
+      // était perdu pour de bon.
+      //
+      // Purgé ICI, après une archive réussie : le brouillon n'a plus d'objet, tout
+      // est en base. `clearDraft` neutralise aussi le flush de démontage (fenêtre
+      // d'inhibition de 2,5 s), qui sinon le ré-écrirait aussitôt.
+      clearDraft(draftUserId);
       dispatch(resetAgent());
       toast.success('Article archivé dans l\'historique !', { icon: <CheckCircle2 size={18} className="text-green-600" /> });
       navigate('/historique');

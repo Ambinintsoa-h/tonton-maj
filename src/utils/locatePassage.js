@@ -111,6 +111,90 @@ export const LOCATABLE_BLOCK_SEL =
   'p, li, h1, h2, h3, h4, h5, h6, td, th, caption, blockquote, figcaption, dd, dt, div';
 
 /**
+ * Éléments qu'un remplacement de texte ne doit JAMAIS emporter.
+ *
+ * `a` d'abord : supprimer un lien EXTERNE est interdit sans exception (règle 8 du
+ * projet), et ce chemin ne passe ni par `enforceExternalLinkPolicy` ni par aucun
+ * autre verrou — la perte serait donc silencieuse. Les médias suivent la même
+ * logique : une correction de style n'a aucune raison de supprimer une image.
+ */
+const PROTEGE_DANS_LA_PLAGE = 'a,img,iframe,video,audio,figure';
+
+/**
+ * REMPLACE `avant` par `apres` dans le DOM, même quand le passage traverse des
+ * balises inline.
+ *
+ * Pourquoi cette fonction existe : accepter une correction de style faisait
+ * `innerHTML.includes(avant)` — or `avant` est du TEXTE NU (les extraits viennent
+ * de `texteDe`, qui retire les balises). Dès que la phrase contenait un `<em>`, un
+ * `<strong>` ou un `<br>`, elle n'apparaissait pas telle quelle dans le HTML et la
+ * correction était REFUSÉE. Les phrases de plus de 20 mots étant les plus longues,
+ * ce sont précisément celles qui portent une balise — donc celles qui échouaient.
+ *
+ * Le balisage inline PUREMENT DÉCORATIF présent dans la plage remplacée disparaît :
+ * c'est inévitable, la phrase corrigée est un texte neuf où les positions du gras
+ * n'ont plus de sens. Ce qui est protégé, en revanche, ne l'est jamais : un passage
+ * contenant un lien ou un média est REFUSÉ, avec son motif.
+ *
+ * @returns {{ok: true} | {ok: false, reason: 'introuvable'|'protege'}}
+ */
+export const replacePassageInDom = (root, avant, apres) => {
+  if (!root || typeof root.querySelectorAll !== 'function') return { ok: false, reason: 'introuvable' };
+  const needle = passageSignature(avant);
+  if (!needle || typeof apres !== 'string') return { ok: false, reason: 'introuvable' };
+
+  const bloc = findBlockForPassage(root, avant);
+  if (!bloc) return { ok: false, reason: 'introuvable' };
+
+  // Signature de TOUT le bloc, nœud texte par nœud texte, avec le chemin de retour
+  // vers (nœud, offset) : c'est ce qui permet de borner une plage qui traverse
+  // plusieurs balises.
+  const noeuds = [];
+  const walker = document.createTreeWalker(bloc, NodeFilter.SHOW_TEXT);
+  let n;
+  while ((n = walker.nextNode())) noeuds.push(n);
+
+  let sig = '';
+  const map = [];
+  noeuds.forEach((node, ni) => {
+    const s = node.nodeValue || '';
+    for (let i = 0; i < s.length; i++) {
+      const piece = charSignature(s[i]);
+      for (let k = 0; k < piece.length; k++) { sig += piece[k]; map.push({ ni, off: i }); }
+    }
+  });
+
+  const at = sig.indexOf(needle);
+  if (at === -1) return { ok: false, reason: 'introuvable' };
+  const debut = map[at];
+  const fin   = map[at + needle.length - 1];
+  if (!debut || !fin) return { ok: false, reason: 'introuvable' };
+
+  const range = document.createRange();
+  try {
+    range.setStart(noeuds[debut.ni], debut.off);
+    range.setEnd(noeuds[fin.ni], fin.off + 1);
+  } catch { return { ok: false, reason: 'introuvable' }; }
+
+  // Un lien ou un média dans la plage : on REFUSE plutôt que de le détruire.
+  const copie = range.cloneContents();
+  if (copie.querySelector && copie.querySelector(PROTEGE_DANS_LA_PLAGE)) {
+    return { ok: false, reason: 'protege' };
+  }
+
+  range.deleteContents();
+  range.insertNode(document.createTextNode(apres));
+
+  // Balises inline vidées par le remplacement : un `<em></em>` résiduel n'a plus
+  // d'objet. On ne touche QUE le décoratif, et seulement s'il ne reste rien dedans.
+  Array.from(bloc.querySelectorAll('em,strong,i,b,u,span')).forEach((e) => {
+    if (!(e.textContent || '').trim() && !e.querySelector('img,br,a')) e.remove();
+  });
+  if (typeof bloc.normalize === 'function') bloc.normalize();
+  return { ok: true };
+};
+
+/**
  * Bloc le plus SPÉCIFIQUE contenant `passage`.
  *
  * @param {Element} root
