@@ -416,10 +416,36 @@ const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
 const CLAUDE_RETRY_DELAYS_MS = [2000, 5000]; // 2 relances max, backoff court
 
 /** Extrait { text, usage } d'une réponse proxy ({ content, modelUsed, usage }). */
+/**
+ * Extrait le TEXTE d'une réponse Anthropic, quels que soient les blocs présents.
+ *
+ * `content[0].text` était lu en dur. Ça marchait tant que le premier bloc était
+ * toujours du texte. Depuis la bascule Sonnet 5 (14/08/2026), le modèle raisonne
+ * par défaut : la réponse commence alors par un bloc `{ type: 'thinking' }`, dont
+ * `.text` est `undefined`. Résultat : `text` valait `undefined`, l'audit lisait
+ * une chaîne VIDE, la jugeait « réponse illisible » et rejouait ses 3 essais —
+ * tous facturés, aucun exploitable. 100 % des audits perdus depuis cette date.
+ *
+ * Signature exacte du bug : la récupération de JSON tronqué (`salvage`) du 3ᵉ
+ * essai ne rattrapait RIEN. Un JSON coupé se répare ; une chaîne vide, non.
+ *
+ * On concatène donc TOUS les blocs de texte et on ignore le reste (`thinking`,
+ * `redacted_thinking`, appels d'outils). Ainsi, activer volontairement le
+ * raisonnement — étape 2 de la bascule — ne cassera plus l'extraction.
+ */
+export const extractTextBlocks = (content) => {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter(b => b && (b.type === 'text' || (b.type === undefined && typeof b.text === 'string')))
+    .map(b => b.text || '')
+    .join('');
+};
+
 const parseClaudeResponse = (data, model) => {
   const actualModel = data.modelUsed || data.model || model;
   return {
-    text: data.content[0].text,
+    text: extractTextBlocks(data.content),
     usage: {
       input_tokens: data.usage?.input_tokens || 0,
       output_tokens: data.usage?.output_tokens || 0,
@@ -432,12 +458,19 @@ const parseClaudeResponse = (data, model) => {
 //   'JOB_UNSUPPORTED' → route absente (vieux serveur) — bascule sur la route legacy
 //   'JOB_LOST'        → job disparu (app redémarrée pendant l'analyse) — rejouable
 //   err.isAppError    → erreur applicative renvoyée par le serveur — non rejouable
-const callClaudeViaJob = async ({ system, messages, max_tokens, model }) => {
+const callClaudeViaJob = async ({ system, messages, max_tokens, model, thinking, output_config }) => {
   let created;
   try {
     created = await axios.post(
       JOB_PROXY,
-      { model, max_tokens, system, messages },
+      // `thinking` / `output_config` : MÊME PIÈGE que dans callClaudeStream et
+      // dans proxy.js — le corps est écrit champ par champ, donc tout paramètre
+      // non recopié ici est SILENCIEUSEMENT perdu. Il l'était : la bascule Sonnet
+      // 5 n'avait ouvert le passe-plat que sur le chemin SSE, alors que la
+      // production tourne sur CE transport (le proxy n0c bufferise le flux, tous
+      // les appels se rabattent ici). `thinking: disabled` n'atteignait donc
+      // jamais l'API et Sonnet 5 raisonnait à chaque audit.
+      { model, max_tokens, system, messages, ...(thinking ? { thinking } : {}), ...(output_config ? { output_config } : {}) },
       { headers: { 'content-type': 'application/json' }, timeout: 30000 }
     );
   } catch (err) {
@@ -472,24 +505,32 @@ const callClaudeViaJob = async ({ system, messages, max_tokens, model }) => {
 // Route legacy (réponse synchrone dans le même POST) — secours uniquement.
 // Timeout aligné sur le ceiling serveur (10 min) + marge, sinon une génération
 // Refonte via ce repli serait coupée à 5 min alors que le serveur l'autorise.
-const callClaudeLegacy = async ({ system, messages, max_tokens, model }) => {
+const callClaudeLegacy = async ({ system, messages, max_tokens, model, thinking, output_config }) => {
   const response = await axios.post(
     LOCAL_PROXY,
-    { model, max_tokens, system, messages },
+    // Même passe-plat que la route job ci-dessus — voir son commentaire.
+    { model, max_tokens, system, messages, ...(thinking ? { thinking } : {}), ...(output_config ? { output_config } : {}) },
     { headers: { 'content-type': 'application/json' }, timeout: 660000 }
   );
   return parseClaudeResponse(response.data, model);
 };
 
-export const callClaude = async (_apiKey, { system, messages, max_tokens = 2048, model = MODELS.FAST }) => {
+export const callClaude = async (_apiKey, {
+  system, messages, max_tokens = 2048, model = MODELS.FAST,
+  // PREMIÈRE des trois portes où `thinking` tombait. Cette destructuration est un
+  // filtre : ce qui n'y figure pas n'existe plus pour la suite de la chaîne, sans
+  // erreur ni avertissement. `callClaudeWithProgress` passe ses `params` ici tels
+  // quels — c'est par cette porte que `thinking: disabled` disparaissait.
+  thinking, output_config,
+}) => {
   // _apiKey ignoré — le proxy lit la clé depuis data/settings.json côté serveur.
   // La clé n'est plus jamais transmise dans le body HTTP (invisible dans DevTools).
   let useLegacy = false;
   for (let attempt = 0; ; attempt++) {
     try {
       return useLegacy
-        ? await callClaudeLegacy({ system, messages, max_tokens, model })
-        : await callClaudeViaJob({ system, messages, max_tokens, model });
+        ? await callClaudeLegacy({ system, messages, max_tokens, model, thinking, output_config })
+        : await callClaudeViaJob({ system, messages, max_tokens, model, thinking, output_config });
     } catch (err) {
       // Vieux serveur sans route job (fenêtre de déploiement) → bascule legacy
       // sans consommer d'essai.

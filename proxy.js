@@ -1917,6 +1917,35 @@ const MODEL_FALLBACK = 'claude-haiku-4-5';
 // Utilisé quand le client fournit sa propre clé Anthropic plutôt que le token OAuth.
 // Le call est fait côté serveur (Node.js) — la clé ne transite jamais vers Anthropic
 // depuis le navigateur, ce qui évite son exposition dans les DevTools du navigateur.
+/**
+ * Texte d'une réponse Anthropic — TOUS les blocs de texte, concaténés.
+ *
+ * ⚠️ C'EST LA CAUSE RACINE DE LA PANNE D'AUDIT DU 14/08/2026 AU 17/08/2026.
+ * Les deux voies d'appel lisaient `content?.[0]?.text || ''`. Ça tenait aussi
+ * longtemps que le premier bloc était du texte. Depuis la bascule vers
+ * `claude-sonnet-5`, le modèle raisonne PAR DÉFAUT : la réponse commence alors
+ * par un bloc `{ type: 'thinking' }`, dont `.text` est `undefined`. Le `|| ''`
+ * transformait ça en CHAÎNE VIDE, sans erreur, sans log, sans indice.
+ *
+ * Conséquence exacte, mesurée en production : 100 % des audits perdus pendant
+ * trois jours. `runQatAudit` recevait '', jugeait la réponse illisible, rejouait
+ * ses 3 essais — tous facturés (~0,55 $ par article) — et écrivait un audit vide.
+ * La réparation de JSON tronqué du 3ᵉ essai ne rattrapait rien : un JSON coupé se
+ * répare, une chaîne vide non. C'était la signature du bug.
+ *
+ * Ignorer les blocs `thinking` / `redacted_thinking` et concaténer le reste rend
+ * l'extraction indifférente au raisonnement : l'activer volontairement (étape 2
+ * de la bascule) ne pourra plus casser la chaîne.
+ */
+const textFromAnthropic = (content) => {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter(b => b && (b.type === 'text' || (b.type === undefined && typeof b.text === 'string')))
+    .map(b => b.text || '')
+    .join('');
+};
+
 const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, reject) => {
   const requestBody = {
     model: bodyObj.model,
@@ -1953,7 +1982,9 @@ const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, rejec
         if (res.statusCode === 401 || res.statusCode === 403) return reject(new Error('Clé API Anthropic invalide ou expirée'));
         if (res.statusCode === 429) return reject(new Error('RATE_LIMITED'));
         if (res.statusCode !== 200) return reject(new Error(json.error?.message || `HTTP ${res.statusCode}`));
-        const text = json.content?.[0]?.text || '';
+        // Voir textFromAnthropic : lire `content[0].text` perdait TOUTE la réponse
+        // dès que Sonnet 5 la faisait précéder d'un bloc de raisonnement.
+        const text = textFromAnthropic(json.content);
         const usage = json.usage || {};
         // ── DIAGNOSTIC TEMPORAIRE (2) — le bloc 0 est-il VRAIMENT identique ? ──
         // Deux audits reels, memes longueurs de bloc 0 (28057), meme
@@ -2076,7 +2107,9 @@ const callWithModelCascade = async (token, bodyObj) => {
     try {
       const result = await callAnthropicDirect(token, { ...bodyObj, model });
       // Extraire text + usage depuis la réponse complète
-      const text = result.content?.[0]?.text || '';
+      // Voie OAuth — celle de la production. Même correctif que sur la voie clé
+      // API : voir textFromAnthropic. C'est ICI que les audits se perdaient.
+      const text = textFromAnthropic(result.content);
       const usage = result.usage || {};
       // DIAGNOSTIC TEMPORAIRE — voie OAuth (voir le bloc jumeau plus haut).
       const sO = bodyObj.system;
@@ -2179,7 +2212,7 @@ const friendlyAiError = (rawMsg = '') => {
 // ─── Cœur de l'appel Claude (partagé : route directe + jobs asynchrones) ───────
 // Reprend les 3 stratégies historiques : clé API settings.json → OAuth+cascade → CLI.
 // Retourne { ok:true, data:{ content, modelUsed, usage } } ou { ok:false, status, error }.
-const executeClaudeCall = async ({ system, messages, max_tokens = 4096, model }) => {
+const executeClaudeCall = async ({ system, messages, max_tokens = 4096, model, thinking, output_config }) => {
   if (!messages?.length) return { ok: false, status: 400, error: 'messages requis' };
 
   // Clé Anthropic : lire uniquement depuis data/settings.json (jamais depuis le client).
@@ -2205,7 +2238,7 @@ const executeClaudeCall = async ({ system, messages, max_tokens = 4096, model })
       })();
       for (const m of [...new Set(toTry)]) {
         try {
-          const { text, modelUsed, usage } = await callAnthropicWithApiKey(clientApiKey, { model: m, max_tokens, system, messages });
+          const { text, modelUsed, usage } = await callAnthropicWithApiKey(clientApiKey, { model: m, max_tokens, system, messages, thinking, output_config });
           return { ok: true, data: { content: [{ text }], modelUsed, usage } };
         } catch (e) {
           if (e.message === 'RATE_LIMITED') { console.log(`[proxy] Cascade clé API : ${m} → suivant`); continue; }
@@ -2230,6 +2263,10 @@ const executeClaudeCall = async ({ system, messages, max_tokens = 4096, model })
         max_tokens,
         system,    // ← top-level system parameter (pas intégré dans user content)
         messages,  // ← messages d'origine (structure correcte)
+        // Dernier maillon du passe-plat : sans ces deux lignes, tout le reste de
+        // la chaîne aurait été corrigé pour rien sur la voie de production.
+        ...(thinking ? { thinking } : {}),
+        ...(output_config ? { output_config } : {}),
       });
       // usage ← { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens }
       return { ok: true, data: { content: [{ text }], modelUsed, usage } };
@@ -2261,8 +2298,13 @@ const executeClaudeCall = async ({ system, messages, max_tokens = 4096, model })
 
 // ─── Route principale (réponse synchrone — conservée pour compatibilité) ───────
 app.post('/api/claude', requireAuth, async (req, res) => {
-  const { system, messages, max_tokens = 4096, model } = req.body;
-  const r = await executeClaudeCall({ system, messages, max_tokens, model });
+  // `thinking` / `output_config` : le corps est réécrit champ par champ jusqu'à
+  // l'API, et CHAQUE étape qui les oublie les supprime en silence. La bascule
+  // Sonnet 5 avait ouvert le passe-plat dans callAnthropicDirect /
+  // callAnthropicWithApiKey, mais PAS dans les routes qui les appellent : le
+  // `thinking: disabled` du client mourait ici, sur le pas de la porte.
+  const { system, messages, max_tokens = 4096, model, thinking, output_config } = req.body;
+  const r = await executeClaudeCall({ system, messages, max_tokens, model, thinking, output_config });
   // Toujours retourner une réponse HTTP, ne jamais laisser Express crasher
   if (!res.headersSent) {
     if (r.ok) res.json(r.data);
@@ -2291,14 +2333,17 @@ setInterval(() => {
 }, 60000).unref();
 
 app.post('/api/claude-job', requireAuth, (req, res) => {
-  const { system, messages, max_tokens = 4096, model } = req.body;
+  // Même passe-plat que /api/claude — et c'est la route la PLUS importante : le
+  // proxy n0c bufferise le flux SSE, donc TOUS les appels de production passent
+  // ici. C'était donc la porte décisive où `thinking: disabled` disparaissait.
+  const { system, messages, max_tokens = 4096, model, thinking, output_config } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
 
   const jobId = require('crypto').randomUUID();
   const job = { status: 'running', createdAt: Date.now() };
   claudeJobs.set(jobId, job);
 
-  executeClaudeCall({ system, messages, max_tokens, model })
+  executeClaudeCall({ system, messages, max_tokens, model, thinking, output_config })
     .then(r => {
       if (r.ok) { job.status = 'done'; job.result = r.data; }
       else { job.status = 'error'; job.httpStatus = r.status; job.error = r.error; }
