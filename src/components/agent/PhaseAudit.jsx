@@ -48,10 +48,16 @@ export default function PhaseAudit({
   // depuis l'Historique sans mot-clé enregistré (entrées antérieures à son
   // archivage) laisserait sinon un bouton grisé que RIEN ne peut débloquer.
   onMotCleChange,
+  // La liste des skills n'est pas encore revenue du serveur. Volontairement SÉPARÉ
+  // de `champsManquants` : ce n'est pas un prérequis à renseigner mais une attente
+  // de quelques secondes, et la ranger parmi les manquants produisait la phrase
+  // « chargement des skills en cours manquant ». Deux états, deux messages, deux
+  // gestes — patienter ici, aller créer un skill là.
+  skillsEnChargement = false,
 }) {
   const [confirmation, setConfirmation] = useState(false);
   const [motCleSaisi, setMotCleSaisi] = useState('');
-  const bloque = champsManquants.length > 0;
+  const bloque = champsManquants.length > 0 || skillsEnChargement;
   const manqueMotCle = champsManquants.includes('mot-clé cible');
   const libelleManquants = `${champsManquants.join(' et ')} manquant${champsManquants.length > 1 ? 's' : ''}`;
   const dejaAudite = !!audit || !!rapportMarkdown;
@@ -140,8 +146,20 @@ export default function PhaseAudit({
         </div>
       )}
 
+      {/* Skills pas encore chargés — bandeau NEUTRE, pas une alerte : rien à faire
+          qu'attendre, et le bouton se réactive tout seul à l'arrivée de la liste. */}
+      {skillsEnChargement && !running && (
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+          <p className="text-[11px] text-gray-600 flex items-center gap-1.5">
+            <Loader2 size={12} className="animate-spin text-gray-400" />
+            Chargement des skills… l'audit s'appuie sur le skill cerveau (SKILL.md) : le bouton
+            s'active dès que la liste est arrivée.
+          </p>
+        </div>
+      )}
+
       {/* Prérequis absents — nommés AVANT le bouton grisé, sinon il est muet */}
-      {bloque && !running && (
+      {champsManquants.length > 0 && !running && (
         <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 space-y-1">
           <p className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
             <AlertTriangle size={12} />
@@ -183,7 +201,11 @@ export default function PhaseAudit({
           type="button"
           onClick={demander}
           disabled={bloque}
-          title={bloque ? `Audit impossible — ${libelleManquants}` : (dejaAudite ? 'Relancer l\'audit de la version en ligne' : 'Lancer l\'audit de la version en ligne')}
+          title={champsManquants.length > 0
+            ? `Audit impossible — ${libelleManquants}`
+            : skillsEnChargement
+              ? 'Chargement des skills en cours — le bouton s\'active tout seul'
+              : (dejaAudite ? 'Relancer l\'audit de la version en ligne' : 'Lancer l\'audit de la version en ligne')}
           className="flex items-center gap-2 px-4 py-2.5 bg-black text-white rounded-xl text-sm font-semibold hover:bg-gray-800 transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-black"
         >
           {dejaAudite ? <RotateCcw size={14} /> : <ClipboardCheck size={14} />}

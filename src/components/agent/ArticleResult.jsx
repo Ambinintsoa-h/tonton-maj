@@ -166,6 +166,12 @@ export default function ArticleResult() {
   const agent = useSelector(s => s.agent);
   const settings = useSelector(s => s.settings);
   const skills = useSelector(s => s.skills.list);
+  // Le chargement serveur des skills a-t-il abouti ? Voir skillsSlice : à
+  // l'ouverture, `skills` n'est que le cache local, qui peut ne pas porter le
+  // cerveau. Sans cette distinction, l'audit était REFUSÉ pendant la seconde qui
+  // précède l'arrivée de la liste, avec un message qui envoyait chercher un skill
+  // pourtant présent. Constaté en production le 2026-08-17.
+  const skillsBootstrapped = useSelector(s => s.skills.bootstrapped);
   const knowledge = useSelector(s => s.knowledge.list);
   const authUser = useSelector(s => s.auth);
   const firebaseReady   = useSelector(s => s.settings.firebaseReady);
@@ -1010,6 +1016,17 @@ export default function ArticleResult() {
       wpData:          agent.wpData || null,
       internalLinks:   agent.internalLinks || [],
       audit:           agent.audit || '',
+      // MOT-CLÉ CIBLE — prérequis de l'audit (voir `motCleAudit` plus bas). Il ne
+      // vivait QUE dans Redux, saisi à l'écran de lancement : un simple F5 le
+      // perdait et « Relancer l'audit » se grisait avec « mot-clé cible manquant »
+      // alors que l'enregistrement en base le porte. Les replis
+      // (currentArticle.keyword) ne rattrapaient rien tant que les centaines
+      // d'articles de l'historique n'étaient pas chargés — c'est-à-dire
+      // précisément pendant les premières secondes après le rechargement.
+      // Constaté en production le 2026-08-17 : plus aucune analyse lançable.
+      // On enregistre la valeur RÉSOLUE, pas `agent.targetKeyword` brut : un
+      // article rouvert depuis la file porte son mot-clé dans `cqItem`.
+      targetKeyword:   (agent.targetKeyword || currentArticle?.keyword || cqItem?.keyword || '').trim(),
       // Avancement du parcours. Sans lui, un simple rechargement de page ramenait
       // le stepper à « phase 1 à faire » sur un article déjà généré, et
       // VERROUILLAIT les phases suivantes — le rédacteur ne pouvait plus rien
@@ -1789,9 +1806,20 @@ export default function ArticleResult() {
   // actif pour que handleAudit affiche le vrai diagnostic (« Article d'origine
   // introuvable »), seul message sur lequel l'utilisateur peut agir.
   const contenuOrigine = (agent.originalContent || '').trim();
+  // SKILL CERVEAU — troisieme prerequis, jusqu'ici absent de ce garde-fou. Le
+  // bouton restait actif, `runQatAudit` levait « exige un skill cerveau (SKILL.md)
+  // actif dans le menu SKILLS IA », la phase 1 basculait en ECHEC et le redacteur
+  // partait fouiller un menu ou le skill etait pourtant bien la : le vrai probleme
+  // etait que la liste n'etait PAS ENCORE CHARGEE. Deux messages distincts donc,
+  // pour deux gestes opposes — patienter, ou aller en creer un. Etat derive : le
+  // bouton se reactive de lui-meme des que la liste arrive, sans reclic.
+  // Deux etats distincts, jamais melanges dans la meme phrase : « pas encore
+  // charge » se resout en patientant, « absent » demande d'aller en creer un.
+  const skillsEnChargement = !hasBrainSkill && !skillsBootstrapped;
   const champsManquantsAudit = [
     ...(contenuOrigine && !titreAudit ? ['titre'] : []),
     ...(!motCleAudit ? ['mot-clé cible'] : []),
+    ...(!hasBrainSkill && skillsBootstrapped ? ['skill cerveau actif'] : []),
   ];
 
   const handleAudit = async () => {
@@ -1801,6 +1829,15 @@ export default function ArticleResult() {
     const source = agent.originalContent || '';
     if (!source.trim()) {
       toast.error('Article d\'origine introuvable — rouvrez-le depuis « MAJ en attente ».');
+      return;
+    }
+    // La liste des skills n'est pas encore revenue du serveur : PATIENTER, ne pas
+    // echouer. `runQatAudit` refusait ici avec « exige un skill cerveau actif dans
+    // le menu SKILLS IA » — un message faux dans ce cas (le skill est bien la, il
+    // n'est pas encore arrive dans le navigateur) qui basculait en plus la phase 1
+    // en ECHEC. Constate en production le 2026-08-17.
+    if (skillsEnChargement) {
+      toast('Chargement des skills en cours — relancez l\'audit dans quelques secondes.', { icon: '⏳' });
       return;
     }
     // Second rideau derriere le bouton desactive de PhaseAudit.
@@ -4397,6 +4434,7 @@ export default function ArticleResult() {
               progress={auditProgress}
               travailEnAval={travailEnAval}
               champsManquants={champsManquantsAudit}
+              skillsEnChargement={skillsEnChargement}
               // Le mot-cle cible se saisit dans le panneau quand il manque : c'est
               // la SEULE porte de sortie ici (aucun champ de l'editeur ne le porte)
               // pour les articles rouverts sans mot-cle archive. Meme valeur que
