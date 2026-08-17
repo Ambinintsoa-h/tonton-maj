@@ -30,7 +30,7 @@ import {
 } from '../../utils/faq';
 import { blockMeta, accord, blockAtRange, insertBlockHtml, makeTablesResponsive, tableBlockOf, unwrapTransparentDivs, normalizeTableStructure, diffClusterOf, cleanBlocksHtml } from '../../utils/blocks';
 import { scrollBlockIntoView, flashBlock } from '../../utils/scrollBlock';
-import { findBlockForPassage, replacePassageInDom } from '../../utils/locatePassage';
+import { findBlockForPassage, replacePassageInDom, highlightPassage } from '../../utils/locatePassage';
 import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setWpData, setDraftStatus, setCurrentArticleId,
   setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport, appliquerSuggestionObsolescence,
   setAuditJson, setAnalysis, setTargetKeyword } from '../../store/slices/agentSlice';
@@ -1621,6 +1621,17 @@ export default function ArticleResult() {
     catch { return ''; }
   }, [agent.wpData, articleUrl]);
 
+  // Surlignage temporaire du passage visé en relecture : le nettoyage est gardé
+  // dans un ref pour être rejoué au clic suivant comme au démontage — un <mark>
+  // oublié dans le texte serait pire que pas de surlignage du tout.
+  const focusRef   = useRef(null);
+  const focusTimer = useRef(null);
+  const FOCUS_MS   = 6000;   // assez pour le repérer à l'œil, assez court pour ne pas gêner
+  useEffect(() => () => {
+    clearTimeout(focusTimer.current);
+    if (focusRef.current) { focusRef.current(); focusRef.current = null; }
+  }, []);
+
   // ── PHASE 4 — appliquer une correction de style acceptée ────────────────────
   // Remplacement DIRECT, sans marqueur de diff : le rédacteur vient de valider la
   // proposition, il n'a pas à la réarbitrer ensuite dans la vue diff.
@@ -1730,7 +1741,7 @@ export default function ArticleResult() {
 
   // Situer une occurrence dans l'article : même mécanique que le navigateur de
   // structure (scroll multi-niveaux), qui fonctionne.
-  const handleLocateStyle = (extrait) => {
+  const handleLocateStyle = (extrait, terme = '') => {
     const el = articleRef.current;
     if (!el) {
       toast('Ouvrez la vue « Après » pour situer le passage.', { icon: 'ℹ️' });
@@ -1738,6 +1749,24 @@ export default function ArticleResult() {
     }
     const amorce = String(extrait || '').slice(0, 40);
     if (!amorce) return;
+
+    // ── SURLIGNER LE MOT, pas seulement le paragraphe ────────────────────────
+    // On atterrissait au bon endroit, mais l'ancien `flashBlock` entourait tout le
+    // BLOC : sur un paragraphe de 60 mots, il restait à chercher lequel remplacer.
+    // On surligne donc le terme fautif quand il est connu, le passage sinon.
+    // Le <mark> est retiré au bout de quelques secondes ET débalisé à l'export :
+    // s'il est capté par un autosave entre-temps, il ne partira jamais sur le site.
+    if (focusRef.current) { focusRef.current(); focusRef.current = null; }
+    const focus = highlightPassage(el, extrait, terme);
+    if (focus.el) {
+      scrollBlockIntoView(el, focus.el);
+      focusRef.current = focus.cleanup;
+      clearTimeout(focusTimer.current);
+      focusTimer.current = setTimeout(() => {
+        if (focusRef.current) { focusRef.current(); focusRef.current = null; }
+      }, FOCUS_MS);
+      return;
+    }
     // `findBlockForPassage` (locatePassage.js) au lieu d'un `includes` brut. On
     // cherchait une chaîne DÉJÀ normalisée par `texteDe` (stylePatterns.js :
     // balises remplacées par une espace, `&nbsp;` converti, espaces réduits) dans

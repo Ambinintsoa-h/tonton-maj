@@ -335,6 +335,17 @@ export const exportAsHtml = (content, articleUrl = '') => {
     if (span.parentNode) span.parentNode.replaceChild(frag, span);
   });
 
+  // SURLIGNAGE TEMPORAIRE de relecture (data-relecture-focus, voir
+  // src/utils/locatePassage.js) : il ne vit que quelques secondes dans l'éditeur,
+  // mais un autosave peut passer pendant ce temps et l'emporter dans le brouillon.
+  // C'est la CEINTURE : même capté, il ne part jamais sur le site. Le texte reste,
+  // seule la balise <mark> disparaît.
+  div.querySelectorAll('[data-relecture-focus]').forEach(mark => {
+    const frag = document.createDocumentFragment();
+    while (mark.firstChild) frag.appendChild(mark.firstChild);
+    if (mark.parentNode) mark.parentNode.replaceChild(frag, mark);
+  });
+
   // Convertir les wrappers vidéo (iframes YouTube) en URL brute pour WordPress oEmbed.
   // WordPress strip les <iframe> via wp_kses ; une URL YouTube seule sur sa propre ligne
   // est auto-convertie en lecteur embarqué par le mécanisme oEmbed natif de WordPress.

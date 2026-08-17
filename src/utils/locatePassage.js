@@ -111,6 +111,99 @@ export const LOCATABLE_BLOCK_SEL =
   'p, li, h1, h2, h3, h4, h5, h6, td, th, caption, blockquote, figcaption, dd, dt, div';
 
 /**
+ * Marque de SURLIGNAGE TEMPORAIRE d'un passage visé en relecture.
+ *
+ * Même mécanique que `[data-il-idx]` et `[data-lien-redige]` : un `<mark>` porteur
+ * qui est DÉBALISÉ à l'export (src/utils/export.js). C'est la ceinture : le
+ * surlignage est retiré au bout de quelques secondes, mais si un autosave passe
+ * entre-temps il ne doit surtout pas finir publié.
+ */
+export const FOCUS_ATTR  = 'data-relecture-focus';
+export const FOCUS_CLASS = 'relecture-focus';
+
+/**
+ * SURLIGNE un passage dans le DOM et rend la fonction de nettoyage.
+ *
+ * Le clic sur un pattern de relecture amenait bien au bon endroit, mais entourait
+ * tout le BLOC : sur un paragraphe de 60 mots, le rédacteur devait encore chercher
+ * lequel remplacer. On surligne donc le terme lui-même quand il est connu, et le
+ * passage entier sinon.
+ *
+ * @param {Element} root
+ * @param {string}  passage  la phrase repérée (sert à borner la recherche)
+ * @param {string}  [terme]  le mot fautif, s'il est connu — c'est LUI qu'on surligne
+ * @returns {{el: Element|null, cleanup: function}}
+ */
+export const highlightPassage = (root, passage, terme = '') => {
+  const rien = { el: null, cleanup: () => {} };
+  if (!root || typeof root.querySelectorAll !== 'function') return rien;
+  const bloc = findBlockForPassage(root, passage);
+  if (!bloc) return rien;
+
+  // Le terme est cherché DANS le passage repéré, pas dans tout le bloc : un mot
+  // courant (« reste », « offre ») apparaîtrait ailleurs et on surlignerait la
+  // mauvaise occurrence.
+  const cible = String(terme || '').trim() || passage;
+  const noeuds = [];
+  const walker = document.createTreeWalker(bloc, NodeFilter.SHOW_TEXT);
+  let n;
+  while ((n = walker.nextNode())) noeuds.push(n);
+
+  let sig = '';
+  const map = [];
+  noeuds.forEach((node, ni) => {
+    const s = node.nodeValue || '';
+    for (let i = 0; i < s.length; i++) {
+      const piece = charSignature(s[i]);
+      for (let k = 0; k < piece.length; k++) { sig += piece[k]; map.push({ ni, off: i }); }
+    }
+  });
+
+  // Position du passage, puis du terme À L'INTÉRIEUR de ce passage.
+  const sigPassage = passageSignature(passage);
+  const sigCible   = passageSignature(cible);
+  if (!sigCible) return rien;
+  const base = sigPassage ? sig.indexOf(sigPassage) : 0;
+  const dans = sigCible === sigPassage ? 0 : sigPassage.indexOf(sigCible);
+  const at = base >= 0 && dans >= 0 ? base + dans : sig.indexOf(sigCible);
+  if (at < 0) return rien;
+
+  const debut = map[at];
+  const fin   = map[at + sigCible.length - 1];
+  if (!debut || !fin) return rien;
+
+  const range = document.createRange();
+  try {
+    range.setStart(noeuds[debut.ni], debut.off);
+    range.setEnd(noeuds[fin.ni], fin.off + 1);
+  } catch { return rien; }
+
+  const marque = document.createElement('mark');
+  marque.className = FOCUS_CLASS;
+  marque.setAttribute(FOCUS_ATTR, '1');
+  try { range.surroundContents(marque); }
+  catch {
+    // Bornes à cheval sur des balises : on retombe sur le passage entier plutôt
+    // que de ne rien montrer.
+    try {
+      marque.appendChild(range.extractContents());
+      range.insertNode(marque);
+    } catch { return rien; }
+  }
+
+  return {
+    el: marque,
+    cleanup: () => {
+      if (!marque.parentNode) return;
+      const parent = marque.parentNode;
+      while (marque.firstChild) parent.insertBefore(marque.firstChild, marque);
+      parent.removeChild(marque);
+      if (typeof parent.normalize === 'function') parent.normalize();
+    },
+  };
+};
+
+/**
  * Éléments qu'un remplacement de texte ne doit JAMAIS emporter.
  *
  * `a` d'abord : supprimer un lien EXTERNE est interdit sans exception (règle 8 du

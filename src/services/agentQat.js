@@ -17,7 +17,10 @@ import {
   unwrapForbiddenInternalLinks,
 } from '../utils/internalWeave';
 import { listArticleImages, carryOverImages } from '../utils/imageCarry';
-import { phrasesTropLongues, MOTS_MAX_PHRASE } from '../utils/stylePatterns';
+import {
+  phrasesTropLongues, MOTS_MAX_PHRASE,
+  suroptimisationMotCle, MAX_H2_AVEC_MOT_CLE, elisionsOrphelines,
+} from '../utils/stylePatterns';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
@@ -116,7 +119,32 @@ Bornes, à respecter — un texte tout en gras ne met plus rien en avant :
 - **jamais** de gras dans un titre (h1-h6), ni à l'intérieur du texte d'un lien
   \`<a>\` — le lien a déjà son propre repère visuel ;
 - le même terme n'est pas mis en gras à chacune de ses occurrences : la première
-  fois qu'il compte, dans la section où il compte.`;
+  fois qu'il compte, dans la section où il compte.
+
+### 3. NE SUROPTIMISE PAS le mot-clé
+${targetKeyword ? `Mot-clé : « ${targetKeyword} ».` : ''}
+Sa forme exacte est obligatoire au titre SEO, au H1 et une fois dans le premier
+paragraphe — et **c'est tout**. Ailleurs, tu emploies des variantes.
+
+- **${MAX_H2_AVEC_MOT_CLE} titres H2 au MAXIMUM** peuvent contenir la forme exacte.
+  Les autres H2 emploient une variante ou un angle différent. Mesuré sur un article
+  réel : 8 H2 sur 9 portaient la forme exacte — un rédacteur humain ne fait jamais
+  ça, et Google le voit.
+- Varie avec les **voisins sémantiques**, les mots de la **même famille**, les
+  **synonymes partiels** et les **termes techniques** du sujet. Sur « toiture en bac
+  acier » : couverture, toit, bardage, tôle nervurée, panneau sandwich, profilé…
+- Emploie **au moins 4 variantes distinctes** dans l'article.
+- Une phrase ne contient jamais deux fois le mot-clé, et deux phrases voisines non
+  plus.
+- Le texte doit se lire comme écrit pour un lecteur, pas pour un moteur : si tu
+  hésites entre répéter le mot-clé et écrire ce qu'un humain dirait, écris ce qu'un
+  humain dirait.
+
+### 4. Aucune élision orpheline
+Quand tu places une ancre imposée, **adapte les mots autour**. L'ancre est
+intouchable, la phrase qui l'accueille ne l'est pas : « face à l'ardoise » devient
+« face à la toiture en ardoise », jamais « face à l' toiture en ardoise ». Relevé
+deux fois sur un article réel — une apostrophe orpheline se voit à la lecture.`;
 
 /**
  * Extrait un objet JSON d'une réponse Claude, même entourée de texte ou de
@@ -326,7 +354,10 @@ Un texte de ton cru vaut mieux que cette rustine : c'est tout l'intérêt de les
 placer toi-même.`;
   }
   return `## ═══ BRIEF DU RÉDACTEUR (prioritaire sur les valeurs par défaut des ressources) ═══
-- Mot-clé cible (à respecter À LA LETTRE PRÈS) : « ${targetKeyword} »
+- Mot-clé cible : « ${targetKeyword} » — forme EXACTE obligatoire dans le titre SEO,
+  le H1 et une fois dans le premier paragraphe. Ne le paraphrase JAMAIS à ces trois
+  endroits : on ciblerait un autre terme. PARTOUT AILLEURS, varie (voir le bloc
+  « suroptimisation » plus bas).
 - Type d'article : ${ARTICLE_TYPES[articleType]?.label || articleType} — ${ARTICLE_TYPES[articleType]?.description || ''}
 - Plugin SEO du site : ${SEO_PLUGINS[seoPlugin]?.label || seoPlugin} (emploie sa terminologie exacte dans pre_pub_checklist)
 - Longueur cible : ${targetWords} mots
@@ -1068,6 +1099,18 @@ N'ajoute aucun AUTRE lien externe.`;
       const tropLongues = phrasesTropLongues(woven.html);
       if (tropLongues.length) {
         onStep(`✏️ ${tropLongues.length} phrase(s) de plus de ${MOTS_MAX_PHRASE} mots (la plus longue : ${tropLongues[0].mots} mots) — à couper en relecture.`);
+      }
+      // SUROPTIMISATION — le chiffre qui trahit, c'est le nombre de H2 portant la
+      // forme exacte, pas la densité : 1,1 % passe inaperçu, 8 titres sur 9 non.
+      const suropt = suroptimisationMotCle(woven.html, targetKeyword);
+      if (suropt.excesH2 > 0) {
+        onStep(`🔍 Mot-clé exact dans ${suropt.h2AvecMotCle} titres H2 sur ${suropt.h2Total} (maximum ${MAX_H2_AVEC_MOT_CLE}) — suroptimisation à corriger en relecture.`);
+      }
+      // ÉLISIONS ORPHELINES — signalées, jamais réparées : choisir entre « le » et
+      // « la » demande le genre, et un code qui devine écrit « le toiture ».
+      const elisions = elisionsOrphelines(woven.html);
+      if (elisions.length) {
+        onStep(`⚠️ ${elisions.length} élision(s) orpheline(s) — « ${elisions.slice(0, 2).join(' », « ')} ». À corriger à la main.`);
       }
 
       const withImages = carryOverImages(sourceHtml, woven.html);

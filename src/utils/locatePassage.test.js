@@ -9,7 +9,9 @@
 import {
   passageSignature, findPassageInText, textContainsPassage,
   findBlockForPassage, LOCATABLE_BLOCK_SEL, replacePassageInDom,
+  highlightPassage, FOCUS_ATTR, FOCUS_CLASS,
 } from './locatePassage';
+import { exportAsHtml } from './export';
 
 const dom = (html) => {
   const d = document.createElement('div');
@@ -128,6 +130,83 @@ describe('replacePassageInDom — corriger malgré les balises inline', () => {
     expect(replacePassageInDom(null, 'a', 'b').ok).toBe(false);
     expect(replacePassageInDom(dom('<p>x</p>'), '', 'b').ok).toBe(false);
     expect(replacePassageInDom(dom('<p>x</p>'), 'x', null).ok).toBe(false);
+  });
+});
+
+// ── Surligner LE MOT, pas tout le paragraphe ──────────────────────────────────
+// Le clic sur un pattern amenait au bon endroit mais entourait le bloc entier :
+// sur un paragraphe de 60 mots, il restait à chercher quoi remplacer.
+describe('highlightPassage — le terme fautif est surligné', () => {
+  const PHRASE = 'La toiture en bac acier reste competitive face aux tuiles.';
+  const P = `<p>Un premier paragraphe sans rapport. ${PHRASE}</p>`;
+
+  test('surligne le TERME quand il est connu, pas la phrase entière', () => {
+    const root = dom(P);
+    const { el, cleanup } = highlightPassage(root, PHRASE, 'reste');
+    expect(el).not.toBeNull();
+    expect(el.tagName).toBe('MARK');
+    expect(el.textContent).toBe('reste');            // le mot seul
+    expect(el.getAttribute(FOCUS_ATTR)).toBe('1');
+    expect(el.className).toBe(FOCUS_CLASS);
+    cleanup();
+  });
+
+  test('sans terme, surligne le passage repéré', () => {
+    const root = dom(P);
+    const { el, cleanup } = highlightPassage(root, PHRASE);
+    expect(el.textContent).toBe(PHRASE);
+    cleanup();
+  });
+
+  test('le terme est cherché DANS le passage — pas ailleurs dans le bloc', () => {
+    // « reste » apparaît AVANT dans le bloc : on doit surligner celui de la phrase
+    // repérée, sinon on envoie le rédacteur sur la mauvaise occurrence.
+    const root = dom(`<p>Il reste un point. ${PHRASE}</p>`);
+    const { el, cleanup } = highlightPassage(root, PHRASE, 'reste');
+    const avant = root.textContent.indexOf('Il reste');
+    const marque = root.textContent.indexOf(el.textContent, avant + 8);
+    expect(marque).toBeGreaterThan(avant);
+    cleanup();
+  });
+
+  test('cleanup RESTAURE le texte exactement — aucun <mark> oublié', () => {
+    const root = dom(P);
+    const avant = root.innerHTML;
+    const { cleanup } = highlightPassage(root, PHRASE, 'reste');
+    expect(root.querySelector('mark')).not.toBeNull();
+    cleanup();
+    expect(root.querySelector('mark')).toBeNull();
+    expect(root.textContent).toBe(dom(avant).textContent);
+  });
+
+  test('cleanup est idempotent — le rappeler ne casse rien', () => {
+    const root = dom(P);
+    const { cleanup } = highlightPassage(root, PHRASE, 'reste');
+    cleanup(); cleanup();
+    expect(root.querySelector('mark')).toBeNull();
+  });
+
+  test('fonctionne malgré une balise inline dans la phrase', () => {
+    const root = dom('<p>La toiture en <em>bac acier</em> reste competitive face aux tuiles.</p>');
+    const { el, cleanup } = highlightPassage(root, PHRASE, 'reste');
+    expect(el).not.toBeNull();
+    expect(el.textContent).toBe('reste');
+    cleanup();
+  });
+
+  test('CEINTURE — un surlignage capté par un autosave ne part JAMAIS à la publication', () => {
+    const root = dom(P);
+    highlightPassage(root, PHRASE, 'reste');          // volontairement SANS cleanup
+    const publie = exportAsHtml(root.innerHTML);
+    expect(publie).not.toContain(FOCUS_ATTR);
+    expect(publie).not.toContain(FOCUS_CLASS);
+    expect(publie).toContain('reste');                // le TEXTE survit
+  });
+
+  test('passage introuvable ou racine invalide → aucun surlignage, aucune exception', () => {
+    expect(highlightPassage(dom('<p>Rien.</p>'), 'Autre chose entierement').el).toBeNull();
+    expect(highlightPassage(null, 'x').el).toBeNull();
+    expect(() => highlightPassage(dom('<p>x</p>'), '').cleanup()).not.toThrow();
   });
 });
 

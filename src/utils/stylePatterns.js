@@ -31,6 +31,33 @@ export const texteDe = (html = '') =>
 export const phrasesDe = (texte = '') =>
   texte.split(/(?<=[.!?…])\s+/).map(p => p.trim()).filter(p => p.split(/\s+/).length >= 3);
 
+/**
+ * Retire ce qui n'est PAS de la prose : tableaux, listes, FAQ.
+ *
+ * ⚠️ Sans ça, la règle « phrases de plus de 20 mots » est FAUSSE. `texteDe` aplatit
+ * un tableau en un flux de cellules sans ponctuation, et `phrasesDe` y voit une
+ * seule phrase géante. Mesuré sur un article réel le 2026-08-17 : le compteur
+ * annonçait 9 phrases trop longues, dont « une de 96 mots » qui était le tableau
+ * comparatif. Le vrai chiffre était 5. Le rédacteur cherchait donc des phrases qui
+ * n'existaient pas.
+ *
+ * Volontairement limité à la règle des phrases (et à `phrasesTropLongues`) : un
+ * verbe fade ou un adverbe en -ment DANS une cellule reste un vrai défaut, et
+ * changer leur périmètre modifierait un comportement qui fonctionne.
+ *
+ * Regex plutôt que DOM : ce module est appelé côté service (agentQat) comme côté
+ * composant, et ne dépend d'aucun `document`.
+ */
+export const retireHorsProse = (html = '') =>
+  String(html)
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<table\b[\s\S]*?<\/table>/gi, ' ')
+    .replace(/<(ul|ol|dl)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<details\b[\s\S]*?<\/details>/gi, ' ');
+
+/** Phrases de la PROSE seule — la seule base honnête pour juger une longueur. */
+export const phrasesDeProse = (html = '') => phrasesDe(texteDe(retireHorsProse(html)));
+
 /** Contenu textuel des titres d'un fragment HTML. */
 const titresDe = (html = '') => {
   const out = [];
@@ -91,7 +118,7 @@ const META = [
 /**
  * Plafond de longueur d'une phrase. EXPORTÉ depuis le 2026-08-17 : le même nombre
  * doit piloter la CONSIGNE donnée à la génération (agentQat.js) et la DÉTECTION
- * faite ensuite. Deux littéraux séparés auraient fini par divergerdiscrètement, et
+ * faite ensuite. Deux littéraux séparés auraient fini par diverger discrètement, et
  * on aurait signalé au rédacteur des phrases qu'on n'avait jamais interdites.
  */
 export const MOTS_MAX_PHRASE = 20;
@@ -104,10 +131,73 @@ const MOTS_MAX_TITRE  = 10;
  * rédacteur, jamais un motif de rejet de la génération.
  */
 export const phrasesTropLongues = (html = '') =>
-  phrasesDe(texteDe(html))
+  phrasesDeProse(html)
     .map((p) => ({ extrait: p, mots: p.split(/\s+/).length }))
     .filter((o) => o.mots > MOTS_MAX_PHRASE)
     .sort((a, b) => b.mots - a.mots);
+
+/**
+ * Nombre maximal de H2 pouvant porter le mot-clé EXACT.
+ *
+ * Mesuré sur un article réel le 2026-08-17 : **8 H2 sur 9** portaient la forme
+ * exacte. Aucun rédacteur humain ne fait ça, et Google le voit. La cause est dans
+ * les prompts, qui exigeaient le mot-clé « À LA LETTRE PRÈS » sans dire OÙ — donc
+ * partout.
+ */
+export const MAX_H2_AVEC_MOT_CLE = 2;
+
+/**
+ * SUROPTIMISATION du mot-clé principal — le constat, chiffré.
+ *
+ * Compte ce qui se voit : occurrences exactes, densité, et surtout le nombre de H2
+ * qui portent la forme exacte. C'est ce dernier chiffre qui trahit la
+ * suroptimisation, bien plus que la densité — 1,1 % passe inaperçu, 8 titres sur 9
+ * non.
+ *
+ * @returns {{exact:number, densite:number, h2Total:number, h2AvecMotCle:number, excesH2:number}}
+ */
+export const suroptimisationMotCle = (html = '', motCle = '') => {
+  const cle = String(motCle || '').trim();
+  const vide = { exact: 0, densite: 0, h2Total: 0, h2AvecMotCle: 0, excesH2: 0 };
+  if (!cle) return vide;
+  const texte = texteDe(html);
+  const mots = texte ? texte.split(/\s+/).length : 0;
+  // Espaces souples : le mot-clé peut être coupé par un retour à la ligne ou une
+  // balise dans le HTML d'origine.
+  const motif2 = cle.split(/\s+/).map(echappe).join('\\s+');
+  const exact = (texte.match(new RegExp(motif2, 'giu')) || []).length;
+  const titres = String(html).match(/<h2\b[^>]*>[\s\S]*?<\/h2>/gi) || [];
+  // Regex SANS `g` pour `.test()` : un regex global garde son `lastIndex` entre les
+  // appels et ne testerait donc qu'un titre sur deux.
+  const rxTitre = new RegExp(motif2, 'iu');
+  const h2AvecMotCle = titres.filter((h) => rxTitre.test(texteDe(h))).length;
+  return {
+    exact,
+    densite: mots ? +((exact / mots) * 100).toFixed(2) : 0,
+    h2Total: titres.length,
+    h2AvecMotCle,
+    excesH2: Math.max(0, h2AvecMotCle - MAX_H2_AVEC_MOT_CLE),
+  };
+};
+
+/**
+ * ÉLISIONS ORPHELINES — « face à l' toiture », « L' Isolation ».
+ *
+ * Relevées sur un article réel : deux cas, tous deux JUSTE AVANT un lien dont
+ * l'ancre était une paire imposée du brief. Le modèle (ou le tissage) a placé
+ * l'ancre là où le texte portait « l'ardoise », laissant l'article orphelin.
+ *
+ * DÉTECTION SEULEMENT, jamais de réparation automatique : corriger « l' toiture »
+ * exige de choisir entre `le` et `la`, donc de connaître le genre. Un code qui
+ * devine écrira « le toiture » une fois sur deux — pire que le défaut. On le dit
+ * au rédacteur, il tranche en deux secondes.
+ */
+export const elisionsOrphelines = (html = '') => {
+  const texte = texteDe(retireHorsProse(html));
+  // Une apostrophe d'élision suivie d'une ESPACE puis d'une lettre : l'élision ne
+  // colle plus à son mot, donc elle est fautive quoi qu'il arrive.
+  return (texte.match(/\b[ldnjcmts]['’]\s+\p{L}+/giu) || []);
+};
 
 const echappe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Apostrophe droite ou typographique : le texte publié porte souvent la seconde.
@@ -183,13 +273,17 @@ export const detectStylePatterns = (html = '') => {
   ajoute('adverbes', 'Adverbes en -ment', 'À éviter : préférer un mot plus précis ou supprimer.',
     adverbes.size, exemplesDeTermes(adverbes));
 
-  // 5. Phrases trop longues
-  const longues = phrases
+  // 5. Phrases trop longues — sur la PROSE SEULE.
+  // Un tableau aplati par `texteDe` devient une « phrase » de 96 mots : c'est ce
+  // qui faisait annoncer 9 phrases trop longues là où il y en avait 5. Une cellule
+  // de tableau ou une puce n'est pas une phrase, et la couper n'a aucun sens.
+  const phrasesProse = phrasesDeProse(html);
+  const longues = phrasesProse
     .map(p => ({ extrait: p, mots: p.split(/\s+/).length }))
     .filter(o => o.mots > MOTS_MAX_PHRASE)
     .sort((a, b) => b.mots - a.mots);
   ajoute('phrases', `Phrases de plus de ${MOTS_MAX_PHRASE} mots`,
-    `${longues.length} sur ${phrases.length} phrases. Couper en deux, ou raccourcir.`,
+    `${longues.length} sur ${phrasesProse.length} phrases rédigées (tableaux, listes et FAQ exclus). Couper en deux, ou raccourcir.`,
     longues.length, longues);
 
   // 6. Tirets cadratins et demi-cadratins
