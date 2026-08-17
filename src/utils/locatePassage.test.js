@@ -8,7 +8,7 @@
 /* eslint-env jest */
 import {
   passageSignature, findPassageInText, textContainsPassage,
-  findBlockForPassage, LOCATABLE_BLOCK_SEL,
+  findBlockForPassage, LOCATABLE_BLOCK_SEL, replacePassageInDom,
 } from './locatePassage';
 
 const dom = (html) => {
@@ -64,6 +64,70 @@ describe('findPassageInText — bornes dans le texte RÉEL', () => {
   test('passage vide → null, jamais un appariement à l\'index 0', () => {
     expect(findPassageInText('Le prix monte', '   ')).toBeNull();
     expect(findPassageInText('Le prix monte', '')).toBeNull();
+  });
+});
+
+// ── Appliquer une correction de style sur une phrase QUI PORTE DU BALISAGE ─────
+// C'est ce qui bloquait les corrections des phrases de plus de 20 mots : elles
+// sont les plus longues, donc les plus susceptibles de contenir un <em> ou un
+// <br>, et `innerHTML.includes(extraitNu)` ne les trouvait jamais.
+describe('replacePassageInDom — corriger malgré les balises inline', () => {
+  const COURTE = 'Le prix moyen atteint 60 EUR.';
+  const CORRIGEE = 'Le prix moyen atteint 60 EUR au metre carre.';
+
+  test('remplace un passage coupé par un `<em>`', () => {
+    const root = dom(`<p>Le prix <em>moyen</em> atteint 60 EUR.</p>`);
+    expect(replacePassageInDom(root, COURTE, CORRIGEE)).toEqual({ ok: true });
+    expect(root.textContent).toBe(CORRIGEE);
+    expect(root.querySelector('em')).toBeNull();   // balise vidée, donc retirée
+  });
+
+  test('remplace un passage coupé par un `<br>`', () => {
+    const root = dom('<p>Le prix moyen<br>atteint 60 EUR.</p>');
+    expect(replacePassageInDom(root, COURTE, CORRIGEE)).toEqual({ ok: true });
+    expect(root.textContent).toBe(CORRIGEE);
+    expect(root.querySelector('br')).toBeNull();   // le <br> était DANS la plage
+  });
+
+  test('RÈGLE 8 — un passage contenant un LIEN est REFUSÉ, jamais mutilé', () => {
+    // Supprimer le lien serait irréversible et invisible : ce chemin ne passe par
+    // aucun verrou liens.
+    const html = '<p>Le prix <a href="/prix">moyen</a> atteint 60 EUR.</p>';
+    const root = dom(html);
+    expect(replacePassageInDom(root, COURTE, CORRIGEE)).toEqual({ ok: false, reason: 'protege' });
+    expect(root.innerHTML).toBe(html);             // rien n'a bougé
+  });
+
+  test('une IMAGE dans la plage est protégée de la même façon', () => {
+    const root = dom('<p>Le prix moyen <img src="a.jpg" alt="x"> atteint 60 EUR.</p>');
+    expect(replacePassageInDom(root, COURTE, CORRIGEE).reason).toBe('protege');
+    expect(root.querySelector('img')).not.toBeNull();
+  });
+
+  test('le texte AUTOUR du passage est preservé', () => {
+    const root = dom(`<p>Avant. Le prix <em>moyen</em> atteint 60 EUR. Apres.</p>`);
+    expect(replacePassageInDom(root, COURTE, CORRIGEE).ok).toBe(true);
+    expect(root.textContent).toBe(`Avant. ${CORRIGEE} Apres.`);
+  });
+
+  test('le gras HORS du passage remplacé survit', () => {
+    const root = dom('<p><strong>Titre.</strong> Le prix <em>moyen</em> atteint 60 EUR.</p>');
+    expect(replacePassageInDom(root, COURTE, CORRIGEE).ok).toBe(true);
+    expect(root.querySelector('strong')).not.toBeNull();
+    expect(root.querySelector('strong').textContent).toBe('Titre.');
+  });
+
+  test('passage absent → introuvable, et le DOM est intact', () => {
+    const html = '<p>Rien de tel ici.</p>';
+    const root = dom(html);
+    expect(replacePassageInDom(root, COURTE, CORRIGEE)).toEqual({ ok: false, reason: 'introuvable' });
+    expect(root.innerHTML).toBe(html);
+  });
+
+  test('entrées dégénérées → introuvable, jamais une exception', () => {
+    expect(replacePassageInDom(null, 'a', 'b').ok).toBe(false);
+    expect(replacePassageInDom(dom('<p>x</p>'), '', 'b').ok).toBe(false);
+    expect(replacePassageInDom(dom('<p>x</p>'), 'x', null).ok).toBe(false);
   });
 });
 
