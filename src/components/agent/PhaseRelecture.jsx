@@ -201,8 +201,12 @@ export default function PhaseRelecture({
                               <li key={i} className="text-[11px] leading-relaxed border-l-2 border-amber-200 pl-2 space-y-1">
                                 <button
                                   type="button"
-                                  onClick={() => onLocate?.(ex.extrait)}
-                                  title="Situer ce passage dans l'article"
+                                  // Le TERME est transmis : c'est lui qu'on
+                                  // surligne, pas tout le paragraphe.
+                                  onClick={() => onLocate?.(ex.extrait, ex.terme)}
+                                  title={ex.terme
+                                    ? `Situer et surligner « ${ex.terme} » dans l'article`
+                                    : 'Situer ce passage dans l\'article'}
                                   className="text-left text-gray-700 hover:text-amber-800 transition-colors"
                                 >
                                   {ex.terme && <strong className="text-amber-800">« {ex.terme} » — </strong>}

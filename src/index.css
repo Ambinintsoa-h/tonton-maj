@@ -271,6 +271,22 @@ body {
   background-color: rgba(250, 204, 21, 0.55);
 }
 
+/* SURLIGNAGE TEMPORAIRE du mot visé en relecture (phase 4).
+   Le clic sur un pattern amenait au bon paragraphe mais l'entourait en entier :
+   sur 60 mots, il restait à trouver lequel remplacer. On surligne donc le terme.
+   Orange soutenu, volontairement distinct du jaune de .lien-redige (une clause
+   écrite par le code) et du rouge des suggestions d'obsolescence : trois repères
+   qui peuvent coexister à l'écran ne doivent pas se confondre.
+   Pas de ::before ni d'animation : ce texte vit dans un contenteditable, où un
+   pseudo-élément perturbe le placement du caret — même raison que .lien-redige. */
+.relecture-focus {
+  background-color: rgba(249, 115, 22, 0.38);   /* orange */
+  box-shadow: inset 0 -2px 0 rgba(194, 65, 12, 0.75);
+  border-radius: 3px;
+  color: inherit;                                /* <mark> impose sinon du noir */
+  scroll-margin-top: 140px;
+}
+
 /* Skills editor */
 .skill-editor-preview { line-height: 1.7; }
 .skill-editor-preview h1, .skill-editor-preview h2, .skill-editor-preview h3 {
