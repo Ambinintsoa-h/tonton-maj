@@ -311,6 +311,61 @@ export const countPlacedBriefLinks = (html = '', links = [], articleUrl = '') =>
 };
 
 /**
+ * DÉLIE les liens INTERNES que le modèle a posés dans un emplacement interdit
+ * (FAQ, TL;DR, sommaire, titre, tableau, citation, légende).
+ *
+ * Pourquoi du code alors que la consigne est déjà écrite : « aucun lien dans la
+ * FAQ » figure DÉJÀ trois fois dans le skill (deux fois dans
+ * `maillage-interne-ancres.md`, une fois dans `tldr-et-faq.md`) et le code
+ * empêchait ces emplacements pour SES propres liens (R1/R2, via linkZones.js).
+ * Rien n'empêchait le modèle d'en poser quand même : `countPlacedBriefLinks` ne
+ * faisait que le CONSTATER (`misplaced`), et seulement pour les paires du brief.
+ * Une quatrième formulation de la même consigne ne fermerait pas le trou —
+ * seul un verrou le ferme.
+ *
+ * ⚠️ RÈGLE 8, LIMITE ABSOLUE DE CETTE FONCTION : on ne touche QUE les liens
+ * INTERNES. Délier un lien EXTERNE serait le SUPPRIMER de l'article — interdit
+ * sans exception, et `enforceExternalLinkPolicy` a déjà validé le texte à ce
+ * stade : la suppression passerait donc inaperçue. Sans `articleUrl`,
+ * `filterSameSiteLinks` traite toute URL absolue comme externe (protection
+ * maximale) : dans le doute, on ne délie pas.
+ *
+ * À appeler ENTRE R1 et R2, jamais après : le lien délié redevient « absent »
+ * pour `weaveBriefLinks`, qui le replace alors dans le corps de l'article. La
+ * violation se transforme en placement correct au lieu d'être perdue.
+ *
+ * Le TEXTE de l'ancre est toujours conservé : on retire la balise `<a>`, pas les
+ * mots. Une FAQ ne perd donc jamais une phrase.
+ *
+ * @returns {{ html: string, unwrapped: Array<{anchor: string, url: string}> }}
+ */
+export const unwrapForbiddenInternalLinks = (html = '', articleUrl = '') => {
+  if (!html || typeof document === 'undefined') return { html, unwrapped: [] };
+  const root = document.createElement('div');
+  root.innerHTML = html;
+  const zones = forbiddenLinkZones(root);
+  const unwrapped = [];
+
+  Array.from(root.querySelectorAll('a[href]')).forEach((a) => {
+    const url = a.getAttribute('href') || '';
+    if (!url) return;
+    // Interne uniquement (règle 8). `filterSameSiteLinks` porte déjà toute la
+    // logique de domaine, URL protocol-relative comprise.
+    if (!filterSameSiteLinks([{ anchor: 'x', url }], articleUrl).length) return;
+    if (!isInForbiddenLinkZone(a.parentElement, zones, MISPLACED_LINK_SEL)) return;
+
+    unwrapped.push({ anchor: (a.textContent || '').trim(), url });
+    // Remplacer le <a> par ses enfants : le texte reste, la balise part.
+    const parent = a.parentNode;
+    if (!parent) return;
+    while (a.firstChild) parent.insertBefore(a.firstChild, a);
+    parent.removeChild(a);
+  });
+
+  return { html: unwrapped.length ? root.innerHTML : html, unwrapped };
+};
+
+/**
  * TISSE tous les liens du brief dans `html`, et FORCE ceux dont l'ancre est
  * introuvable (`force: true`, le défaut — décision d'Andrianina).
  *

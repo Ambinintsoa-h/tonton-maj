@@ -43,8 +43,15 @@ export const DEFAULT_SKILLS = [
 
 <h3>4. Liens internes</h3>
 <ul>
-<li>Viser au moins 3 liens internes pertinents vers d'autres articles du site, si le site en a assez.</li>
+<li>Viser au moins 6 liens internes pertinents vers d'autres articles du site, 10 au maximum.</li>
 <li>Ancres courtes (2-5 mots) présentes mot-pour-mot dans l'article ; cibles proches du sujet.</li>
+<li>Aucun lien dans la FAQ, un titre, le TL;DR, un tableau ou une citation.</li>
+</ul>
+
+<h3>4 bis. Médias</h3>
+<ul>
+<li>Jamais deux médias à la suite : toujours un paragraphe rédigé entre deux images, vidéos ou tableaux.</li>
+<li>Toujours un paragraphe rédigé avant un média — jamais un média collé sous un titre.</li>
 </ul>
 
 <h3>5. Priorité</h3>
