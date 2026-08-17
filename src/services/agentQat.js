@@ -12,7 +12,10 @@
 
 import { searchWeb } from './search';
 import { sanitizeFullArticle, listExternalLinks, listInternalLinks, carryOverInternalLinks } from '../utils/diff';
-import { weaveBriefLinks, countPlacedBriefLinks, briefLinkReportLine } from '../utils/internalWeave';
+import {
+  weaveBriefLinks, countPlacedBriefLinks, briefLinkReportLine,
+  unwrapForbiddenInternalLinks,
+} from '../utils/internalWeave';
 import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import {
@@ -46,6 +49,21 @@ const MAX_SOURCES_INJECTED = 6;
  * RÉDACTEUR peut saisir à la main, pas ce que l'IA propose.
  */
 const MAX_LIENS_ENTRANTS = 10;
+
+/**
+ * PLANCHER des liens internes suggérés — décision Andrianina, 17 août 2026 :
+ * « il faut en ajouter 6 nouveaux liens interne au minimum ».
+ *
+ * Passé de 3 à 6. C'est bien un plancher de MAILLAGE et pas seulement de
+ * suggestion : les paires de l'audit pré-remplissent le brief de la phase 2
+ * (`auditSuggestedLinkRows` + `mergeLinkRows`), et le forçage à 100 % de R2 place
+ * ensuite TOUTES les paires validées. Suggérer 6 revient donc à en poser 6.
+ *
+ * Le plafond de 10 reste l'enveloppe technique (taille du JSON) ; ce plancher est
+ * une exigence métier. Les deux sont dits dans le même bloc de prompt, et repris
+ * dans le skill (`maillage-interne-ancres.md`).
+ */
+const MIN_LIENS_ENTRANTS = 6;
 
 /**
  * Extrait un objet JSON d'une réponse Claude, même entourée de texte ou de
@@ -527,7 +545,7 @@ ${sourceHtml}
 ${formatSourcesForPrompt(sources)}
 
 ## ENVELOPPE DE TAILLE — internal_linking.liens_entrants
-Donne **au moins 3** paires ancre + URL, et **au maximum ${MAX_LIENS_ENTRANTS}**.
+Donne **au moins ${MIN_LIENS_ENTRANTS}** paires ancre + URL, et **au maximum ${MAX_LIENS_ENTRANTS}**.
 Ce plafond prime sur toute autre limite indiquée ailleurs : le JSON d'audit doit
 tenir en une seule réponse, et une liste sans borne le faisait tronquer — audit
 illisible, 3 essais facturés, phase 2 sans ampleur ni score. Mesuré en production
@@ -955,7 +973,19 @@ N'ajoute aucun AUTRE lien externe.`;
       // FORÇAGE À 100 % (décision explicite d'Andrianina) : ce que l'IA n'a pas
       // placé, le code le place — en tissant l'ancre si son texte existe, sinon
       // en RÉDIGEANT une clause d'appoint marquée « à relire ».
-      const woven = weaveBriefLinks(carried.html, internalLinks, articleUrl);
+      // ── R2a — les liens INTERNES posés dans une zone interdite sont DÉLIÉS ────
+      // « Aucun lien dans la FAQ » est écrit trois fois dans le skill et le code
+      // s'interdisait déjà ces emplacements pour SES liens — mais rien
+      // n'empêchait le modèle d'en poser : on ne faisait que le constater.
+      // Placé ICI, entre R1 et R2, pour une raison précise : le lien délié
+      // redevient « absent » aux yeux de weaveBriefLinks juste en dessous, qui le
+      // replace alors dans le corps. La violation devient un bon placement.
+      // Ne touche QUE l'interne — délier un externe serait le supprimer (règle 8).
+      const deloc = unwrapForbiddenInternalLinks(carried.html, articleUrl);
+      if (deloc.unwrapped.length) {
+        onStep(`🔗 ${deloc.unwrapped.length} lien(s) interne(s) posé(s) par l'IA dans une zone interdite (FAQ, titre, tableau, TL;DR) — délié(s), puis replacé(s) dans le corps.`);
+      }
+      const woven = weaveBriefLinks(deloc.html, internalLinks, articleUrl);
       // CONSTAT : on ne croit ni le modèle (`ancres_placees` est une
       // auto-déclaration jamais vérifiée) ni le rapport du tissage — on RECOMPTE
       // sur le HTML final.

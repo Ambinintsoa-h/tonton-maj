@@ -14,12 +14,73 @@
 import {
   weaveBriefLinks, countPlacedBriefLinks, briefLinkReportLine,
   classifyBriefLinks, placeableBriefLinks, WRITTEN_MARK_ATTR,
+  unwrapForbiddenInternalLinks,
 } from './internalWeave';
 import { exportAsHtml } from './export';
 
 const URL_ART = 'https://monsite.fr/guide-isolation';
 const P = (t) => `<p>${t}</p>`;
 const LONG = 'Un paragraphe de longueur suffisante pour accueillir une clause, largement plus de quarante caracteres.';
+
+// ── R2a — les liens que l'IA pose dans une zone interdite sont DÉLIÉS ──────────
+// « Aucun lien dans la FAQ » était écrit trois fois dans le skill et respecté par
+// le code pour SES propres liens — mais rien n'empêchait le modèle d'en poser.
+describe('R2a — délier les liens internes posés en zone interdite', () => {
+  const FAQ = '<h2>FAQ</h2><p>Quel <a href="/prix">prix au m2</a> prevoir ?</p>';
+
+  test('un lien interne dans la FAQ est délié, mais son TEXTE est conservé', () => {
+    const r = unwrapForbiddenInternalLinks(FAQ, URL_ART);
+    expect(r.unwrapped).toEqual([{ anchor: 'prix au m2', url: '/prix' }]);
+    expect(r.html).not.toContain('<a href="/prix"');
+    expect(r.html).toContain('prix au m2');       // la phrase reste intacte
+  });
+
+  test('RÈGLE 8 — un lien EXTERNE dans la FAQ n\'est JAMAIS touché', () => {
+    // Le délier serait le SUPPRIMER de l'article : interdit sans exception, et le
+    // verrou externe a déjà validé le texte à ce stade, donc rien ne le verrait.
+    const html = '<h2>FAQ</h2><p>Voir <a href="https://autre-site.fr/x">cette source</a>.</p>';
+    const r = unwrapForbiddenInternalLinks(html, URL_ART);
+    expect(r.unwrapped).toEqual([]);
+    expect(r.html).toContain('href="https://autre-site.fr/x"');
+  });
+
+  test('sans articleUrl, une URL absolue est traitée comme externe — on ne délie pas', () => {
+    const html = '<h2>FAQ</h2><p><a href="https://monsite.fr/prix">prix</a></p>';
+    expect(unwrapForbiddenInternalLinks(html, '').unwrapped).toEqual([]);
+  });
+
+  test('titres, tableaux, TL;DR et citations sont traités comme la FAQ', () => {
+    const cas = [
+      '<h2>Le <a href="/a">prix</a></h2>',
+      '<table><tr><td><a href="/a">prix</a></td></tr></table>',
+      '<h2>Résumé de l\'article</h2><p><a href="/a">prix</a></p>',
+      '<blockquote><a href="/a">prix</a></blockquote>',
+    ];
+    cas.forEach((h) => {
+      expect(unwrapForbiddenInternalLinks(h, URL_ART).unwrapped).toHaveLength(1);
+    });
+  });
+
+  test('un lien interne dans un paragraphe normal n\'est PAS touché', () => {
+    const html = P(`Le <a href="/prix">prix au m2</a> et ${LONG}`);
+    const r = unwrapForbiddenInternalLinks(html, URL_ART);
+    expect(r.unwrapped).toEqual([]);
+    expect(r.html).toBe(html);                    // aucune réécriture inutile
+  });
+
+  test('délié puis REPLACÉ dans le corps : la violation devient un bon placement', () => {
+    // C'est la raison de l'ordre R1 → R2a → R2 : weaveBriefLinks voit l'URL comme
+    // absente et la pose dans la prose.
+    const rows = [{ anchor: 'prix au m2', url: '/prix' }];
+    const html = `${P(`Le prix au m2 depend du materiau, et ${LONG}`)}${FAQ}`;
+    const deloc = unwrapForbiddenInternalLinks(html, URL_ART);
+    expect(deloc.unwrapped).toHaveLength(1);
+    const woven = weaveBriefLinks(deloc.html, rows, URL_ART);
+    const constat = countPlacedBriefLinks(woven.html, rows, URL_ART);
+    expect(constat[0].placed).toBe(true);
+    expect(constat[0].misplaced).toBe(false);     // plus dans la FAQ
+  });
+});
 
 describe('RÈGLE 8 — aucune URL hors domaine ne peut être posée par le code', () => {
   test('URL protocol-relative //autre-site : ÉCARTÉE, et le rédacteur en est averti', () => {

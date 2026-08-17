@@ -85,11 +85,14 @@ describe('runQatAudit — enveloppe de sortie', () => {
     expect(params.thinking).toEqual({ type: 'disabled' });
   });
 
-  test('borne les liens internes suggérés à 10, avec un plancher de 3', async () => {
+  test('borne les liens internes suggérés à 10, avec un plancher de 6', async () => {
     callClaudeWithProgress.mockResolvedValueOnce(reply(AUDIT_OK));
     await runQatAudit(baseArgs());
     const prompt = callClaudeWithProgress.mock.calls[0][1].messages[0].content;
-    expect(prompt).toMatch(/\*\*au moins 3\*\*/);
+    // Plancher porté de 3 à 6 le 2026-08-17 (décision Andrianina). Le skill dit la
+    // même chose ; ce test verrouille la version code, qu'une édition de skill ne
+    // peut pas contredire.
+    expect(prompt).toMatch(/\*\*au moins 6\*\*/);
     expect(prompt).toMatch(/au maximum 10/);
     // Le plafond doit primer sur ce que dirait le skill : sans cette phrase, une
     // édition de skill (« pas de limite ») reprenait le dessus et le JSON
