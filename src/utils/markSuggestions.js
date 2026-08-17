@@ -12,6 +12,8 @@
  * n'a pas d'ancre visible.
  */
 
+import { findPassageInText, findBlockForPassage, LOCATABLE_BLOCK_SEL } from './locatePassage';
+
 /** Compare deux textes en ignorant les différences d'espaces et d'apostrophes. */
 const norm = (s) => String(s || '')
   .replace(/[’‘]/g, "'")
@@ -72,24 +74,23 @@ export const markSuggestions = (html, suggestions = [], appliquees = []) => {
     const classes = vert ? [MARK_CLASS, MARK_CLASS_OK] : [MARK_CLASS];
 
     // 1) Le passage tient dans UN nœud texte : on encadre exactement la portion.
+    // Les bornes viennent de `findPassageInText`, qui apparie sur une signature
+    // sans espaces et rend les index dans le texte RÉEL. La version précédente
+    // appariait sur le texte NORMALISÉ puis recherchait la position du premier mot
+    // dans le texte BRUT (`brut.indexOf(premierMot)`) : quand c'était justement la
+    // normalisation qui avait rendu l'appariement possible — apostrophe courbe,
+    // espace insécable — la position était introuvable et l'appariement JETÉ.
+    const amorce = cible.length > AMORCE ? cible.slice(0, AMORCE) : cible;
     const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
     let trouve = false;
     let n;
     while ((n = walker.nextNode())) {
       if (n.parentElement && n.parentElement.closest(`.${MARK_CLASS}`)) continue; // déjà repéré
-      const texte = norm(n.nodeValue);
-      const idx = texte.indexOf(cible.length > AMORCE ? cible.slice(0, AMORCE) : cible);
-      if (idx === -1) continue;
-      // On retrouve la position dans le nœud NON normalisé, en tolérant les
-      // espaces multiples : on repart du premier mot de la cible.
-      const premierMot = cible.split(' ')[0];
-      const brut = n.nodeValue;
-      const pos = brut.indexOf(premierMot);
-      if (pos === -1) continue;
-      const fin = Math.min(brut.length, pos + (cible.length > AMORCE ? AMORCE : cible.length));
+      const bornes = findPassageInText(n.nodeValue, amorce);
+      if (!bornes) continue;
       const range = document.createRange();
-      range.setStart(n, pos);
-      range.setEnd(n, fin);
+      range.setStart(n, bornes.start);
+      range.setEnd(n, bornes.end);
       const marque = document.createElement('mark');
       // MARK_CLASS est TOUJOURS posée, même en vert : c'est elle qui porte la
       // pastille numérotée et qui sert de garde anti-imbrication ci-dessus.
@@ -103,13 +104,17 @@ export const markSuggestions = (html, suggestions = [], appliquees = []) => {
     // 2) Repli : le passage chevauche plusieurs balises → on repère le BLOC qui
     //    le contient, sans tenter de découper le balisage.
     if (!trouve) {
-      const blocs = [...box.querySelectorAll('p, li, h2, h3, h4, td, blockquote')];
-      // Un bloc qui CONTIENT déjà un repère est écarté : sans ce test, deux
+      // `findBlockForPassage` apparie sur la signature sans espaces — seul moyen de
+      // retrouver un passage coupé par un `<br>` (`A<br>B` donne le textContent
+      // "AB", mots COLLÉS) ou porteur d'une espace fantôme laissée par le retrait
+      // d'une balise inline. Il rend aussi le bloc le PLUS PETIT, jamais un `div`
+      // d'habillage qui apparierait tout l'article.
+      //
+      // Un bloc qui CONTIENT déjà un repère reste écarté : sans ce test, deux
       // suggestions portant sur le même passage aboutissaient à marquer d'abord
       // la portion exacte, puis tout le paragraphe par-dessus.
-      const bloc = blocs.find((b) => !b.closest(`.${MARK_CLASS}`)
-        && !b.querySelector(`.${MARK_CLASS}`)
-        && norm(b.textContent).includes(cible.slice(0, AMORCE)));
+      const bloc = findBlockForPassage(box, cible.slice(0, AMORCE), (b) =>
+        !!b.closest(`.${MARK_CLASS}`) || !!b.querySelector(`.${MARK_CLASS}`));
       if (bloc) {
         bloc.classList.add(...classes);
         bloc.setAttribute('data-sugg', String(num));
