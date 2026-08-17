@@ -120,7 +120,17 @@ export const derivePhaseStatus = (rec) => {
   // phases, il porte l'article D'ORIGINE dès la fin de l'audit. S'en servir
   // marquerait la phase 2 terminée alors que rien n'a été produit. Les seuls
   // signaux fiables sont l'article réécrit ou des modifications proposées.
-  const aUneGenration = !!(rec.qatArticle || (Array.isArray(rec.diff) && rec.diff.length));
+  // ⚠️ DEUX NOMS POUR LA MÊME CHOSE, et il faut lire les deux. Le store appelle ce
+  // tableau `diff` ; l'ARCHIVE le persiste sous `updates` (`updates: agent.diff`,
+  // ArticleResult + Articles + MajEnAttente). Cette fonction ne lisait que `diff` :
+  // sur un enregistrement d'historique, le signal de génération était donc TOUJOURS
+  // absent. Conséquence pour une MAJ simple, qui ne produit pas de `qatArticle` et
+  // n'a que des modifications proposées : rouvrir un article TERMINÉ le ramenait à
+  // « génération à faire » et ouvrait l'éditeur sur l'écran de génération, comme
+  // s'il fallait tout refaire.
+  const modifs = Array.isArray(rec.diff) ? rec.diff
+    : (Array.isArray(rec.updates) ? rec.updates : null);
+  const aUneGenration = !!(rec.qatArticle || (modifs && modifs.length));
   const aUneVerif     = !!rec.obsolescenceReport;
 
   // Une génération présente implique un audit passé : sur les anciens

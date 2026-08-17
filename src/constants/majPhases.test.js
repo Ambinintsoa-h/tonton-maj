@@ -125,6 +125,30 @@ describe('derivePhaseStatus — rouvrir un article au bon endroit', () => {
     PHASE_ORDER.forEach(id => expect(canEnterPhase(id, s)).toBe(true));
   });
 
+  // ⚠️ PERTE DE TRAVAIL. Le store nomme ce tableau `diff`, l'ARCHIVE le persiste
+  // sous `updates`. derivePhaseStatus ne lisait que `diff` : sur un enregistrement
+  // d'historique, le signal de génération était TOUJOURS absent.
+  test('les modifications archivées sous `updates` prouvent la génération', () => {
+    // Cas réel : une MAJ simple ne produit PAS de `qatArticle`, seulement des
+    // modifications. Rouvrir cet article TERMINÉ le ramenait à « génération à
+    // faire » et ouvrait l'éditeur sur l'écran de génération, comme s'il fallait
+    // tout refaire.
+    const archive = { auditJson: { scores: {} }, updates: [{ original: 'a', updated: 'b' }] };
+    const s = derivePhaseStatus(archive);
+    expect(s[PHASE_GENERATION]).toBe(DONE);
+    expect(maxReachablePhase(s)).not.toBe(PHASE_GENERATION);
+  });
+
+  test('`diff` et `updates` sont équivalents — le store et l\'archive doivent concorder', () => {
+    const modifs = [{ original: 'a', updated: 'b' }];
+    expect(derivePhaseStatus({ diff: modifs })[PHASE_GENERATION])
+      .toBe(derivePhaseStatus({ updates: modifs })[PHASE_GENERATION]);
+  });
+
+  test('un tableau VIDE ne prouve rien : `updates: []` ne marque pas la génération', () => {
+    expect(derivePhaseStatus({ auditJson: {}, updates: [] })[PHASE_GENERATION]).toBe(TODO);
+  });
+
   test('l\'avancement explicite renseigne ce que le contenu ne prouve pas', () => {
     // La relecture n'a pas d'artefact : seul « Terminer » la marque faite.
     const s = derivePhaseStatus({

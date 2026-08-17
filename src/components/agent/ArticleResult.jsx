@@ -59,7 +59,7 @@ import {
   saveArticle, updateArticleHtml,
   acquireEditLock, heartbeatEditLock, releaseEditLock, watchEditLock, isLockActive, LOCK_HEARTBEAT_MS,
 } from '../../services/firebase';
-import { saveDraft, flushDraftRemote, onDraftStatus } from '../../services/articleDraft';
+import { saveDraft, flushDraftRemote, onDraftStatus, clearDraft } from '../../services/articleDraft';
 import articleTimeTracker from '../../services/articleTimeTracker';
 import { renderMarkdown, emojiToIcons, unwrapProseFences, trimAuditForDisplay } from '../../utils/markdown';
 import { validateImageFile } from '../../utils/uploadLimits';
@@ -2300,6 +2300,11 @@ export default function ArticleResult() {
           dispatch(addToHistory({ ...articleData, id: Date.now().toString(), ...(r.seoTracking ? { seoTracking: r.seoTracking } : {}) }));
         }
         dispatch(removePendingItem(cqItem.id));
+        // BROUILLON PURGÉ — il vient d'être archivé, le garder DÉTRUIT du travail.
+        // Voir le commentaire jumeau du flux normal ci-dessous : sans cet appel, le
+        // brouillon survivait au « Terminer » et écrasait le HTML final à la
+        // réouverture.
+        clearDraft(draftUserId);
         toast.success('Article validé et archivé dans l\'historique !', { icon: <CheckCircle2 size={18} className="text-green-600" /> });
         navigate('/maj-en-attente');
       } catch (e) {
@@ -2352,6 +2357,20 @@ export default function ArticleResult() {
       if (firebaseReady && finalHtml) {
         updateArticleHtml(agent.currentArticleId, finalHtml, lastMod, archive).catch(() => {});
       }
+      // ── BROUILLON PURGÉ — SINON IL DÉTRUIT LE TRAVAIL ARCHIVÉ ────────────────
+      // `clearDraft` n'était appelé NULLE PART dans cet écran. Le brouillon
+      // d'autosave survivait donc au « Terminer », figé sur le dernier
+      // enregistrement AVANT l'archivage. À la réouverture de ce même article
+      // depuis l'Historique, l'effet de restauration d'Articles.jsx retrouvait ce
+      // brouillon (même `currentArticleId`) et REMPLAÇAIT le HTML final par lui —
+      // puis l'autosave réécrivait cette version périmée en base. Le rédacteur
+      // retrouvait un article amputé de ses dernières corrections, et le travail
+      // était perdu pour de bon.
+      //
+      // Purgé ICI, après une archive réussie : le brouillon n'a plus d'objet, tout
+      // est en base. `clearDraft` neutralise aussi le flush de démontage (fenêtre
+      // d'inhibition de 2,5 s), qui sinon le ré-écrirait aussitôt.
+      clearDraft(draftUserId);
       dispatch(resetAgent());
       toast.success('Article archivé dans l\'historique !', { icon: <CheckCircle2 size={18} className="text-green-600" /> });
       navigate('/historique');

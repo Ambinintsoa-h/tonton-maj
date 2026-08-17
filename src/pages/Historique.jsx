@@ -17,6 +17,7 @@ import {
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit, setWpData,
   setAuditJson, setQatArticle, restorePhaseStatus, setPhase, setMajScope, setObsolescenceReport,
+  markArchiveOpened,
 } from '../store/slices/agentSlice';
 import { derivePhaseStatus, maxReachablePhase } from '../constants/majPhases';
 import { deleteArticle, fetchArticleHtml, getArticles, isLockActive, archiveArticle } from '../services/firebase';
@@ -883,6 +884,10 @@ export default function Historique() {
     dispatch(setMajScope(article.majScope || null));
     dispatch(setObsolescenceReport(article.obsolescenceReport || null));
     dispatch(setCurrentArticleId(article.id));
+    // RÉOUVERTURE DÉLIBÉRÉE — ce qu'on vient de charger fait foi. Interdit à un
+    // brouillon d'autosave antérieur de le remplacer (voir Articles.jsx) : c'est ce
+    // qui écrasait le travail d'un article déjà terminé.
+    dispatch(markArchiveOpened(Date.now()));
     dispatch(setStatus('done'));
     navigate('/');
   };

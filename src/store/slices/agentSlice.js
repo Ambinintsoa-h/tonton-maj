@@ -47,6 +47,14 @@ const agentSlice = createSlice({
     editorMeta: null,
     draftStatus: 'idle',   // idle | saving | saved | local — état de l'autosave (indicateur header)
     draftSavedAt: null,    // timestamp du dernier enregistrement réussi
+    // ── Réouverture DÉLIBÉRÉE depuis une archive (Historique / MAJ en attente) ──
+    // Horodatage du moment où le rédacteur a demandé à rouvrir un article archivé.
+    // Sert d'ARBITRE contre le brouillon d'autosave : un brouillon ANTÉRIEUR à ce
+    // geste est périmé et ne doit jamais remplacer le contenu qu'on vient de
+    // charger. Sans cet arbitrage, rouvrir un article « terminé » ramenait l'état
+    // figé au dernier autosave d'avant l'archivage, et l'autosave suivant écrivait
+    // cette version périmée en base : le travail était perdu.
+    archiveOpenedAt: 0,
   },
   reducers: {
     resetAgent: (state) => {
@@ -167,6 +175,14 @@ const agentSlice = createSlice({
       state.draftStatus = action.payload?.status ?? 'idle';
       if (action.payload?.savedAt) state.draftSavedAt = action.payload.savedAt;
     },
+    /**
+     * Le rédacteur vient de rouvrir un article ARCHIVÉ. À appeler par CHAQUE
+     * chemin de réouverture, juste avant de naviguer vers l'éditeur : c'est ce
+     * qui interdit à un brouillon plus ancien de reprendre le dessus.
+     */
+    markArchiveOpened: (state, action) => {
+      state.archiveOpenedAt = Number(action.payload) || Date.now();
+    },
   },
 });
 
@@ -176,6 +192,7 @@ export const {
   setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
   setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword, setMajDepth, setInstruction, setAudit, setEditorMeta, setDraftStatus,
   setPhase, setPhaseStatus, restorePhaseStatus, setMajScope, setLinkAudit, setObsolescenceReport,
+  markArchiveOpened,
   appliquerSuggestionObsolescence,
   setAuditJson, setQatArticle, setLiveText, clearLiveText,
 } = agentSlice.actions;

@@ -22,7 +22,7 @@ import {
   setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed,
   setWpData, setMajDepth, setInstruction, setAudit, setEditorMeta,
   setAuditJson, setQatArticle, restorePhaseStatus, setPhase, setMajScope, setObsolescenceReport,
-  setTargetKeyword,
+  setTargetKeyword, markArchiveOpened,
 } from '../store/slices/agentSlice';
 import { MAJ_DEPTHS, DEFAULT_DEPTH, depthMeta } from '../constants/majDepth';
 import { derivePhaseStatus, maxReachablePhase, PHASE_AUDIT, DONE } from '../constants/majPhases';
@@ -1996,6 +1996,10 @@ export default function MajEnAttente() {
     // auditerait celui-ci contre la cible d'un autre — pire qu'un bouton grisé.
     dispatch(setTargetKeyword((arch?.keyword || item.keyword || '').trim()));
     dispatch(setCurrentArticleId(item.id)); // marque cet item comme "en cours de review"
+    // RÉOUVERTURE DÉLIBÉRÉE — même arbitrage que depuis l'Historique : un brouillon
+    // d'autosave antérieur à ce geste ne doit pas remplacer ce qu'on vient de
+    // charger (voir Articles.jsx).
+    dispatch(markArchiveOpened(Date.now()));
     dispatch(setStatus('done'));
     navigate('/');
   };
