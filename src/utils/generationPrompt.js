@@ -36,6 +36,20 @@ N'apporte aucune amélioration de style : ce n'est pas l'objet de cette étape.`
 const MAX_ACTIONS = 8;      // même plafond que l'audit (skill QAT)
 const MAX_OBSOLETES = 5;
 
+/**
+ * PLAFOND DE L'INSTRUCTION, en caractères.
+ *
+ * `runQatRewrite` tronque l'instruction à cette longueur avant de l'envoyer
+ * (`agentQat.js`). Mesuré avant correction : un audit complet produisait 2 557
+ * caractères, donc **1 057 perdus en silence** — les actions 5 à 8 et TOUT le
+ * bloc « Données à actualiser », c'est-à-dire les chiffres à rafraîchir.
+ *
+ * Exporté pour que la saisie (compteur bloquant, PhaseGeneration), le
+ * pré-remplissage (ci-dessous) et l'envoi partagent LE MÊME littéral. Trois
+ * copies d'un plafond, c'est trois occasions de divergence.
+ */
+export const MAX_INSTRUCTION_CHARS = 1500;
+
 const ligne = (v) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
 
 /** Actions prioritaires de l'audit, de la plus urgente à la moins urgente. */
@@ -51,7 +65,13 @@ const actionsDeLAudit = (audit) => {
       const p = a.priority ? `[${a.priority}] ` : '';
       const t = ligne(a.title);
       const d = ligne(a.detail);
-      return `- ${p}${t}${d && d !== t ? ` — ${d}` : ''}`;
+      // DEUX formes. Quand la place manque, on garde l'action en abrégeant son
+      // détail plutôt que de supprimer l'action entière : huit titres valent
+      // mieux que deux actions complètes et six disparues.
+      return {
+        long: `- ${p}${t}${d && d !== t ? ` — ${d}` : ''}`,
+        court: `- ${p}${t || d}`,
+      };
     });
 };
 
@@ -102,8 +122,9 @@ const obsoletesDeLAudit = (audit) => {
       const e = ligne(o.element);
       const av = ligne(o.valeur_article);
       const ap = ligne(o.valeur_actuelle);
-      if (av && ap) return `- ${e} : « ${av} » devient « ${ap} »`;
-      return `- ${e}${ap ? ` : ${ap}` : ''}`;
+      const long = av && ap ? `- ${e} : « ${av} » devient « ${ap} »` : `- ${e}${ap ? ` : ${ap}` : ''}`;
+      // Forme courte : la valeur À JOUR suffit à agir, l'ancienne est dans l'article.
+      return { long, court: `- ${e}${ap ? ` : ${ap}` : ''}` };
     });
 };
 
@@ -129,22 +150,25 @@ export const buildGenerationPrompt = ({
 
   if (scope === SCOPE_SIMPLE) {
     bloc.push('', '## Ampleur : MAJ simple',
-      'Corrige et enrichis les passages concernés en conservant la structure et le texte qui fonctionnent.',
-      `Ajoute ${MIN_WORDS_ADDED_SIMPLE} mots au minimum : c'est un minimum strict, pas un objectif indicatif.`,
+      'Corrige et enrichis les passages concernés, en gardant la structure et le texte qui tiennent.',
+      `Ajoute ${MIN_WORDS_ADDED_SIMPLE} mots au minimum — minimum strict, pas un objectif.`,
       // Sans cette préséance, une action d'audit du type « réduire de 3452 à 2500
       // mots » entre en contradiction directe avec le minimum ci-dessus. Constaté
       // en test réel : le modèle a suivi l'audit et RACCOURCI l'article de 935
       // mots sur une MAJ simple. Les deux consignes venant du même prompt, c'est
       // à lui de dire laquelle l'emporte.
-      'PRÉSÉANCE : si une action de l\'audit contredit cette ampleur — par exemple une demande de raccourcir l\'article — c\'est CETTE AMPLEUR qui prime. Applique le fond de l\'action sans réduire la longueur, et signale la contradiction en fin de réponse.');
+      // Formulation resserrée (232 → 118 caractères) : le plafond de l'instruction
+      // est serré, et chaque caractère de texte FIXE en retire un au contenu de
+      // l'audit, qui est la vraie matière.
+      'PRÉSÉANCE : une action de l\'audit qui demande de raccourcir ne l\'emporte PAS sur ce minimum. Applique-la sans réduire la longueur.');
   } else {
     bloc.push('', '## Ampleur : refonte',
       'Réécris l\'article intégralement à partir de ces directives. Le plan peut être refait.',
-      'Toute information encore valable de l\'ancien texte est conservée et reformulée, jamais supprimée par réflexe.');
+      'Toute information encore valable de l\'ancien texte est conservée et reformulée.');
   }
 
   if (targetKeyword) {
-    bloc.push('', `## Mot-clé cible`, `« ${ligne(targetKeyword)} » — à employer tel quel, à la lettre près.`);
+    bloc.push('', '## Mot-clé cible', `« ${ligne(targetKeyword)} » — tel quel, à la lettre près.`);
   }
 
   const actions = actionsDeLAudit(audit);
@@ -158,8 +182,7 @@ export const buildGenerationPrompt = ({
     const autres = autresApportsDeLAudit(audit);
     if (autres.length) {
       bloc.push('', '## Audit — aucune action prioritaire',
-        'L\'audit ne liste ni action prioritaire, ni donnée obsolète, ni résumé.',
-        `Il contient en revanche : ${autres.join(', ')}.`,
+        `Ni action prioritaire, ni donnée obsolète, ni résumé. Il contient en revanche : ${autres.join(', ')}.`,
         'Ces éléments partent au modèle avec l\'audit complet — ne les recopie pas ici.');
     } else {
       bloc.push('', '## Audit',
@@ -168,8 +191,62 @@ export const buildGenerationPrompt = ({
   } else {
     bloc.push('', '## Ce que l\'audit demande de corriger');
     if (resume) bloc.push(resume);
-    if (actions.length) bloc.push('', ...actions);
-    if (obsoletes.length) bloc.push('', 'Données à actualiser :', ...obsoletes);
+
+    // ── ON TIENT DANS LE PLAFOND, ET ON DIT CE QUI N'Y TIENT PAS ─────────────
+    // Avant : tout était empilé, puis `runQatRewrite` coupait à 1 500 caractères
+    // au milieu d'une phrase. Les actions 5 à 8 et TOUT le bloc « Données à
+    // actualiser » disparaissaient — sans un mot, et toujours les mêmes, parce
+    // qu'une troncature ampute par la FIN.
+    //
+    // Rien n'est réellement perdu : `summarizeAuditForRewrite` envoie
+    // `priority_actions` et `recent_context` ENTIERS au modèle par l'autre canal.
+    // Ce qui se joue ici, c'est la place dans l'instruction de PRIORITÉ HAUTE, et
+    // la relecture par le rédacteur.
+    const NOTE = (n) => `(+ ${n} point(s) d'audit non repris ici, faute de place — ils partent au modèle avec l'audit complet.)`;
+    // Réserve calculée sur la note la PLUS LONGUE possible, jamais estimée : une
+    // marge « à peu près » laissait le total à 1 537 caractères.
+    const reserve = NOTE(actions.length + obsoletes.length).length + 2;
+
+    // Les DONNÉES À ACTUALISER passent AVANT les actions : ce sont les chiffres
+    // périmés, le cœur d'une mise à jour de fraîcheur, et elles étaient les
+    // premières sacrifiées puisqu'elles fermaient le prompt.
+    const budget = () => MAX_INSTRUCTION_CHARS - bloc.join('\n').length - reserve;
+    const rejetes = [];
+    // `plafond` borne ce qu'UNE liste peut prendre, pour que les deux soient
+    // représentées. Sans lui, la première servie mangeait tout : mesuré à
+    // 1 391 caractères avec les 5 données obsolètes et UNE SEULE action sur 8.
+    const empile = (entete, lignes, plafond) => {
+      if (!lignes.length) return;
+      const dispo = Math.min(plafond, budget());
+      const fixe = (entete ? entete.length + 1 : 0) + 1;   // + la ligne vide de séparation
+      const total = (forme) => fixe + lignes.reduce((n, o) => n + o[forme].length + 1, 0);
+      // La forme se choisit pour la LISTE ENTIÈRE, pas ligne par ligne. En
+      // décidant par ligne, les premières prenaient la forme longue et mangeaient
+      // la place des suivantes : mesuré à DEUX actions complètes sur huit, quand
+      // la forme courte en fait tenir six.
+      const forme = total('long') <= dispo ? 'long' : 'court';
+      const retenues = [];
+      let cout = fixe;
+      lignes.forEach((o) => {
+        const l = o[forme];
+        if (cout + l.length + 1 <= dispo) { retenues.push(l); cout += l.length + 1; }
+        else rejetes.push(o);
+      });
+      if (retenues.length) bloc.push('', ...(entete ? [entete] : []), ...retenues);
+    };
+
+    // Moitié-moitié au départ, puis le reste va aux actions : les deux listes
+    // comptent, et une place non consommée ne se perd pas.
+    const moitie = Math.floor(budget() / 2);
+    empile('Données à actualiser :', obsoletes, moitie);
+    empile(null, actions, Infinity);
+    // Deuxième tour : ce que le plafond de moitié avait écarté peut encore tenir.
+    if (rejetes.length && budget() > 0) {
+      const restants = rejetes.splice(0, rejetes.length);
+      empile(null, restants, Infinity);
+    }
+
+    if (rejetes.length) bloc.push('', NOTE(rejetes.length));
   }
 
   return bloc.join('\n');
