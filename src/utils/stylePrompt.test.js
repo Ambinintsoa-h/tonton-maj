@@ -144,7 +144,11 @@ describe('normalizeStyleProposals — rattachement par numéro', () => {
     }];
     const o = flattenAiOccurrences(source);
     const r = normalizeStyleProposals([
-      { n: 1, apres: 'Le site https://ademe.fr/guide reste une ressource utile.' },
+      // Pas « reste » : ce verbe est dans VERBES_INTERDITS, et depuis le 18 août
+      // 2026 une proposition qui réintroduit un pattern proscrit est écartée. Ce
+      // test-ci porte sur les URL — sa formulation ne doit pas déclencher l'autre
+      // verrou, sinon il ne mesure plus ce qu'il annonce.
+      { n: 1, apres: 'Le site https://ademe.fr/guide rassemble des ressources utiles.' },
     ], o);
     expect(r).toHaveLength(1);
     expect(r[0].apres).toContain('ademe.fr/guide');
