@@ -3,7 +3,7 @@
  * Même famille que la reprise des liens (R1) et des images (R4) : consigne au
  * modèle, PLUS un contrôle déterministe et non bloquant.
  */
-import { carryOverBold, listBoldTerms } from './boldCarry';
+import { carryOverBold, listBoldTerms, constatGras } from './boldCarry';
 
 const gras = (html) => (html.match(/<strong>/g) || []).length;
 
@@ -85,5 +85,53 @@ describe('carryOverBold', () => {
     const apres = '<p>Le bac acier ici, le bac acier là, et encore le bac acier.</p>';
     const r = carryOverBold(avant, apres);
     expect(gras(r.html)).toBe(1);
+  });
+});
+
+describe('constatGras — la consigne de gras est enfin MESURÉE', () => {
+  const S = (titre, gras) =>
+    `<h2>${titre}</h2><p>${Array.from({ length: gras }, (_, i) => `<strong>terme ${i}</strong>`).join(' et ')} du texte autour.</p>`;
+
+  it('compte le gras par section H2 et nomme les DEUX sens de l\'écart', () => {
+    // Sous le plancher : section non optimisée. Au-dessus du plafond : le gras ne
+    // met plus rien en avant. N'afficher que le manque laisserait passer le second,
+    // qui est le plus visible à la lecture.
+    const r = constatGras(`${S('Trop peu', 1)}${S('Juste', 3)}${S('Trop', 6)}`);
+    expect(r.sections.map((s) => s.gras)).toEqual([1, 3, 6]);
+    expect(r.sections.map((s) => s.ecart)).toEqual(['sous', null, 'sur']);
+    expect(r.sousPlancher).toBe(1);
+    expect(r.surPlafond).toBe(1);
+  });
+
+  it('un gras de titre ou de lien ne COMPTE PAS dans la densité', () => {
+    // Sinon une faute d'emplacement passerait pour une mise en avant valable, et la
+    // section paraîtrait conforme alors qu'elle ne l'est pas.
+    const html = '<h2>Le <strong>prix</strong> au m2</h2>'
+      + '<p>Voir <a href="/x"><strong>ce guide</strong></a> pour le detail complet.</p>';
+    const r = constatGras(html);
+    expect(r.sections[0].gras).toBe(0);
+    expect(r.sections[0].ecart).toBe('sous');
+    expect(r.dansTitre).toBe(1);
+    expect(r.dansLien).toBe(1);
+  });
+
+  it('signale un gras trop long — ce n\'est plus une mise en avant', () => {
+    const html = '<h2>T</h2><p><strong>une phrase entiere mise en gras ne sert a rien</strong> ici.</p>';
+    expect(constatGras(html).tropLongs).toBe(1);
+  });
+
+  it('le gras AVANT le premier H2 n\'est rattaché à aucune section', () => {
+    // Chapô et TL;DR ne relèvent pas d'une règle qui parle de densité « par H2 ».
+    const r = constatGras(`<p>Chapo avec <strong>un terme</strong>.</p>${S('Section', 3)}`);
+    expect(r.sections).toHaveLength(1);
+    expect(r.sections[0].gras).toBe(3);
+    expect(r.total).toBe(4);            // le chapô est compté dans le TOTAL, pas dans la section
+  });
+
+  it('no-op sur un HTML vide — aucun chiffre inventé', () => {
+    expect(constatGras('')).toEqual({
+      sections: [], sousPlancher: 0, surPlafond: 0,
+      dansTitre: 0, dansLien: 0, tropLongs: 0, total: 0,
+    });
   });
 });

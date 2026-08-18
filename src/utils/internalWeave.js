@@ -56,7 +56,30 @@ export const WRITTEN_MARK_TITLE =
   + 'n\'apparaissait nulle part dans le texte. À RELIRE et reformuler avant publication. '
   + 'Cette marque ne part pas dans WordPress ; le lien, lui, reste.';
 /** Amorce de la clause rédigée — formule éditoriale neutre, jamais tirée au hasard. */
-export const WRITTEN_CLAUSE_LEAD = ' À lire aussi : ';
+export const WRITTEN_CLAUSE_LEAD = 'À lire aussi : ';
+
+/**
+ * ENCART : la clause est son PROPRE BLOC, plus une queue de paragraphe.
+ *
+ * Corrigé le 18 août 2026 sur constat d'Andrianina — « ils sont un peu
+ * orphelins ». La clause était collée en fin du paragraphe d'accueil
+ * (`p.appendChild`), donc le lecteur tombait sur « …des combats plus nerveux. À
+ * lire aussi : les actualités PlayStation 5. » d'un seul souffle : un renvoi
+ * éditorial déguisé en fin de phrase, qui ne se voit ni ne se saute.
+ *
+ * Trois conséquences du choix du bloc :
+ *   • le SAUT DE LIGNE est structurel, pas un `<br>` que WordPress peut ravaler ;
+ *   • le libellé passe en `<strong>`, donc mis en avant SANS dépendre du thème —
+ *     une classe CSS ne serait stylée que si le thème la connaît ;
+ *   • `pickParagraph` doit compter autrement (la clause n'est plus un enfant du
+ *     `<p>`) et s'interdire de choisir un encart comme paragraphe d'accueil.
+ *     Sans ces deux ajustements, les 15 clauses reviendraient s'empiler — le
+ *     défaut que le critère `clauses` avait justement été écrit pour fermer.
+ *
+ * La classe SURVIT à l'export, contrairement à la marque jaune : elle ne dit rien
+ * au rédacteur, elle donne au thème une prise pour styler le renvoi s'il le veut.
+ */
+export const WRITTEN_BLOCK_CLASS = 'lien-connexe';
 
 // ── Emplacements INTERDITS ────────────────────────────────────────────────────
 // La liste vit désormais dans src/utils/linkZones.js, PARTAGÉE avec R1
@@ -189,6 +212,10 @@ const pickParagraph = (root, link, zones, articleUrl) => {
   const anchorLc = String(link.anchor || '').trim().toLowerCase();
   const candidates = [];
   Array.from(root.querySelectorAll('p')).forEach((p, index) => {
+    // Un encart de renvoi n'est PAS un support rédactionnel : y accrocher une
+    // clause produirait « À lire aussi : X. À lire aussi : Y. » en cascade. Le
+    // filtre par longueur ne suffit pas, une ancre longue dépassant les 40 car.
+    if (isClauseBlock(p)) return;
     if (isBlocked(p, zones)) return;
     if (hasBlockingDescendant(p)) return;
     if ((p.textContent || '').trim().length < MIN_PARAGRAPH_CHARS) return;
@@ -197,26 +224,65 @@ const pickParagraph = (root, link, zones, articleUrl) => {
     const have = new Set(tokens(p.textContent));
     let score = 0;
     wanted.forEach((w) => { if (have.has(w)) score++; });
-    candidates.push({ p, index, score, clauses: p.querySelectorAll(`[${WRITTEN_MARK_ATTR}]`).length });
+    // Les clauses se comptent sur les FRÈRES SUIVANTS depuis que l'encart est un
+    // bloc à part : `p.querySelectorAll` ne voyait plus rien, et le critère qui
+    // répartit les renvois entre paragraphes valait 0 pour tout le monde — les 15
+    // « À lire aussi » se seraient réempilés sous le même paragraphe.
+    candidates.push({ p, index, score, clauses: clauseBlocksAfter(p).length });
   });
   if (!candidates.length) return null;
   candidates.sort((a, b) => (a.clauses - b.clauses) || (b.score - a.score) || (a.index - b.index));
   return candidates[0].p;
 };
 
-/** Écrit la clause marquée en FIN du paragraphe. Aucune phrase existante touchée. */
+/** Vrai si l'élément est un encart de renvoi écrit par le code. */
+const isClauseBlock = (el) =>
+  !!el && el.nodeType === 1 && !!el.querySelector && !!el.querySelector(`[${WRITTEN_MARK_ATTR}]`)
+  && el.classList.contains(WRITTEN_BLOCK_CLASS);
+
+/** Encarts déjà posés APRÈS ce paragraphe — ils se suivent, jamais s'intercalent. */
+const clauseBlocksAfter = (p) => {
+  const out = [];
+  let n = p.nextElementSibling;
+  while (isClauseBlock(n)) { out.push(n); n = n.nextElementSibling; }
+  return out;
+};
+
+/**
+ * Écrit l'encart de renvoi APRÈS le paragraphe. Aucune phrase existante touchée.
+ *
+ * L'encart est inséré à la SUITE des encarts déjà présents, pas juste après le
+ * paragraphe : sinon les renvois s'afficheraient dans l'ordre inverse de leur
+ * ajout, et le résultat cesserait d'être reproductible (le déterminisme est la
+ * contrepartie de « le code rédige », règle 9).
+ */
 const writeClause = (p, link) => {
+  const bloc = document.createElement('p');
+  bloc.setAttribute('class', WRITTEN_BLOCK_CLASS);
+
+  // Le <span> marqué enveloppe TOUT le contenu de l'encart : à l'export il est
+  // débalisé (export.js), et il ne doit rien emporter d'autre que lui-même.
   const span = document.createElement('span');
   span.setAttribute('class', WRITTEN_MARK_CLASS);
   span.setAttribute(WRITTEN_MARK_ATTR, '1');
   span.setAttribute('title', WRITTEN_MARK_TITLE);
-  span.appendChild(document.createTextNode(WRITTEN_CLAUSE_LEAD));
+
+  // Libellé en gras : mise en avant qui ne dépend d'AUCUNE feuille de style.
+  const label = document.createElement('strong');
+  label.textContent = WRITTEN_CLAUSE_LEAD;
+  span.appendChild(label);
+
   const a = document.createElement('a');
   a.setAttribute('href', link.url);               // aucun rel → DOFOLLOW (R3)
   a.textContent = link.anchor;
   span.appendChild(a);
   span.appendChild(document.createTextNode('.'));
-  p.appendChild(span);
+
+  bloc.appendChild(span);
+  const deja = clauseBlocksAfter(p);
+  const apres = deja.length ? deja[deja.length - 1] : p;
+  if (apres.parentNode) apres.parentNode.insertBefore(bloc, apres.nextSibling);
+  else p.appendChild(bloc);                       // paragraphe détaché : repli sûr
 };
 
 // ── API ───────────────────────────────────────────────────────────────────────

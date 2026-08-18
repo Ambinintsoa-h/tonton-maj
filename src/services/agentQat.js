@@ -18,7 +18,7 @@ import {
 } from '../utils/internalWeave';
 import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 // R5 — le gras de l'article d'origine ne disparaît pas (module AUTONOME).
-import { carryOverBold } from '../utils/boldCarry';
+import { carryOverBold, constatGras, GRAS_MIN_PAR_H2, GRAS_MAX_PAR_H2, GRAS_MAX_MOTS } from '../utils/boldCarry';
 import {
   phrasesTropLongues, MOTS_MAX_PHRASE, MOTS_MAX_TITRE,
   VERBES_INTERDITS, PARTICIPES, CLICHES, META,
@@ -1192,11 +1192,34 @@ N'ajoute aucun AUTRE lien externe.`;
         onStep(`⚠️ ${withBold.missing.length} terme(s) en gras d'origine non replacé(s) (les mots ne figurent plus dans le texte) — signalés, génération conservée.`);
       }
 
+      // ── CONSTAT — le gras est COMPTÉ PAR SECTION, pas seulement demandé ──────
+      // La reprise ci-dessus ne dit rien du gras NEUF : le prompt exige 2 à 4
+      // passages par H2 (règle 10), et rien ne vérifiait que le modèle les
+      // produisait. Même angle mort que la règle des 20 mots avant d'être mesurée.
+      // Les DEUX sens de l'écart sont dits : sous le plancher, la section n'est pas
+      // optimisée ; au-dessus du plafond, le gras ne met plus rien en avant.
+      const gras = constatGras(withBold.html);
+      if (gras.sousPlancher || gras.surPlafond) {
+        const bouts = [];
+        if (gras.sousPlancher) bouts.push(`${gras.sousPlancher} sous ${GRAS_MIN_PAR_H2}`);
+        if (gras.surPlafond)   bouts.push(`${gras.surPlafond} au-dessus de ${GRAS_MAX_PAR_H2}`);
+        onStep(`🅰️ Gras : ${bouts.join(', ')} sur ${gras.sections.length} section(s) H2 — à ajuster en relecture.`);
+      }
+      // Fautes franches, distinctes d'un écart de densité : le prompt les interdit.
+      if (gras.dansTitre || gras.dansLien || gras.tropLongs) {
+        const f = [];
+        if (gras.dansTitre) f.push(`${gras.dansTitre} dans un titre`);
+        if (gras.dansLien)  f.push(`${gras.dansLien} dans le texte d'un lien`);
+        if (gras.tropLongs) f.push(`${gras.tropLongs} de plus de ${GRAS_MAX_MOTS} mots`);
+        onStep(`⚠️ Gras mal placé : ${f.join(', ')} — à retirer en relecture.`);
+      }
+
       sanitized = {
         ...check,
         html: withBold.html,
         restoredBold: withBold.restored,
         missingBold: withBold.missing,
+        constatGras: gras,
         restoredImages: withImages.restored,
         missingImages: withImages.missing,
         missingInternal: carried.missing,

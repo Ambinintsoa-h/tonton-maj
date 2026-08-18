@@ -14,6 +14,17 @@
  * aucun cycle d'import n'est possible.
  */
 
+/**
+ * BORNES DE DENSITÉ, reprises du prompt (`redactionConstraintsBlock`, agentQat.js).
+ * Exportées pour que la CONSIGNE et la MESURE portent les mêmes nombres : deux
+ * littéraux séparés auraient fini par diverger, et on aurait signalé au rédacteur
+ * une densité qu'on n'avait jamais demandée. Même raison que `MOTS_MAX_PHRASE`.
+ */
+export const GRAS_MIN_PAR_H2 = 2;
+export const GRAS_MAX_PAR_H2 = 4;
+/** Un passage en gras ne dépasse pas 4 mots : au-delà, ce n'est plus une mise en avant. */
+export const GRAS_MAX_MOTS = 4;
+
 /** Longueur mini d'un terme repris : « m2 » ou « et » ne portent aucun sens. */
 const MIN_CARS = 4;
 /** Au-delà, ce n'est plus un terme mis en avant mais une phrase entière. */
@@ -124,4 +135,81 @@ export const carryOverBold = (originalHtml = '', newHtml = '') => {
     console.warn(`[R5 gras] ${missing.length} terme(s) en gras non replacé(s) (les mots ne figurent plus dans le texte) :`, missing);
   }
   return { html: root.innerHTML, restored, missing };
+};
+
+/**
+ * CONSTAT DE GRAS PAR SECTION H2 — la moitié qui manquait.
+ *
+ * Ajouté le 18 août 2026, à la demande d'Andrianina (« d'autres mots importants
+ * doivent être aussi mis en gras, c'est très important »). Le gras était déjà
+ * demandé au modèle (règle 10, `redactionConstraintsBlock`) et déjà REPRIS de
+ * l'article d'origine (`carryOverBold`, ci-dessus) — mais jamais MESURÉ. Personne
+ * ne savait donc si les 2 à 4 passages par H2 étaient réellement produits : la
+ * situation exacte que la règle des 20 mots a connue avant d'être comptée.
+ *
+ * Le constat porte sur les DEUX sens de l'écart, et c'est délibéré :
+ *   • une section SOUS le plancher n'est pas optimisée pour le mot-clé ;
+ *   • une section AU-DESSUS du plafond ne met plus rien en avant — un texte tout
+ *     en gras est aussi plat qu'un texte sans gras.
+ * N'afficher que le manque aurait laissé passer la sur-mise-en-gras, qui est le
+ * défaut le plus visible à la lecture.
+ *
+ * Les violations d'emplacement (gras dans un titre, gras dans le texte d'un lien)
+ * sont comptées à part : le prompt les interdit explicitement, et ce ne sont pas
+ * des questions de densité mais des fautes franches.
+ *
+ * NON BLOQUANT, comme toutes les mesures de ce fichier : c'est un chiffre montré
+ * au rédacteur, jamais un motif de rejet — un 4e motif écraserait `currentUser` et
+ * ferait perdre la consigne de reprise du verrou externe (règle 8).
+ *
+ * @returns {{sections: Array<{titre:string, gras:number, ecart:'sous'|'sur'|null}>,
+ *            sousPlancher:number, surPlafond:number,
+ *            dansTitre:number, dansLien:number, tropLongs:number, total:number}}
+ */
+export const constatGras = (html = '') => {
+  const vide = {
+    sections: [], sousPlancher: 0, surPlafond: 0,
+    dansTitre: 0, dansLien: 0, tropLongs: 0, total: 0,
+  };
+  if (!html || typeof document === 'undefined') return vide;
+  const d = document.createElement('div');
+  d.innerHTML = html;
+
+  const tous = Array.from(d.querySelectorAll('strong, b'));
+  const dansTitre = tous.filter((e) => e.closest('h1, h2, h3, h4, h5, h6')).length;
+  const dansLien  = tous.filter((e) => e.closest('a')).length;
+  const tropLongs = tous.filter((e) => norm(e.textContent).split(' ').length > GRAS_MAX_MOTS).length;
+
+  // Découpage en sections H2 : on parcourt les blocs de premier niveau, un H2
+  // ouvrant une nouvelle section. Les gras situés AVANT le premier H2 (chapô,
+  // TL;DR) ne sont rattachés à aucune section — ils ne relèvent pas de la règle,
+  // qui parle de densité « par section H2 ».
+  const sections = [];
+  let courante = null;
+  Array.from(d.children).forEach((el) => {
+    if (el.tagName === 'H2') {
+      courante = { titre: norm(el.textContent), gras: 0, ecart: null };
+      sections.push(courante);
+      return;
+    }
+    if (!courante) return;
+    // Un gras de titre ou de lien ne COMPTE PAS dans la densité : il est déjà
+    // signalé comme faute d'emplacement, l'ajouter au décompte le ferait passer
+    // pour une mise en avant valable.
+    courante.gras += Array.from(el.querySelectorAll('strong, b'))
+      .filter((e) => !e.closest('h1, h2, h3, h4, h5, h6') && !e.closest('a')).length;
+  });
+
+  sections.forEach((s) => {
+    if (s.gras < GRAS_MIN_PAR_H2) s.ecart = 'sous';
+    else if (s.gras > GRAS_MAX_PAR_H2) s.ecart = 'sur';
+  });
+
+  return {
+    sections,
+    sousPlancher: sections.filter((s) => s.ecart === 'sous').length,
+    surPlafond:   sections.filter((s) => s.ecart === 'sur').length,
+    dansTitre, dansLien, tropLongs,
+    total: tous.length,
+  };
 };
