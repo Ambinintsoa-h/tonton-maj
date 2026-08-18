@@ -43,6 +43,7 @@ import {
 import { cleanLinkRows, emptyLinkRow } from '../../constants/majMode';
 import { auditSuggestedLinkRows, mergeLinkRows } from '../../utils/auditSuggestions';
 import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, DEFAULT_VERIFICATION_TEMPLATE } from '../../utils/generationPrompt';
+import { defaultAuditSelection, unselectedFactualFields } from '../../utils/auditSelection';
 import { setProfile } from '../../store/slices/authSlice';
 import PhaseStepper from './PhaseStepper';
 import PhaseAudit from './PhaseAudit';
@@ -1540,6 +1541,15 @@ export default function ArticleResult() {
   const [promptTouche, setPromptTouche] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
 
+// ── CASES DE L'AUDIT — source de verite de la session ────────────────────
+  // MEME patron que briefLinkRows, et pour la meme raison : la generation et le
+  // filet de publication doivent lire la MEME selection. Sinon l'avertissement
+  // de publication porterait sur un audit different de celui qui est parti.
+  // `null` tant que rien n'est amorce : `filterAuditBySelection` traite ce cas
+  // comme « aucun filtre », donc exactement le comportement d'avant.
+  const [auditSelection, setAuditSelection] = useState(null);
+  const [selectionTouchee, setSelectionTouchee] = useState(false);
+
   const ampleurRetenue = agent.majScope || scopeProposedByAudit(auditJson);
 
   const reconstruirePrompt = useCallback(() => {
@@ -1548,9 +1558,13 @@ export default function ArticleResult() {
       template: monModele,
       scope: ampleurRetenue,
       targetKeyword: agent.targetKeyword || '',
+      // MEME selection que `summarizeAuditForRewrite` : decocher une categorie
+      // doit la faire disparaitre de CE texte aussi, sinon le redacteur relit
+      // une consigne qu'il vient d'ecarter.
+      selection: auditSelection,
     }));
     setPromptTouche(false);
-  }, [auditJson, monModele, ampleurRetenue, agent.targetKeyword]);
+  }, [auditJson, monModele, ampleurRetenue, agent.targetKeyword, auditSelection]);
 
   // Reconstruction automatique tant que le redacteur n'a pas retouche le texte :
   // changer d'ampleur doit se refleter dans les directives. Des qu'il y a touche,
@@ -1606,6 +1620,7 @@ export default function ArticleResult() {
   // Ces lignes sont la source de vérité de la session pour la génération ET
   // pour le filet de publication.
   const [briefLinkRows, setBriefLinkRows] = useState([emptyLinkRow()]);
+
   // Suggestions de l'audit déjà versées dans le champ, par article : sans ce
   // repère, une simple relecture de l'audit réinjecterait des paires que le
   // rédacteur vient de supprimer volontairement.
@@ -1618,10 +1633,26 @@ export default function ArticleResult() {
       ? stored.map(l => ({ anchor: l.anchor || '', url: l.url || '' }))
       : [emptyLinkRow()]);
     suggestionsVerseesRef.current = null;
+    // La selection des cases suit le meme chemin que les paires de liens : lue
+    // dans le qatBrief enregistre, sinon amorcee par l'ampleur. Sans cette
+    // relecture, un F5 en phase 2 rendait la main a un pre-cochage par defaut
+    // SANS le dire — le scenario exact de `agent.targetKeyword`.
+    const brief = currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {};
+    setAuditSelection(brief.auditSelection || null);
+    setSelectionTouchee(!!brief.auditSelection);
     // `currentArticle`/`cqItem` sont recalculés à chaque rendu : seul l'id doit
     // déclencher le réamorçage, sinon la saisie en cours serait écrasée.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent.currentArticleId]);
+
+  // Pre-cochage PAR AMPLEUR, tant que le redacteur n'a rien touche : changer
+  // d'ampleur doit se refleter dans les cases, comme dans les directives. Une
+  // MAJ simple (+200 mots, un H2) ne porte pas les trente consignes d'une
+  // refonte — c'est tout l'interet du dispositif.
+  useEffect(() => {
+    if (!auditJson || selectionTouchee) return;
+    setAuditSelection(defaultAuditSelection(ampleurRetenue));
+  }, [auditJson, ampleurRetenue, selectionTouchee]);
 
   // ── PRÉ-REMPLISSAGE par les suggestions de l'AUDIT ─────────────────────────
   // L'audit produit `internal_linking.liens_entrants` et le panneau QAT les
@@ -2047,7 +2078,11 @@ export default function ArticleResult() {
     if (agent.currentArticleId) {
       dispatch(updateInHistory({
         id: agent.currentArticleId,
-        qatBrief: { ...brief, internalLinks: maillage },
+        // La selection des cases est enregistree AVEC le maillage : le filet de
+        // publication et une reouverture apres F5 doivent voir la MEME selection
+        // que la generation, sinon l'avertissement factuel porterait sur un audit
+        // qui n'est pas celui qui est parti.
+        qatBrief: { ...brief, internalLinks: maillage, auditSelection },
       }));
     }
     const source = agent.originalContent || '';
@@ -2068,6 +2103,10 @@ export default function ArticleResult() {
         seoPlugin:      brief.seoPlugin,
         targetWords:    brief.targetWords,
         internalLinks:  maillage,
+        // Les cases de la phase 2 filtrent l'audit AVANT son envoi. Sans ce
+        // parametre, decocher n'aurait aucun effet reel : `summarizeAuditForRewrite`
+        // envoyait les dix champs entiers par le canal du JSON.
+        auditSelection,
         // L'ampleur tranchee en phase 2 pilote la profondeur : un choix explicite
         // du redacteur prime toujours sur la recommandation de l'audit.
         depth:          scope === SCOPE_SIMPLE ? 'ciblee' : 'refonte',
@@ -3691,6 +3730,36 @@ export default function ArticleResult() {
     //   • PUBLIER  → décision explicite, prise en connaissance de cause.
     // Rien ne se déclenche si le code n'a rien écrit : le chemin normal de
     // publication est inchangé (aucune popup ajoutée au quotidien).
+    // ── FACTUEL ECARTE — CONFIRMATION AVANT PUBLICATION ────────────────────
+    // Les cases de la phase 2 laissent decocher « passages a supprimer » et
+    // « affirmations a sourcer ». C'est voulu : sur une MAJ simple a 200 mots,
+    // sourcer dix affirmations est hors perimetre. Mais decocher de la VERACITE
+    // n'est pas decocher une suggestion SEO — publier sans l'avoir revu doit etre
+    // une decision prise, pas un oubli. Meme dispositif que la confirmation du
+    // maillage redige juste en dessous, et pour la meme raison : la phase 2 peut
+    // etre loin derriere au moment de publier.
+    const factuelEcarte = unselectedFactualFields(auditSelection, auditJson);
+    if (factuelEcarte.length) {
+      const LIB = {
+        a_supprimer:   'passages a supprimer signales par l\'audit',
+        sources_check: 'affirmations a sourcer ou a retirer',
+      };
+      const liste = factuelEcarte
+        .map((f) => `• ${LIB[f]} (${(auditJson?.[f] || []).length})`)
+        .join('\n');
+      const ok = window.confirm(
+        `L'audit a signale du FACTUEL qui a ete ecarte en phase 2 :\n\n${liste}\n\n`
+        + 'Ces points n\'ont pas ete transmis a la generation : l\'article part sans '
+        + 'qu\'ils aient ete traites.\n\n'
+        + 'OK = publier quand meme.\n'
+        + 'Annuler = arreter ici et les recocher en phase 2.',
+      );
+      if (!ok) {
+        toast('Publication annulee — recochez le bloc « Factuel » en phase 2, puis relancez la generation.', { icon: '⚠', duration: 9000 });
+        return;
+      }
+    }
+
     if (filetR2Redigees.length) {
       const liste = filetR2Redigees.map((l) => `• ${l.anchor} → ${l.url}`).join('\n');
       const ok = window.confirm(
@@ -4603,6 +4672,11 @@ export default function ArticleResult() {
               onLinkRowsChange={setBriefLinkRows}
               articleUrl={articleUrl}
               auditSuggestionsCount={auditLinkSuggestions.length}
+              // Cases de l'audit. `setSelectionTouchee` coupe le pre-cochage
+              // automatique par ampleur : passe ce point, c'est SA selection qui
+              // vaut, et changer d'ampleur ne la reecrit plus.
+              auditSelection={auditSelection}
+              onAuditSelectionChange={(sel) => { setAuditSelection(sel); setSelectionTouchee(true); }}
             />
           )}
           {phase === PHASE_OBSOLESCENCE && (

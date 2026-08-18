@@ -29,6 +29,10 @@ import { auditAmpleurDecision } from '../constants/majPhases';
 // Plafond de l'instruction — MÊME littéral que la saisie et le compteur
 // (utils/generationPrompt.js). Trois copies, c'est trois divergences possibles.
 import { MAX_INSTRUCTION_CHARS } from '../utils/generationPrompt';
+// Le filtrage de l'audit par les cases de la phase 2 vit dans UN SEUL module,
+// partagé avec le textarea (utils/generationPrompt.js). Deux filtres, ce serait
+// deux sélections divergentes — donc une case décochée qui part quand même.
+import { filterAuditBySelection, isSelectionEmpty } from '../utils/auditSelection';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
   ARTICLE_TYPES, SEO_PLUGINS, cleanLinkRows,
@@ -756,19 +760,30 @@ limites de taille par champ. Priorise "ampleur", "scores", "priority_actions",
  * réécriture, pas les scores ni les justifications (économie de tokens, et le
  * modèle n'a pas à recopier un rapport dans l'article).
  */
-const summarizeAuditForRewrite = (audit) => {
+const summarizeAuditForRewrite = (audit, selection = null) => {
   if (!audit) return 'Audit indisponible : traite l\'article comme une refonte totale prudente.';
   const j = (v) => JSON.stringify(v ?? null);
+  // Le rédacteur a tout décoché. Ne PAS servir le repli « audit indisponible »
+  // ci-dessus : il déclencherait une refonte prudente alors que la demande est
+  // l'inverse. Les deux champs de CADRAGE partent quand même — `ampleur` pilote
+  // `resolveQatDepth` et `keyword_repositioning` porte le mot-clé : les taire
+  // casserait la génération au lieu de la nuancer.
+  if (isSelectionEmpty(selection)) {
+    return `Le rédacteur a écarté toutes les catégories de l'audit pour cette génération.
+N'applique QUE l'instruction de l'équipe ci-dessous. N'ajoute aucune recommandation de ton cru.
+- ampleur : ${j(audit.ampleur)}
+- keyword_repositioning : ${j(audit.keyword_repositioning)}`;
+  }
+  // MÊME sélection que le textarea de la phase 2 : sans ce filtre, une case
+  // décochée disparaissait de l'écran et partait quand même par ce canal-ci.
+  const retenu = filterAuditBySelection(audit, selection);
+  // Une catégorie décochée est ABSENTE, pas vide : écrire « seo_geo_gaps : null »
+  // se lit « l'audit n'a rien trouvé », ce qui est faux et invite le modèle à
+  // combler de lui-même. On ne l'écrit donc pas du tout.
+  const champ = (cle, libelle) => (cle in retenu ? `
+- ${libelle} : ${j(retenu[cle])}` : '');
   return `- ampleur : ${j(audit.ampleur)}
-- keyword_repositioning : ${j(audit.keyword_repositioning)}
-- a_supprimer : ${j(audit.a_supprimer)}
-- priority_actions : ${j(audit.priority_actions)}
-- recent_context : ${j(audit.recent_context)}
-- seo_geo_gaps : ${j(audit.seo_geo_gaps)}
-- eeat_recommendations : ${j(audit.eeat_recommendations)}
-- strategic_recommendation : ${j(audit.strategic_recommendation)}
-- tldr proposé par l'audit : ${j(audit.tldr)}
-- sources_check (affirmations à sourcer ou à retirer) : ${j(audit.sources_check)}`;
+- keyword_repositioning : ${j(audit.keyword_repositioning)}${champ('a_supprimer', 'a_supprimer')}${champ('priority_actions', 'priority_actions')}${champ('recent_context', 'recent_context')}${champ('seo_geo_gaps', 'seo_geo_gaps')}${champ('eeat_recommendations', 'eeat_recommendations')}${champ('strategic_recommendation', 'strategic_recommendation')}${champ('tldr', 'tldr proposé par l\'audit')}${champ('sources_check', 'sources_check (affirmations à sourcer ou à retirer)')}`;
 };
 
 /**
@@ -812,6 +827,10 @@ export const runQatRewrite = async ({
   targetWords = DEFAULT_TARGET_WORDS,
   internalLinks = [],
   sources = [],
+  // Cases cochées en phase 2. `null` = aucune sélection : l'audit part ENTIER,
+  // exactement comme avant ce dispositif. Les appels hors phase 2 et les articles
+  // audités avant ne changent donc pas de comportement.
+  auditSelection = null,
   depth = 'auto',
   instruction = '',
   modelPricing = null,
@@ -994,7 +1013,7 @@ ${internalBlock}
 ${imageBlock}
 
 ## CONCLUSIONS DE L'AUDIT (elles pilotent la réécriture)
-${summarizeAuditForRewrite(audit)}
+${summarizeAuditForRewrite(audit, auditSelection)}
 
 ## SOURCES WEB DISPONIBLES (pour les données récentes — ne cite jamais une source non listée ici)
 ${formatSourcesForPrompt(sources)}
