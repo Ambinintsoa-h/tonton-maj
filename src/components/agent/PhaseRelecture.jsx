@@ -189,17 +189,25 @@ export default function PhaseRelecture({
   // Fond OPAQUE : sur du translucide le texte de l'article défilerait au travers
   // et rendrait la liste illisible.
   return createPortal(
-    <motion.div
+    // DEUX niveaux, et c'est le correctif : l'ENVELOPPE porte la position et le
+    // déplacement, la `motion.div` INTÉRIEURE ne porte que l'animation. Livrée
+    // d'abord en un seul élément, framer-motion pilotait `transform` pour animer
+    // `y` et écrasait le `translate3d` du déplacement : le panneau ne bougeait
+    // pas d'un pixel. Séparer rend aussi le déplacement vérifiable par un test —
+    // le transform de framer-motion n'existe pas sous jsdom.
+    <div
       ref={panneauRef}
-      initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
       style={{
         position: 'fixed', top: 160, zIndex: 230,
-        // translate3d et non left/top : les classes Tailwind du bord choisi
-        // (left-2 / md:right-[14px]) restent la position de repos, le déplacement
-        // s'y ajoute. Aucune règle de placement à réécrire.
+        // Les classes Tailwind du bord choisi (left-2 / md:right-[14px]) restent
+        // la position de REPOS ; le translate s'y ajoute.
         transform: `translate3d(${decalage.dx}px, ${decalage.dy}px, 0)`,
       }}
-      className={`flex flex-col bg-white border border-gray-200 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.22)] overflow-hidden max-h-[calc(100vh-300px)] md:max-h-[calc(100vh-235px)] ${place.panneau}`}
+      className={place.panneau}
+    >
+    <motion.div
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+      className="flex flex-col w-full bg-white border border-gray-200 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.22)] overflow-hidden max-h-[calc(100vh-300px)] md:max-h-[calc(100vh-235px)]"
     >
       {/* ── En-tête FIXE, et POIGNÉE de déplacement ──────────────────────────
           Le double-clic remet le panneau à sa place de repos : après plusieurs
@@ -390,7 +398,8 @@ export default function PhaseRelecture({
           )}
         </div>
       </div>
-    </motion.div>,
+    </motion.div>
+    </div>,
     document.body,
   );
 }
