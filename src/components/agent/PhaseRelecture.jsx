@@ -263,6 +263,18 @@ export default function PhaseRelecture({
                     >
                       <AlertTriangle size={12} className="text-amber-500 flex-shrink-0" />
                       <span className="text-xs font-semibold text-gray-800 flex-1 min-w-0 truncate">{f.label}</span>
+                      {/* Part du total pour la règle qui en a un sens : « 16 » ne dit
+                          pas si l'article est à reprendre ou presque bon. */}
+                      {typeof f.pct === 'number' && (
+                        <span
+                          title={`${f.count} sur ${f.base} phrases rédigées`}
+                          className={`text-[10px] font-bold shrink-0 tabular-nums ${
+                            f.pct >= 30 ? 'text-red-600' : f.pct >= 15 ? 'text-amber-600' : 'text-gray-400'
+                          }`}
+                        >
+                          {f.pct} %
+                        </span>
+                      )}
                       <span className="text-[10px] font-bold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5 flex-shrink-0">
                         {f.count}
                       </span>
