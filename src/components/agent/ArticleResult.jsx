@@ -44,6 +44,7 @@ import { cleanLinkRows, emptyLinkRow } from '../../constants/majMode';
 import { auditSuggestedLinkRows, mergeLinkRows } from '../../utils/auditSuggestions';
 import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, DEFAULT_VERIFICATION_TEMPLATE } from '../../utils/generationPrompt';
 import { defaultAuditSelection, unselectedFactualFields } from '../../utils/auditSelection';
+import { decodeEntities } from '../../utils/htmlText';
 import { setProfile } from '../../store/slices/authSlice';
 import PhaseStepper from './PhaseStepper';
 import PhaseAudit from './PhaseAudit';
@@ -401,7 +402,13 @@ export default function ArticleResult() {
   useEffect(() => {
     setTitleDirty(false);
     // Priorité 1 : titre WP réel (API REST) — source la plus fiable
-    const wpTitle = wpMcpData?.wpTitle || '';
+    // DÉCODÉ : `title.rendered` de l'API REST WordPress porte les ENTITÉS
+    // (« découvrez l&rsquo;ordre de jeu »). Poussé tel quel dans un <input>, React
+    // les affiche littéralement — et c'est cette chaîne-là qui repartait à la
+    // publication. Le titre n'était pas seulement laid, il était faux à la source.
+    // `decodeEntities` et non `htmlToText` : un titre est du TEXTE, et
+    // « Comparatif <10 kW » passé par innerHTML perdrait sa fin en silence.
+    const wpTitle = decodeEntities(wpMcpData?.wpTitle || '');
     if (wpTitle) { setEditedTitle(wpTitle); return; }
     // Priorité 2 : H1 de l'article original — jamais le slug d'URL
     const h1 = extractH1FromHtml(agent.originalContent);
@@ -412,7 +419,8 @@ export default function ArticleResult() {
     // page (« Suivez … », « Articles récents »…). Ce titre parasite n'était pas
     // publié (protégé par titleDirty) mais il était archivé dans l'Historique
     // via handleTerminer, et affiché au rédacteur comme s'il était correct.
-    const enregistre = cqItem?.title || currentArticle?.title || '';
+    // Même origine WordPress que wpTitle, donc mêmes entités à décoder.
+    const enregistre = decodeEntities(cqItem?.title || currentArticle?.title || '');
     // Priorité 4 : première ligne du texte brut collé (dernier recours)
     setEditedTitle(h1 || enregistre || firstLineAsTitle(agent.originalContent));
   }, [wpMcpData?.wpTitle, agent.originalContent, cqItem?.title, currentArticle?.title]); // eslint-disable-line react-hooks/exhaustive-deps
