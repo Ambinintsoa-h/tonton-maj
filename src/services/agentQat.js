@@ -23,6 +23,9 @@ import {
 } from '../utils/stylePatterns';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import { auditAmpleurDecision } from '../constants/majPhases';
+// Plafond de l'instruction — MÊME littéral que la saisie et le compteur
+// (utils/generationPrompt.js). Trois copies, c'est trois divergences possibles.
+import { MAX_INSTRUCTION_CHARS } from '../utils/generationPrompt';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
   ARTICLE_TYPES, SEO_PLUGINS, cleanLinkRows,
@@ -881,7 +884,7 @@ ${buildSkillsBlock(
     'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — OBLIGATOIRES'
   )}${buildKnowledgeBlock(knowledge)}
 
-${brief}${instruction?.trim() ? `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instruction.trim().slice(0, 1500)}\nElle prime sur les règles générales, sauf le verrou liens externes.` : ''}`;
+${brief}${instruction?.trim() ? `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instruction.trim().slice(0, MAX_INSTRUCTION_CHARS)}\nElle prime sur les règles générales, sauf le verrou liens externes.` : ''}`;
 
   const system = [
     { type: 'text', text: socle, cache_control: { type: 'ephemeral', ttl: '1h' } },

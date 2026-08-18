@@ -18,6 +18,10 @@ import {
   MAJ_SCOPES, SCOPE_SIMPLE, scopeProposedByAudit, scopeRecommendationSource, wordsAddedReport,
 } from '../../constants/majPhases';
 import { cleanLinkRows } from '../../constants/majMode';
+// Plafond RÉEL de l'instruction : `runQatRewrite` tronque à cette longueur.
+// Le compteur et le blocage de saisie s'appuient donc sur le même littéral que
+// l'envoi — un compteur qui mentirait sur la limite serait pire que rien.
+import { MAX_INSTRUCTION_CHARS } from '../../utils/generationPrompt';
 import InternalLinksField from './InternalLinksField';
 
 const LIBELLE_DECISION = {
@@ -62,6 +66,7 @@ export default function PhaseGeneration({
   const contredit = !!scope && scope !== propose;
   const dejaGenere = !!generatedHtml && !!qatArticle;
   const bilan = dejaGenere ? wordsAddedReport(originalHtml, generatedHtml, retenu) : null;
+  const reste = Math.max(0, MAX_INSTRUCTION_CHARS - (prompt || '').length);
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-5 space-y-4">
@@ -161,17 +166,40 @@ export default function PhaseGeneration({
         </div>
         <textarea
           value={prompt}
-          onChange={(e) => onPromptChange?.(e.target.value)}
+          onChange={(e) => onPromptChange?.(e.target.value.slice(0, MAX_INSTRUCTION_CHARS))}
           disabled={generating}
           rows={12}
           spellCheck={false}
+          maxLength={MAX_INSTRUCTION_CHARS}
           className="input-glass text-[12px] leading-relaxed font-mono resize-y w-full disabled:opacity-60"
           placeholder="Directives de génération…"
         />
-        <p className="text-[11px] text-gray-400">
-          Pré-rempli avec vos directives permanentes et ce que l'audit demande de corriger. Ajustez-le pour CET
-          article — c'est ce texte exact qui part à l'IA.
-        </p>
+        {/* COMPTEUR BLOQUANT. Le texte était coupé à 1 500 caractères au moment de
+            l'envoi, en silence et au milieu d'une phrase. La saisie s'arrête
+            maintenant AVANT, et le rédacteur voit venir la limite. */}
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <p className="text-[11px] text-gray-400 flex-1 min-w-0">
+            Pré-rempli avec vos directives permanentes et ce que l'audit demande de corriger. Ajustez-le pour CET
+            article — c'est ce texte exact qui part à l'IA.
+          </p>
+          <span
+            title={`Plafond réel de l'instruction envoyée à l'IA : ${MAX_INSTRUCTION_CHARS} caractères`}
+            className={`text-[10px] font-semibold shrink-0 tabular-nums ${
+              reste === 0 ? 'text-red-500'
+              : reste <= 120 ? 'text-amber-500'
+              : 'text-gray-400'
+            }`}
+          >
+            {prompt.length}/{MAX_INSTRUCTION_CHARS}
+          </span>
+        </div>
+        {reste === 0 && (
+          <p className="text-[11px] text-red-600 flex items-center gap-1">
+            <AlertTriangle size={11} className="shrink-0" />
+            Plafond atteint : la saisie est bloquée. Raccourcissez une consigne pour en ajouter une autre — au-delà,
+            le texte serait coupé à l'envoi.
+          </p>
+        )}
       </div>
 
       {/* ── Maillage interne — dernière occasion de le renseigner ─────────────

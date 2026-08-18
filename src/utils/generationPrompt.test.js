@@ -2,7 +2,7 @@
 // Exigence centrale — le prompt ne doit RIEN inventer : ce qui vient de l'audit y
 // figure tel quel, et un audit vide se dit au lieu de se combler.
 /* eslint-env jest */
-import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE } from './generationPrompt';
+import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, MAX_INSTRUCTION_CHARS } from './generationPrompt';
 import { SCOPE_SIMPLE, SCOPE_REFONTE, MIN_WORDS_ADDED_SIMPLE } from '../constants/majPhases';
 
 const AUDIT = {
@@ -55,7 +55,7 @@ describe('ampleur — la consigne change vraiment selon le choix de phase 2', ()
       audit: { priority_actions: [{ priority: 'P2', title: 'Réduire la longueur', detail: 'De 3452 à 2500 mots.' }] },
     });
     expect(p).toMatch(/PRÉSÉANCE/);
-    expect(p).toMatch(/c'est CETTE AMPLEUR qui prime/);
+    expect(p).toMatch(/ne l'emporte PAS sur ce minimum/);
     expect(p).toMatch(/sans réduire la longueur/);
     expect(p).toContain('Réduire la longueur');   // l'action de l'audit reste citée
   });
@@ -213,5 +213,86 @@ describe('robustesse', () => {
   test('les retours à la ligne des champs d\'audit sont aplatis (une action = une ligne)', () => {
     const p = buildGenerationPrompt({ audit: { priority_actions: [{ priority: 'P1', title: 'Titre\nsur deux lignes', detail: 'Detail\n\navec trous' }] } });
     expect(p).toContain('[P1] Titre sur deux lignes — Detail avec trous');
+  });
+});
+
+describe('plafond de l\'instruction — on tient dedans, et on dit ce qui n\'y tient pas', () => {
+  // Mesuré avant correction : un audit complet produisait 2 557 caractères, et
+  // `runQatRewrite` coupait à 1 500 au milieu d'une phrase. 1 057 caractères
+  // partaient en silence — les actions 5 à 8 et TOUT le bloc « Données à
+  // actualiser », c'est-à-dire les chiffres à rafraîchir.
+  const AUDIT_LOURD = {
+    executive_summary: "L'article couvre le sujet mais ses tarifs datent de 2023 et la structure ne répond pas à l'intention de recherche principale.",
+    priority_actions: Array.from({ length: 8 }, (_, i) => ({
+      priority: i < 3 ? 'P1' : 'P2',
+      title: `Action prioritaire numéro ${i + 1} à mener sur cet article`,
+      detail: "Détail de l'action, en une à deux phrases comme le demande le skill, pour être exploitable par la rédactrice.",
+    })),
+    recent_context: { donnees_obsoletes: Array.from({ length: 5 }, (_, i) => ({
+      element: `Tarif de la prestation ${i + 1}`, valeur_article: '30 euros le m2', valeur_actuelle: '42 euros le m2',
+    })) },
+  };
+
+  test('un audit LOURD tient désormais sous le plafond', () => {
+    const p = buildGenerationPrompt({
+      audit: AUDIT_LOURD, scope: SCOPE_REFONTE, targetKeyword: 'isolation phonique plafond',
+    });
+    expect(p.length).toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS);
+  });
+
+  test('ce qui est écarté est ANNONCÉ, jamais coupé en silence', () => {
+    // Audit VOLONTAIREMENT hors gabarit : 14 actions à détail long. Même en forme
+    // courte il faut écarter, et c'est ce cas-là qui doit parler.
+    const p = buildGenerationPrompt({
+      audit: {
+        ...AUDIT_LOURD,
+        priority_actions: Array.from({ length: 14 }, (_, i) => ({
+          priority: 'P1',
+          title: `Action très longue numéro ${i + 1} portant sur la structure et le fond de cet article`,
+          detail: "Détail volumineux, deux phrases entières, pour saturer le plafond de l'instruction à coup sûr et vérifier le message.",
+        })),
+      },
+      scope: SCOPE_REFONTE,
+      targetKeyword: 'isolation phonique plafond sous plancher bois',
+    });
+    expect(p.length).toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS);
+    expect(p).toMatch(/point\(s\) d'audit non repris ici, faute de place/);
+    expect(p).toMatch(/partent au modèle avec l'audit complet/);
+  });
+
+  test('aucune ligne n\'est coupée au milieu — chaque puce est entière', () => {
+    // La troncature brutale laissait une phrase pendante en fin de prompt.
+    // Ici chaque ligne d'audit est soit une puce complète, soit un en-tête.
+    const p = buildGenerationPrompt({ audit: AUDIT_LOURD, scope: SCOPE_REFONTE, targetKeyword: 'plafond' });
+    const puces = p.split('\n').filter((l) => l.startsWith('- '));
+    expect(puces.length).toBeGreaterThan(0);
+    puces.forEach((l) => expect(l).toMatch(/[.»\w]$/));   // jamais un mot tronqué en fin de ligne
+  });
+
+  test('quand la place manque, on ABRÈGE les lignes au lieu d\'en supprimer', () => {
+    // Mesuré : en choisissant la forme ligne par ligne, 2 actions complètes sur 8
+    // passaient. En choisissant la forme pour la LISTE entière, 7 sur 8 passent.
+    const p = buildGenerationPrompt({
+      audit: AUDIT_LOURD, scope: SCOPE_REFONTE, targetKeyword: 'isolation phonique plafond',
+    });
+    expect(p.length).toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS);
+    expect((p.match(/Action prioritaire/g) || []).length).toBeGreaterThanOrEqual(6);
+    expect((p.match(/Tarif de la prestation/g) || []).length).toBe(5);
+  });
+
+  test('un audit qui TIENT n\'affiche aucune mention d\'écart', () => {
+    const p = buildGenerationPrompt({ audit: AUDIT, scope: SCOPE_REFONTE });
+    expect(p.length).toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS);
+    expect(p).not.toMatch(/faute de place/);
+    // et tout y est
+    expect(p).toContain('Corriger la pente DTU 43.1');
+    expect(p).toContain('Prix du bac acier');
+  });
+
+  test('les données à actualiser ne sont plus les premières sacrifiées', () => {
+    // Avant, la troncature partait de la FIN : le bloc « Données à actualiser »
+    // disparaissait toujours en entier, alors que ce sont les chiffres.
+    const p = buildGenerationPrompt({ audit: AUDIT_LOURD, scope: SCOPE_REFONTE });
+    expect(p).toContain('Données à actualiser :');
   });
 });
