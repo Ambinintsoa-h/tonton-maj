@@ -15,6 +15,40 @@
  * paragraphe : la phase 4 corrige des patterns, elle ne réécrit pas l'article.
  */
 import { AI_IDS } from './styleFixes';
+import { VERBES_INTERDITS, PARTICIPES, CLICHES, META, MOTS_MAX_PHRASE } from './stylePatterns';
+
+/**
+ * LES PATTERNS INTERDITS VOYAGENT AVEC LE PROMPT — corrigé le 18 août 2026.
+ *
+ * Le prompt disait « remplace le verbe fade par un verbe précis » sans jamais
+ * NOMMER les verbes proscrits. Le modèle ne peut pas éviter ce qu'il ne connaît
+ * pas, et le résultat était mécanique : pour corriger « constitue », il proposait
+ *   « La franchise s'impose en pilier du jeu vidéo depuis deux décennies. »
+ * or `s'impose` est lui-même dans VERBES_INTERDITS. La correction rendait la
+ * phrase re-signalable au tour suivant — les « récurrences » vues en production.
+ *
+ * Deux gestes, parce qu'une consigne de prompt n'est pas un verrou :
+ *   1. la liste est DITE au modèle (ce bloc) ;
+ *   2. toute proposition qui réintroduit un pattern interdit est ÉCARTÉE en code
+ *      (`reintroduitUnPattern`, plus bas). Une consigne qu'on ne vérifie pas est
+ *      une consigne dont on ne sait rien.
+ *
+ * Source unique : les listes viennent de `stylePatterns.js`, celles-là même qui
+ * servent à la DÉTECTION. Les recopier ici les aurait fait diverger, et on aurait
+ * proposé au rédacteur des corrections qu'on rejette ensuite.
+ */
+const INTERDITS = [
+  '',
+  'JAMAIS ces tournures dans tes propositions — elles sont proscrites par la charte',
+  'et une proposition qui en contient une sera REJETÉE automatiquement :',
+  `- verbes fades : ${VERBES_INTERDITS.join(', ')}`,
+  `- participes présents : ${PARTICIPES.join(', ')}`,
+  `- clichés : ${CLICHES.join(' / ')}`,
+  `- méta-commentaires : ${META.join(' / ')}`,
+  `- aucune phrase de plus de ${MOTS_MAX_PHRASE} mots.`,
+  '- aucune mention du type « [à vérifier] », « (à confirmer) », « source à ajouter » :',
+  '  ce sont des notes de travail, elles n\'ont rien à faire dans un article publié.',
+].join('\n');
 
 /** Consigne par règle — ce que l'IA doit faire, pas seulement ce qu'elle doit éviter. */
 const CONSIGNE = {
@@ -81,6 +115,7 @@ export const buildStyleFixPrompt = (occurrences = []) => {
     '- Ne change aucun chiffre, aucune date, aucun nom propre, aucune unité.',
     '- N\'ajoute ni ne supprime aucun lien.',
     '- Si une phrase est déjà correcte, renvoie-la à l\'identique.',
+    INTERDITS,
     '',
     ...blocs,
     '',
@@ -114,6 +149,34 @@ const urlsDe = (s) => String(s || '').match(/(?:https?:\/\/|www\.)[^\s<>"')]+/gi
  */
 const PORTE_BALISAGE = /<|href\s*=/i;
 
+/** Apostrophe droite ou typographique, comme dans stylePatterns. */
+const motifTerme = (terme) => new RegExp(
+  `(?<![\\p{L}])${terme.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/'/g, "['’]")}(?![\\p{L}])`, 'iu',
+);
+
+/** Notes de travail : jamais dans un article publié (demande Andrianina, août 2026). */
+const NOTE_DE_TRAVAIL = /\[[^\]]*(?:vérifier|verifier|confirmer|à sourcer|source manquante|todo)[^\]]*\]|\((?:à vérifier|a verifier|à confirmer|à sourcer)\)/i;
+
+/**
+ * Vrai si la proposition réintroduit un pattern que la phase 4 signalerait.
+ *
+ * Le filtre est ASYMÉTRIQUE, et c'est voulu : on ne rejette que ce qui est
+ * ABSENT de l'original. Rejeter un pattern déjà présent dans `avant` écarterait
+ * des corrections légitimes — la phrase « La franchise constitue un pilier »
+ * corrigée sur son participe présent n'a pas à être perdue parce qu'elle contient
+ * encore « constitue », qui sera traité par sa propre occurrence. Même logique que
+ * le verrou liens juste au-dessus.
+ */
+const PATTERNS_REJETES = [...VERBES_INTERDITS, ...PARTICIPES, ...CLICHES, ...META];
+
+const reintroduitUnPattern = (avant, apres) => {
+  if (NOTE_DE_TRAVAIL.test(apres) && !NOTE_DE_TRAVAIL.test(avant)) return true;
+  return PATTERNS_REJETES.some((t) => {
+    const re = motifTerme(t);
+    return re.test(apres) && !re.test(avant);
+  });
+};
+
 export const normalizeStyleProposals = (brut, occurrences = []) => {
   const parNum = new Map((Array.isArray(occurrences) ? occurrences : []).map((o) => [o.n, o]));
   const items = Array.isArray(brut) ? brut : (brut && Array.isArray(brut.propositions) ? brut.propositions : []);
@@ -127,6 +190,7 @@ export const normalizeStyleProposals = (brut, occurrences = []) => {
     if (apres === occ.extrait) return;                      // rien à corriger
     if (apres.length > occ.extrait.length * 2.5 + 40) return; // le modèle a débordé
     if (PORTE_BALISAGE.test(apres)) return;                 // verrou liens : balisage
+    if (reintroduitUnPattern(occ.extrait, apres)) return;   // corrige un pattern par un autre
     const dejaLa = new Set(urlsDe(occ.extrait).map((u) => u.toLowerCase()));
     if (urlsDe(apres).some((u) => !dejaLa.has(u.toLowerCase()))) return; // lien ajouté
     out.set(n, { n, id: occ.id, avant: occ.extrait, apres });

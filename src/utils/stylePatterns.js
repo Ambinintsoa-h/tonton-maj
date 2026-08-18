@@ -378,6 +378,53 @@ export const elisionsOrphelines = (html = '') => {
   return (texte.match(/\b[ldnjcmts]['’]\s+\p{L}+/giu) || []);
 };
 
+/**
+ * ADVERBE EN -MENT vs NOM EN -MENT — règle GRAMMATICALE, pas une liste de mots.
+ *
+ * Corrigé le 18 août 2026. La détection était `\b\p{L}{5,}ment\b`, protégée par
+ * une liste blanche codée en dur de 28 noms (`document`, `bâtiment`, `logement`…).
+ * Elle attrapait donc TOUS les noms en -ment absents de cette liste, et le
+ * correctif mécanique (`corrigeAdverbe`, styleFixes.js) SUPPRIME le mot signalé :
+ * le bouton « Accepter » proposait du texte détruit, relevé en production sur un
+ * article réel —
+ *   « Après un affrontement titanesque, Kratos terrasse… »  → « Après un titanesque, »
+ *   « L'engouement autour des adaptations… »                → « L' autour des… »
+ * Une phrase amputée offerte en un clic est pire que l'anomalie qu'on signalait.
+ *
+ * Allonger la liste blanche ne ferme pas le trou : les noms français en -ment se
+ * comptent par centaines et la prochaine génération en apportera un nouveau. La
+ * grammaire, elle, est finie : **un adverbe n'est jamais précédé d'un
+ * déterminant**. `un affrontement`, `L'engouement`, `ce classement` → nom, écarté ;
+ * `retrouve brièvement`, `annoncé officiellement` → adverbe, conservé.
+ *
+ * La liste blanche est GARDÉE malgré tout : elle couvre le cas où le nom n'a pas de
+ * déterminant devant lui (« Traitement des données », après un tiret, en tête de
+ * titre). Les deux gardes ne se recouvrent pas, aucune ne remplace l'autre.
+ *
+ * Ce qui reste hors de portée, et qu'on ne maquille pas : un nom en -ment sans
+ * déterminant ET absent de la liste passera encore. Il sera SIGNALÉ, jamais
+ * supprimé silencieusement — le rédacteur juge sur l'extrait, comme partout en
+ * phase 4.
+ */
+const MOT_EN_MENT = /\b\p{L}{5,}ment\b/giu;
+
+const NOMS_EN_MENT = /^(?:document|moment|ciment|instrument|argument|element|élément|vetement|vêtement|batiment|bâtiment|traitement|equipement|équipement|logement|paiement|abonnement|environnement|gouvernement|complement|complément|supplement|supplément|remplacement|amenagement|aménagement|revetement|revêtement|isolement|placement|classement|financement)$/;
+
+/**
+ * Déterminants et introducteurs de groupe nominal. Un mot en -ment qui suit l'un
+ * d'eux est un NOM, jamais un adverbe. `l'` / `d'` couvrent l'élision, apostrophe
+ * droite ou typographique — c'est la forme exacte qui a lâché (« L'engouement »).
+ */
+const DETERMINANTS = /(?:un|une|le|la|les|des|du|au|aux|ce|cet|cette|ces|son|sa|ses|leur|leurs|mon|ma|mes|ton|ta|tes|notre|nos|votre|vos|tout|tous|toute|toutes|chaque|plusieurs|certains|certaines|aucun|aucune|quel|quelle|quelques|[ld])$/i;
+
+const estAdverbeEnMent = (phrase, index, mot) => {
+  if (NOMS_EN_MENT.test(mot.toLowerCase())) return false;
+  // Ce qui précède immédiatement le mot, apostrophe d'élision comprise.
+  const avant = phrase.slice(0, index).replace(/['’]\s*$/, "'").trimEnd();
+  const dernier = (avant.match(/[\p{L}']+$/u) || [''])[0].replace(/'$/, '');
+  return !DETERMINANTS.test(dernier);
+};
+
 const echappe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Apostrophe droite ou typographique : le texte publié porte souvent la seconde.
 const motif = (terme) => new RegExp(`(?<![\\p{L}])${echappe(terme).replace(/'/g, "['’]")}(?![\\p{L}])`, 'iu');
@@ -452,13 +499,13 @@ export const detectStylePatterns = (html = '') => {
   // 4. Adverbes en -ment
   const adverbes = new Map();
   phrases.forEach((p) => {
-    (p.match(/\b\p{L}{5,}ment\b/giu) || []).forEach((a) => {
-      const cle = a.toLowerCase();
-      if (/^(?:document|moment|ciment|instrument|argument|element|élément|vetement|vêtement|batiment|bâtiment|traitement|equipement|équipement|logement|paiement|abonnement|environnement|gouvernement|complement|complément|supplement|supplément|remplacement|amenagement|aménagement|revetement|revêtement|isolement|placement|classement|financement)$/.test(cle)) return;
+    for (const m of p.matchAll(MOT_EN_MENT)) {
+      if (!estAdverbeEnMent(p, m.index, m[0])) continue;
+      const cle = m[0].toLowerCase();
       if (!adverbes.has(cle)) adverbes.set(cle, []);
       const l = adverbes.get(cle);
       if (l.length < 2) l.push(p);
-    });
+    }
   });
   ajoute('adverbes', 'Adverbes en -ment', 'À éviter : préférer un mot plus précis ou supprimer.',
     adverbes.size, exemplesDeTermes(adverbes));
