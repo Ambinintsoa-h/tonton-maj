@@ -16,8 +16,18 @@
 /** Anomalies dont la correction est calculable sans comprendre le sens. */
 export const MECHANICAL_IDS = ['cadratins', 'adverbes'];
 
-/** Anomalies qui exigent de comprendre la phrase → proposition par l'IA. */
-export const AI_IDS = ['verbes', 'participes', 'passive', 'phrases', 'cliches', 'meta'];
+/**
+ * Anomalies qui exigent de comprendre la phrase → proposition par l'IA.
+ *
+ * `coupees` (phrases amputées) ouvre la liste depuis le 18 août 2026 : c'est la
+ * seule famille où le texte est ILLISIBLE, pas seulement fade. Restituer le mot
+ * manquant demande de lire le contexte — donc l'IA, jamais un calcul. La consigne
+ * qui l'accompagne (`stylePrompt.js`) lui interdit d'inventer : sans certitude,
+ * elle renvoie la phrase à l'identique, ce que `normalizeStyleProposals` écarte
+ * ensuite comme « rien à corriger ». Le doute ne produit donc aucune proposition,
+ * au lieu d'en produire une fausse.
+ */
+export const AI_IDS = ['coupees', 'verbes', 'participes', 'passive', 'phrases', 'cliches', 'meta'];
 
 const nettoie = (s) => String(s || '')
   .replace(/\s+([,.;:!?])/g, '$1')      // pas d'espace avant une ponctuation simple
