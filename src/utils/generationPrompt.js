@@ -12,6 +12,7 @@
  * fabriquer des recommandations.
  */
 import { SCOPE_SIMPLE, MIN_WORDS_ADDED_SIMPLE } from '../constants/majPhases';
+import { filterAuditBySelection, isSelectionEmpty } from './auditSelection';
 
 /**
  * Modèle par défaut, servi au rédacteur qui n'en a pas encore enregistré un.
@@ -112,6 +113,92 @@ const autresApportsDeLAudit = (audit) => AUTRES_APPORTS
     return Array.isArray(v) ? `${libelle} (${v.length})` : libelle;
   });
 
+/**
+ * SUGGESTION DE FRAÎCHEUR, PRÉ-REMPLIE DANS LA DIRECTIVE (MAJ simple).
+ *
+ * Une MAJ simple ajoute 200 mots au minimum : concrètement UN H2 d'actualisation.
+ * Le rédacteur écrivait cette directive à la main alors que l'audit venait de
+ * PAYER une recherche web pour trouver exactement ces faits — dates, scores,
+ * statuts, sources. On les lui sert, il ajuste.
+ *
+ * ASSEMBLAGE EN DUR, aucun appel IA : chaque valeur est reprise telle quelle du
+ * JSON d'audit. Le code ne rédige pas de son initiative — c'est la même ligne de
+ * conduite que le maillage (`weaveBriefLinks`), à ceci près qu'ici le texte
+ * atterrit dans un champ que le rédacteur RELIT avant de lancer, donc sans avoir
+ * besoin d'être marqué dans l'éditeur.
+ *
+ * La nuance (`d.nuance`, « à confirmer ») est reprise TEXTUELLEMENT et suivie de
+ * « au conditionnel ». C'est le point qui a lâché en production : noyée dans un
+ * JSON de dix champs parmi trente consignes, la nuance a été ignorée et le modèle
+ * a inventé une confirmation de date. Dans la directive de priorité haute, que le
+ * rédacteur a sous les yeux, elle a une chance de tenir.
+ */
+export const buildFreshnessSuggestion = (audit, maxChars = MAX_INSTRUCTION_CHARS) => {
+  const recent = audit?.recent_context || {};
+  const faits = [];
+
+  (Array.isArray(recent.donnees_obsoletes) ? recent.donnees_obsoletes : [])
+    .filter((d) => d && (d.element || d.valeur_actuelle))
+    .slice(0, MAX_OBSOLETES)
+    .forEach((d) => {
+      const e = ligne(d.element);
+      const v = ligne(d.valeur_actuelle);
+      faits.push(v ? `${e} : ${v}` : e);
+    });
+
+  (Array.isArray(recent.developpements_manquants) ? recent.developpements_manquants : [])
+    .filter((d) => d && (d.sujet || d.description))
+    .slice(0, MAX_OBSOLETES)
+    .forEach((d) => {
+      const s = ligne(d.sujet);
+      const desc = ligne(d.description);
+      const n = ligne(d.nuance);
+      const base = desc && desc !== s ? `${s} — ${desc}` : s || desc;
+      faits.push(n ? `${base} (${n} : écris-le au conditionnel)` : base);
+    });
+
+  if (!faits.length) return '';
+
+  // Les sources sont NOMMÉES, jamais inventées : l'audit les a rapportées de sa
+  // recherche web. Le rédacteur sait où vérifier avant de valider la directive.
+  const sources = [...new Set(
+    [...(Array.isArray(recent.donnees_obsoletes) ? recent.donnees_obsoletes : []),
+      ...(Array.isArray(recent.developpements_manquants) ? recent.developpements_manquants : [])]
+      .map((d) => ligne(d?.source))
+      .filter(Boolean)
+      .map((u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } })
+      .filter(Boolean)
+  )];
+
+  // ── ON TIENT DANS LE PLAFOND, ET ON DIT CE QU'ON ÉCARTE ────────────────────
+  // Sans cette borne, la suggestion faisait à elle seule 3 127 caractères sur un
+  // audit chargé, soit le DOUBLE du plafond de l'instruction. `runQatRewrite`
+  // tronque par la FIN : la ligne « Sources » sautait la première, et avec elle
+  // la seule chose qui rend le fait vérifiable. Même logique que les deux listes
+  // d'audit plus bas, et jamais de coupe silencieuse.
+  const entete = `Ajout de fraîcheur — un H2, ${MIN_WORDS_ADDED_SIMPLE} mots minimum, chaque fait sourcé.`;
+  const pied = sources.length ? `Sources : ${sources.join(', ')}.` : '';
+  const dispo = Math.max(0, maxChars - entete.length - (pied ? pied.length + 1 : 0) - 1);
+
+  const retenus = [];
+  let cout = 0;
+  faits.forEach((f) => {
+    const l = `- ${f}`;
+    if (cout + l.length + 1 <= dispo) { retenus.push(l); cout += l.length + 1; }
+  });
+  // Aucun fait ne tient : mieux vaut ne rien suggérer que servir un en-tête et
+  // une liste de sources sans le moindre fait à rédiger.
+  if (!retenus.length) return '';
+  const ecartes = faits.length - retenus.length;
+
+  return [
+    entete,
+    ...retenus,
+    ecartes ? `(+ ${ecartes} fait(s) de fraîcheur non repris ici, faute de place — voir l'audit.)` : '',
+    pied,
+  ].filter(Boolean).join('\n');
+};
+
 /** Données que l'audit signale comme périmées. */
 const obsoletesDeLAudit = (audit) => {
   const src = audit?.recent_context?.donnees_obsoletes;
@@ -135,18 +222,37 @@ const obsoletesDeLAudit = (audit) => {
  * @param {string}  template       modèle personnel du rédacteur
  * @param {string}  scope          SCOPE_SIMPLE | SCOPE_REFONTE
  * @param {string}  targetKeyword  mot-clé cible
+ * @param {object}  selection      cases cochées par le rédacteur (null = tout)
  * @returns {string} prompt prêt à être relu et ajusté
  */
 export const buildGenerationPrompt = ({
-  audit = null,
+  audit: auditComplet = null,
   template = DEFAULT_GENERATION_TEMPLATE,
   scope = SCOPE_SIMPLE,
   targetKeyword = '',
+  selection = null,
 } = {}) => {
   const bloc = [];
 
+  // MÊME sélection que `summarizeAuditForRewrite` : les deux canaux doivent voir
+  // le même audit, sinon la case décochée disparaîtrait de l'écran tout en
+  // partant au modèle par le JSON — des cases décoratives, et une confiance
+  // perdue qu'on ne récupère pas.
+  const audit = filterAuditBySelection(auditComplet, selection);
+
+  // Le template n'est JAMAIS remplacé par la suggestion : les directives
+  // permanentes du rédacteur (tutoiement, forme des H2) doivent survivre au
+  // pré-remplissage. Elles passent devant, la suggestion se glisse dessous.
   const mesDirectives = ligne(template) ? String(template).trim() : DEFAULT_GENERATION_TEMPLATE;
   bloc.push('## Mes directives', mesDirectives);
+
+  // La suggestion de fraîcheur s'AFFICHE ici, sous les directives permanentes,
+  // mais elle se CALCULE plus bas : son budget dépend de tout ce qui vient après
+  // (ampleur, mot-clé, audit). Calculée à cet endroit, elle réservait 120
+  // caractères pour le seul bloc « Mot-clé » et ignorait les 310 du bloc
+  // « Ampleur » — le prompt sortait à 1 863 caractères, donc tronqué par la fin
+  // par `runQatRewrite`. On retient la position, on insère à la fin.
+  const POS_FRAICHEUR = bloc.length;
 
   if (scope === SCOPE_SIMPLE) {
     bloc.push('', '## Ampleur : MAJ simple',
@@ -169,6 +275,29 @@ export const buildGenerationPrompt = ({
 
   if (targetKeyword) {
     bloc.push('', '## Mot-clé cible', `« ${ligne(targetKeyword)} » — tel quel, à la lettre près.`);
+  }
+
+  // ── Insertion de la suggestion de fraîcheur, à la place retenue plus haut ───
+  // Réserve : l'en-tête « Ce que l'audit demande de corriger » et la note de
+  // points non repris s'ajoutent hors budget dans la section suivante.
+  const RESERVE_AUDIT = 160;
+  if (scope === SCOPE_SIMPLE) {
+    const suggestion = buildFreshnessSuggestion(
+      audit, MAX_INSTRUCTION_CHARS - bloc.join('\n').length - RESERVE_AUDIT,
+    );
+    if (suggestion) bloc.splice(POS_FRAICHEUR, 0, '', suggestion);
+  }
+
+  // TOUT DÉCOCHÉ N'EST PAS « AUDIT INDISPONIBLE ». Le repli d'un audit absent
+  // écrit « traite l'article comme une refonte totale prudente » : le servir à
+  // quelqu'un qui a sciemment tout décoché serait faux deux fois — l'audit
+  // existe, et il vient de demander le minimum, pas une refonte. Deux états,
+  // deux messages, comme `skills.bootstrapped`.
+  if (auditComplet && isSelectionEmpty(selection)) {
+    bloc.push('', '## Audit — écarté par le rédacteur',
+      'L\'audit a bien tourné : aucune de ses catégories n\'a été retenue pour cette génération.',
+      'Applique mes directives ci-dessus, et rien d\'autre de l\'audit.');
+    return bloc.join('\n');
   }
 
   const actions = actionsDeLAudit(audit);
@@ -198,9 +327,10 @@ export const buildGenerationPrompt = ({
     // actualiser » disparaissaient — sans un mot, et toujours les mêmes, parce
     // qu'une troncature ampute par la FIN.
     //
-    // Rien n'est réellement perdu : `summarizeAuditForRewrite` envoie
-    // `priority_actions` et `recent_context` ENTIERS au modèle par l'autre canal.
-    // Ce qui se joue ici, c'est la place dans l'instruction de PRIORITÉ HAUTE, et
+    // Rien n'est perdu de ce que le rédacteur a COCHÉ :
+    // `summarizeAuditForRewrite` envoie les catégories retenues entières au
+    // modèle par l'autre canal — filtrées par la MÊME sélection qu'ici. Ce qui se
+    // joue à cet endroit, c'est la place dans l'instruction de PRIORITÉ HAUTE, et
     // la relecture par le rédacteur.
     const NOTE = (n) => `(+ ${n} point(s) d'audit non repris ici, faute de place — ils partent au modèle avec l'audit complet.)`;
     // Réserve calculée sur la note la PLUS LONGUE possible, jamais estimée : une

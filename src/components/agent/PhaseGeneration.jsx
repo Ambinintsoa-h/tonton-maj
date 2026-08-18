@@ -23,6 +23,7 @@ import { cleanLinkRows } from '../../constants/majMode';
 // l'envoi — un compteur qui mentirait sur la limite serait pire que rien.
 import { MAX_INSTRUCTION_CHARS } from '../../utils/generationPrompt';
 import InternalLinksField from './InternalLinksField';
+import AuditChecklist from './AuditChecklist';
 
 const LIBELLE_DECISION = {
   maj_ciblee:      'MAJ ciblée',
@@ -58,6 +59,10 @@ export default function PhaseGeneration({
   // pour que le rédacteur sache d'où viennent les lignes pré-remplies — sinon
   // il ne peut pas distinguer sa propre saisie d'une proposition à relire.
   auditSuggestionsCount = 0,
+  // Cases de l'audit — colonne GAUCHE, face aux directives. La sélection filtre
+  // les DEUX canaux d'envoi ; sans elle, décocher n'aurait aucun effet réel.
+  auditSelection = null,
+  onAuditSelectionChange,
 }) {
   const propose  = scopeProposedByAudit(audit);
   const source   = scopeRecommendationSource(audit);
@@ -67,6 +72,7 @@ export default function PhaseGeneration({
   const dejaGenere = !!generatedHtml && !!qatArticle;
   const bilan = dejaGenere ? wordsAddedReport(originalHtml, generatedHtml, retenu) : null;
   const reste = Math.max(0, MAX_INSTRUCTION_CHARS - (prompt || '').length);
+  const simple = retenu === SCOPE_SIMPLE;
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-5 space-y-4">
@@ -135,8 +141,23 @@ export default function PhaseGeneration({
         )}
       </div>
 
-      {/* Le prompt : la vision du rédacteur fusionnée avec l'audit */}
-      <div className="space-y-1.5">
+      {/* ── DEUX COLONNES : l'audit se coche à gauche, la vision s'écrit à droite ──
+          La largeur suit l'AMPLEUR, elle n'est pas figée à 50/50 : en refonte
+          l'audit porte l'essentiel du travail, en MAJ simple c'est la directive
+          écrite à la main qui décide (200 mots, un H2). On donne la place à la
+          colonne qui tranche. */}
+      <div className={`grid gap-4 lg:grid-cols-5`}>
+        <div className={simple ? 'lg:col-span-2' : 'lg:col-span-3'}>
+          <AuditChecklist
+            audit={audit}
+            selection={auditSelection}
+            onChange={onAuditSelectionChange}
+            scope={retenu}
+            disabled={generating}
+          />
+        </div>
+
+        <div className={`space-y-1.5 ${simple ? 'lg:col-span-3' : 'lg:col-span-2'}`}>
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
             <FileText size={13} className="text-gray-400" />
@@ -200,6 +221,7 @@ export default function PhaseGeneration({
             le texte serait coupé à l'envoi.
           </p>
         )}
+        </div>
       </div>
 
       {/* ── Maillage interne — dernière occasion de le renseigner ─────────────
