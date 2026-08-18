@@ -27,9 +27,51 @@ export const texteDe = (html = '') =>
     .replace(/\s+/g, ' ')
     .trim();
 
+/**
+ * Sentinelle de fin de bloc. Un caractère, et non un saut de ligne : `texteDe`
+ * réduit toute suite d'espaces blancs à UNE espace, donc un « 
+ » n'y survivrait
+ * pas. Le pied-de-mouche n'apparaît dans aucun article.
+ */
+const FIN_DE_BLOC = ' ¶ ';
+
+/**
+ * TEXTE AVEC UNE FRONTIÈRE DE PHRASE À CHAQUE FIN DE BLOC.
+ *
+ * `texteDe` remplace CHAQUE balise par une espace. Un titre non ponctué se
+ * retrouvait donc collé au premier paragraphe qui le suit :
+ *   `<h2>Isolants</h2><p>Le PUR est réellement efficace.</p>`
+ *   → « Isolants Le PUR est réellement efficace. »
+ * `phrasesDe` ne coupant que sur `.!?…`, cette « phrase » n'existait dans AUCUN
+ * bloc du document. Conséquence directe, relevée par Andrianina : accepter une
+ * correction de style répondait « Passage introuvable — il a déjà été modifié
+ * depuis l'analyse », parce que `findBlockForPassage` ne pouvait pas la situer.
+ * Toutes les règles travaillant sur `phrases` étaient touchées (verbes,
+ * participes, adverbes, passives, cadratins, clichés, méta), et d'autant plus
+ * souvent que la tournure ouvrait une section.
+ *
+ * Second effet, voulu : le décompte cesse de compter des phrases fabriquées par
+ * la mise à plat. Moins de points à relire, et ceux qui restent sont réels.
+ */
+export const texteParBlocs = (html = '') =>
+  texteDe(
+    String(html)
+      // Les TITRES sortent du flux de phrases : un titre n'est pas une phrase, et
+      // le compter en gonflait le total (« 92 phrases analysées ») avec des
+      // fragments qu'on ne demandera jamais de couper. Leur longueur a sa propre
+      // règle (titres de plus de MOTS_MAX_TITRE mots), et le mot-clé dans les H2
+      // la sienne (suroptimisationMotCle).
+      .replace(/<h[1-6][^>]*>[\s\S]*?<\/h[1-6]>/gi, FIN_DE_BLOC)
+      .replace(/<br\s*\/?>/gi, FIN_DE_BLOC)
+      .replace(/<\/(p|h[1-6]|li|td|th|dt|dd|div|section|article|blockquote|figcaption|summary|details|tr|caption)\s*>/gi, FIN_DE_BLOC),
+  );
+
 /** Découpe en phrases exploitables (au moins trois mots). */
 export const phrasesDe = (texte = '') =>
-  texte.split(/(?<=[.!?…])\s+/).map(p => p.trim()).filter(p => p.split(/\s+/).length >= 3);
+  texte
+    .split(/(?<=[.!?…])\s+|\s*¶\s*/)
+    .map(p => p.trim())
+    .filter(p => p.split(/\s+/).length >= 3);
 
 /**
  * Retire ce qui n'est PAS de la prose : tableaux, listes, FAQ.
@@ -56,7 +98,7 @@ export const retireHorsProse = (html = '') =>
     .replace(/<details\b[\s\S]*?<\/details>/gi, ' ');
 
 /** Phrases de la PROSE seule — la seule base honnête pour juger une longueur. */
-export const phrasesDeProse = (html = '') => phrasesDe(texteDe(retireHorsProse(html)));
+export const phrasesDeProse = (html = '') => phrasesDe(texteParBlocs(retireHorsProse(html)));
 
 /** Contenu textuel des titres d'un fragment HTML. */
 const titresDe = (html = '') => {
@@ -236,8 +278,10 @@ const exemplesDeTermes = (trouves) => {
  * @returns {{ total:number, phrases:number, findings:Array }}
  */
 export const detectStylePatterns = (html = '') => {
-  const texte   = texteDe(html);
-  const phrases = phrasesDe(texte);
+  // Découpage PAR BLOCS : sans lui, un titre non ponctué se colle au paragraphe
+  // suivant et l'extrait produit n'existe dans aucun bloc — donc « Passage
+  // introuvable » au moment de l'accepter.
+  const phrases = phrasesDe(texteParBlocs(html));
   const titres  = titresDe(html);
   const paras   = paragraphesDe(html);
   const findings = [];
