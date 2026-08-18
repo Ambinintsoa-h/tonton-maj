@@ -271,6 +271,20 @@ body {
   background-color: rgba(250, 204, 21, 0.55);
 }
 
+/* ENCART DE RENVOI écrit par le code (.lien-connexe, voir internalWeave.js).
+   La clause était collée en fin du paragraphe d'accueil : le lecteur tombait sur
+   « …des combats plus nerveux. À lire aussi : les actualités PS5. » d'un seul
+   souffle. C'est son propre bloc désormais, et il se voit.
+   Contrairement à .lien-redige (marque de relecture, retirée à l'export), cette
+   classe SURVIT à la publication — d'où un style sobre, et la mise en avant
+   portée par le <strong> du libellé, qui ne dépend d'aucune feuille de style. */
+.lien-connexe {
+  border-left: 3px solid #94a3b8;
+  padding-left: 0.75rem;
+  margin: 1rem 0;
+  font-size: 0.95em;
+}
+
 /* SURLIGNAGE TEMPORAIRE du mot visé en relecture (phase 4).
    Le clic sur un pattern amenait au bon paragraphe mais l'entourait en entier :
    sur 60 mots, il restait à trouver lequel remplacer. On surligne donc le terme.

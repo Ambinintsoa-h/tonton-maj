@@ -188,12 +188,12 @@ describe('EMPLACEMENTS INTERDITS — le tissage n\'y touche pas', () => {
 });
 
 describe('FORÇAGE À 100 % — le code RÉDIGE, et le marque', () => {
-  test('ancre introuvable → clause marquée en fin du paragraphe le plus pertinent', () => {
+  test('ancre introuvable → clause marquée dans un encart, après le paragraphe le plus pertinent', () => {
     const html = `${P(`Sujet sans rapport. ${LONG}`)}${P(`Le tarif de la pose des panneaux, ${LONG}`)}`;
     const r = weaveBriefLinks(html, [{ anchor: 'pose de panneaux', url: '/pose' }], URL_ART);
     expect(r.written).toEqual([{ anchor: 'pose de panneaux', url: '/pose' }]);
     expect(r.html).toContain(`${WRITTEN_MARK_ATTR}="1"`);
-    expect(r.html).toContain('À lire aussi : <a href="/pose">pose de panneaux</a>.');
+    expect(r.html).toContain('<strong>À lire aussi : </strong><a href="/pose">pose de panneaux</a>.');
     // la clause est bien allée dans le paragraphe qui parle du sujet
     expect(r.html.indexOf('data-lien-redige')).toBeGreaterThan(r.html.indexOf('Sujet sans rapport'));
   });
@@ -204,6 +204,44 @@ describe('FORÇAGE À 100 % — le code RÉDIGE, et le marque', () => {
     expect(publie).toContain('<a href="/aides">aides 2026</a>');
     expect(publie).not.toContain('lien-redige');
     expect(publie).not.toContain('À RELIRE');
+    // L'ENCART, lui, survit : c'est la structure du renvoi, pas une marque de
+    // relecture. Le libellé en gras est ce qui le met en avant sans dépendre du
+    // thème WordPress — une classe seule ne serait stylée que s'il la connaît.
+    expect(publie).toContain('class="lien-connexe"');
+    expect(publie).toContain('<strong>À lire aussi : </strong>');
+  });
+
+  test('l\'encart est un BLOC, pas une queue de paragraphe', () => {
+    // Constat d'Andrianina : collé en fin de phrase, le renvoi était orphelin —
+    // « …des combats plus nerveux. À lire aussi : les actualités PS5. » d'un seul
+    // souffle. Le saut de ligne doit être STRUCTUREL, pas un <br> que WordPress
+    // peut ravaler.
+    const r = weaveBriefLinks(P(LONG), [{ anchor: 'aides 2026', url: '/aides' }], URL_ART);
+    const tmp = document.createElement('div');
+    tmp.innerHTML = r.html;
+    const ps = Array.from(tmp.querySelectorAll('p'));
+    expect(ps).toHaveLength(2);
+    expect(ps[0].textContent).not.toContain('À lire aussi');
+    expect(ps[1].classList.contains('lien-connexe')).toBe(true);
+    expect(ps[1].querySelector('a').getAttribute('href')).toBe('/aides');
+    expect(ps[1].querySelector('a').getAttribute('rel')).toBeNull();   // DOFOLLOW (R3)
+  });
+
+  test('un encart n\'accueille JAMAIS un second renvoi', () => {
+    // Sans ce garde-fou : « À lire aussi : X. À lire aussi : Y. » en cascade dans
+    // le même bloc. Le filtre par longueur ne suffit pas — une ancre longue passe
+    // les 40 caractères de MIN_PARAGRAPH_CHARS.
+    const rows = [
+      { anchor: 'aides financieres pour la renovation energetique', url: '/aides' },
+      { anchor: 'prix au m2', url: '/prix' },
+    ];
+    const r = weaveBriefLinks(P(LONG), rows, URL_ART);
+    const tmp = document.createElement('div');
+    tmp.innerHTML = r.html;
+    Array.from(tmp.querySelectorAll('.lien-connexe')).forEach((e) => {
+      expect(e.querySelectorAll('a')).toHaveLength(1);
+    });
+    expect(r.placed).toHaveLength(2);
   });
 
   test('AUCUNE clause n\'est empilée : 3 liens, un seul paragraphe éligible', () => {
@@ -231,9 +269,20 @@ describe('FORÇAGE À 100 % — le code RÉDIGE, et le marque', () => {
     const r = weaveBriefLinks(html, rows, URL_ART);
     const tmp = document.createElement('div');
     tmp.innerHTML = r.html;
-    const parClause = Array.from(tmp.querySelectorAll('p'))
-      .map((p) => p.querySelectorAll(`[${WRITTEN_MARK_ATTR}]`).length);
-    expect(parClause).toEqual([1, 1, 1]);   // une par paragraphe, jamais deux au même endroit
+    // L'encart est un BLOC A PART depuis le 18/08/2026 (la clause collee en fin de
+    // paragraphe etait orpheline a la lecture). L'invariant protege ici ne change
+    // pas : UN renvoi par paragraphe d'accueil, jamais deux au meme endroit. On le
+    // mesure donc sur les encarts qui SUIVENT chaque paragraphe de prose.
+    const ps = Array.from(tmp.querySelectorAll('p'));
+    const prose = ps.filter((p) => !p.classList.contains('lien-connexe'));
+    const encarts = ps.filter((p) => p.classList.contains('lien-connexe'));
+    expect(prose).toHaveLength(3);
+    expect(encarts).toHaveLength(3);
+    // Chaque paragraphe de prose est immediatement suivi de SON encart.
+    prose.forEach((p) => {
+      expect(p.nextElementSibling?.classList.contains('lien-connexe')).toBe(true);
+      expect(p.querySelectorAll(`[${WRITTEN_MARK_ATTR}]`)).toHaveLength(0);
+    });
   });
 
   test('même ancre déjà liée vers une AUTRE cible → pas côte à côte dans le même <p>', () => {
@@ -242,8 +291,15 @@ describe('FORÇAGE À 100 % — le code RÉDIGE, et le marque', () => {
     const tmp = document.createElement('div');
     tmp.innerHTML = r.html;
     const ps = Array.from(tmp.querySelectorAll('p'));
+    // Le premier paragraphe porte deja l'ancre vers une AUTRE cible : ni lui ni
+    // son suivant immediat ne doivent porter le renvoi.
     expect(ps[0].querySelectorAll(`[${WRITTEN_MARK_ATTR}]`)).toHaveLength(0);
-    expect(ps[1].innerHTML).toContain('/prix');
+    expect(ps[0].nextElementSibling?.classList.contains('lien-connexe')).toBe(false);
+    // Le renvoi est l'encart pose apres le SECOND paragraphe.
+    const encart = ps.find((p) => p.classList.contains('lien-connexe'));
+    expect(encart).toBeTruthy();
+    expect(encart.innerHTML).toContain('/prix');
+    expect(encart.previousElementSibling.textContent).toContain('Autre bloc');
   });
 
   test('aucun paragraphe éligible → SIGNALÉ, jamais un bloc fabriqué de toutes pièces', () => {
