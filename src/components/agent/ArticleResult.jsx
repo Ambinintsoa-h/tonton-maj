@@ -336,6 +336,35 @@ export default function ArticleResult() {
   // ── SEO Meta (Yoast / SEOPress) ───────────────────────────────────────────────
   const [seoTitle,       setSeoTitle]       = useState('');
   const [seoDescription, setSeoDescription] = useState('');
+
+  // ── MÉTAS DÉJÀ VALIDÉES, quelle que soit leur provenance ───────────────────
+  // Deux sources portent les métas SEO retouchées à la main :
+  //   • `agent.editorMeta` — le brouillon PRIVÉ du membre (un par membre, local
+  //     puis distant) ;
+  //   • l'ARTICLE lui-même — `seoMeta` / `publishDate` / `editedTitle`, écrits
+  //     par `updateArticleHtml(..., extraFields)` à chaque enregistrement.
+  // Seule la première était lue sur le parcours « Faire une MAJ » : cache vidé,
+  // autre poste ou autre membre, et `agent.editorMeta` arrivait NUL — l'effet
+  // `qatArticle` ci-dessous réécrivait alors les champs avec les métas GÉNÉRÉES,
+  // effaçant en silence la retouche du rédacteur. Elle était pourtant bien en
+  // base : c'est la RELECTURE qui manquait, pas l'écriture.
+  const metaValidee = useMemo(() => {
+    const m = agent.editorMeta;
+    if (m && (m.seoTitle || m.seoDescription)) return m;   // le brouillon est le plus frais
+    const src = currentArticle || cqItem?.majResult || null;
+    const sm = src?.seoMeta;
+    if (sm && (sm.seoTitle || sm.seoDescription)) {
+      return {
+        ...(m || {}),
+        seoTitle:       sm.seoTitle       || '',
+        seoDescription: sm.seoDescription || '',
+        publishDate:    src.publishDate   || m?.publishDate  || '',
+        editedTitle:    src.editedTitle   || m?.editedTitle  || '',
+        titleDirty:     !!src.editedTitle || !!m?.titleDirty,
+      };
+    }
+    return m || null;
+  }, [agent.editorMeta, currentArticle, cqItem]);
   const [seoGenerating,  setSeoGenerating]  = useState(false);
   // Date de publication de la MAJ (optionnelle) — format input datetime-local
   // « YYYY-MM-DDTHH:mm ». Vide = WordPress garde la date existante du post.
@@ -433,15 +462,17 @@ export default function ArticleResult() {
   // envoyé à WordPress (sans ça, le H1 réécrit ne partait jamais).
   useEffect(() => {
     if (!qatArticle || qatMetaRef.current) return;
-    // Des métas restaurées depuis un brouillon sont du travail validé : on ne les écrase pas.
-    const m = agent.editorMeta;
+    // Des métas déjà validées sont du travail humain : on ne les écrase pas.
+    // `metaValidee`, et non `agent.editorMeta` : les métas persistées sur
+    // l'ARTICLE doivent compter autant que celles du brouillon privé.
+    const m = metaValidee;
     if (m && (m.seoTitle || m.seoDescription)) { qatMetaRef.current = true; return; }
     qatMetaRef.current = true;
     seoGeneratedRef.current = true;   // neutralise l'auto-génération du flux historique
     if (qatArticle.titreSeo)        setSeoTitle(qatArticle.titreSeo);
     if (qatArticle.metaDescription) setSeoDescription(qatArticle.metaDescription);
     if (qatArticle.h1 && !titleDirty) { setEditedTitle(qatArticle.h1); setTitleDirty(true); }
-  }, [qatArticle, agent.editorMeta]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [qatArticle, metaValidee]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-génération SEO dès que la MAJ est prête (une seule fois par analyse)
   useEffect(() => {
@@ -450,14 +481,14 @@ export default function ArticleResult() {
     // arrivent dans le même lot Redux que le contenu : ne JAMAIS les écraser
     // par une régénération automatique — c'est le travail déjà validé de
     // l'équipe. Le bouton « Régénérer » reste disponible pour forcer.
-    const m = agent.editorMeta;
+    const m = metaValidee;
     if (m && (m.seoTitle || m.seoDescription)) {
       seoGeneratedRef.current = true;
       return;
     }
     seoGeneratedRef.current = true;
     runSeoGeneration();
-  }, [agent.updatedContent, agent.editorMeta, runSeoGeneration]);
+  }, [agent.updatedContent, metaValidee, runSeoGeneration]);
 
   // ── Catégories WordPress ──────────────────────────────────────────────────────
   const [wpCategories, setWpCategories]       = useState([]);
@@ -496,7 +527,7 @@ export default function ArticleResult() {
   // en dernier dans le même commit React (l'ordre de déclaration fait foi).
   const editorMetaAppliedRef = useRef(null);
   useEffect(() => {
-    const m = agent.editorMeta;
+    const m = metaValidee;
     if (!m || editorMetaAppliedRef.current === m) return;
     editorMetaAppliedRef.current = m;
     if (m.editedTitle) { setEditedTitle(m.editedTitle); setTitleDirty(!!m.titleDirty); }
@@ -517,7 +548,7 @@ export default function ArticleResult() {
       setSelectedCategories(m.selectedCategories);
       setCatsDirty(!!m.catsDirty);
     }
-  }, [agent.editorMeta]);
+  }, [metaValidee]);
   const articleRef = useRef(null);      // pointe sur le div contentEditable
   const contentRef = useRef('');        // stocke le HTML édité SANS re-render React
   const changeIdxRef = useRef(-1);

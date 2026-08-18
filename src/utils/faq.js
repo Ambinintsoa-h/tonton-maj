@@ -10,20 +10,42 @@
 
 import { diffClusterOf } from './blocks';
 
-const isFaqTitle = (text) => {
-  const t = (text || '').toLowerCase().trim();
-  return (
-    t.includes('faq') ||
-    t.includes('questions fréquentes') ||
-    t.includes('questions frequentes') ||
-    t.includes('foire aux questions')
-  );
-};
+// Titres de FAQ acceptés. Les quatre premiers sont historiques ; les suivants
+// viennent d'articles réels où la FAQ n'était PAS normalisée faute de vocabulaire
+// (« Questions et réponses », « Vos questions les plus courantes »). La liste
+// reste FERMÉE : l'ouvrir à « questions » seul convertirait en accordéon une
+// section légitime du type « Questions à poser à votre artisan ».
+const FAQ_TITLE_RX = new RegExp([
+  'faq',
+  'foire aux questions',
+  'questions? fr[eé]quentes?',
+  'questions? courantes?',
+  'questions? (?:les )?plus (?:fr[eé]quentes?|courantes?|pos[eé]es?)',
+  'questions? (?:et|/) r[eé]ponses?',
+  'vos questions',
+  'questions? des lecteurs',
+  'on (?:vous )?r[eé]pond',
+].join('|'), 'i');
+
+const isFaqTitle = (text) => FAQ_TITLE_RX.test((text || '').toLowerCase().trim());
 
 const headingLevel = (node) => {
   if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
   const m = node.tagName?.match(/^H([1-6])$/i);
   return m ? parseInt(m[1], 10) : null;
+};
+
+/**
+ * Un titre qui EST une question : son texte se termine par « ? ».
+ *
+ * C'est le garde-fou de tous les assouplissements ci-dessous. Élargir la
+ * détection sur le seul vocabulaire du titre ferait convertir en accordéon des
+ * sections légitimes ; exiger le point d'interrogation rend le faux positif
+ * quasi impossible, parce qu'un H2 rédactionnel n'en porte pas.
+ */
+const isQuestionHeading = (node) => {
+  const lvl = headingLevel(node);
+  return !!lvl && /\?\s*$/.test((node.textContent || '').trim());
 };
 
 /**
@@ -81,6 +103,23 @@ export const findFaqBlock = (container) => {
     }
   }
 
+  // Stratégie 1 bis : la FAQ est enfermée dans un conteneur NEUTRE (<section>,
+  // <div>, <article>) sans classe ni id « faq ». La stratégie 2 ne la voyait pas
+  // — elle exige un titre enfant DIRECT du container — et la FAQ restait donc en
+  // titres bruts. On ne retient le conteneur que s'il porte un titre de FAQ ou
+  // au moins deux vraies questions : un <div> quelconque n'est jamais capturé.
+  for (const child of Array.from(container.children)) {
+    if (!['SECTION', 'DIV', 'ARTICLE'].includes(child.tagName)) continue;
+    const heads = Array.from(child.querySelectorAll('h1, h2, h3, h4'));
+    if (!heads.length) continue;
+    const titre = heads.find(h => isFaqTitle(h.textContent)) || null;
+    const questions = heads.filter(isQuestionHeading);
+    if (!titre && questions.length < 2) continue;
+    const heading = titre || null;
+    return { kind: 'container', nodes: [child], root: child, heading,
+             level: headingLevel(heading) || 2 };
+  }
+
   // Stratégie 2 : heading direct (h1-h4) — collecte le heading + frères suivants
   // jusqu'au prochain heading de niveau ≤ (même logique que moveFaqToEnd)
   for (const h of Array.from(container.querySelectorAll('h1, h2, h3, h4'))) {
@@ -89,13 +128,57 @@ export const findFaqBlock = (container) => {
     const level = headingLevel(h);
     const nodes = [h];
     let node = h.nextSibling;
+    // Une FAQ pose ses questions à UN seul niveau. Dès qu'un titre plus profond
+    // est vu, c'est LUI le niveau des questions : un titre de même niveau que le
+    // titre FAQ redevient alors une frontière, même s'il finit par « ? ».
+    // Sans cette borne, un H2 rédactionnel interrogatif placé après la FAQ était
+    // absorbé — avec tout son texte — à l'intérieur de la dernière réponse.
+    let vuPlusProfond = false;
     while (node) {
       const lvl = headingLevel(node);
-      if (lvl && lvl <= level) break;
+      if (lvl && lvl > level) vuPlusProfond = true;
+      // On traverse les titres de MÊME niveau tant que ce sont des QUESTIONS et
+      // qu'aucun niveau plus profond n'a été rencontré (cas du modèle qui écrit
+      // les questions en <h2>, comme le titre de la FAQ).
+      if (lvl && lvl <= level && (vuPlusProfond || !isQuestionHeading(node))) break;
       nodes.push(node);
       node = node.nextSibling;
     }
     return { kind: 'heading', nodes, root: null, heading: h, level };
+  }
+
+  // Stratégie 2 ter : AUCUN titre reconnaissable, mais une suite d'au moins deux
+  // titres de même niveau qui sont de vraies questions. C'est la FAQ détectée par
+  // sa STRUCTURE, plus par son vocabulaire : un titre inventé par le modèle
+  // (« Ce qu'on nous demande le plus ») ne bloque plus la mise en forme.
+  {
+    const kids = Array.from(container.children);
+    for (let i = 0; i < kids.length; i++) {
+      if (!isQuestionHeading(kids[i])) continue;
+      const level = headingLevel(kids[i]);
+      let n = 0;
+      for (let j = i; j < kids.length; j++) {
+        const lvl = headingLevel(kids[j]);
+        if (lvl && lvl < level) break;              // on a quitté la section
+        if (lvl === level && isQuestionHeading(kids[j])) n++;
+        else if (lvl === level) break;              // titre de même niveau, pas une question
+      }
+      if (n < 2) continue;
+      // Le titre est le heading juste avant, s'il est de niveau strictement
+      // supérieur (donc un vrai chapeau) et n'est pas lui-même une question.
+      const prev = kids[i - 1];
+      const prevLvl = prev ? headingLevel(prev) : null;
+      const heading = prevLvl && prevLvl < level && !isQuestionHeading(prev) ? prev : null;
+      const debut = heading ? i - 1 : i;
+      const nodes = [];
+      for (let j = debut; j < kids.length; j++) {
+        const lvl = headingLevel(kids[j]);
+        if (j > debut && lvl && lvl <= level && !isQuestionHeading(kids[j])) break;
+        nodes.push(kids[j]);
+      }
+      return { kind: 'heading', nodes, root: null, heading,
+               level: heading ? prevLvl : level - 1 };
+    }
   }
 
   // Stratégie 3 : suite de <details> top-level consécutifs (format accordéon
@@ -181,7 +264,14 @@ export const getQAGroups = (block) => {
 
   // Format headings : niveau de question = plus petit niveau strictement > titre FAQ
   const titleLevel = block.level || 2;
-  const qLevels = elems.map(headingLevel).filter(l => l && l > titleLevel);
+  let qLevels = elems.map(headingLevel).filter(l => l && l > titleLevel);
+  // Questions au MÊME niveau que le titre (modèle qui écrit tout en <h2>) :
+  // accepté UNIQUEMENT si ce sont de vraies questions, sinon on découperait un
+  // article entier en accordéon.
+  if (!qLevels.length) {
+    const memeNiveau = elems.filter(el => headingLevel(el) === titleLevel && isQuestionHeading(el));
+    if (memeNiveau.length) qLevels = [titleLevel];
+  }
   if (qLevels.length) {
     const qLevel = Math.min(...qLevels);
     const groups = [];
