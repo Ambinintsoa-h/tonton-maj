@@ -26,7 +26,7 @@
  * les barres d'édition de texte (BubbleToolbar/TableToolbar, ~9998) — celles-ci
  * doivent rester cliquables même si elles surgissent au-dessus du panneau.
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import {
@@ -72,7 +72,31 @@ const PLACEMENT = {
 // gauche à CHAQUE correction acceptée — soit 66 fois sur un article comme celui
 // qui a motivé ce panneau. Persisté pour la session, pas au-delà : ce n'est pas
 // un réglage à mémoriser d'un article à l'autre.
-const prefsAffichage = { cote: 'gauche', replie: false };
+const prefsAffichage = { cote: 'gauche', replie: false, decalage: { dx: 0, dy: 0 } };
+
+// Ce qui doit rester à l'écran quand on relâche le panneau : on ne le laisse
+// jamais sortir entièrement, sinon il devient impossible de le rattraper.
+const MARGE_VISIBLE = 48;
+
+/**
+ * Borne un déplacement pour que le panneau reste rattrapable.
+ * `actuel` sert à retrouver la position SANS transformation : getBoundingClientRect
+ * inclut déjà le translate en cours.
+ */
+const bornerDecalage = (el, dx, dy, actuel) => {
+  if (!el) return { dx, dy };
+  const r = el.getBoundingClientRect();
+  const baseLeft = r.left - actuel.dx;
+  const baseTop  = r.top  - actuel.dy;
+  const minDx = -(baseLeft + r.width - MARGE_VISIBLE);
+  const maxDx = window.innerWidth - baseLeft - MARGE_VISIBLE;
+  const minDy = -(baseTop - 8);                                  // pas sous la barre du haut
+  const maxDy = window.innerHeight - baseTop - MARGE_VISIBLE;
+  return {
+    dx: Math.min(maxDx, Math.max(minDx, dx)),
+    dy: Math.min(maxDy, Math.max(minDy, dy)),
+  };
+};
 
 export default function PhaseRelecture({
   html = '', onRefresh, onAccept, onLocate,
@@ -84,7 +108,52 @@ export default function PhaseRelecture({
   const [replie, setReplieState] = useState(prefsAffichage.replie);
   const [cote, setCoteState] = useState(prefsAffichage.cote);
   const setReplie = (v) => { prefsAffichage.replie = v; setReplieState(v); };
-  const setCote   = (v) => { prefsAffichage.cote   = v; setCoteState(v); };
+
+  // ── DÉPLACEMENT À LA SOURIS ────────────────────────────────────────────────
+  // Le panneau est opaque et fixe : quel que soit le bord choisi, il recouvre
+  // des lignes. Basculer gauche/droite ne suffisait pas — le passage à corriger
+  // peut être exactement dessous, des deux côtés. On le prend donc par son
+  // en-tête et on le pose où l'on veut.
+  // Le décalage vit dans `prefsAffichage` (portée module) pour la même raison
+  // que le côté et le repli : le parent REMONTE ce composant à chaque
+  // « Accepter » (key={relectureTick}), et un état local ramènerait le panneau
+  // à sa place d'origine à chaque correction.
+  const [decalage, setDecalageState] = useState(prefsAffichage.decalage);
+  const setDecalage = (d) => { prefsAffichage.decalage = d; setDecalageState(d); };
+  // Changer de bord repart d'un placement propre : conserver le décalage
+  // pourrait projeter le panneau hors de l'écran de l'autre côté.
+  const setCote   = (v) => {
+    prefsAffichage.cote = v;
+    prefsAffichage.decalage = { dx: 0, dy: 0 };
+    setDecalage({ dx: 0, dy: 0 });
+    setCoteState(v);
+  };
+  const panneauRef = useRef(null);
+  const [glisse, setGlisse] = useState(false);
+
+  const auPointerDown = (e) => {
+    if (e.button !== 0) return;
+    // Les boutons de l'en-tête (changer de bord, replier) gardent leur rôle.
+    if (e.target.closest('button')) return;
+    const el = panneauRef.current;
+    const depart = { x: e.clientX, y: e.clientY, ...decalage };
+    let courant = decalage;
+    setGlisse(true);
+    const bouge = (ev) => {
+      courant = bornerDecalage(el, depart.dx + (ev.clientX - depart.x),
+                                   depart.dy + (ev.clientY - depart.y), depart);
+      setDecalage(courant);
+    };
+    const fin = () => {
+      setGlisse(false);
+      window.removeEventListener('pointermove', bouge);
+      window.removeEventListener('pointerup', fin);
+      window.removeEventListener('pointercancel', fin);
+    };
+    window.addEventListener('pointermove', bouge);
+    window.addEventListener('pointerup', fin);
+    window.addEventListener('pointercancel', fin);
+  };
   // Occurrences écartées par le rédacteur — locales à la session : « Ignorer »
   // n'écrit rien dans l'article, il retire simplement la ligne de la liste.
   const [ignores, setIgnores] = useState([]);
@@ -121,12 +190,27 @@ export default function PhaseRelecture({
   // et rendrait la liste illisible.
   return createPortal(
     <motion.div
+      ref={panneauRef}
       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-      style={{ position: 'fixed', top: 160, zIndex: 230 }}
+      style={{
+        position: 'fixed', top: 160, zIndex: 230,
+        // translate3d et non left/top : les classes Tailwind du bord choisi
+        // (left-2 / md:right-[14px]) restent la position de repos, le déplacement
+        // s'y ajoute. Aucune règle de placement à réécrire.
+        transform: `translate3d(${decalage.dx}px, ${decalage.dy}px, 0)`,
+      }}
       className={`flex flex-col bg-white border border-gray-200 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.22)] overflow-hidden max-h-[calc(100vh-300px)] md:max-h-[calc(100vh-235px)] ${place.panneau}`}
     >
-      {/* ── En-tête FIXE : le décompte reste lu même la liste défilée ── */}
-      <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-gray-100 bg-gray-50/80 shrink-0">
+      {/* ── En-tête FIXE, et POIGNÉE de déplacement ──────────────────────────
+          Le double-clic remet le panneau à sa place de repos : après plusieurs
+          déplacements, on ne sait plus forcément où était l'origine. */}
+      <div
+        onPointerDown={auPointerDown}
+        onDoubleClick={() => setDecalage({ dx: 0, dy: 0 })}
+        title="Glissez pour déplacer le panneau — double-clic pour le remettre en place"
+        style={{ cursor: glisse ? 'grabbing' : 'grab', touchAction: 'none' }}
+        className="flex items-center gap-2 px-3.5 py-2.5 border-b border-gray-100 bg-gray-50/80 shrink-0 select-none"
+      >
         <ShieldCheck size={14} className={`shrink-0 ${propre ? 'text-emerald-500' : 'text-amber-500'}`} />
         <span className="text-xs font-semibold text-gray-800 flex-1 min-w-0 truncate">Patterns d'écriture IA</span>
         {!propre && (
