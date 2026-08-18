@@ -18,6 +18,17 @@ import { AI_IDS } from './styleFixes';
 
 /** Consigne par règle — ce que l'IA doit faire, pas seulement ce qu'elle doit éviter. */
 const CONSIGNE = {
+  // PHRASE AMPUTÉE — la seule consigne où l'IA doit AJOUTER du texte, et donc la
+  // seule où elle peut inventer un fait. D'où la porte de sortie explicite : sans
+  // certitude, elle renvoie la phrase telle quelle, et `normalizeStyleProposals`
+  // l'écarte comme « rien à corriger ». Aucune proposition vaut mieux qu'une
+  // proposition inventée — c'est précisément en comblant un vide que le modèle a
+  // produit « date confirmée au Comic-Con le 24 juillet » sur un article réel.
+  coupees:    'Un mot ou un signe manque : la phrase est illisible. Restitue le mot '
+              + 'manquant SEULEMENT si le contexte le rend certain, et corrige la '
+              + 'ponctuation fusionnée. N\'ajoute aucune information nouvelle, aucun '
+              + 'chiffre, aucune date. Si tu n\'es pas certain du mot manquant, renvoie '
+              + 'la phrase à l\'identique.',
   verbes:     'Remplace le verbe fade par un verbe précis et concret, sans changer le sens.',
   participes: 'Reformule le participe présent en verbe conjugué (« qui permet », « il évite »).',
   passive:    'Mets le sujet en action : « Google indexe la page » plutôt que « la page est indexée par Google ».',

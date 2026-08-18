@@ -184,6 +184,138 @@ export const phrasesTropLongues = (html = '') =>
     .sort((a, b) => b.mots - a.mots);
 
 /**
+ * PHRASES AMPUTÉES — le défaut le plus grave, et le seul qui n'était pas mesuré.
+ *
+ * Observé sur un article généré le 18 août 2026, QUATRE fois dans le même texte :
+ *   • « un nouveau jeu Kratos déjà **en.** »            → mot manquant après « en »
+ *   • « couvrent cette période complète**., elle** … »  → ponctuation fusionnée,
+ *                                                         « Chronologiquement » perdu
+ *   • « Après un **titanesque**, il terrasse … »        → « affrontement » manquant
+ *   • « reçoit un accueil **polaire** »                 → mot substitué
+ *
+ * Cause la plus probable : le plafond dur de MOTS_MAX_PHRASE. Le prompt exige
+ * « PLAFOND, pas une moyenne » (règle 10), et le modèle taille dans les phrases
+ * qui frôlent la limite jusqu'à en retirer des mots porteurs. Les quatre cas
+ * étaient des phrases longues.
+ *
+ * Ce plafond reste appliqué SANS RECOURS — c'est le périmètre arrêté (règle 12 :
+ * les cases pilotent le contenu, jamais le technique). La correction ne peut donc
+ * pas vivre dans une case de la phase 2 : elle est ici, en phase 4, où l'on
+ * mesure ce que la génération a réellement produit.
+ *
+ * ── CE QUI EST DÉTECTÉ, ET POURQUOI CES MOTIFS-LÀ ───────────────────────────
+ * Aucun de ces motifs ne demande de comprendre la phrase : ils sont tous
+ * SYNTAXIQUEMENT impossibles en français correct. C'est la condition pour qu'un
+ * détecteur soit exhaustif sans être bavard.
+ *   1. fin sur un mot qui EXIGE une suite (préposition, article, conjonction) ;
+ *   2. ponctuation fusionnée (« complète., elle ») ;
+ *   3. phrase reprenant en minuscule après un point, hors abréviation connue.
+ *
+ * ── DEUX CAS VOLONTAIREMENT NON COUVERTS, et il faut le dire ────────────────
+ * • Le MOT SUBSTITUÉ (« reçoit un accueil polaire » au lieu de « mitigé ») : la
+ *   phrase est syntaxiquement valide, aucun détecteur sans compréhension ne peut
+ *   la signaler. Prétendre le contraire donnerait une fausse garantie.
+ * • La PHRASE NOMINALE COURTE (« L'assaut final. ») : un quatrième motif avait été
+ *   écrit pour elle — tout segment de deux mots ponctué comme une phrase. Il a été
+ *   RETIRÉ avant livraison : « L'assaut final. » fait exactement deux mots, et
+ *   c'est une tournure journalistique VOULUE, présente dans l'article même qui a
+ *   motivé ce module. Le motif ne distinguait pas l'amputation du choix de style.
+ *   Un panneau de phase 4 qui crie au loup sur de la prose correcte cesse d'être
+ *   lu, et on perdrait les trois motifs qui, eux, sont sûrs.
+ */
+/**
+ * Contexte autour d'un motif, pour que l'extrait soit localisable dans l'éditeur.
+ *
+ * Les bornes sont ramenées sur une FRONTIÈRE DE MOT. Une découpe brute à 60
+ * caractères coupe au milieu d'un mot, et l'extrait obtenu n'existe alors dans
+ * aucun bloc du document : « Situer » répond « Passage introuvable » et
+ * « Accepter » échoue. C'est exactement le défaut corrigé par `texteParBlocs` sur
+ * les autres règles — inutile de le réintroduire par la porte de celle-ci.
+ */
+const LIGNE_EXTRAIT = (texte, motif) => {
+  const i = texte.indexOf(motif);
+  if (i < 0) return motif.trim();
+  let debut = Math.max(0, i - 60);
+  let fin = Math.min(texte.length, i + motif.length + 60);
+  while (debut > 0 && /\S/.test(texte[debut - 1])) debut -= 1;
+  while (fin < texte.length && /\S/.test(texte[fin])) fin += 1;
+  return texte.slice(debut, fin).trim();
+};
+
+export const MOTS_SUSPENDUS = [
+  // Prépositions et locutions qui ne peuvent pas fermer une phrase.
+  'à', 'de', 'du', 'des', 'en', 'dans', 'sur', 'sous', 'par', 'pour', 'vers', 'chez',
+  'avec', 'sans', 'entre', 'depuis', 'pendant', 'selon', 'malgré', 'dès', 'jusqu',
+  // Articles et déterminants.
+  'le', 'la', 'les', 'un', 'une', 'ce', 'cet', 'cette', 'ces', 'son', 'sa', 'ses',
+  'leur', 'leurs', 'mon', 'ma', 'mes', 'notre', 'nos', 'votre', 'vos', 'au', 'aux',
+  // Conjonctions et relatifs.
+  'et', 'ou', 'mais', 'car', 'donc', 'ni', 'que', 'qui', 'dont', 'quand', 'comme',
+  // Auxiliaires laissés sans participe.
+  'est', 'sont', 'était', 'étaient', 'a', 'ont', 'avait', 'avaient', 'sera', 'seront',
+];
+
+/** Abréviations qui portent légitimement un point sans terminer la phrase. */
+const ABREVIATIONS = ['etc', 'cf', 'ex', 'env', 'av', 'ap', 'M', 'Mme', 'Dr', 'no', 'nº', 'vs', 'p'];
+
+export const phrasesCoupees = (html = '') => {
+  const out = [];
+  const vu = new Set();
+  const ajoute = (motif, extrait, terme = '') => {
+    const cle = `${motif}::${extrait}`;
+    if (vu.has(cle)) return;
+    vu.add(cle);
+    out.push({ motif, extrait, terme });
+  };
+
+  // Prose seule : un tableau aplati finit sur n'importe quel mot sans que ce soit
+  // une amputation. Même raison que `phrasesTropLongues` — sans ce périmètre, la
+  // règle serait FAUSSE et enverrait chercher des phrases qui n'existent pas.
+  const prose = retireHorsProse(html);
+
+  // ── 2. Ponctuation fusionnée — cherchée sur le texte CONTINU ──────────────
+  // Sur le texte découpé en phrases, « complète., elle » se scinde et le motif
+  // disparaît. Il faut donc le chercher avant tout découpage.
+  const continu = texteDe(prose);
+  (continu.match(/\p{L}+\s*[.!?…]\s*[,;:]\s*\p{L}+/giu) || []).forEach((m) => {
+    ajoute('ponctuation', LIGNE_EXTRAIT(continu, m), m.trim());
+  });
+
+  phrasesDeProse(html).forEach((phrase) => {
+    const mots = phrase.split(/\s+/).filter(Boolean);
+    if (!mots.length) return;
+
+    // ── 1. Fin suspendue ────────────────────────────────────────────────────
+    // On retire la ponctuation finale, jamais l'apostrophe : « jusqu' » est
+    // précisément une fin suspendue, et la couper la rendrait invisible.
+    const dernier = mots[mots.length - 1].replace(/[.!?…,;:»)\]]+$/u, '').toLowerCase();
+    if (dernier && MOTS_SUSPENDUS.includes(dernier.replace(/['’]$/u, ''))) {
+      ajoute('suspendue', phrase, dernier);
+    }
+  });
+
+  // ── 3. Reprise en minuscule après un point ────────────────────────────────
+  // Cherchée sur le texte continu, pour la même raison que la ponctuation
+  // fusionnée : le découpage en phrases efface la jointure.
+  (continu.match(/\p{L}{2,}[.!?]\s+\p{Ll}\p{L}+/gu) || []).forEach((m) => {
+    const avant = m.split(/[.!?]/u)[0];
+    if (ABREVIATIONS.includes(avant)) return;
+    // Un nombre décimal ou une version (« 4.6 millions ») n'est pas une reprise.
+    if (/\d/u.test(m)) return;
+    ajoute('minuscule', LIGNE_EXTRAIT(continu, m), m.trim());
+  });
+
+  return out;
+};
+
+/** Libellés des motifs — partagés par le panneau et le prompt de correction. */
+export const MOTIFS_COUPURE = {
+  suspendue:   'Phrase finissant sur un mot qui exige une suite',
+  ponctuation: 'Ponctuation fusionnée (« complète., elle »)',
+  minuscule:   'Reprise en minuscule après un point',
+};
+
+/**
  * Nombre maximal de H2 pouvant porter le mot-clé EXACT.
  *
  * Mesuré sur un article réel le 2026-08-17 : **8 H2 sur 9** portaient la forme
@@ -289,6 +421,15 @@ export const detectStylePatterns = (html = '') => {
   const ajoute = (id, label, hint, count, exemples, extras = null) => {
     if (count > 0) findings.push({ id, label, hint, count, exemples: exemples.slice(0, MAX_EXEMPLES), ...(extras || {}) });
   };
+
+  // 0. PHRASES AMPUTÉES — en PREMIER, avant les verbes fades.
+  // Une phrase amputée n'est pas un défaut de style : c'est du texte illisible.
+  // La ranger onzième aurait reproduit le travers que l'audit reproche aux
+  // articles (la réponse attendue reléguée en 16e position sur 22).
+  const coupees = phrasesCoupees(html);
+  ajoute('coupees', 'Phrases coupées ou amputées',
+    'Un mot manque ou la ponctuation a fusionné : à relire mot à mot.',
+    coupees.length, coupees);
 
   // 1. Verbes interdits
   const verbes = chercheTermes(phrases, VERBES_INTERDITS);
