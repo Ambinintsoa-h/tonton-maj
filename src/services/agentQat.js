@@ -17,8 +17,11 @@ import {
   unwrapForbiddenInternalLinks,
 } from '../utils/internalWeave';
 import { listArticleImages, carryOverImages } from '../utils/imageCarry';
+// R5 — le gras de l'article d'origine ne disparaît pas (module AUTONOME).
+import { carryOverBold } from '../utils/boldCarry';
 import {
-  phrasesTropLongues, MOTS_MAX_PHRASE,
+  phrasesTropLongues, MOTS_MAX_PHRASE, MOTS_MAX_TITRE,
+  VERBES_INTERDITS, PARTICIPES, CLICHES, META,
   suroptimisationMotCle, MAX_H2_AVEC_MOT_CLE, elisionsOrphelines,
 } from '../utils/stylePatterns';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
@@ -99,7 +102,7 @@ const MIN_LIENS_ENTRANTS = 6;
  */
 const redactionConstraintsBlock = (targetKeyword = '') => `## ═══ CONTRAINTES RÉDACTIONNELLES — NON NÉGOCIABLES ═══
 
-### 1. AUCUNE phrase de plus de ${MOTS_MAX_PHRASE} mots
+### 2. AUCUNE phrase de plus de ${MOTS_MAX_PHRASE} mots
 C'est un PLAFOND, pas une moyenne. Compte les mots de chaque phrase avant de
 passer à la suivante. Une phrase qui dépasse se coupe en deux — c'est toujours
 possible, et le texte y gagne.
@@ -108,7 +111,7 @@ Ce n'est pas une préférence de style : les phrases longues sont le premier dé
 relevé sur les articles publiés, et elles sont corrigées à la main ensuite. Varie
 les rythmes EN DESSOUS de ${MOTS_MAX_PHRASE} mots (5, 12, 18), jamais au-dessus.
 
-### 2. Mets en GRAS les mots importants liés au mot-clé
+### 1. PRIORITÉ HAUTE — mets en GRAS les mots importants liés au mot-clé
 ${targetKeyword
     ? `Mot-clé principal : « ${targetKeyword} ».`
     : 'Mot-clé principal : celui du brief ci-dessus.'}
@@ -124,6 +127,12 @@ Bornes, à respecter — un texte tout en gras ne met plus rien en avant :
   \`<a>\` — le lien a déjà son propre repère visuel ;
 - le même terme n'est pas mis en gras à chacune de ses occurrences : la première
   fois qu'il compte, dans la section où il compte.
+
+**REPRENDS LE GRAS DE L'ARTICLE D'ORIGINE.** Tout mot ou groupe de mots déjà
+enveloppé dans \`<strong>\` ou \`<b>\` avant la réécriture doit le rester, même si
+tu reformules la phrase autour. Ce balisage est un choix éditorial déjà validé :
+le perdre est une régression silencieuse. Un contrôle technique le remet ensuite,
+mais ne compte pas dessus — il ne sait pas replacer ce que tu as réécrit.
 
 ### 3. NE SUROPTIMISE PAS le mot-clé
 ${targetKeyword ? `Mot-clé : « ${targetKeyword} ».` : ''}
@@ -148,7 +157,25 @@ paragraphe — et **c'est tout**. Ailleurs, tu emploies des variantes.
 Quand tu places une ancre imposée, **adapte les mots autour**. L'ancre est
 intouchable, la phrase qui l'accueille ne l'est pas : « face à l'ardoise » devient
 « face à la toiture en ardoise », jamais « face à l' toiture en ardoise ». Relevé
-deux fois sur un article réel — une apostrophe orpheline se voit à la lecture.`;
+deux fois sur un article réel — une apostrophe orpheline se voit à la lecture.
+
+### 5. TOURNURES QUI SERONT COMPTÉES APRÈS — ne les écris pas
+La relecture (phase 4) recense mécaniquement ce qui suit, et le rédacteur corrige
+à la main, un point à la fois. Sur un article réel : **35 points sur 4 règles**.
+Chaque occurrence évitée ici est une correction manuelle en moins.
+
+- **Verbes vagues INTERDITS** — remplace par un verbe précis et concret :
+  ${VERBES_INTERDITS.join(', ')}
+- **Participe présent en tête de proposition** — conjugue le verbe (« qui permet »,
+  « il évite ») plutôt que : ${PARTICIPES.join(', ')}
+- **Adverbes en -ment** : aucun. Un mot plus précis, ou rien.
+- **Voix passive avec agent** (« est indexée par Google ») → sujet en action.
+- **Tirets cadratins et demi-cadratins** (— –) : virgule, deux points, ou deux phrases.
+- **Titres de plus de ${MOTS_MAX_TITRE} mots** : raccourcis-les.
+- **Une seule parenthèse par paragraphe** au maximum.
+- **Clichés bannis** : ${CLICHES.map((c) => `« ${c} »`).join(', ')}
+- **Méta-commentaires** — n'annonce ni l'article ni son plan :
+  ${META.map((m) => `« ${m} »`).join(', ')}`;
 
 /**
  * Extrait un objet JSON d'une réponse Claude, même entourée de texte ou de
@@ -1132,9 +1159,25 @@ N'ajoute aucun AUTRE lien externe.`;
         onStep(`⚠️ ${withImages.missing.length} image(s) d'origine non replacée(s) (le texte qui les entourait a disparu) — signalées, génération conservée.`);
       }
 
+      // ── R5 — le GRAS d'origine est remis, DÉTERMINISTE et NON BLOQUANT ──────
+      // EN DERNIER, après R1/R2/R4 : on baliserait sinon des mots que le code
+      // s'apprête à réécrire. Un <strong> est un choix éditorial déjà validé —
+      // le perdre à la réécriture est une régression que personne ne voit.
+      // JAMAIS un rejet : un 4e motif écraserait `currentUser` et ferait perdre
+      // la consigne de reprise du verrou externe (règle 8).
+      const withBold = carryOverBold(sourceHtml, withImages.html);
+      if (withBold.restored.length) {
+        onStep(`🅱️ ${withBold.restored.length} terme(s) en gras de l'article d'origine remis en place.`);
+      }
+      if (withBold.missing.length) {
+        onStep(`⚠️ ${withBold.missing.length} terme(s) en gras d'origine non replacé(s) (les mots ne figurent plus dans le texte) — signalés, génération conservée.`);
+      }
+
       sanitized = {
         ...check,
-        html: withImages.html,
+        html: withBold.html,
+        restoredBold: withBold.restored,
+        missingBold: withBold.missing,
         restoredImages: withImages.restored,
         missingImages: withImages.missing,
         missingInternal: carried.missing,

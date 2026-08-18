@@ -86,7 +86,7 @@ const paragraphesDe = (html = '') => {
 // Chaque verbe interdit est décliné : le skill nomme l'infinitif, le texte porte
 // des formes conjuguées. On reste sur les formes courantes plutôt que sur une
 // conjugaison complète, qui produirait des faux positifs (« restaurant »…).
-const VERBES_INTERDITS = [
+export const VERBES_INTERDITS = [
   'offrir', 'offre', 'offres', 'offrent', 'offrait', 'offraient', 'offert', 'offerte',
   'devenir', 'devient', 'deviennent', 'devenu', 'devenue', 'devenait',
   'résider', 'réside', 'résident', 'résidait',
@@ -97,20 +97,20 @@ const VERBES_INTERDITS = [
   'constituer', 'constitue', 'constituent', 'constituait',
 ];
 
-const PARTICIPES = [
+export const PARTICIPES = [
   'offrant', 'évitant', 'constituant', 'permettant', 'garantissant', 'proposant',
   'apportant', 'utilisant', 'disposant', 'assurant', 'facilitant', 'optimisant',
   'générant', 'améliorant', 'nécessitant', 'représentant', 'bénéficiant',
   'comportant', 'affichant', 'entraînant',
 ];
 
-const CLICHES = [
+export const CLICHES = [
   "à l'ère du numérique", 'il est crucial', 'plongeons dans', 'dans un monde où',
   'plus que jamais', 'force est de constater', 'il convient de', 'en conclusion',
   'à noter que', 'de nos jours', 'incontournable',
 ];
 
-const META = [
+export const META = [
   'il est important de noter', 'cet article', 'dans cet article', 'nous allons voir',
   'comme nous l\'avons vu', 'il faut savoir que', 'notons que',
 ];
@@ -122,7 +122,12 @@ const META = [
  * on aurait signalé au rédacteur des phrases qu'on n'avait jamais interdites.
  */
 export const MOTS_MAX_PHRASE = 20;
-const MOTS_MAX_TITRE  = 10;
+/**
+ * Plafond de longueur d'un titre. EXPORTÉ pour la même raison que
+ * MOTS_MAX_PHRASE : la consigne de génération et la détection de la phase 4
+ * doivent porter LE MÊME nombre.
+ */
+export const MOTS_MAX_TITRE = 10;
 
 /**
  * Phrases dépassant le plafond, dans un fragment HTML. Sert à VÉRIFIER après la
@@ -237,8 +242,8 @@ export const detectStylePatterns = (html = '') => {
   const paras   = paragraphesDe(html);
   const findings = [];
 
-  const ajoute = (id, label, hint, count, exemples) => {
-    if (count > 0) findings.push({ id, label, hint, count, exemples: exemples.slice(0, MAX_EXEMPLES) });
+  const ajoute = (id, label, hint, count, exemples, extras = null) => {
+    if (count > 0) findings.push({ id, label, hint, count, exemples: exemples.slice(0, MAX_EXEMPLES), ...(extras || {}) });
   };
 
   // 1. Verbes interdits
@@ -282,9 +287,16 @@ export const detectStylePatterns = (html = '') => {
     .map(p => ({ extrait: p, mots: p.split(/\s+/).length }))
     .filter(o => o.mots > MOTS_MAX_PHRASE)
     .sort((a, b) => b.mots - a.mots);
+  // POURCENTAGE affiché à côté du décompte : « 16 » ne dit pas si l'article est
+  // à reprendre ou presque bon. 16 phrases sur 92 (17 %) et 16 sur 20 (80 %) ne
+  // demandent pas le même travail. Dénominateur = la PROSE seule, le même que
+  // celui du décompte — un pourcentage calculé sur un autre total mentirait.
+  const pctLongues = phrasesProse.length
+    ? Math.round((longues.length / phrasesProse.length) * 100)
+    : 0;
   ajoute('phrases', `Phrases de plus de ${MOTS_MAX_PHRASE} mots`,
-    `${longues.length} sur ${phrasesProse.length} phrases rédigées (tableaux, listes et FAQ exclus). Couper en deux, ou raccourcir.`,
-    longues.length, longues);
+    `${longues.length} sur ${phrasesProse.length} phrases rédigées, soit ${pctLongues} % (tableaux, listes et FAQ exclus). Couper en deux, ou raccourcir.`,
+    longues.length, longues, { pct: pctLongues, base: phrasesProse.length });
 
   // 6. Tirets cadratins et demi-cadratins
   const cadratins = phrases.filter(p => /[—–]/.test(p));

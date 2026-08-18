@@ -88,9 +88,28 @@ describe('contraintes rédactionnelles en dur dans le prompt de refonte', () => 
 
   test('le gras sémantique nomme le mot-clé — sinon la consigne ne guide rien', async () => {
     const p = await promptDeRefonte();
-    expect(p).toMatch(/Mets en GRAS les mots importants liés au mot-clé/);
+    expect(p).toMatch(/PRIORITÉ HAUTE — mets en GRAS les mots importants liés au mot-clé/);
     expect(p).toContain('isolation phonique plafond');   // le mot-clé du brief
     expect(p).toMatch(/<strong>/);
+  });
+
+  // ── R5 (demande d'Andrianina, août 2026) ──────────────────────────────────
+  test('le gras passe en PRIORITÉ HAUTE, et le gras d\'origine doit être repris', async () => {
+    const p = await promptDeRefonte();
+    expect(p).toMatch(/### 1\. PRIORITÉ HAUTE — mets en GRAS/);
+    expect(p).toMatch(/REPRENDS LE GRAS DE L'ARTICLE D'ORIGINE/);
+  });
+
+  test('les tournures comptées en phase 4 sont listées AVANT la génération', async () => {
+    // Objectif : ne plus corriger 35 points à la main après coup. Les listes
+    // viennent de stylePatterns.js — MÊMES littéraux que la détection, donc la
+    // consigne et le décompte ne peuvent pas diverger.
+    const p = await promptDeRefonte();
+    expect(p).toMatch(/TOURNURES QUI SERONT COMPTÉES APRÈS/);
+    expect(p).toMatch(/Adverbes en -ment/);
+    expect(p).toContain('constitue');            // un verbe interdit réel de la liste
+    expect(p).toContain('permettant');           // un participe réel de la liste
+    expect(p).toMatch(/Titres de plus de 10 mots/);
   });
 
   test('le gras est BORNÉ — un texte tout en gras ne met plus rien en avant', async () => {
