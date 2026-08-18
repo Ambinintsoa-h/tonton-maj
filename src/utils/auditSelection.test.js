@@ -10,7 +10,7 @@
 import {
   AUDIT_BLOCKS, SELECTABLE_FIELDS, FACTUAL_FIELDS, ALWAYS_SENT_FIELDS,
   defaultAuditSelection, filterAuditBySelection, isSelectionEmpty,
-  unselectedFactualFields, selectedPriorities,
+  unselectedFactualFields, selectedPriorities, auditItemLines, sourceHost,
 } from './auditSelection';
 import { buildGenerationPrompt, buildFreshnessSuggestion } from './generationPrompt';
 import { SCOPE_SIMPLE, SCOPE_REFONTE } from '../constants/majPhases';
@@ -216,5 +216,60 @@ describe('suggestion de fraîcheur pré-remplie', () => {
       audit: gros, scope: SCOPE_SIMPLE, selection: defaultAuditSelection(SCOPE_SIMPLE),
     });
     expect(txt.length).toBeLessThanOrEqual(1500);
+  });
+});
+
+describe('les cases MONTRENT les faits, pas seulement leur nombre', () => {
+  // Le defaut vidait le dispositif de son sens : on demandait de TRANCHER sur un
+  // compteur (« 4 »). Decider sans voir de quoi il s'agit, ce n'est pas decider.
+  it('recent_context : les deux listes sont listees et DISTINGUEES', () => {
+    const l = auditItemLines(AUDIT, 'recent_context');
+    expect(l).toHaveLength(2);
+    // Une donnee perimee n'est pas un developpement manquant : les fondre sans le
+    // dire ferait lire « 4 » comme quatre choses de meme nature.
+    expect(l[0].prefixe).toBe('Périmé');
+    expect(l[1].prefixe).toBe('Manquant');
+    expect(l[0].text).toContain('64/100');
+    expect(l[1].text).toContain('16 février 2027');
+  });
+
+  it('la NUANCE et la SOURCE sont portees par la ligne', () => {
+    // La nuance est le point EXACT qui a lache en production : « a confirmer »
+    // noye dans un JSON, et le modele a ecrit « date confirmee au Comic-Con ».
+    const l = auditItemLines(AUDIT, 'recent_context');
+    expect(l[1].nuance).toBe('à confirmer');
+    expect(l[1].source).toBe('playstation.com');
+    expect(l[0].source).toBe('metacritic.com');
+  });
+
+  it('les listes de chaines simples passent telles quelles', () => {
+    expect(auditItemLines(AUDIT, 'seo_geo_gaps')).toEqual([
+      { text: 'mot-clé absent du H1', nuance: '', source: '' },
+    ]);
+    expect(auditItemLines(AUDIT, 'tldr')[0].text).toBe('trois ordres possibles');
+  });
+
+  it('les objets factuels sont rendus lisibles', () => {
+    expect(auditItemLines(AUDIT, 'a_supprimer')[0].text).toBe('chiffre faux');
+    expect(auditItemLines(AUDIT, 'sources_check')[0].text).toBe('76,5 millions de ventes');
+  });
+
+  it('une forme INATTENDUE est montree, jamais silencieusement ignoree', () => {
+    // Le modele rend parfois du texte libre la ou le schema prevoit un objet.
+    // L'ignorer afficherait « 4 » avec deux lignes en dessous : pire qu'imparfait.
+    const l = auditItemLines({ seo_geo_gaps: [{ inattendu: 'un manque decrit autrement' }] }, 'seo_geo_gaps');
+    expect(l[0].text).toBe('un manque decrit autrement');
+  });
+
+  it('rien a montrer ne fabrique rien', () => {
+    expect(auditItemLines(null, 'recent_context')).toEqual([]);
+    expect(auditItemLines({}, 'a_supprimer')).toEqual([]);
+    expect(auditItemLines({ recent_context: {} }, 'recent_context')).toEqual([]);
+  });
+
+  it('sourceHost reduit l\'URL a son hote, et encaisse une URL cassee', () => {
+    expect(sourceHost('https://www.metacritic.com/game/x?a=1')).toBe('metacritic.com');
+    expect(sourceHost('pas-une-url')).toBe('');
+    expect(sourceHost(null)).toBe('');
   });
 });

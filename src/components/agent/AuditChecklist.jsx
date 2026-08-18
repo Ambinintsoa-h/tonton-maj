@@ -11,9 +11,11 @@
  * liens internes — tout cela s'applique sans recours et n'apparaît pas ici. Les
  * cases pilotent le CONTENU, rien d'autre (décision Andrianina, août 2026).
  */
+import { useState } from 'react';
 import { AlertTriangle, ShieldCheck, Clock, ListChecks, Sparkles } from 'lucide-react';
 import {
   AUDIT_BLOCKS, FACTUAL_FIELDS, isFieldSelected, selectedPriorities, isSelectionEmpty,
+  auditItemLines,
 } from '../../utils/auditSelection';
 import { SCOPE_SIMPLE, MIN_WORDS_ADDED_SIMPLE } from '../../constants/majPhases';
 
@@ -49,6 +51,60 @@ const compte = (audit, field) => {
   return v ? 1 : 0;
 };
 
+/** Au-delà, la liste est repliée : on montre pour décider, pas pour noyer. */
+const VISIBLES = 3;
+
+/**
+ * LES FAITS TROUVÉS PAR L'AUDIT, EN CLAIR SOUS LA CASE.
+ *
+ * Les cases n'affichaient qu'un compteur — « 4 », « 10 ». Or cocher, c'est
+ * décider qu'une consigne part au modèle : décider sur un nombre, sans voir de
+ * quoi il s'agit, ce n'est pas décider, c'est deviner (demande d'Andrianina,
+ * 18 août 2026).
+ *
+ * La NUANCE est mise en avant, en ambre : c'est le point exact qui a lâché en
+ * production — « à confirmer » noyé dans un JSON de dix champs, et le modèle a
+ * écrit « date confirmée au Comic-Con le 24 juillet ». Celui qui coche doit la
+ * voir. La SOURCE est réduite à son nom d'hôte : un fait sans source affichée est
+ * un fait qu'on croit sur parole.
+ */
+const Faits = ({ lignes, ouvert, onToggle }) => {
+  if (!lignes.length) return null;
+  const montres = ouvert ? lignes : lignes.slice(0, VISIBLES);
+  const reste = lignes.length - montres.length;
+  return (
+    <ul className="ml-6 mt-0.5 mb-1 space-y-1">
+      {montres.map((l, i) => (
+        <li key={i} className="text-[10px] leading-snug text-gray-500">
+          {l.prefixe && (
+            <span className="mr-1 rounded bg-gray-100 px-1 py-px text-[9px] font-semibold uppercase text-gray-500">
+              {l.prefixe}
+            </span>
+          )}
+          <span className="text-gray-600">{l.text}</span>
+          {l.nuance && (
+            <span className="ml-1 rounded bg-amber-100 px-1 py-px text-[9px] font-semibold text-amber-800">
+              {l.nuance}
+            </span>
+          )}
+          {l.source && <span className="ml-1 text-gray-400">· {l.source}</span>}
+        </li>
+      ))}
+      {(reste > 0 || ouvert) && (
+        <li>
+          <button
+            type="button"
+            onClick={onToggle}
+            className="text-[10px] font-medium text-gray-400 underline hover:text-gray-700"
+          >
+            {ouvert ? 'replier' : `+ ${reste} autre${reste > 1 ? 's' : ''}`}
+          </button>
+        </li>
+      )}
+    </ul>
+  );
+};
+
 const Case = ({ checked, onChange, disabled, label, count, ton = 'gray' }) => (
   <label
     className={`flex items-start gap-2 py-1 cursor-pointer group ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
@@ -78,6 +134,13 @@ export default function AuditChecklist({
   scope = SCOPE_SIMPLE,
   disabled = false,
 }) {
+  // Replis par champ. Local au composant, et DÉLIBÉRÉMENT pas dans le brief
+  // persisté : c'est un confort de lecture, contrairement à la SÉLECTION, qui
+  // pilote la génération et doit survivre à un F5 (leçon `agent.targetKeyword`).
+  // Déclaré avant tout `return` — un hook conditionnel casserait l'ordre d'appel.
+  const [ouverts, setOuverts] = useState({});
+  const basculer = (f) => setOuverts((o) => ({ ...o, [f]: !o[f] }));
+
   // Pas d'audit : rien à cocher. On ne montre pas une liste vide qui laisserait
   // croire que l'analyse n'a rien trouvé — un audit absent est un ÉCHEC, traité
   // en amont (phase 1), pas une liste sans case.
@@ -143,15 +206,24 @@ export default function AuditChecklist({
             {champs.map((f) => {
               if (f !== 'priority_actions') {
                 return (
-                  <Case
-                    key={f}
-                    checked={isFieldSelected(selection, f)}
-                    onChange={(on) => set({ [f]: on })}
-                    disabled={disabled}
-                    label={LIBELLES[f]}
-                    count={compte(audit, f)}
-                    ton={factuel ? 'red' : 'gray'}
-                  />
+                  <div key={f}>
+                    <Case
+                      checked={isFieldSelected(selection, f)}
+                      onChange={(on) => set({ [f]: on })}
+                      disabled={disabled}
+                      label={LIBELLES[f]}
+                      count={compte(audit, f)}
+                      ton={factuel ? 'red' : 'gray'}
+                    />
+                    {/* Les faits sont montres COCHE OU NON : c'est en les lisant
+                        qu'on decide de cocher. Ne les afficher qu'une fois coche
+                        inverserait l'ordre de la decision. */}
+                    <Faits
+                      lignes={auditItemLines(audit, f)}
+                      ouvert={!!ouverts[f]}
+                      onToggle={() => basculer(f)}
+                    />
+                  </div>
                 );
               }
               // `priority_actions` se coche PAR PRIORITÉ : c'est la granularité
