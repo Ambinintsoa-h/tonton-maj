@@ -15,6 +15,7 @@
 import {
   findPassageInText, findBlockForPassage, rangeForPassage, wrapRange,
 } from './locatePassage';
+import { htmlToText } from './htmlText';
 
 /** Compare deux textes en ignorant les différences d'espaces et d'apostrophes. */
 const norm = (s) => String(s || '')
@@ -31,12 +32,12 @@ export const MARK_CLASS_OK = 'sugg-applique';
 
 /** Texte nu d'un fragment : une suggestion peut contenir du balisage
  *  (`<p>`, `<strong>`), alors qu'on cherche dans des NŒUDS TEXTE — comparer avec
- *  les balises ne trouverait jamais rien. */
-const texteNu = (frag) => {
-  const d = document.createElement('div');
-  d.innerHTML = String(frag || '');
-  return d.textContent || '';
-};
+ *  les balises ne trouverait jamais rien.
+ *
+ *  Implémentation déplacée dans `htmlText.js` le 18 août 2026, quand il est apparu
+ *  qu'elle était appliquée à `updated` mais PAS à `original` — voir le commentaire
+ *  de `cibles`, plus bas. */
+const texteNu = htmlToText;
 
 /**
  * @param {string} html         article issu de la phase 2
@@ -148,9 +149,15 @@ export const markSuggestions = (html, suggestions = [], appliquees = []) => {
     // NOUVEAU en priorité, avec l'ancien en repli : le volet de gauche est un
     // instantané qui n'a pas toujours pu être réécrit (le rédacteur a pu retoucher
     // le passage entre-temps). Dans les deux cas c'est VERT et jamais une anomalie.
+    // `texteNu` sur les DEUX côtés. Il ne l'était que sur `updated` — or `original`
+    // est le SEUL cité tant que la suggestion n'est pas appliquée, c'est-à-dire
+    // dans le cas normal. L'audit citant ses passages avec leur balisage
+    // (`<li><strong>Le bilan</strong> : …`), toute suggestion portant sur un bloc
+    // balisé était déclarée « passage cité mais introuvable » — relevé en
+    // production le 18 août 2026 sur deux suggestions du même article.
     const cibles = (applique
-      ? [norm(texteNu(s && s.updated)), norm(s && s.original)]
-      : [norm(s && s.original)]).filter(Boolean);
+      ? [norm(texteNu(s && s.updated)), norm(texteNu(s && s.original))]
+      : [norm(texteNu(s && s.original))]).filter(Boolean);
     // Aucun passage d'origine = ajout pur : il n'y a rien à repérer, ce n'est
     // pas un échec. Les mélanger dans `missed` faisait passer une situation
     // normale pour une anomalie.
