@@ -517,3 +517,184 @@ export const briefLinkReportLine = ({
   }
   return parts.join(' — ');
 };
+
+// ── R6 — LES RENVOIS ÉCRITS PAR LE MODÈLE DEVIENNENT DES ENCARTS ─────────────
+//
+// Ajouté le 19 août 2026, après vérification de la PRODUCTION au navigateur.
+//
+// Le constat qui a motivé ce code, et pourquoi le correctif précédent ne
+// suffisait pas. R2 pose ses propres clauses dans un `<p class="lien-connexe">`
+// depuis le 18/08 — mais le renvoi qu'Andrianina avait signalé n'en était pas
+// une. Relevé tel quel sur l'article publié :
+//
+//   …Le résultat dépasse toutes les prévisions. À lire aussi les
+//   <a href="…">actualités PlayStation 5</a>.</p>
+//
+// « À lire aussi LES », sans deux-points, et AUCUN `data-lien-redige` dans toute
+// la page : c'est le MODÈLE qui l'a écrit, pas le code. Corriger `writeClause`
+// ne pouvait donc rien y changer. Le renvoi restait collé en fin de phrase —
+// « un peu orphelin », le défaut d'origine, intact.
+//
+// Ce que fait ce passage : il DÉPLACE la clause dans son propre encart. Ce n'est
+// pas une réécriture — aucun mot n'est ajouté, aucun mot n'est retiré, le texte
+// de l'ancre est conservé au caractère près. Seule l'amorce est normalisée sur
+// celle du code (`À lire aussi : `), pour que les renvois du modèle et ceux du
+// code se présentent de la même façon.
+//
+// Trois garde-fous, chacun pour une raison précise :
+//   • INTERNE UNIQUEMENT. Déplacer un lien EXTERNE, c'est le sortir de sa phrase
+//     — et `enforceExternalLinkPolicy` a déjà validé le texte à ce stade, donc
+//     personne ne le verrait (même raisonnement que R2a, règle 8).
+//   • ZONES INTERDITES ÉCARTÉES, via la source unique `linkZones.js` : on ne
+//     fabrique pas un encart dans une FAQ ou une cellule de tableau.
+//   • UN SEUL LIEN dans la clause. Deux liens, et la découpe deviendrait un
+//     arbitrage sur le sens de la phrase : on s'abstient plutôt que de deviner.
+
+/**
+ * Amorces de renvoi que le modèle emploie réellement. Liste EXPLICITE et courte,
+ * volontairement : une détection large (« voir », « lire ») attraperait de la
+ * prose ordinaire et découperait des phrases qui n'ont rien d'un renvoi.
+ * L'accent est optionnel — le modèle écrit parfois « A lire aussi ».
+ */
+const RENVOI_LEAD_RX =
+  /(?:^|[.!?…]\s+|\s—\s|\s–\s)((?:À|A)\s+(?:lire|découvrir|voir)\s+(?:aussi|également)|(?:Lire|Voir)\s+(?:aussi|également))\b/giu;
+
+/** Le paragraphe est-il DÉJÀ un encart de renvoi ? (idempotence) */
+const estEncart = (p) => !!p && p.classList && p.classList.contains(WRITTEN_BLOCK_CLASS);
+
+/**
+ * Nœuds texte de `el` avec leur position de DÉPART dans `el.textContent`.
+ *
+ * Nécessaire parce que la position de l'amorce est trouvée sur le TEXTE À PLAT,
+ * alors que la découpe se fait dans le DOM : les balises inline (`<strong>`, un
+ * `<a>`) découpent les nœuds, et aucun ne contient à lui seul la clause.
+ */
+const noeudsTexteAvecOffset = (el) => {
+  const out = [];
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let n;
+  let pos = 0;
+  while ((n = walker.nextNode())) {
+    out.push({ node: n, debut: pos });
+    pos += (n.nodeValue || '').length;
+  }
+  return out;
+};
+
+/**
+ * Plage allant de l'offset `debut` (en caractères de `textContent`) jusqu'à la
+ * FIN de `el`. Rend null si l'offset ne tombe dans aucun nœud texte.
+ */
+const rangeDepuis = (el, debut) => {
+  const noeuds = noeudsTexteAvecOffset(el);
+  const cible = noeuds.find(({ node, debut: d }) => debut >= d && debut <= d + (node.nodeValue || '').length);
+  if (!cible) return null;
+  const range = document.createRange();
+  try {
+    range.setStart(cible.node, debut - cible.debut);
+    range.setEnd(el, el.childNodes.length);
+  } catch { return null; }
+  return range;
+};
+
+/** Offset de DÉPART d'un élément dans le `textContent` de son ancêtre. */
+const offsetDe = (racine, el) => {
+  const noeuds = noeudsTexteAvecOffset(racine);
+  const premier = noeuds.find(({ node }) => el.contains(node));
+  return premier ? premier.debut : -1;
+};
+
+/**
+ * Promeut en encart les renvois inline écrits par le modèle.
+ *
+ * @param {string} html
+ * @param {string} articleUrl  sans elle, toute URL absolue est traitée comme
+ *   EXTERNE et laissée en place — protection maximale, convention du projet.
+ * @returns {{ html: string, promoted: Array<{anchor:string, url:string}> }}
+ */
+export const promoteInlineRenvois = (html = '', articleUrl = '') => {
+  if (!html || typeof document === 'undefined') return { html, promoted: [] };
+  const root = document.createElement('div');
+  root.innerHTML = html;
+  const zones = forbiddenLinkZones(root);
+  const promoted = [];
+
+  Array.from(root.querySelectorAll('p')).forEach((p) => {
+    if (estEncart(p)) return;                          // déjà fait
+    if (isBlocked(p, zones)) return;                   // FAQ, tableau, citation…
+
+    const texte = p.textContent || '';
+    RENVOI_LEAD_RX.lastIndex = 0;
+    const m = RENVOI_LEAD_RX.exec(texte);
+    if (!m) return;
+
+    // La clause commence à l'amorce et court jusqu'à la fin du paragraphe : c'est
+    // la forme que le modèle produit, et la seule qu'on sache découper sans
+    // toucher au sens. Une amorce en MILIEU de phrase suivie d'autre chose n'est
+    // pas traitée.
+    const debut = m.index + m[0].indexOf(m[1]);
+
+    // Un seul lien, et il doit être DANS la clause.
+    const liens = Array.from(p.querySelectorAll('a[href]'));
+    if (liens.length !== 1) return;
+    const a = liens[0];
+    const url = a.getAttribute('href') || '';
+    if (!url) return;
+    // INTERNE uniquement (règle 8). `filterSameSiteLinks` porte toute la logique
+    // de domaine, URL protocol-relative comprise.
+    if (!filterSameSiteLinks([{ anchor: 'x', url }], articleUrl).length) return;
+
+    // La clause doit être en FIN de paragraphe, et il doit y avoir du texte AVANT
+    // elle : sans texte avant, le renvoi n'est pas orphelin, il est déjà seul dans
+    // son bloc — on se contente alors de le marquer comme encart, plus bas.
+    const avant = texte.slice(0, debut).trim();
+
+    // Le lien doit commencer APRÈS l'amorce, donc être entièrement dans la portion
+    // déplacée. Vérifié sur les offsets plutôt qu'avec `Range.comparePoint`, dont
+    // le support varie sous jsdom : si le `<a>` commençait avant, la découpe le
+    // couperait en deux et produirait du HTML cassé.
+    if (offsetDe(p, a) < debut) return;
+
+    const range = rangeDepuis(p, debut);
+    if (!range) return;
+
+    const bloc = document.createElement('p');
+    bloc.setAttribute('class', WRITTEN_BLOCK_CLASS);
+    const label = document.createElement('strong');
+    label.textContent = WRITTEN_CLAUSE_LEAD;
+    bloc.appendChild(label);
+
+    // On reprend le CONTENU de la clause en retirant sa seule amorce : le reste
+    // (« les », « notre dossier sur »…) est de la prose du modèle, on la garde.
+    const contenu = range.extractContents();
+    const jeter = m[1];
+    const premier = contenu.firstChild;
+    if (premier && premier.nodeType === 3 && premier.nodeValue.trimStart().startsWith(jeter)) {
+      // `WRITTEN_CLAUSE_LEAD` finit DÉJÀ par une espace : ne pas en rajouter,
+      // sinon le HTML publié porte « À lire aussi :  les » (double espace).
+      premier.nodeValue = premier.nodeValue.trimStart().slice(jeter.length).replace(/^\s*:?\s*/, '');
+    }
+    bloc.appendChild(contenu);
+    if (p.parentNode) p.parentNode.insertBefore(bloc, p.nextSibling);
+
+    // Le paragraphe d'origine peut se retrouver vide (le renvoi occupait tout le
+    // bloc) : il n'a alors plus d'objet, et un `<p></p>` vide se voit à l'écran.
+    if (!avant) {
+      p.remove();
+    } else {
+      // L'espace qui séparait la phrase de l'amorce est restée derrière : sans ce
+      // nettoyage, le paragraphe publié finit par « prévisions. » avec une espace
+      // traînante avant la balise fermante.
+      const dernier = p.lastChild;
+      if (dernier && dernier.nodeType === 3) {
+        dernier.nodeValue = dernier.nodeValue.replace(/\s+$/, '');
+        if (!dernier.nodeValue) p.removeChild(dernier);
+      }
+      p.normalize();
+    }
+
+    promoted.push({ anchor: (a.textContent || '').trim(), url });
+  });
+
+  return { html: promoted.length ? root.innerHTML : html, promoted };
+};
