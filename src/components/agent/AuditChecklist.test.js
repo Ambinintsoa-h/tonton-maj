@@ -83,3 +83,35 @@ describe('les faits de l\'audit sont LISIBLES sous la case', () => {
     expect(screen.queryByText(/autres$/)).not.toBeInTheDocument();
   });
 });
+
+describe('L ECRAN NE CONTREDIT JAMAIS CE QUI PART', () => {
+  // Constate par un parcours complet en production le 19/08/2026, sur un article
+  // NEUF : les dix cases etaient decochees, et le prompt contenait pourtant
+  // « Ce que l audit demande de corriger » sans « ecarte par le redacteur ».
+  // `filterAuditBySelection(audit, null)` ne filtre RIEN : l audit partait en
+  // entier pendant que l ecran affichait le contraire. La trappe des cases
+  // decoratives, prise a l envers.
+  it('selection NULL : le bandeau dit que l audit part EN ENTIER', () => {
+    render(<AuditChecklist audit={AUDIT} selection={null} onChange={() => {}} scope={SCOPE_REFONTE} />);
+    expect(screen.getByText(/part EN ENTIER/)).toBeInTheDocument();
+    // Et il ne se confond pas avec « tout est decoche », qui est l inverse.
+    expect(screen.queryByText(/ne pèsera pas sur cette génération/)).not.toBeInTheDocument();
+  });
+
+  it('tout DECOCHE : message inverse, et pas celui de l audit entier', () => {
+    const vide = {
+      a_supprimer: false, sources_check: false, recent_context: false,
+      priority_actions: [], seo_geo_gaps: false, eeat_recommendations: false,
+      strategic_recommendation: false, tldr: false,
+    };
+    render(<AuditChecklist audit={AUDIT} selection={vide} onChange={() => {}} scope={SCOPE_REFONTE} />);
+    expect(screen.getByText(/ne pèsera pas sur cette génération/)).toBeInTheDocument();
+    expect(screen.queryByText(/part EN ENTIER/)).not.toBeInTheDocument();
+  });
+
+  it('selection normale : aucun des deux bandeaux', () => {
+    render(<Harnais scope={SCOPE_REFONTE} />);
+    expect(screen.queryByText(/part EN ENTIER/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ne pèsera pas sur cette génération/)).not.toBeInTheDocument();
+  });
+});
