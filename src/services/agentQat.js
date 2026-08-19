@@ -26,6 +26,7 @@ import {
 } from '../utils/stylePatterns';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import { auditAmpleurDecision } from '../constants/majPhases';
+import { stripUncertaintyMarkers, uncertaintyReportLine } from '../utils/uncertaintyMarkers';
 // Plafond de l'instruction — MÊME littéral que la saisie et le compteur
 // (utils/generationPrompt.js). Trois copies, c'est trois divergences possibles.
 import { MAX_INSTRUCTION_CHARS } from '../utils/generationPrompt';
@@ -1033,6 +1034,38 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
   // ce qui a manqué. Relancer un prompt IDENTIQUE reproduirait la même erreur.
   let currentUser = user;
 
+  // ── CE QUI PART RÉELLEMENT AU MODÈLE, DANS LA CONSOLE ─────────────────────
+  // Demande d'Andrianina, 19 août 2026 : « l'ensemble des règles envoyées à l'IA
+  // quand une génération est lancée — ça me permettra d'évaluer les résultats ».
+  //
+  // C'est le seul endroit où le prompt est CONNU EN ENTIER : skills du menu,
+  // contraintes tenues en dur, audit filtré par les cases, directives du
+  // rédacteur, brief. Le reconstituer de mémoire à partir du code est justement
+  // ce qui fait croire qu'une consigne est envoyée alors qu'elle ne l'est pas —
+  // on vient d'en corriger trois (gras jamais vérifié, `[à vérifier]` réintroduit,
+  // maillage forcé sur zéro paire).
+  //
+  // Le contenu est SEULEMENT lu, jamais reconstruit : le socle système porte
+  // `cache_control` et doit rester identique octet pour octet, sous peine
+  // d'invalider le cache de préfixe à chaque article.
+  try {
+    /* eslint-disable no-console */
+    console.groupCollapsed(
+      `%c[TONTON] Règles envoyées à l'IA — génération (${system.reduce((n, b) => n + (b.text || '').length, 0) + currentUser.length} car.)`,
+      'color:#6366f1;font-weight:bold',
+    );
+    system.forEach((bloc, i) => {
+      console.groupCollapsed(`SYSTÈME ${i + 1}/${system.length} — ${(bloc.text || '').length} car.${bloc.cache_control ? ' (mis en cache)' : ''}`);
+      console.log(bloc.text || '');
+      console.groupEnd();
+    });
+    console.groupCollapsed(`UTILISATEUR — ${currentUser.length} car. (audit filtré + directives + brief)`);
+    console.log(currentUser);
+    console.groupEnd();
+    console.groupEnd();
+    /* eslint-enable no-console */
+  } catch { /* la journalisation ne doit JAMAIS empêcher une génération */ }
+
   for (let attempt = 1; attempt <= 3 && !sanitized; attempt++) {
     try {
       const { text } = await callWithLiveText({
@@ -1142,6 +1175,22 @@ N'ajoute aucun AUTRE lien externe.`;
         onStep(`🔗 ${renvois.promoted.length} renvoi(s) « À lire aussi » collé(s) en fin de phrase par l'IA — déplacé(s) dans leur propre encart.`);
       }
       woven.html = renvois.html;
+
+      // ── R7 — LES MARQUEURS DE DOUTE NE PARTENT JAMAIS EN LIGNE ───────────────
+      // « Ne jamais mettre des : [à vérifier] etc. » (consigne d'Andrianina).
+      // Mesuré le 19/08 : l'article produit en portait TROIS, alors que l'audit
+      // avait mis en action P1 « Lever les mentions [à vérifier] » et que cette
+      // action était COCHÉE. Le modèle a lu la consigne puis en a écrit trois de
+      // plus — une consigne qu'on ne mesure jamais est une consigne dont on ne
+      // sait rien (même leçon que le gras et le plafond de 20 mots).
+      // On retire la MARQUE et on REMONTE la phrase : un `[à vérifier]` signale
+      // une affirmation non sourcée, et l'effacer en silence rendrait le doute
+      // invisible juste avant la publication.
+      const douteux = stripUncertaintyMarkers(woven.html);
+      if (douteux.removed.length) {
+        woven.html = douteux.html;
+        onStep(uncertaintyReportLine(douteux.removed));
+      }
 
       // CONSTAT : on ne croit ni le modèle (`ancres_placees` est une
       // auto-déclaration jamais vérifiée) ni le rapport du tissage — on RECOMPTE
