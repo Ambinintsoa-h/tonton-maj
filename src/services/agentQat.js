@@ -18,7 +18,7 @@ import {
 } from '../utils/internalWeave';
 import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 // R5 — le gras de l'article d'origine ne disparaît pas (module AUTONOME).
-import { carryOverBold, constatGras, GRAS_MIN_PAR_H2, GRAS_MAX_PAR_H2, GRAS_MAX_MOTS } from '../utils/boldCarry';
+import { carryOverBold, constatGras, GRAS_MIN_PAR_H2, GRAS_MAX_MOTS } from '../utils/boldCarry';
 import { runBoldPass } from './agentBold';
 import {
   phrasesTropLongues, MOTS_MAX_PHRASE, MOTS_MAX_TITRE,
@@ -1289,11 +1289,18 @@ N'ajoute aucun AUTRE lien externe.`;
       // Les DEUX sens de l'écart sont dits : sous le plancher, la section n'est pas
       // optimisée ; au-dessus du plafond, le gras ne met plus rien en avant.
       const gras = constatGras(withBold.html);
-      if (gras.sousPlancher || gras.surPlafond) {
-        const bouts = [];
-        if (gras.sousPlancher) bouts.push(`${gras.sousPlancher} sous ${GRAS_MIN_PAR_H2}`);
-        if (gras.surPlafond)   bouts.push(`${gras.surPlafond} au-dessus de ${GRAS_MAX_PAR_H2}`);
-        onStep(`🅰️ Gras : ${bouts.join(', ')} sur ${gras.sections.length} section(s) H2 — à ajuster en relecture.`);
+      // PLUS DE PLAFOND : le modèle juge le nombre (objection d'Andrianina, 19/08 —
+      // « il comprend le mot-clé et le contenu de l'article »). Ce qu'on annonce
+      // désormais, c'est le PLANCHER, qui reste structurel : une section H2 sans
+      // gras est un fragment muet pour un moteur génératif.
+      if (gras.sousPlancher) {
+        const titres = gras.sections.filter((x) => x.ecart === 'sous').map((x) => x.titre);
+        onStep(`🅰️ Gras : ${gras.sousPlancher} section(s) sous ${GRAS_MIN_PAR_H2} passage(s) sur ${gras.sections.length} — ${titres.slice(0, 2).join(', ')}${titres.length > 2 ? '…' : ''}`);
+      }
+      // COMPOSITION : le vrai défaut, celui que le plafond masquait. Une section à
+      // 11 passages dont 6 chiffres n'a pas un problème de nombre.
+      if (gras.sectionsChiffrees.length) {
+        onStep(`🅰️ Gras majoritairement CHIFFRÉ dans ${gras.sectionsChiffrees.length} section(s) (${gras.partChiffres} % sur tout l'article) — ${gras.sectionsChiffrees.slice(0, 2).join(', ')}${gras.sectionsChiffrees.length > 2 ? '…' : ''}`);
       }
       // Fautes franches, distinctes d'un écart de densité : le prompt les interdit.
       if (gras.dansTitre || gras.dansLien || gras.tropLongs) {
@@ -1310,6 +1317,18 @@ N'ajoute aucun AUTRE lien externe.`;
         restoredBold: withBold.restored,
         missingBold: withBold.missing,
         constatGras: gras,
+        // RAPPORT DE LA PASSE DE GRAS, PERSISTÉ. Les messages `onStep` disparaissent
+        // dès que la génération se termine — les étapes se replient et rien n'est
+        // conservé. Impossible alors de savoir ce que la passe a proposé ni ce
+        // qu'elle a rejeté : on pilotait à l'aveugle, exactement le travers qu'on
+        // corrige partout ailleurs. Ce champ voyage avec l'article.
+        boldPass: {
+          posed: passeGras.posed,
+          ecartes: passeGras.ecartes,
+          echecs: passeGras.echecs,
+          sansGras: passeGras.sansGras,
+          report: passeGras.report,
+        },
         restoredImages: withImages.restored,
         missingImages: withImages.missing,
         missingInternal: carried.missing,

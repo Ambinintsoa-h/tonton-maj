@@ -25,7 +25,7 @@
  * rejet de tout passage introuvable). Le jugement vient du modèle, les bornes
  * viennent du code : ni l'un ni l'autre seul n'y arrive.
  */
-import { GRAS_MIN_PAR_H2, GRAS_MAX_PAR_H2, GRAS_MAX_MOTS } from './boldCarry';
+import { GRAS_MIN_PAR_H2, GRAS_MAX_MOTS } from './boldCarry';
 
 const LIGNE = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
 
@@ -44,8 +44,12 @@ const LIGNE = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
  *   2. LE MOT-CLÉ ET SES VARIANTES : le signal de sujet. Une seule fois chacun.
  *   3. LES ENTITÉS du sujet (produits, versions, studios, normes) : elles
  *      alimentent la reconnaissance d'entités, donc l'association thématique.
- *   4. LES CHIFFRES DÉCISIFS en dernier — ils sont utiles et très citables, mais
- *      c'est la catégorie que le modèle sur-produit spontanément (19 sur 29).
+ *   4. LES CHIFFRES DÉCISIFS en DERNIER — utiles et très citables, mais c'est la
+ *      catégorie que le modèle sur-produit spontanément (19 sur 29, puis 26 sur 42).
+ *
+ * AUCUN PLAFOND n'est imposé au modèle depuis le 19/08 : il juge le nombre d'après
+ * la longueur et la densité de la section. Le code ne borne que ce qui ne demande
+ * aucun jugement (doublons, longueur d'un passage, emplacements) et MESURE le reste.
  *
  * Et la contrainte de RÉPARTITION est traitée comme une règle à part entière :
  * un article est découpé en fragments par les moteurs génératifs. Une section
@@ -71,9 +75,22 @@ const REGLES = (kw, secondaires) => [
   '   doivent JAMAIS dépasser la MOITIÉ des passages d\'une section.',
   '',
   '## Répartition — une règle, pas un détail',
-  `CHAQUE section H2 doit porter ${GRAS_MIN_PAR_H2} à ${GRAS_MAX_PAR_H2} passages. Pas une seule section vide :`,
-  'les moteurs génératifs découpent l\'article en fragments, et un fragment sans',
-  'gras est un fragment sans signal. Traite les sections une par une.',
+  `CHAQUE section H2 doit porter AU MOINS ${GRAS_MIN_PAR_H2} passages. Pas une seule`,
+  'section vide : les moteurs génératifs découpent l\'article en fragments, et un',
+  'fragment sans gras est un fragment sans signal. Traite les sections une par une.',
+  '',
+  // PLAFOND SUPPRIMÉ le 19 août 2026, sur objection d'Andrianina : « le modèle peut
+  // juger par lui-même, il comprend le mot-clé et le contenu de l'article ». Les
+  // données lui donnaient raison. Sur la section à 11 passages, le défaut n'était
+  // pas le nombre mais la COMPOSITION : 6 chiffres sur 11. Les cinq autres —
+  // studios, nom du jeu, genre technique — étaient exactement ce qu'on veut, et un
+  // plafond à 4 aurait coupé dans le bon, au hasard de l'ordre d'arrivée.
+  // Un nombre fixe ignore aussi la longueur : 3 passages sur 107 mots et 3 sur 231
+  // ne sont pas la même densité, et l'ancien plafond traitait les deux à l'identique.
+  'AUCUN PLAFOND IMPOSÉ. Tu juges combien une section en mérite, d\'après sa longueur',
+  'et sa densité d\'information : une section de 230 mots riche en entités en porte',
+  'légitimement plus qu\'une section de 60 mots. Garde le sens de la mesure — du gras',
+  'partout ne met plus rien en avant.',
   '',
   '## Interdits',
   `- JAMAIS plus de ${GRAS_MAX_MOTS} mots par passage, JAMAIS une phrase entière.`,
@@ -85,7 +102,7 @@ const REGLES = (kw, secondaires) => [
 /**
  * Construit le prompt. L'article est fourni SECTION PAR SECTION, avec son titre :
  * c'est ce découpage qui rend la contrainte de répartition applicable — demander
- * « 2 à 4 par section » sur un mur de texte revient à ne rien demander.
+ * « au moins 2 par section » sur un mur de texte revient à ne rien demander.
  *
  * @param {Array<{titre:string, texte:string}>} sections
  * @param {string} targetKeyword
@@ -125,8 +142,14 @@ const PORTE_BALISAGE = /<|>|href\s*=|&[a-z]+;/i;
  *   • `balisage` — le modèle a renvoyé du HTML malgré la consigne. L'appliquer
  *     injecterait des balises dans le texte ;
  *   • `trop-long` — au-delà de GRAS_MAX_MOTS, ce n'est plus une mise en avant ;
- *   • `doublon` — le même terme deux fois, ce que la règle interdit ;
- *   • `plafond` — au-delà de GRAS_MAX_PAR_H2 dans une section, le gras dilue.
+ *   • `doublon` — le même terme deux fois. Le modèle l'a fait en production
+ *     (`Valhalla` deux fois dans la MÊME section) : il comprend l'article et se
+ *     répète quand même. Aucun jugement n'est requis pour le refuser, donc c'est
+ *     au code de le faire.
+ *
+ * PLUS DE PLAFOND PAR SECTION. Retiré le 19 août 2026 : compter à la place du
+ * modèle coupait dans le bon au hasard de l'ordre d'arrivée. Le code ne borne plus
+ * le NOMBRE, il MESURE la composition (part de chiffres) et la montre au rédacteur.
  *
  * @returns {{ retenus: Array<{section:number, passage:string}>,
  *             ecartes: Array<{passage:string, motif:string}> }}
@@ -159,16 +182,14 @@ export const normalizeBoldProposals = (brut, sections = []) => {
       return;
     }
 
-    const n = parSection.get(idx) || 0;
-    if (n >= GRAS_MAX_PAR_H2) { ecartes.push({ passage, motif: 'plafond' }); return; }
-
     vus.add(cle);
-    parSection.set(idx, n + 1);
+    parSection.set(idx, (parSection.get(idx) || 0) + 1);
     retenus.push({ section: idx, passage });
   });
 
   return { retenus, ecartes };
 };
+
 
 /** Ligne remontée au rédacteur : ce qui a été posé, et ce qui a été refusé. */
 export const boldPassReportLine = ({ retenus = [], ecartes = [], sansGras = [] } = {}) => {
