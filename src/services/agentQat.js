@@ -19,6 +19,7 @@ import {
 import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 // R5 — le gras de l'article d'origine ne disparaît pas (module AUTONOME).
 import { carryOverBold, constatGras, GRAS_MIN_PAR_H2, GRAS_MAX_PAR_H2, GRAS_MAX_MOTS } from '../utils/boldCarry';
+import { weaveKeywordBold, boldReportLine } from '../utils/keywordBold';
 import {
   phrasesTropLongues, MOTS_MAX_PHRASE, MOTS_MAX_TITRE,
   VERBES_INTERDITS, PARTICIPES, CLICHES, META,
@@ -1255,6 +1256,23 @@ N'ajoute aucun AUTRE lien externe.`;
       if (withBold.missing.length) {
         onStep(`⚠️ ${withBold.missing.length} terme(s) en gras d'origine non replacé(s) (les mots ne figurent plus dans le texte) — signalés, génération conservée.`);
       }
+
+      // ── R8 — le CODE POSE le gras lié au MOT-CLÉ, là où il manque ──────────
+      // APRÈS R5 : la reprise du gras d'origine passe d'abord, sinon R8 remplirait
+      // le plancher d'une section que R5 allait de toute façon compléter.
+      // Mesuré le 19/08 sur l'article God of War : 29 gras dont 19 de purs
+      // chiffres, 5 sections sans aucun gras, 7 sous le plancher. Le modèle n'a
+      // retenu qu'UNE des quatre catégories demandées, la plus mécanique.
+      // Le code ne devine RIEN : il n'utilise que le mot-clé cible et les
+      // mots-clés secondaires, qui sont des données fournies. Une section sans
+      // candidat prouvable n'est PAS remplie — elle est signalée.
+      const grasPose = weaveKeywordBold(withBold.html, {
+        targetKeyword,
+        secondaires: Array.isArray(article.mots_cles_secondaires) ? article.mots_cles_secondaires : [],
+      });
+      if (grasPose.placed.length) withBold.html = grasPose.html;
+      const ligneGras = boldReportLine(grasPose);
+      if (ligneGras) onStep(ligneGras);
 
       // ── CONSTAT — le gras est COMPTÉ PAR SECTION, pas seulement demandé ──────
       // La reprise ci-dessus ne dit rien du gras NEUF : le prompt exige 2 à 4
