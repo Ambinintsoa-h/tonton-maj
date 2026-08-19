@@ -27,6 +27,31 @@ import {
 } from '../utils/boldPrompt';
 import { splitSectionsForBold, applyBoldPassages } from '../utils/boldApply';
 
+/**
+ * PLAFOND DE SORTIE de la passe.
+ *
+ * Relevé de 4 000 à 16 000 le 19 août 2026, sur un échec MESURÉ en production. Les
+ * trois appels de la journée :
+ *   7 482 car. → 22 passages posés
+ *   5 273 car. → posés
+ *   9 419 car. → RÉPONSE ILLISIBLE, zéro posé
+ * La plus longue est la seule qui a échoué, et le plafond de 4 000 tokens en était
+ * proche : le JSON était coupé en plein tableau, donc impossible à parser. Tout
+ * l'appel était perdu.
+ *
+ * Le retrait de la borne de longueur (demande d'Andrianina, le même jour) a créé
+ * les conditions : des passages plus longs font un JSON plus gros. Le correctif
+ * demandé a franchi un plafond laissé trop bas.
+ *
+ * Même défaut que la règle 11 du projet — l'audit calibré à 20 000 tokens sur
+ * Sonnet 4.5, illisible sur Sonnet 5 dont le tokenizer compte ~30 % de plus, avec
+ * 0,55 $ dépensés pour un JSON null. Le plafond doit avoir de la MARGE, pas être
+ * ajusté au plus juste : on ne paie pas moins cher en tronquant, on paie pour rien.
+ * 16 000 laisse de la place à un article de trente sections sans jamais s'en
+ * approcher, et reste la moitié des 32 000 de l'audit.
+ */
+const MAX_TOKENS_GRAS = 16000;
+
 const SYSTEME = 'Tu es experte SEO éditoriale. Tu désignes des passages à mettre en '
   + 'valeur dans un texte existant, sans jamais le réécrire. Tu réponds UNIQUEMENT '
   + 'par du JSON valide, sans aucun texte autour.';
@@ -65,14 +90,17 @@ export const runBoldPass = async ({
   // facture affichée au rédacteur.
   let usage = null;
   let brut = null;
+  // Déclaré HORS du try : le compte rendu d'échec en a besoin, et une variable
+  // locale au bloc aurait rendu la fin de la réponse inaccessible là où elle sert.
+  let texte = '';
   try {
     const res = await callClaudeWithProgress(
       null,
-      { system: SYSTEME, messages: [{ role: 'user', content: prompt }], max_tokens: 4000 },
+      { system: SYSTEME, messages: [{ role: 'user', content: prompt }], max_tokens: MAX_TOKENS_GRAS },
       onStep, onReplace, 'Mise en gras',
     );
     usage = (res && res.usage) || null;
-    const texte = (res && res.text) || '';
+    texte = (res && res.text) || '';
     brut = parseJsonLoose(texte);
     // RÉPONSE BRUTE DANS LA CONSOLE, comme le prompt de génération. Sans elle, un
     // no-op est indiagnosticable : c'est exactement ce qui est arrivé le 19/08 —
@@ -93,8 +121,17 @@ export const runBoldPass = async ({
   }
 
   if (!brut) {
-    onStep('⚠️ Passe de gras : réponse illisible — article conservé tel quel.');
-    return inchange;
+    // ON PERSISTE LE MOTIF ET LA FIN DE LA RÉPONSE. Sans ça, cet échec est
+    // indiagnosticable : `onStep` disparaît avec la génération, et il ne restait
+    // qu'un `grasPasse` vide — impossible de distinguer « réponse illisible » d'un
+    // retour anticipé avant l'appel. La FIN du texte est ce qui compte : une
+    // troncature par `max_tokens` se voit à ce qu'il s'arrête en plein milieu d'un
+    // objet JSON, sans crochet fermant.
+    const fin = texte.slice(-160);
+    const report = `Passe de gras : réponse ILLISIBLE (${texte.length} car., `
+      + `plafond ${MAX_TOKENS_GRAS} tokens) — article conservé tel quel. Fin reçue : « …${fin} »`;
+    onStep(`⚠️ ${report}`);
+    return { ...inchange, report, tokenUsage: usage };
   }
 
   // FORME INATTENDUE : la réponse a été lue mais ne porte aucune proposition. On le
