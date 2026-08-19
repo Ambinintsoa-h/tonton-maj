@@ -92,8 +92,8 @@ const REGLES = (kw, secondaires) => [
   '1. LA RÉPONSE À LA REQUÊTE. Le fragment de phrase qui répond directement à la',
   '   question posée par le mot-clé. C\'est le passage qu\'un moteur reprend en',
   '   position zéro et qu\'une IA cite. Le plus rentable de tous : ne le manque pas.',
-  `   Marque-le "type": "${TYPE_REPONSE}" : il a droit à ${MOTS_MAX_REPONSE} mots, contre`,
-  `   ${GRAS_MAX_MOTS} pour les autres. UNE SEULE par section — c'est un rôle, pas une quantité.`,
+  `   Marque-le "type": "${TYPE_REPONSE}". UNE SEULE par section — c'est un rôle, pas`,
+  '   une quantité.',
   `2. LE MOT-CLÉ PRINCIPAL, sa première occurrence utile dans le corps, et ses`,
   '   VARIANTES proches (reformulations, synonymes, pluriel). Une seule fois chacune.',
   '3. LES MOTS-CLÉS SECONDAIRES, là où ils apparaissent naturellement.',
@@ -122,9 +122,14 @@ const REGLES = (kw, secondaires) => [
   'légitimement plus qu\'une section de 60 mots. Garde le sens de la mesure — du gras',
   'partout ne met plus rien en avant.',
   '',
+  '## Longueur — une visée, pas un couperet',
+  `Vise ${GRAS_MAX_MOTS} mots par passage, et jusqu'à ${MOTS_MAX_REPONSE} pour une réponse. Rien n'est`,
+  'rejeté sur la longueur : ton jugement tranche. Mais un gras trop long cesse',
+  'd\'attirer l\'œil, et tu perds ce que tu cherchais à souligner.',
+  '',
   '## Interdits',
-  `- JAMAIS plus de ${GRAS_MAX_MOTS} mots par passage, sauf le type "${TYPE_REPONSE}" (${MOTS_MAX_REPONSE} mots).`,
-  '- JAMAIS une phrase entière terminée par un point.',
+  '- JAMAIS une phrase entière terminée par un point : le gras met en avant, il ne',
+  '  remplace pas le corps du texte.',
   '- JAMAIS un titre (H1-H6), JAMAIS le texte d\'un lien, JAMAIS la FAQ ni le TL;DR.',
   '- JAMAIS deux fois le même terme dans tout l\'article.',
   '- JAMAIS un mot seul coupé d\'un nom propre : « God of War » entier, pas « War ».',
@@ -172,7 +177,12 @@ const PORTE_BALISAGE = /<|>|href\s*=|&[a-z]+;/i;
  *     dangereux : appliquer un passage approximatif déplacerait le gras ailleurs ;
  *   • `balisage` — le modèle a renvoyé du HTML malgré la consigne. L'appliquer
  *     injecterait des balises dans le texte ;
- *   • `trop-long` — au-delà de GRAS_MAX_MOTS, ce n'est plus une mise en avant ;
+ *   • `phrase-entiere` — un passage terminé par un point. SEULE borne de longueur
+ *     encore appliquée, et elle ne mesure rien : elle constate une nature. Le rejet
+ *     `trop-long` a été SUPPRIMÉ le 19/08 sur décision d'Andrianina — après le
+ *     plafond par type, il ne restait que 3 rejets sur 89, donc presque rien à
+ *     gagner en durcissant, et un rejet est toujours une décision du modèle annulée
+ *     par un nombre écrit d'avance ;
  *   • `doublon` — le même terme deux fois. Le modèle l'a fait en production
  *     (`Valhalla` deux fois dans la MÊME section) : il comprend l'article et se
  *     répète quand même. Aucun jugement n'est requis pour le refuser, donc c'est
@@ -233,21 +243,36 @@ export const normalizeBoldProposals = (brut, sections = []) => {
     const sec = sections[idx - 1];
     if (!sec) { ecartes.push({ passage, motif: 'section-inconnue' }); return; }
     if (PORTE_BALISAGE.test(passage)) { ecartes.push({ passage, motif: 'balisage' }); return; }
-    // PLAFOND SELON LE TYPE. Une borne unique rejetait 70 propositions sur 89 en
-    // production, dont TOUTES les « réponses à la requête » — la priorité 1.
+    // PLUS AUCUN REJET SUR LA LONGUEUR — décision d'Andrianina, 19 août 2026 :
+    // « enlève le trop-long de la mise en gras, on va observer le résultat ».
+    //
+    // Historique, en deux temps. La borne unique de 4 mots rejetait 70 propositions
+    // sur 89, dont TOUTES les « réponses à la requête » — la priorité 1. Le plafond
+    // par type (12 mots pour une réponse) a ramené ce chiffre à 3 rejets et fait
+    // passer les passages posés de 9 à 22. Il ne reste donc presque rien à gagner
+    // en durcissant, et tout à perdre : chaque rejet est une décision du modèle
+    // annulée par un nombre écrit d'avance.
+    //
+    // Ce qui subsiste est la seule borne qui ne demande AUCUN jugement : une phrase
+    // entière, reconnue à son point final. Elle ne mesure pas une longueur, elle
+    // constate une nature — mettre une phrase complète en gras n'est plus une mise
+    // en avant, c'est un changement de corps de texte.
     const type = String(it.type || '').trim().toLowerCase();
-    const estReponse = type === TYPE_REPONSE;
-    const maxMots = estReponse ? MOTS_MAX_REPONSE : GRAS_MAX_MOTS;
-    if (passage.split(' ').length > maxMots) { ecartes.push({ passage, motif: 'trop-long' }); return; }
-    // Une phrase ENTIÈRE reste refusée quel que soit le type. Le point final est
-    // l'indice le plus fiable et ne demande aucun jugement.
-    if (/[.!?]\s*$/.test(passage)) { ecartes.push({ passage, motif: 'phrase-entiere' }); return; }
-    // UNE SEULE réponse par section : c'est un rôle. Sans cette limite, le plafond
-    // élevé s'appliquerait à tout et « jamais une phrase entière » ne tiendrait plus.
-    if (estReponse) {
+    if (type === TYPE_REPONSE) {
+      // Le rôle reste unique par section, même sans plafond de mots.
       if (reponsesParSection.has(idx)) { ecartes.push({ passage, motif: 'reponse-en-double' }); return; }
-      reponsesParSection.add(idx);
     }
+    // Deux formes, une seule nature : le passage porte une phrase complète.
+    //   • il se TERMINE par un point : « Trois approches existent. » ;
+    //   • il ENJAMBE une frontière de phrase : « …existent. L'ordre de sortie… ».
+    // Le second cas manquait, et il passait donc au travers une fois le rejet sur la
+    // longueur retiré — attrapé par un test. Aucun jugement requis : la ponctuation
+    // constate, elle ne mesure pas.
+    if (/[.!?]\s*$/.test(passage) || /[.!?]\s+\p{Lu}/u.test(passage)) {
+      ecartes.push({ passage, motif: 'phrase-entiere' });
+      return;
+    }
+    if (type === TYPE_REPONSE) reponsesParSection.add(idx);
 
     const cle = passage.toLowerCase();
     if (vus.has(cle)) { ecartes.push({ passage, motif: 'doublon' }); return; }

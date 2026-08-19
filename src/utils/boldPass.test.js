@@ -119,11 +119,14 @@ describe('validation — le code n\'applique QUE ce qu\'il a vérifié', () => {
     expect(ecartes[0].motif).toBe('balisage');
   });
 
-  it('un passage trop long est écarté', () => {
+  it('un passage long n\'est PLUS écarté, mais une phrase entière l\'est', () => {
+    // Le rejet sur la longueur a été retiré le 19/08 (voir le bloc dédié plus bas).
+    // Ce qui reste attrape ce cas par sa NATURE : le passage contient une phrase
+    // terminée par un point, donc il ne met plus en avant, il remplace le texte.
     const { ecartes } = normalizeBoldProposals(
       [{ section: 1, passage: 'Trois approches existent. L\'ordre de sortie convient aux puristes' }], sections,
     );
-    expect(ecartes[0].motif).toBe('trop-long');
+    expect(ecartes[0].motif).toBe('phrase-entiere');
   });
 
   it('un doublon est écarté', () => {
@@ -275,60 +278,59 @@ describe('JAMAIS SILENCIEUSE — le no-op de production', () => {
   });
 });
 
-describe('PLAFOND DE MOTS PAR TYPE — 70 rejets sur 89 en production', () => {
-  // La priorite 1 est « la reponse a la requete » : un fragment de phrase. Le
-  // plafond general de 4 mots la rendait IMPOSSIBLE. Deux consignes qui se
-  // contredisent, et l une des deux perdait en silence.
+describe('AUCUN REJET SUR LA LONGUEUR — decision du 19/08', () => {
+  // « enleve le trop-long de la mise en gras, on va observer le resultat »
+  // (Andrianina). Historique en deux temps : la borne unique de 4 mots rejetait 70
+  // propositions sur 89, dont TOUTES les reponses a la requete. Le plafond par type
+  // a ramene ce chiffre a 3 rejets et fait passer les passages poses de 9 a 22. Il
+  // ne restait donc presque rien a gagner en durcissant, et un rejet est toujours
+  // une decision du modele annulee par un nombre ecrit d avance.
   const sections = splitSectionsForBold(ARTICLE);
+  const LONG = 'ordre de sortie convient aux puristes de la saga';
 
-  it('une REPONSE de plus de 4 mots est desormais RETENUE', () => {
-    // Le passage exact rejete en production, transpose sur notre fixture.
-    const { retenus, ecartes } = normalizeBoldProposals(
-      [{ section: 1, passage: 'ordre de sortie convient aux puristes', type: 'reponse' }],
-      sections,
-    );
-    expect(ecartes).toEqual([]);
-    expect(retenus).toHaveLength(1);
+  it('un passage LONG est retenu, quel que soit son type', () => {
+    ['reponse', 'entite', 'chiffre', ''].forEach((type) => {
+      const { retenus, ecartes } = normalizeBoldProposals(
+        [{ section: 1, passage: LONG, type }], sections,
+      );
+      expect(ecartes).toEqual([]);
+      expect(retenus).toHaveLength(1);
+    });
   });
 
-  it('le meme passage SANS le type reste rejete', () => {
-    // Le plafond de 4 mots garde tout son sens hors du role de reponse.
-    const { ecartes } = normalizeBoldProposals(
-      [{ section: 1, passage: 'ordre de sortie convient aux puristes', type: 'entite' }],
-      sections,
-    );
-    expect(ecartes[0].motif).toBe('trop-long');
+  it('le motif « trop-long » n existe PLUS', () => {
+    const props = ['Trois approches existent', LONG]
+      .map((passage) => ({ section: 1, passage, type: 'entite' }));
+    const { ecartes } = normalizeBoldProposals(props, sections);
+    expect(ecartes.some((e) => e.motif === 'trop-long')).toBe(false);
   });
 
-  it('une reponse au-dela de 12 mots reste rejetee', () => {
-    const long = 'Trois approches existent. L ordre de sortie convient aux puristes de la saga';
-    const { ecartes } = normalizeBoldProposals(
-      [{ section: 1, passage: long, type: 'reponse' }], sections,
-    );
-    expect(ecartes[0].motif).toBe('trop-long');
-  });
-
-  it('UNE SEULE reponse par section : c est un role, pas une quantite', () => {
-    const { retenus, ecartes } = normalizeBoldProposals([
-      { section: 1, passage: 'ordre de sortie convient aux puristes', type: 'reponse' },
-      { section: 1, passage: 'ordre chronologique seduit les amateurs', type: 'reponse' },
-    ], sections);
-    expect(retenus).toHaveLength(1);
-    expect(ecartes[0].motif).toBe('reponse-en-double');
-  });
-
-  it('une PHRASE ENTIERE reste refusee, meme typee reponse', () => {
-    // Le point final est l indice le plus fiable et ne demande aucun jugement.
+  it('mais une PHRASE ENTIERE reste refusee — une nature, pas une longueur', () => {
+    // Mettre une phrase complete en gras n est plus une mise en avant, c est un
+    // changement de corps de texte. Le point final ne demande aucun jugement.
     const { ecartes } = normalizeBoldProposals(
       [{ section: 1, passage: 'Trois approches existent.', type: 'reponse' }], sections,
     );
     expect(ecartes[0].motif).toBe('phrase-entiere');
   });
 
-  it('le prompt ANNONCE le type et son plafond', () => {
+  it('UNE SEULE reponse par section, sans plafond de mots', () => {
+    const { retenus, ecartes } = normalizeBoldProposals([
+      { section: 1, passage: LONG, type: 'reponse' },
+      { section: 1, passage: 'ordre chronologique seduit les amateurs de lore', type: 'reponse' },
+    ], sections);
+    expect(retenus).toHaveLength(1);
+    expect(ecartes[0].motif).toBe('reponse-en-double');
+  });
+
+  it('le prompt annonce la longueur comme une VISEE, pas un couperet', () => {
+    // Une consigne qui annonce un rejet inexistant est trompeuse : le prompt et le
+    // code doivent dire la meme chose.
     const p = buildBoldPrompt(sections, KW);
     expect(p).toContain('"type": "reponse"');
-    expect(p).toContain('12 mots');
+    expect(p).toMatch(/pas un couperet/);
+    expect(p).toContain('rejeté sur la longueur');
+    expect(p).not.toMatch(/JAMAIS plus de \d+ mots/);
     expect(p).toMatch(/UNE SEULE par section/);
   });
 });
