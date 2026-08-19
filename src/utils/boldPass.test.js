@@ -334,3 +334,16 @@ describe('AUCUN REJET SUR LA LONGUEUR — decision du 19/08', () => {
     expect(p).toMatch(/UNE SEULE par section/);
   });
 });
+
+describe('ECHEC DE LECTURE — diagnosticable, pas silencieux', () => {
+  // Constate en production le 19/08 : la passe a appele l IA (reponse de 9 419 car.,
+  // visible dans la console) et `grasPasse` etait ENTIEREMENT vide — posed [],
+  // ecartes [], report "". Impossible de distinguer « reponse illisible » d un
+  // retour anticipe AVANT l appel. Le plafond de sortie etait a 4 000 tokens et la
+  // reponse etait coupee en plein tableau JSON.
+  it('formeInattendue distingue ILLISIBLE de LISIBLE-SANS-LISTE', () => {
+    // Deux echecs differents, deux messages differents : c est tout l enjeu.
+    expect(formeInattendue(null)).toBe(false);            // illisible
+    expect(formeInattendue({ msg: 'rien' })).toBe(true);  // lisible, sans liste
+  });
+});
