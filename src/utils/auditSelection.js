@@ -164,3 +164,111 @@ export const unselectedFactualFields = (selection, audit = null) => {
     return Array.isArray(v) ? v.length > 0 : !!v;
   });
 };
+
+/**
+ * ── CE QUE L'AUDIT A TROUVÉ, EN CLAIR ────────────────────────────────────────
+ *
+ * Ajouté le 18 août 2026, demande d'Andrianina : « Données périmées et
+ * développements manquants : 4 (lister les 4 manquants) », « donner les faits
+ * récents trouvés par la recherche ».
+ *
+ * Le défaut était réel et il vidait le dispositif de son sens. Les cases
+ * n'affichaient qu'un COMPTEUR — « 4 », « 10 ». Or on demandait au rédacteur de
+ * TRANCHER : cocher, c'est décider qu'une consigne part au modèle. Décider sur un
+ * nombre, sans voir de quoi il s'agit, ce n'est pas décider — c'est deviner. Le
+ * pré-cochage par ampleur (règle 12) devenait alors la seule vraie décision, et
+ * les cases un décor de plus.
+ *
+ * Trois choses sont rendues visibles, et chacune pour une raison précise :
+ *   • le FAIT, évidemment ;
+ *   • la NUANCE (« à confirmer ») — c'est le point EXACT qui a lâché en
+ *     production : noyée dans un JSON de dix champs, le modèle l'a ignorée et a
+ *     écrit « date confirmée au Comic-Con le 24 juillet ». Elle doit sauter aux
+ *     yeux de celui qui coche ;
+ *   • la SOURCE, réduite à son nom d'hôte : elle rend le fait vérifiable en un
+ *     clic. Un fait sans source affichée est un fait qu'on croit sur parole.
+ *
+ * Aucune donnée n'est fabriquée : tout est repris tel quel de l'audit. Un champ
+ * de forme inattendue (le modèle rend parfois du texte libre là où le schéma
+ * prévoit un objet) est rendu en texte plutôt qu'ignoré — l'ignorer afficherait
+ * « 4 » avec deux lignes en dessous, ce qui est pire qu'un affichage imparfait.
+ */
+
+const ligneTexte = (v) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+
+/** Nom d'hôte d'une URL, ou '' — c'est lui qui rend la source lisible. */
+export const sourceHost = (u) => {
+  const s = ligneTexte(u);
+  if (!s) return '';
+  try { return new URL(s).hostname.replace(/^www\./, ''); } catch { return ''; }
+};
+
+/** Premières valeurs textuelles d'un objet de forme inconnue. */
+const premiersTextes = (o) => Object.entries(o)
+  .filter(([k, v]) => typeof v === 'string' && v.trim() && !/^(source|url|nuance|priority)$/i.test(k))
+  .map(([, v]) => ligneTexte(v));
+
+/** Une entrée d'audit → { text, nuance, source }. Jamais null : on montre tout. */
+const versLigne = (item, clesPrincipales = []) => {
+  if (item == null) return null;
+  if (typeof item === 'string') {
+    const t = ligneTexte(item);
+    return t ? { text: t, nuance: '', source: '' } : null;
+  }
+  if (typeof item !== 'object') return { text: ligneTexte(item), nuance: '', source: '' };
+
+  // Clés attendues d'abord, dans l'ordre du schéma : elles composent la phrase
+  // la plus lisible (« Metascore Sons of Sparta : 64/100 »).
+  const morceaux = clesPrincipales.map((k) => ligneTexte(item[k])).filter(Boolean);
+  const texte = morceaux.length ? [...new Set(morceaux)].join(' — ') : premiersTextes(item).join(' — ');
+  if (!texte) return null;
+  return {
+    text: texte,
+    nuance: ligneTexte(item.nuance),
+    source: sourceHost(item.source || item.url),
+  };
+};
+
+/**
+ * Les éléments d'une catégorie de l'audit, prêts à l'affichage.
+ *
+ * `recent_context` porte DEUX listes de natures différentes — une donnée périmée
+ * n'est pas un développement manquant — d'où le préfixe qui les distingue. Les
+ * fondre sans le dire ferait lire « 4 » comme quatre choses de même nature.
+ *
+ * @returns {Array<{text:string, nuance:string, source:string, prefixe?:string}>}
+ */
+export const auditItemLines = (audit, field) => {
+  const v = audit?.[field];
+  if (v == null) return [];
+
+  if (field === 'recent_context') {
+    const r = typeof v === 'object' ? v : {};
+    const out = [];
+    (Array.isArray(r.donnees_obsoletes) ? r.donnees_obsoletes : []).forEach((d) => {
+      const l = versLigne(d, ['element', 'valeur_actuelle']);
+      if (l) out.push({ ...l, prefixe: 'Périmé' });
+    });
+    (Array.isArray(r.developpements_manquants) ? r.developpements_manquants : []).forEach((d) => {
+      const l = versLigne(d, ['sujet', 'description']);
+      if (l) out.push({ ...l, prefixe: 'Manquant' });
+    });
+    // Forme inattendue : plutôt que rien, on montre ce qu'il y a.
+    if (!out.length && typeof v === 'string') {
+      const l = versLigne(v);
+      if (l) out.push(l);
+    }
+    return out;
+  }
+
+  const CLES = {
+    a_supprimer:              ['element', 'passage', 'raison'],
+    sources_check:            ['affirmation', 'statut'],
+    seo_geo_gaps:             ['gap', 'element', 'description'],
+    eeat_recommendations:     ['recommandation', 'element', 'description'],
+    strategic_recommendation: ['recommandation', 'description'],
+    tldr:                     ['point', 'texte'],
+  };
+  const liste = Array.isArray(v) ? v : [v];
+  return liste.map((it) => versLigne(it, CLES[field] || [])).filter(Boolean);
+};
