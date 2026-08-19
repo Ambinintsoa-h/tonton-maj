@@ -1,9 +1,9 @@
 // Champs de lancement propres au mode « Audit QAT + Refonte ».
 // Rendus uniquement quand ce mode est sélectionné : le flux historique garde son
 // formulaire inchangé (double flux temporaire — voir constants/majMode.js).
-import React from 'react';
+import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { FileText, Plug, Ruler, AlertCircle, Loader2 } from 'lucide-react';
+import { FileText, Plug, Ruler, AlertCircle, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   ARTICLE_TYPES, SEO_PLUGINS, TARGET_WORDS_MIN, TARGET_WORDS_MAX,
 } from '../../constants/majMode';
@@ -43,6 +43,22 @@ const QatBriefFields = ({
   skillsEnChargement = false,
   articleUrl = '',
 }) => {
+  // ── ÉCRAN DE LANCEMENT ALLÉGÉ (18 août 2026, demande d'Andrianina) ─────────
+  // Ces quatre réglages sont MASQUÉS, pas supprimés : ils sont bien consommés par
+  // `runQatAudit`, mais aucun n'est touché en pratique — la file d'attente impose
+  // déjà DEFAULT_ARTICLE_TYPE / DEFAULT_SEO_PLUGIN / DEFAULT_TARGET_WORDS à TOUS
+  // les articles qui passent par elle. L'écran de lancement demandait donc quatre
+  // décisions dont trois sont toujours la valeur par défaut.
+  //
+  // Le MAILLAGE est le cas le plus net : son vrai point de saisie est la PHASE 2
+  // (`InternalLinksField` y est rendu aussi), seul écran que TOUS les articles
+  // traversent, et où les paires suggérées par l'audit pré-remplissent déjà le
+  // brief. Le demander AVANT l'audit, c'est le demander avant de savoir quoi lier.
+  // Ce n'est PAS la re-fusion interdite par la règle 9 : le rendu de la phase 2 —
+  // celui qui corrigeait le bug — reste intact. C'est le rendu redondant qui se
+  // replie.
+  const [avanceOuvert, setAvanceOuvert] = useState(false);
+
   return (
     <motion.div
       initial={{ opacity: 0, height: 0 }}
@@ -65,6 +81,23 @@ const QatBriefFields = ({
         </div>
       )}
 
+      <button
+        type="button"
+        onClick={() => setAvanceOuvert((v) => !v)}
+        className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 transition-colors"
+      >
+        {avanceOuvert ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        Réglages avancés
+        <span className="font-normal text-gray-400">
+          — type d'article, plugin SEO, longueur cible, maillage
+        </span>
+      </button>
+
+      {/* Les valeurs par défaut s'appliquent tant que ce volet reste fermé : rien
+          n'est perdu, et le rédacteur n'a plus quatre décisions à prendre avant
+          même de connaître le résultat de l'audit. */}
+      {avanceOuvert && (
+      <div className="space-y-4 border-t border-indigo-100 pt-4">
       {/* ── Type d'article ─────────────────────────────────────────────────── */}
       <div className="space-y-1.5">
         <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
@@ -109,8 +142,13 @@ const QatBriefFields = ({
         </p>
       </div>
 
-      {/* ── Maillage interne : paires ancre + URL ──────────────────────────── */}
+      {/* ── Maillage interne : paires ancre + URL ──────────────────────────────
+          Rendu ici pour ne rien retirer au rédacteur qui veut préparer son
+          maillage dès le lancement. Le point de saisie de RÉFÉRENCE reste la
+          phase 2 : c'est là que les paires suggérées par l'audit arrivent. */}
       <InternalLinksField linkRows={linkRows} setLinkRows={setLinkRows} articleUrl={articleUrl} />
+      </div>
+      )}
     </motion.div>
   );
 };

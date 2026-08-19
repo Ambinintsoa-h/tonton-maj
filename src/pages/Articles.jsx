@@ -54,7 +54,8 @@ export default function Articles() {
   const [pasteUrl, setPasteUrl] = useState('');
   const [scraping, setScraping] = useState(false);
   const [targetKeyword, setTargetKeyword] = useState('');
-  const [notes, setNotes]                 = useState(''); // instruction libre transmise en priorité à TONTON (passe 1)
+  // `notes` supprimé avec son champ (18 août 2026) : jamais relu, donc jamais
+  // transmis. Le laisser en état mort aurait entretenu l'illusion d'un branchement.
   // `majDepth` reste dans l'etat mais N'EST PLUS demande au lancement : l'ampleur
   // se decide en PHASE 2, une fois l'audit lu. Le selecteur qui subsistait ici
   // etait de l'interface morte — runQatAudit ne prend pas de `depth` — et il
@@ -700,17 +701,16 @@ export default function Articles() {
                 </p>
               </div>
 
-              {/* ── Notes — instruction pour TONTON (optionnel) ──────────────────── */}
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-gray-700">Notes — instruction pour TONTON</label>
-                <textarea
-                  value={notes}
-                  onChange={e => setNotes(e.target.value)}
-                  placeholder="Consigne appliquée en priorité par l'IA pendant l'analyse — ex. « concentre la MAJ sur la partie prix », « ajoute des idées sur les nouveautés 2026 »…"
-                  rows={3}
-                  className="input-glass text-sm resize-none"
-                />
-              </div>
+              {/* ── « Notes — instruction pour TONTON » : RETIRÉ le 18 août 2026 ───
+                  Le champ ne servait à RIEN, et c'est pire qu'inutile : son état
+                  était écrit par le textarea et relu NULLE PART. La consigne saisie
+                  était donc jetée en silence, alors que le placeholder promettait
+                  « appliquée en priorité par l'IA pendant l'analyse ».
+                  `agent.instruction` est alimenté par le brouillon (applyDraft,
+                  plus haut dans ce fichier), jamais par ce champ.
+                  Les directives du rédacteur se saisissent en PHASE 2, à côté des
+                  cases de l'audit — seul écran que TOUS les articles traversent,
+                  et le seul où elles partent réellement au modèle (règle 12). */}
 
               {/* ── Brief du mode « Audit QAT + Refonte » ─────────────────────────── */}
               <AnimatePresence>

@@ -57,20 +57,35 @@ describe('InternalLinksField — saisie des paires', () => {
   });
 });
 
-describe('QatBriefFields — l\'extraction ne casse pas l\'écran de lancement', () => {
-  it('rend toujours le bloc de maillage', () => {
-    render(
-      <QatBriefFields
-        articleType="dossier" setArticleType={() => {}}
-        seoPlugin="yoast" setSeoPlugin={() => {}}
-        targetWords={2500} setTargetWords={() => {}}
-        linkRows={[emptyLinkRow()]} setLinkRows={() => {}}
-        articleUrl={URL_ART}
-      />
-    );
+describe('QatBriefFields — écran de lancement allégé, rien de perdu', () => {
+  const monter = () => render(
+    <QatBriefFields
+      articleType="dossier" setArticleType={() => {}}
+      seoPlugin="yoast" setSeoPlugin={() => {}}
+      targetWords={2500} setTargetWords={() => {}}
+      linkRows={[emptyLinkRow()]} setLinkRows={() => {}}
+      articleUrl={URL_ART}
+    />
+  );
+
+  it('les réglages jamais touchés sont REPLIÉS par défaut', () => {
+    // Trois de ces quatre réglages valent toujours la valeur par défaut — la file
+    // d'attente impose DEFAULT_* à TOUS les articles qui passent par elle. Les
+    // demander avant l'audit, c'était quatre décisions pour rien.
+    monter();
+    expect(screen.getByText(/Réglages avancés/)).toBeInTheDocument();
+    expect(screen.queryByText(/Type d'article/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Liens internes à placer/)).not.toBeInTheDocument();
+  });
+
+  it('un clic les rend TOUS, maillage compris — rien n\'est perdu', () => {
+    // L'invariant protégé par l'ancien test ne change pas : le bloc de maillage
+    // reste ATTEIGNABLE depuis l'écran de lancement. Seul son affichage par
+    // défaut change — masqué n'est pas supprimé.
+    monter();
+    fireEvent.click(screen.getByText(/Réglages avancés/));
     expect(screen.getByPlaceholderText(/^Ancre/)).toBeInTheDocument();
     expect(screen.getByText(/Liens internes à placer/)).toBeInTheDocument();
-    // et les champs historiques restent là
     expect(screen.getByText(/Type d'article/)).toBeInTheDocument();
     expect(screen.getByText(/Longueur cible/)).toBeInTheDocument();
   });
