@@ -27,6 +27,34 @@
  */
 import { GRAS_MIN_PAR_H2, GRAS_MAX_MOTS } from './boldCarry';
 
+/**
+ * PLAFOND DE MOTS pour un passage de type « reponse ».
+ *
+ * Corrigé le 19 août 2026, sur mesure de production. La priorité 1 de cette passe
+ * est « la réponse à la requête » — le fragment qu'un moteur reprend en position
+ * zéro. Or le plafond général était de GRAS_MAX_MOTS (4) mots : un fragment de
+ * réponse n'y tient pas.
+ *
+ * MESURE : sur 89 propositions du modèle, 70 rejetées pour « trop-long ». Cinq
+ * exemples, tous légitimes, tous jetés :
+ *   « Sept jeux canoniques couvrent cette période »
+ *   « Sorti sur console PS3 en 2013 »
+ *   « Ascension reçoit un accueil mitigé »
+ *   « six mois après le meurtre de la famille de Kratos »
+ *   « du piège tendu par Arès jusqu'à la chute de l'Olympe »
+ * Ma priorité la plus rentable était rendue IMPOSSIBLE par ma propre borne : deux
+ * consignes qui se contredisent, et l'une des deux perd en silence. Exactement le
+ * défaut qu'on reproche au prompt de refonte.
+ *
+ * UNE SEULE par section : c'est un RÔLE, pas une quantité. Sans cette limite, le
+ * plafond élevé s'appliquerait à tout et « jamais une phrase entière » ne voudrait
+ * plus rien dire.
+ */
+export const MOTS_MAX_REPONSE = 12;
+
+/** Type déclaré par le modèle pour la réponse à la requête. */
+const TYPE_REPONSE = 'reponse';
+
 const LIGNE = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
 
 /**
@@ -64,6 +92,8 @@ const REGLES = (kw, secondaires) => [
   '1. LA RÉPONSE À LA REQUÊTE. Le fragment de phrase qui répond directement à la',
   '   question posée par le mot-clé. C\'est le passage qu\'un moteur reprend en',
   '   position zéro et qu\'une IA cite. Le plus rentable de tous : ne le manque pas.',
+  `   Marque-le "type": "${TYPE_REPONSE}" : il a droit à ${MOTS_MAX_REPONSE} mots, contre`,
+  `   ${GRAS_MAX_MOTS} pour les autres. UNE SEULE par section — c'est un rôle, pas une quantité.`,
   `2. LE MOT-CLÉ PRINCIPAL, sa première occurrence utile dans le corps, et ses`,
   '   VARIANTES proches (reformulations, synonymes, pluriel). Une seule fois chacune.',
   '3. LES MOTS-CLÉS SECONDAIRES, là où ils apparaissent naturellement.',
@@ -93,7 +123,8 @@ const REGLES = (kw, secondaires) => [
   'partout ne met plus rien en avant.',
   '',
   '## Interdits',
-  `- JAMAIS plus de ${GRAS_MAX_MOTS} mots par passage, JAMAIS une phrase entière.`,
+  `- JAMAIS plus de ${GRAS_MAX_MOTS} mots par passage, sauf le type "${TYPE_REPONSE}" (${MOTS_MAX_REPONSE} mots).`,
+  '- JAMAIS une phrase entière terminée par un point.',
   '- JAMAIS un titre (H1-H6), JAMAIS le texte d\'un lien, JAMAIS la FAQ ni le TL;DR.',
   '- JAMAIS deux fois le même terme dans tout l\'article.',
   '- JAMAIS un mot seul coupé d\'un nom propre : « God of War » entier, pas « War ».',
@@ -125,7 +156,7 @@ export const buildBoldPrompt = (sections = [], targetKeyword = '', secondaires =
     '',
     'Réponds UNIQUEMENT par un tableau JSON, sans texte autour. Chaque passage doit',
     'être une COPIE EXACTE, au caractère près, d\'un extrait de la section indiquée :',
-    '[{ "section": 1, "passage": "copie exacte" }]',
+    `[{ "section": 1, "passage": "copie exacte", "type": "${TYPE_REPONSE}|motcle|entite|technique|chiffre" }]`,
   ].join('\n');
 };
 
@@ -191,6 +222,7 @@ export const normalizeBoldProposals = (brut, sections = []) => {
   const ecartes = [];
   const vus = new Set();
   const parSection = new Map();
+  const reponsesParSection = new Set();
 
   items.forEach((it) => {
     if (!it) return;
@@ -201,7 +233,21 @@ export const normalizeBoldProposals = (brut, sections = []) => {
     const sec = sections[idx - 1];
     if (!sec) { ecartes.push({ passage, motif: 'section-inconnue' }); return; }
     if (PORTE_BALISAGE.test(passage)) { ecartes.push({ passage, motif: 'balisage' }); return; }
-    if (passage.split(' ').length > GRAS_MAX_MOTS) { ecartes.push({ passage, motif: 'trop-long' }); return; }
+    // PLAFOND SELON LE TYPE. Une borne unique rejetait 70 propositions sur 89 en
+    // production, dont TOUTES les « réponses à la requête » — la priorité 1.
+    const type = String(it.type || '').trim().toLowerCase();
+    const estReponse = type === TYPE_REPONSE;
+    const maxMots = estReponse ? MOTS_MAX_REPONSE : GRAS_MAX_MOTS;
+    if (passage.split(' ').length > maxMots) { ecartes.push({ passage, motif: 'trop-long' }); return; }
+    // Une phrase ENTIÈRE reste refusée quel que soit le type. Le point final est
+    // l'indice le plus fiable et ne demande aucun jugement.
+    if (/[.!?]\s*$/.test(passage)) { ecartes.push({ passage, motif: 'phrase-entiere' }); return; }
+    // UNE SEULE réponse par section : c'est un rôle. Sans cette limite, le plafond
+    // élevé s'appliquerait à tout et « jamais une phrase entière » ne tiendrait plus.
+    if (estReponse) {
+      if (reponsesParSection.has(idx)) { ecartes.push({ passage, motif: 'reponse-en-double' }); return; }
+      reponsesParSection.add(idx);
+    }
 
     const cle = passage.toLowerCase();
     if (vus.has(cle)) { ecartes.push({ passage, motif: 'doublon' }); return; }
