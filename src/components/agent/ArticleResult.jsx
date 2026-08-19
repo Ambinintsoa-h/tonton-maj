@@ -202,6 +202,24 @@ export default function ArticleResult() {
   // l'autosave existant : on ne tient pas un second compteur en parallele.
   const phase       = agent.phase || PHASE_AUDIT;
   const phaseStatus = agent.phaseStatus || {};
+  // ── HAUTEUR RÉELLE DU STEPPER FLOTTANT ─────────────────────────────────────
+  // Le stepper est `fixed` (voir son rendu plus bas) et sort donc du flux : il faut
+  // réserver sa place, sinon le haut de l'article passe dessous. La hauteur est
+  // MESURÉE et non écrite en dur : elle change avec la largeur de la fenêtre (les
+  // libellés des quatre phases passent à la ligne) et avec le zoom du navigateur.
+  // Un `ResizeObserver` suffit — il couvre le redimensionnement ET le changement de
+  // contenu (un statut qui passe de « à faire » à « en cours… »).
+  const stepperRef = useRef(null);
+  const [stepperHeight, setStepperHeight] = useState(0);
+  useEffect(() => {
+    const el = stepperRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const maj = () => setStepperHeight(el.offsetHeight);
+    maj();
+    const ro = new ResizeObserver(maj);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [phase, phaseStatus]);
   // Vrai si un skill SKILL.md est actif → l'onglet Audit est attendu (affiché même vide).
   const hasBrainSkill = (skills || []).some(s => s?.format === 'skillmd' && s.active !== false && s.body);
 
@@ -4609,22 +4627,48 @@ export default function ArticleResult() {
         document.body)}
 
         {/* ── Parcours en quatre phases — repère principal du rédacteur ─────── */}
-        {/* Le stepper SUIT LE DÉFILEMENT, épinglé juste sous la barre du haut
-            (celle de « Vider le cache ») : mesurée à 62 px, en z-index 100 — d'où
-            `top: 62` et un z-index inférieur, pour passer dessous et non dessus.
-            Sur un article de 13 000 px de haut, le rédacteur perdait tout repère
-            dès qu'il descendait. Le fond reprend celui de la page (#eceef1) afin
-            que le contenu ne défile pas au travers. */}
-        <div
-          className="sticky z-[90] px-6 pt-4 pb-3 bg-[#eceef1]/95 backdrop-blur-md border-b border-gray-200/70"
-          style={{ top: 62 }}
-        >
-          <PhaseStepper
-            phase={phase}
-            phaseStatus={phaseStatus}
-            onSelect={(p) => dispatch(setPhase(p))}
-          />
-        </div>
+        {/* TOUJOURS VISIBLE : `position: fixed` dans un PORTAL sur document.body,
+            exactement comme la barre d'actions du bas quelques lignes plus haut.
+            Ce n'est pas une préférence, c'est le seul procédé qui tienne ici.
+            Il était `sticky top-62`, et il ne collait JAMAIS. Mesuré dans le
+            navigateur le 19 août 2026 : après 2 000 px de défilement, le stepper
+            se trouvait à -1 548 px, donc hors écran depuis longtemps. Trois causes
+            cumulées, chacune suffisante :
+              • `glass-card overflow-hidden` (son parent direct) — `overflow`
+                différent de `visible` sur un ancêtre confine un élément sticky à la
+                boîte de cet ancêtre ;
+              • `p-4 sm:p-6 overflow-x-hidden` (calculé « hidden auto ») ;
+              • `<main class="flex-1 overflow-auto">` — et c'est le cas le plus
+                trompeur : ce MAIN ne défile JAMAIS. Sa hauteur de contenu égale sa
+                hauteur visible (14 671 px pour 14 671 px), parce que la chaîne
+                parente est en `min-h-screen` et ne le contraint pas. C'est la
+                FENÊTRE qui défile (14 733 px pour 694 px de haut). `overflow: auto`
+                fait pourtant de lui le « scrollport » de référence de sticky, qui se
+                colle donc à une boîte qui s'en va avec la page.
+            Neutraliser un seul ancêtre ne suffit pas, vérifié à l'exécution. D'où
+            `fixed`, immunisé contre tous.
+            `md:left-60` dégage la barre latérale, comme la barre du bas ; `top: 62`
+            reste la hauteur mesurée de la barre du haut, et le z-index passe
+            DESSOUS elle (100). */}
+        {createPortal(
+          <div
+            ref={stepperRef}
+            className="fixed left-0 right-0 md:left-60 z-[90] px-6 pt-4 pb-3 bg-[#eceef1]/95 backdrop-blur-md border-b border-gray-200/70"
+            style={{ top: 62 }}
+          >
+            <PhaseStepper
+              phase={phase}
+              phaseStatus={phaseStatus}
+              onSelect={(p) => dispatch(setPhase(p))}
+            />
+          </div>,
+          document.body,
+        )}
+        {/* RÉSERVE DE PLACE. Un élément `fixed` sort du flux : sans ce bloc, le haut
+            de l'article passerait SOUS le stepper et resterait illisible. La hauteur
+            est MESURÉE, jamais devinée — elle change avec la largeur (les libellés
+            passent à la ligne) et avec le zoom du navigateur. */}
+        <div aria-hidden="true" style={{ height: stepperHeight }} />
 
         {/* PHASE 4 — le relevé des patterns est un WIDGET FLOTTANT : il se place
             lui-même (position: fixed + portal document.body, cf. PhaseRelecture)
