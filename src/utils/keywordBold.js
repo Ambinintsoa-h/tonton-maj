@@ -77,6 +77,40 @@ const echappe = (s = '') => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const estChiffre = (s = '') => /\d/.test(s);
 
 /**
+ * Sections de SERVICE, écartées de la pose.
+ *
+ * La FAQ et le TL;DR ne sont pas des sections rédactionnelles : leurs réponses
+ * sont courtes et calibrées pour un extrait enrichi. La première mise en
+ * production de R8 y a posé « ordre de sortie » en gras dans une réponse de FAQ —
+ * visiblement hors sujet. Le skill interdit déjà les LIENS dans ces blocs pour la
+ * même raison de fond : ce sont des zones de service, pas de la prose.
+ */
+const EST_SECTION_DE_SERVICE = /^\s*(?:FAQ|questions?\s+fr[eé]quentes?|TL\s*;?\s*DR|en\s+bref|r[eé]sum[eé])/i;
+
+/**
+ * Le passage est-il un FRAGMENT d'un groupe plus long dans le texte ?
+ *
+ * Deuxième garde-fou contre le défaut constaté en production. Même avec des
+ * tranches contiguës, un appariement peut tomber au milieu d'un nom propre :
+ * « War Ragnarök » là où le texte porte « God of War Ragnarök ». On refuse donc
+ * un candidat dont le mot IMMÉDIATEMENT précédent commence par une majuscule et
+ * fait partie du même nom propre — l'indice est typographique, donc fiable en
+ * français où seuls les noms propres portent la majuscule en milieu de phrase.
+ */
+const estFragment = (texte, candidat) => {
+  // Le mot précédent doit faire AU MOINS 3 lettres et ne pas être un mot vide.
+  // Sans ces deux conditions, un article élidé (« L'ordre chronologique ») ou un
+  // début de phrase (« Le raccourci ») passait pour un nom propre, et des
+  // candidats parfaitement valables étaient écartés — attrapé par les tests.
+  const rx = new RegExp(
+    `(\\p{Lu}\\p{L}{2,})\\s+(?:de\\s+|of\\s+|du\\s+)?${candidat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+    'u',
+  );
+  const m = rx.exec(texte);
+  return !!m && !MOTS_VIDES.has(m[1].toLowerCase());
+};
+
+/**
  * CANDIDATS d'un texte, par ordre de priorité DÉCROISSANTE.
  *
  * Les chiffres sont délibérément la DERNIÈRE priorité : c'est la pathologie
@@ -115,26 +149,43 @@ export const candidatsGras = (texte = '', targetKeyword = '', secondaires = []) 
   const exact = norm(targetKeyword);
   if (exact) trouve(new RegExp(echappe(exact), 'gi'));
 
-  // 2. Un groupe recoupant DEUX mots significatifs du mot-clé, à courte distance.
-  //    Fenêtre volontairement serrée (un mot d'écart au plus) : sans elle on
-  //    attraperait deux mots éloignés d'une même phrase, et le gras couvrirait
-  //    une ligne entière — ce que la règle 10 interdit explicitement.
-  for (let i = 0; i < mots.length; i += 1) {
-    for (let j = 0; j < mots.length; j += 1) {
-      if (i === j) continue;
-      trouve(new RegExp(
-        `\\b${echappe(mots[i])}\\p{L}*\\s+(?:\\p{L}+\\s+)?${echappe(mots[j])}\\p{L}*\\b`, 'giu',
-      ));
+  // 2. SOUS-EXPRESSIONS CONTIGUËS du mot-clé, dans SON ordre de mots.
+  //
+  //    Corrigé le 19 août 2026 après la PREMIÈRE mise en production de R8, qui a
+  //    produit des fragments cassés sur l'article réel : « War III », « jeu God »,
+  //    « premiers God », « War Ragnarök ». La version initiale croisait les mots
+  //    significatifs DEUX À DEUX (`god` × `war`, chacun apparié seul), ce qui
+  //    coupait au milieu du nom propre « God of War ». Bolder « jeu God » au lieu
+  //    de « jeu God of War » est pire que ne rien bolder : ça se voit à l'œil et
+  //    ça décrédibilise le texte.
+  //
+  //    On n'apparie donc plus des mots isolés mais des TRANCHES CONTIGUËS du
+  //    mot-clé tel qu'il est écrit (mots vides compris, car « of » fait partie de
+  //    « god of war »). De la plus longue à la plus courte : les tranches longues
+  //    sont plus spécifiques, et le dédoublonnage garde la première trouvée.
+  const brut = norm(targetKeyword).split(/\s+/).filter(Boolean);
+  for (let taille = brut.length; taille >= 2; taille -= 1) {
+    for (let i = 0; i + taille <= brut.length; i += 1) {
+      const tranche = brut.slice(i, i + taille);
+      // Une tranche entièrement composée de mots vides ne porte aucun sens.
+      if (!tranche.some((m) => !MOTS_VIDES.has(m.toLowerCase()))) continue;
+      trouve(new RegExp(`\\b${tranche.map(echappe).join('\\s+')}\\b`, 'gi'));
     }
   }
 
-  // 3. Le mot-tête du mot-clé AVEC son complément adjacent : « ordre
+  // 3. Le MOT-TÊTE du mot-clé avec son complément adjacent : « ordre
   //    chronologique », « ordre de sortie », « ordre idéal ». Priorité validée
   //    explicitement par Andrianina — c'est le gros du gain.
-  mots.forEach((m) => {
-    trouve(new RegExp(`\\b${echappe(m)}\\p{L}*\\s+(?:de\\s+|du\\s+|des\\s+|d['’])?\\p{L}{3,}\\b`, 'giu'));
-    trouve(new RegExp(`\\b\\p{L}{3,}\\s+${echappe(m)}\\p{L}*\\b`, 'giu'));
-  });
+  //
+  //    LE MOT-TÊTE SEUL, jamais tous les mots significatifs : c'est précisément la
+  //    boucle sur `mots` qui fabriquait « jeu God » et « War Ragnarök ». Le
+  //    mot-tête est le premier mot significatif du mot-clé (« ordre » ici), celui
+  //    qui porte l'intention de recherche.
+  const tete = mots[0];
+  if (tete) {
+    trouve(new RegExp(`\\b${echappe(tete)}\\p{L}*\\s+(?:de\\s+|du\\s+|des\\s+|d['’])?\\p{L}{3,}\\b`, 'giu'));
+    trouve(new RegExp(`\\b\\p{L}{3,}\\s+${echappe(tete)}\\p{L}*\\b`, 'giu'));
+  }
 
   // 4. Les mots-clés secondaires — FOURNIS, jamais devinés.
   (Array.isArray(secondaires) ? secondaires : []).forEach((s) => {
@@ -145,8 +196,12 @@ export const candidatsGras = (texte = '', targetKeyword = '', secondaires = []) 
   // 5. Les chiffres avec unité, EN DERNIER seulement.
   trouve(/\b\d+(?:[.,]\d+)?\s*(?:\/\s*100|%|€|\$|h\b|heures?|mois|ans?|millions?|milliards?)/gi);
 
-  // Le tri final est le correctif : tout ce qui n'est pas un chiffre d'abord.
-  return [...out.filter((s) => !estChiffre(s)), ...out.filter(estChiffre)];
+  // FRAGMENTS ÉCARTÉS. « War Ragnarök » est refusé quand le texte porte
+  // « God of War Ragnarök » : bolder une moitié de nom propre se voit à l'œil.
+  const propres = out.filter((s) => !estFragment(t, s));
+
+  // Le tri final est le correctif de fond : tout ce qui n'est pas un chiffre d'abord.
+  return [...propres.filter((s) => !estChiffre(s)), ...propres.filter(estChiffre)];
 };
 
 /**
@@ -190,6 +245,12 @@ export const weaveKeywordBold = (html = '', { targetKeyword = '', secondaires = 
       .filter((e) => !e.closest('h1, h2, h3, h4, h5, h6') && !e.closest('a')).length, 0);
 
   sections.forEach((sec) => {
+    // La FAQ n'est pas une section rédactionnelle : ses réponses sont courtes et
+    // calibrées pour un extrait enrichi, et y poser du gras a produit « ordre de
+    // sortie » en gras dans une réponse lors de la première mise en production.
+    // Le TL;DR est écarté pour la même raison. Ce sont des blocs de service.
+    if (EST_SECTION_DE_SERVICE.test(sec.titre)) return;
+
     let n = grasDe(sec.blocs);
     if (n >= GRAS_MIN_PAR_H2) return;               // conforme : on ne touche à rien
 

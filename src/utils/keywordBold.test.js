@@ -59,6 +59,61 @@ describe('les candidats sont PROUVABLES, jamais devinés', () => {
   });
 });
 
+describe('AUCUN FRAGMENT — le defaut de la premiere mise en production', () => {
+  // La premiere version croisait les mots significatifs DEUX A DEUX (`god` x
+  // `war`, chacun apparie seul), ce qui coupait au milieu du nom propre. Les
+  // quatre fragments ci-dessous ont ete produits sur l article REEL le 19/08.
+  const CAS = [
+    ['<h2>God of War III</h2><p>Le titre God of War III sort en 2010 sur PS3 chez Santa Monica.</p>', 'War III'],
+    ['<h2>Un nouveau jeu</h2><p>Le studio confirme un jeu God of War centre sur Kratos.</p>', 'jeu God'],
+    ['<h2>Un remake</h2><p>Sony prepare un remake des trois premiers God of War chez Santa Monica.</p>', 'premiers God'],
+    ['<h2>Plateformes</h2><p>Le portage de God of War Ragnarok suit en septembre 2024 sur PC.</p>', 'War Ragnarok'],
+  ];
+
+  it('ne bolde jamais une moitie de nom propre', () => {
+    CAS.forEach(([html, fragment]) => {
+      const r = weaveKeywordBold(html, { targetKeyword: KW });
+      grasDe(r.html).forEach((g) => expect(g).not.toBe(fragment));
+    });
+  });
+
+  it('mais bolde bien le nom propre ENTIER quand il tient', () => {
+    // « God of War » est une tranche contigue du mot-cle : elle est legitime.
+    const r = weaveKeywordBold(
+      '<h2>La fresque grecque</h2><p>God of War debarque en 2005 sur PlayStation 2.</p>',
+      { targetKeyword: KW },
+    );
+    expect(grasDe(r.html)).toContain('God of War');
+  });
+
+  it('candidatsGras n emet aucune tranche coupee', () => {
+    const t = 'Le titre God of War Ragnarok sort en 2022, apres God of War III.';
+    candidatsGras(t, KW).forEach((c) => {
+      expect(c).not.toMatch(/^War/);      // jamais un candidat commencant par « War »
+    });
+  });
+});
+
+describe('les sections de SERVICE sont ecartees', () => {
+  it('la FAQ ne recoit pas de gras', () => {
+    // R8 avait pose « ordre de sortie » en gras DANS une reponse de FAQ.
+    const html = '<h2>FAQ</h2><p>Quel ordre de sortie choisir pour debuter la saga ?</p>';
+    const r = weaveKeywordBold(html, { targetKeyword: KW });
+    expect(r.placed).toEqual([]);
+    expect(r.html).toBe(html);
+  });
+
+  it('le TL;DR non plus', () => {
+    const html = '<h2>En bref</h2><p>L ordre de sortie convient aux puristes de la saga.</p>';
+    expect(weaveKeywordBold(html, { targetKeyword: KW }).placed).toEqual([]);
+  });
+
+  it('une section normale, elle, est bien traitee', () => {
+    const html = '<h2>Quel ordre suivre en 2026</h2><p>L ordre chronologique seduit les amateurs de lore.</p>';
+    expect(weaveKeywordBold(html, { targetKeyword: KW }).placed.length).toBeGreaterThan(0);
+  });
+});
+
 describe('la pose remplit les sections SOUS le plancher', () => {
   // La section réelle de l'article : 197 mots, UN seul gras, et c'était une durée.
   const SECTION = '<h2>Quel ordre suivre god of war en 2026 ?</h2>'
