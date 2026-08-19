@@ -38,8 +38,16 @@ const MAX_REMIS = 20;
 
 const norm = (s = '') => String(s).replace(/\s+/g, ' ').trim();
 
-/** Emplacements où un gras posé par du code n'a rien à faire. */
-const INTERDIT = 'h1, h2, h3, h4, h5, h6, a, summary, figcaption, del, ins, mark, code, pre';
+/**
+ * Emplacements où un gras posé par du code n'a rien à faire.
+ *
+ * EXPORTÉ pour `keywordBold.js` (R8) : deux mécanismes qui posent du gras sans
+ * appel IA ne peuvent pas se donner chacun leur liste d'interdits — c'est
+ * exactement l'erreur que R1 et R2 avaient commise avec les zones de liens avant
+ * que `linkZones.js` ne devienne leur source unique.
+ */
+export const NO_BOLD_SEL = 'h1, h2, h3, h4, h5, h6, a, summary, figcaption, del, ins, mark, code, pre';
+const INTERDIT = NO_BOLD_SEL;
 
 /**
  * Les termes mis en gras dans un HTML, dans l'ordre du document et dédoublonnés.
