@@ -75,3 +75,60 @@ describe('suggestions : un passage balisé n\'est plus « introuvable »', () =>
     expect(r.missed).toEqual([]);
   });
 });
+
+/**
+ * DOUBLE ÉCHAPPEMENT — le defaut que le correctif du 18/08 laissait passer.
+ *
+ * Constate en production le 19 aout 2026 : le champ Titre affichait encore
+ * « God of War : decouvrez l&rsquo;ordre... » APRES le correctif. La cause n'est
+ * pas `decodeEntities`, qui marche, mais le NOMBRE DE COUCHES a retirer.
+ *
+ * `wpTitle` et le titre enregistre sont des CHAINES : `decodeEntities` leur est
+ * applique explicitement. Les deux autres sources du titre passent par le DOM
+ * (`innerHTML` puis `textContent`), qui retire UNE couche implicitement — et on
+ * s'arretait la. Sur un HTML doublement echappe, il en restait donc une.
+ *
+ * C'est le cas d'un article COLLE : `wpTitle` est absent, donc c'est justement le
+ * chemin H1 qui sert. Le plus frequent des trois etait le seul non couvert.
+ */
+describe('titre : HTML doublement echappe (article colle)', () => {
+  /** Ce que fait `extractH1FromHtml` : le DOM retire UNE couche d'entites. */
+  const viaDom = (html) => {
+    const d = document.createElement('div');
+    d.innerHTML = html;
+    return (d.querySelector('h1')?.textContent || '').trim();
+  };
+
+  it('le DOM seul ne suffit pas : il reste une couche', () => {
+    const html = '<h1>God of War : découvrez l&amp;rsquo;ordre de jeu complet</h1>';
+    // Exactement la chaine vue a l'ecran, entite en clair dans le champ Titre.
+    expect(viaDom(html)).toBe('God of War : découvrez l&rsquo;ordre de jeu complet');
+  });
+
+  it('DOM + decodeEntities donne le titre propre', () => {
+    const html = '<h1>God of War : découvrez l&amp;rsquo;ordre de jeu complet</h1>';
+    expect(decodeEntities(viaDom(html)))
+      .toBe('God of War : découvrez l’ordre de jeu complet');
+  });
+
+  it('un HTML SIMPLEMENT echappe n\'est pas abime par la seconde passe', () => {
+    // La correction ne doit rien casser sur le cas qui marchait deja : apres le
+    // DOM il n'y a plus d'entite, et `decodeEntities` n'a rien a faire.
+    const html = '<h1>God of War : découvrez l&rsquo;ordre de jeu complet</h1>';
+    expect(decodeEntities(viaDom(html)))
+      .toBe('God of War : découvrez l’ordre de jeu complet');
+  });
+
+  it('une esperluette LITTERALE survit aux deux passes', () => {
+    // Le vrai risque d'un second decodage : abimer un titre qui contient « & ».
+    // `&` seul n'est pas une entite, il traverse intact.
+    const html = '<h1>Marks &amp; Spencer : le comparatif</h1>';
+    expect(decodeEntities(viaDom(html))).toBe('Marks & Spencer : le comparatif');
+  });
+
+  it('un chevron ne perd pas la fin du titre', () => {
+    // Raison pour laquelle c'est `decodeEntities` et non `htmlToText` : passer un
+    // titre par innerHTML lui ferait perdre « <10 kW » en silence.
+    expect(decodeEntities('Comparatif &lt;10 kW')).toBe('Comparatif <10 kW');
+  });
+});
