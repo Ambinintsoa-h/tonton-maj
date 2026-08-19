@@ -11,7 +11,7 @@
  */
 import { buildBoldPrompt, normalizeBoldProposals, boldPassReportLine } from './boldPrompt';
 import { splitSectionsForBold, applyBoldPassages } from './boldApply';
-import { GRAS_MAX_PAR_H2 } from './boldCarry';
+import { constatGras } from './boldCarry';
 
 const KW = 'Quel ordre suivre god of war';
 
@@ -63,9 +63,14 @@ describe('le prompt porte les règles à fort impact SEO', () => {
     expect(p).toMatch(/MOITIÉ/);
   });
 
-  it('la répartition par section est posée comme une règle', () => {
-    expect(p).toMatch(/CHAQUE section H2 doit porter 2 à 4/);
+  it('le PLANCHER est posé comme une règle, sans plafond', () => {
+    // Le plancher reste structurel : une section H2 sans gras est un fragment muet
+    // pour un moteur génératif. Le PLAFOND, lui, a été retiré le 19/08 — le modèle
+    // juge le nombre d'après la longueur et la densité de la section.
+    expect(p).toMatch(/CHAQUE section H2 doit porter AU MOINS 2/);
     expect(p).toMatch(/fragment sans/);
+    expect(p).toMatch(/AUCUN PLAFOND IMPOSÉ/);
+    expect(p).not.toMatch(/doit porter 2 à 4/);
   });
 
   it('interdit le fragment de nom propre — le défaut de R8', () => {
@@ -128,12 +133,17 @@ describe('validation — le code n\'applique QUE ce qu\'il a vérifié', () => {
     expect(ecartes[0].motif).toBe('doublon');
   });
 
-  it(`le PLAFOND de ${GRAS_MAX_PAR_H2} par section est tenu par le code`, () => {
+  it('AUCUN PLAFOND par section : le modele juge le nombre', () => {
+    // Retire le 19/08/2026 sur objection d Andrianina — « le modele peut juger par
+    // lui-meme, il comprend le mot-cle et le contenu de l article ». Les donnees lui
+    // donnaient raison : sur la section a 11 passages, le defaut n etait pas le
+    // nombre mais la COMPOSITION (6 chiffres sur 11). Un plafond a 4 aurait coupe
+    // dans le bon, au hasard de l ordre d arrivee.
     const props = ['ordre de sortie', 'ordre chronologique', 'amateurs de lore', 'Trois approches', 'aux puristes']
       .map((passage) => ({ section: 1, passage }));
     const { retenus, ecartes } = normalizeBoldProposals(props, sections);
-    expect(retenus).toHaveLength(GRAS_MAX_PAR_H2);
-    expect(ecartes.some((e) => e.motif === 'plafond')).toBe(true);
+    expect(retenus).toHaveLength(5);
+    expect(ecartes.some((e) => e.motif === 'plafond')).toBe(false);
   });
 });
 
@@ -182,5 +192,42 @@ describe('compte rendu', () => {
 
   it('rien à dire → aucune ligne de bruit', () => {
     expect(boldPassReportLine({})).toBe('');
+  });
+});
+
+describe('COMPOSITION mesuree — ce qu on surveille depuis qu on ne borne plus', () => {
+  // Le plafond par section masquait le vrai defaut : une section a 11 passages
+  // dont 6 chiffres n a pas un probleme de nombre. Sur l article God of War,
+  // 26 des 42 passages etaient des chiffres.
+  it('signale une section ou les CHIFFRES sont majoritaires', () => {
+    const html = '<h2>Sons of Sparta</h2><p>Sorti le <strong>12 fevrier 2026</strong>, '
+      + 'note <strong>64/100</strong>, a <strong>29,99 EUR</strong>, developpe par '
+      + '<strong>Mega Cat Studios</strong>.</p>';
+    const c = constatGras(html);
+    expect(c.sectionsChiffrees).toEqual(['Sons of Sparta']);
+    expect(c.partChiffres).toBe(75);
+  });
+
+  it('ne signale RIEN quand la composition est saine', () => {
+    const html = '<h2>Section saine</h2><p>Le <strong>systeme de combat</strong> et la '
+      + '<strong>camera a l epaule</strong> pour <strong>94/100</strong>.</p>';
+    const c = constatGras(html);
+    expect(c.sectionsChiffrees).toEqual([]);
+    expect(c.partChiffres).toBe(33);
+  });
+
+  it('une section a UN SEUL passage n est jamais signalee comme chiffree', () => {
+    // Un seul chiffre ne fait pas un desequilibre de composition : c est le
+    // PLANCHER qui est en cause, et il est deja signale a part.
+    const html = '<h2>Section courte</h2><p>Le score atteint <strong>86/100</strong>.</p>';
+    const c = constatGras(html);
+    expect(c.sectionsChiffrees).toEqual([]);
+    expect(c.sousPlancher).toBe(1);
+  });
+
+  it('aucun gras : aucune part, aucune division par zero', () => {
+    const c = constatGras('<h2>Vide</h2><p>Un paragraphe sans aucun gras du tout.</p>');
+    expect(c.partChiffres).toBe(0);
+    expect(c.chiffres).toBe(0);
   });
 });

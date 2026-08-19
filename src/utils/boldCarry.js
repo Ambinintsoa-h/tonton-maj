@@ -196,7 +196,7 @@ export const constatGras = (html = '') => {
   let courante = null;
   Array.from(d.children).forEach((el) => {
     if (el.tagName === 'H2') {
-      courante = { titre: norm(el.textContent), gras: 0, ecart: null };
+      courante = { titre: norm(el.textContent), gras: 0, chiffres: 0, ecart: null };
       sections.push(courante);
       return;
     }
@@ -204,8 +204,15 @@ export const constatGras = (html = '') => {
     // Un gras de titre ou de lien ne COMPTE PAS dans la densité : il est déjà
     // signalé comme faute d'emplacement, l'ajouter au décompte le ferait passer
     // pour une mise en avant valable.
-    courante.gras += Array.from(el.querySelectorAll('strong, b'))
-      .filter((e) => !e.closest('h1, h2, h3, h4, h5, h6') && !e.closest('a')).length;
+    const valables = Array.from(el.querySelectorAll('strong, b'))
+      .filter((e) => !e.closest('h1, h2, h3, h4, h5, h6') && !e.closest('a'));
+    courante.gras += valables.length;
+    // COMPOSITION, mesurée depuis le 19/08/2026. Le plafond par section a été
+    // retiré (le modèle juge le nombre, il comprend l'article), mais le défaut
+    // réel reste mesurable : sur l'article God of War, 26 des 42 passages étaient
+    // des chiffres. Le prompt demande qu'ils ne dépassent pas la moitié d'une
+    // section — encore fallait-il le vérifier.
+    courante.chiffres += valables.filter((e) => /\d/.test(e.textContent || '')).length;
   });
 
   sections.forEach((s) => {
@@ -213,11 +220,25 @@ export const constatGras = (html = '') => {
     else if (s.gras > GRAS_MAX_PAR_H2) s.ecart = 'sur';
   });
 
+  // Sections où les CHIFFRES sont majoritaires — le seuil que le prompt fixe.
+  // C'est le vrai défaut, celui que le plafond par section masquait : une section
+  // à 11 passages dont 6 chiffres n'a pas un problème de nombre, elle a un
+  // problème de composition.
+  const sectionsChiffrees = sections
+    .filter((s) => s.gras >= 2 && s.chiffres * 2 > s.gras)
+    .map((s) => s.titre);
+  const chiffresTotal = sections.reduce((n, s) => n + s.chiffres, 0);
+  const grasTotal = sections.reduce((n, s) => n + s.gras, 0);
+
   return {
     sections,
     sousPlancher: sections.filter((s) => s.ecart === 'sous').length,
     surPlafond:   sections.filter((s) => s.ecart === 'sur').length,
     dansTitre, dansLien, tropLongs,
     total: tous.length,
+    // COMPOSITION
+    chiffres: chiffresTotal,
+    partChiffres: grasTotal ? Math.round((chiffresTotal / grasTotal) * 100) : 0,
+    sectionsChiffrees,
   };
 };
