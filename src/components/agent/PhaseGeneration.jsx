@@ -16,6 +16,7 @@ import { motion } from 'framer-motion';
 import { Sparkles, Loader2, Check, AlertTriangle, ArrowRight, FileText, RotateCcw, Save } from 'lucide-react';
 import {
   MAJ_SCOPES, SCOPE_SIMPLE, scopeProposedByAudit, scopeRecommendationSource, wordsAddedReport,
+  auditAmpleurDecision,
 } from '../../constants/majPhases';
 import { cleanLinkRows } from '../../constants/majMode';
 // Plafond RÉEL de l'instruction : `runQatRewrite` tronque à cette longueur.
@@ -66,7 +67,21 @@ export default function PhaseGeneration({
 }) {
   const propose  = scopeProposedByAudit(audit);
   const source   = scopeRecommendationSource(audit);
-  const decision = audit && audit.ampleur && audit.ampleur.decision;
+  // DEUX LECTURES DU MÊME CHAMP NE PEUVENT PAS SE CONTREDIRE (constaté en
+  // production le 19 août 2026 : « L'audit recommande une . », libellé vide).
+  // `scopeRecommendationSource` choisit la branche avec `auditAmpleurDecision`,
+  // TOLÉRANT au texte libre ; l'affichage lisait `audit.ampleur.decision` en
+  // BRUT. Quand l'audit rend `ampleur` en texte libre — forme dégradée documentée
+  // le 17/08 — la branche « l'audit a tranché » s'affichait avec un libellé vide.
+  // Un seul lecteur pour les deux, sinon le désaccord revient.
+  const decision = auditAmpleurDecision(audit);
+  // La justification vit dans `.justification` en forme normale, et EST le champ
+  // lui-même en forme dégradée. Sans ce repli, la phrase perdait aussi le
+  // « pourquoi » : `'chaîne'.justification` vaut undefined, sans erreur, donc en
+  // silence.
+  const justification = typeof (audit && audit.ampleur) === 'string'
+    ? audit.ampleur
+    : (audit && audit.ampleur && audit.ampleur.justification) || '';
   const retenu   = scope || propose;
   const contredit = !!scope && scope !== propose;
   const dejaGenere = !!generatedHtml && !!qatArticle;
@@ -88,7 +103,7 @@ export default function PhaseGeneration({
         {source === 'ampleur' ? (
           <p className="text-[11px] text-gray-500">
             L'audit recommande une <strong className="text-gray-700">{LIBELLE_DECISION[decision] || decision}</strong>.
-            {audit.ampleur.justification ? ` ${audit.ampleur.justification}` : ''}
+            {justification ? ` ${justification}` : ''}
           </p>
         ) : source === 'scores' ? (
           <p className="text-[11px] text-gray-500">

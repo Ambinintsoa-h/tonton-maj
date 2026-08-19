@@ -411,7 +411,16 @@ export default function ArticleResult() {
     const wpTitle = decodeEntities(wpMcpData?.wpTitle || '');
     if (wpTitle) { setEditedTitle(wpTitle); return; }
     // Priorité 2 : H1 de l'article original — jamais le slug d'URL
-    const h1 = extractH1FromHtml(agent.originalContent);
+    //
+    // DÉCODÉ, comme les deux autres sources. Le correctif du 18/08 traitait
+    // `wpTitle` et le titre enregistré, mais pas les deux chemins qui passent par
+    // le DOM : ceux-là ne retirent qu'UNE couche d'entités, celle de `textContent`.
+    // Sur un HTML DOUBLEMENT ÉCHAPPÉ (`l&amp;rsquo;ordre`, cas d'un article collé)
+    // il en reste donc une : le champ Titre affichait « découvrez l&rsquo;ordre »
+    // en clair, et c'est cette chaîne qui repartait à la publication.
+    // Constaté en production le 19 août 2026, sur le chemin H1 — précisément celui
+    // qui sert quand aucune URL n'est renseignée, donc le plus fréquent des trois.
+    const h1 = decodeEntities(extractH1FromHtml(agent.originalContent));
     // Priorité 3 : titre déjà enregistré pour cet article (file d'attente puis
     // historique). Il vient du relevé WordPress fait au lancement de la MAJ, donc
     // il est fiable — contrairement à la première ligne du contenu, qui sur un
@@ -422,7 +431,8 @@ export default function ArticleResult() {
     // Même origine WordPress que wpTitle, donc mêmes entités à décoder.
     const enregistre = decodeEntities(cqItem?.title || currentArticle?.title || '');
     // Priorité 4 : première ligne du texte brut collé (dernier recours)
-    setEditedTitle(h1 || enregistre || firstLineAsTitle(agent.originalContent));
+    // Le dernier recours passe par le DOM lui aussi : même couche manquante.
+    setEditedTitle(h1 || enregistre || decodeEntities(firstLineAsTitle(agent.originalContent)));
   }, [wpMcpData?.wpTitle, agent.originalContent, cqItem?.title, currentArticle?.title]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset SEO fields + état catégories quand on passe à un nouvel article.
