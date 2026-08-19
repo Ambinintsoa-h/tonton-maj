@@ -13,7 +13,7 @@
 import { searchWeb } from './search';
 import { sanitizeFullArticle, listExternalLinks, listInternalLinks, carryOverInternalLinks } from '../utils/diff';
 import {
-  weaveBriefLinks, countPlacedBriefLinks, briefLinkReportLine,
+  weaveBriefLinks, countPlacedBriefLinks, briefLinkReportLine, promoteInlineRenvois,
   unwrapForbiddenInternalLinks,
 } from '../utils/internalWeave';
 import { listArticleImages, carryOverImages } from '../utils/imageCarry';
@@ -1128,6 +1128,21 @@ N'ajoute aucun AUTRE lien externe.`;
         onStep(`🔗 ${deloc.unwrapped.length} lien(s) interne(s) posé(s) par l'IA dans une zone interdite (FAQ, titre, tableau, TL;DR) — délié(s), puis replacé(s) dans le corps.`);
       }
       const woven = weaveBriefLinks(deloc.html, internalLinks, articleUrl);
+
+      // ── R6 — les renvois écrits PAR LE MODÈLE deviennent des encarts ─────────
+      // APRÈS R2, jamais avant : le tissage doit voir la prose du modèle telle
+      // qu'elle est, et un lien déjà placé reste placé — R6 le DÉPLACE, il ne le
+      // retire pas, donc le constat de R2 juste en dessous est inchangé.
+      // Le renvoi signalé par Andrianina n'était PAS une clause du code : « À lire
+      // aussi LES … », sans deux-points et sans `data-lien-redige` nulle part dans
+      // la page. C'est le modèle qui l'écrit, et corriger `writeClause` (18/08) ne
+      // pouvait donc rien y faire — le renvoi restait collé en fin de phrase.
+      const renvois = promoteInlineRenvois(woven.html, articleUrl);
+      if (renvois.promoted.length) {
+        onStep(`🔗 ${renvois.promoted.length} renvoi(s) « À lire aussi » collé(s) en fin de phrase par l'IA — déplacé(s) dans leur propre encart.`);
+      }
+      woven.html = renvois.html;
+
       // CONSTAT : on ne croit ni le modèle (`ancres_placees` est une
       // auto-déclaration jamais vérifiée) ni le rapport du tissage — on RECOMPTE
       // sur le HTML final.
