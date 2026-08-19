@@ -154,8 +154,39 @@ const PORTE_BALISAGE = /<|>|href\s*=|&[a-z]+;/i;
  * @returns {{ retenus: Array<{section:number, passage:string}>,
  *             ecartes: Array<{passage:string, motif:string}> }}
  */
+/**
+ * Extrait la liste de propositions, quelle que soit la FORME rendue.
+ *
+ * Corrigé le 19 août 2026 après un no-op SILENCIEUX en production : la passe a
+ * consommé ~1 156 tokens de sortie, et RIEN n'a été posé ni signalé. Cause : la
+ * réponse n'était ni un tableau nu ni `{ passages: [...] }`, les deux seules
+ * formes acceptées — donc `items` valait `[]`, donc `retenus` ET `ecartes` étaient
+ * vides, donc `boldPassReportLine` rendait une chaîne vide. Aucun message, aucun
+ * effet, un appel payé : le pire des trois résultats possibles.
+ *
+ * On accepte donc TOUT tableau d'objets trouvé à la racine, quel que soit le nom
+ * de la clé — le modèle rend « resultats », « items », « gras » selon l'humeur.
+ * Et si rien n'est trouvé, l'appelant le DIT (voir `formeInattendue`).
+ */
+const extraireItems = (brut) => {
+  if (Array.isArray(brut)) return brut;
+  if (!brut || typeof brut !== 'object') return [];
+  // Une clé explicite d'abord, pour rester prévisible.
+  for (const cle of ['passages', 'items', 'resultats', 'gras', 'bold', 'data']) {
+    if (Array.isArray(brut[cle])) return brut[cle];
+  }
+  // Sinon, le premier tableau d'objets rencontré.
+  const trouve = Object.values(brut).find(
+    (v) => Array.isArray(v) && v.length && typeof v[0] === 'object',
+  );
+  return trouve || [];
+};
+
+/** La réponse a été lue mais ne contient AUCUNE proposition exploitable. */
+export const formeInattendue = (brut) => !!brut && extraireItems(brut).length === 0;
+
 export const normalizeBoldProposals = (brut, sections = []) => {
-  const items = Array.isArray(brut) ? brut : (brut && Array.isArray(brut.passages) ? brut.passages : []);
+  const items = extraireItems(brut);
   const retenus = [];
   const ecartes = [];
   const vus = new Set();

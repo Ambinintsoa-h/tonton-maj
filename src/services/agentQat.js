@@ -1395,6 +1395,15 @@ N'ajoute aucun AUTRE lien externe.`;
       // FAQ, TL;DR, citation) : le comptage ne doit pas valider ça en silence.
       ancresMalPlacees: (sanitized.briefConstat || []).filter((l) => l.placed && l.misplaced),
       ancresRapport:   sanitized.briefReport || '',      // la phrase de compte rendu, conservée
+      // ── MESURES DU GRAS, RENDUES AVEC L'ARTICLE ─────────────────────────────
+      // Elles vivaient sur `sanitized` et s'arrêtaient là : jamais renvoyées, donc
+      // jamais persistées. Le seul canal était `onStep`, dont les messages
+      // disparaissent dès la fin de la génération (les étapes se replient et rien
+      // n'est conservé). Conséquence constatée le 19/08 : impossible de savoir
+      // pourquoi la passe de gras n'avait rien posé — on pilotait à l'aveugle sur
+      // la mesure censée nous éclairer.
+      constatGras:     sanitized.constatGras || null,
+      grasPasse:       sanitized.boldPass || null,
       ancresDeclareesIa: Array.isArray(article.ancres_placees) ? article.ancres_placees : [],
       notesRedaction:  String(article.notes_redaction || '').trim(),
       strippedExternalLinks: sanitized.stripped,

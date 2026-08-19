@@ -9,7 +9,9 @@
  * prompt de refonte (19 gras sur 29 étaient des chiffres, 5 sections vides) et la
  * pose par le code (« War III », « jeu God »).
  */
-import { buildBoldPrompt, normalizeBoldProposals, boldPassReportLine } from './boldPrompt';
+import {
+  buildBoldPrompt, normalizeBoldProposals, boldPassReportLine, formeInattendue,
+} from './boldPrompt';
 import { splitSectionsForBold, applyBoldPassages } from './boldApply';
 import { constatGras } from './boldCarry';
 
@@ -229,5 +231,46 @@ describe('COMPOSITION mesuree — ce qu on surveille depuis qu on ne borne plus'
     const c = constatGras('<h2>Vide</h2><p>Un paragraphe sans aucun gras du tout.</p>');
     expect(c.partChiffres).toBe(0);
     expect(c.chiffres).toBe(0);
+  });
+});
+
+describe('JAMAIS SILENCIEUSE — le no-op de production', () => {
+  // Constate le 19/08/2026 : la passe a consomme ~1 156 tokens de sortie, RIEN n a
+  // ete pose et RIEN n a ete signale. Cause : la reponse n etait ni un tableau nu
+  // ni { passages: [...] }, les deux seules formes acceptees. `items` valait [],
+  // donc `retenus` ET `ecartes` etaient vides, donc la ligne de compte rendu etait
+  // vide. Un appel paye, aucun effet, aucun message : le pire des trois resultats.
+  const sections = splitSectionsForBold(ARTICLE);
+
+  it('accepte un tableau nu', () => {
+    const { retenus } = normalizeBoldProposals([{ section: 1, passage: 'ordre de sortie' }], sections);
+    expect(retenus).toHaveLength(1);
+    expect(formeInattendue([{ section: 1, passage: 'ordre de sortie' }])).toBe(false);
+  });
+
+  it('accepte les cles alternatives que le modele emploie', () => {
+    ['passages', 'items', 'resultats', 'gras', 'bold', 'data'].forEach((cle) => {
+      const brut = { [cle]: [{ section: 1, passage: 'ordre de sortie' }] };
+      expect(normalizeBoldProposals(brut, sections).retenus).toHaveLength(1);
+      expect(formeInattendue(brut)).toBe(false);
+    });
+  });
+
+  it('accepte un tableau sous une cle INCONNUE', () => {
+    const brut = { mots_en_gras: [{ section: 1, passage: 'ordre de sortie' }] };
+    expect(normalizeBoldProposals(brut, sections).retenus).toHaveLength(1);
+  });
+
+  it('une forme SANS aucune liste est DETECTEE, pas ignoree', () => {
+    // C est le cas exact de production : lisible, mais rien d exploitable.
+    expect(formeInattendue({ message: 'Je ne peux pas traiter cet article.' })).toBe(true);
+    expect(formeInattendue({ section: 1, passage: 'un objet seul, pas une liste' })).toBe(true);
+  });
+
+  it('une reponse ILLISIBLE reste distincte d une forme inattendue', () => {
+    // parseJsonLoose rend null : ce n est pas une « forme inattendue », c est un
+    // echec de lecture, et les deux ont leur propre message.
+    expect(formeInattendue(null)).toBe(false);
+    expect(formeInattendue(undefined)).toBe(false);
   });
 });

@@ -22,7 +22,9 @@
  */
 import { callClaudeWithProgress } from './agent';
 import { parseJsonLoose } from './agentQat';
-import { buildBoldPrompt, normalizeBoldProposals, boldPassReportLine } from '../utils/boldPrompt';
+import {
+  buildBoldPrompt, normalizeBoldProposals, boldPassReportLine, formeInattendue,
+} from '../utils/boldPrompt';
 import { splitSectionsForBold, applyBoldPassages } from '../utils/boldApply';
 
 const SYSTEME = 'Tu es experte SEO éditoriale. Tu désignes des passages à mettre en '
@@ -70,7 +72,19 @@ export const runBoldPass = async ({
       onStep, onReplace, 'Mise en gras',
     );
     usage = (res && res.usage) || null;
-    brut = parseJsonLoose((res && res.text) || '');
+    const texte = (res && res.text) || '';
+    brut = parseJsonLoose(texte);
+    // RÉPONSE BRUTE DANS LA CONSOLE, comme le prompt de génération. Sans elle, un
+    // no-op est indiagnosticable : c'est exactement ce qui est arrivé le 19/08 —
+    // 1 156 tokens de sortie consommés, rien posé, rien signalé, et aucun moyen de
+    // savoir ce que le modèle avait répondu.
+    try {
+      /* eslint-disable no-console */
+      console.groupCollapsed(`%c[TONTON] Passe de gras — réponse du modèle (${texte.length} car.)`, 'color:#6366f1;font-weight:bold');
+      console.log(texte);
+      console.groupEnd();
+      /* eslint-enable no-console */
+    } catch { /* la journalisation ne doit jamais empêcher la passe */ }
   } catch (e) {
     // On garde l'article. Perdre une génération payée pour un gras manquant serait
     // une très mauvaise affaire.
@@ -83,10 +97,22 @@ export const runBoldPass = async ({
     return inchange;
   }
 
+  // FORME INATTENDUE : la réponse a été lue mais ne porte aucune proposition. On le
+  // DIT. Se taire ici a produit le pire résultat possible en production — un appel
+  // payé, aucun effet, aucun message.
+  if (formeInattendue(brut)) {
+    const report = 'Passe de gras : réponse au format inattendu — aucun passage exploitable, gras à faire à la main.';
+    onStep(`⚠️ ${report}`);
+    return { ...inchange, report, tokenUsage: usage };
+  }
+
   const { retenus, ecartes } = normalizeBoldProposals(brut, sections);
   if (!retenus.length) {
-    const report = boldPassReportLine({ retenus: [], ecartes });
-    if (report) onStep(report);
+    // Toutes les propositions ont été refusées : on nomme les motifs, sinon le
+    // rédacteur ne peut ni comprendre ni corriger.
+    const report = boldPassReportLine({ retenus: [], ecartes })
+      || `Passe de gras : ${ecartes.length} proposition(s), toutes écartées.`;
+    onStep(`⚠️ ${report}`);
     return { ...inchange, ecartes, report, tokenUsage: usage };
   }
 
