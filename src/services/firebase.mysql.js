@@ -13,8 +13,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 'use strict';
+// ── 401 : LA SESSION A EXPIRÉ, ET ÇA SE DIT ─────────────────────────────────
+// Cette couche ne faisait RIEN du 401, contrairement à l'intercepteur axios. Le
+// magasin restait vide, l'écran annonçait « Aucun skill cerveau actif » — un
+// message FAUX — et les sondages bouclaient. Voir sessionExpiry.js pour le détail.
+import { signalSessionExpired, isSessionExpired } from './sessionExpiry';
 
 const NI = (name) => { throw new Error(`[mysql] ${name} — endpoint pas encore implémenté (backend MySQL en construction)`); };
+
 
 const authToken = () => sessionStorage.getItem('tonton_auth_token');
 
@@ -28,6 +34,12 @@ const api = async (method, path, body) => {
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  // 401 = jeton mort. On le SIGNALE (bandeau + arrêt des sondages) avant de lever,
+  // sinon l'appelant ne voit qu'une erreur HTTP anonyme et l'utilisateur, rien.
+  if (res.status === 401) {
+    signalSessionExpired();
+    throw new Error(`[mysql] ${method} ${path} → session expirée (401)`);
+  }
   if (!res.ok) throw new Error(`[mysql] ${method} ${path} → HTTP ${res.status}`);
   if (res.status === 204) return null;
   const ct = res.headers.get('content-type') || '';
@@ -50,6 +62,10 @@ const pollUrl = (path, callback, intervalMs, { onError } = {}) => {
   let lastBody = null;
   const fetchOnce = async (force) => {
     if (stopped) return;
+    // Session déjà expirée : on n'interroge plus. Sans cette garde, chaque sondage
+    // repartait toutes les N secondes avec un jeton mort — le serveur répondait 401
+    // en boucle, et le journal se remplissait pour rien.
+    if (isSessionExpired()) { stopped = true; return; }
     if (!force && typeof document !== 'undefined' && document.hidden) return; // pause onglet caché
     try {
       const res = await fetch('/api/data' + path, {
@@ -61,6 +77,14 @@ const pollUrl = (path, callback, intervalMs, { onError } = {}) => {
       });
       if (stopped) return;
       if (res.status === 304) return;            // inchangé
+      if (res.status === 401) {
+        // Un sondage qui tombe sur un 401 ARRÊTE le sondage : le laisser tourner
+        // n'apporterait rien et masquerait le vrai problème derrière du bruit.
+        signalSessionExpired();
+        stopped = true;
+        if (onError) onError(new Error(`[mysql] poll ${path} → session expirée (401)`));
+        return;
+      }
       if (!res.ok) { if (onError) onError(new Error(`[mysql] poll ${path} → HTTP ${res.status}`)); return; }
       etag = res.headers.get('ETag') || etag;
       const text = await res.text();

@@ -7,11 +7,12 @@ import { Provider, useSelector } from 'react-redux';
 import { Toaster } from 'react-hot-toast';
 import axios from 'axios';
 import store from './store';
+import { signalSessionExpired, isAuthenticatedApiUrl } from './services/sessionExpiry';
 import Login from './pages/Login';
+import SessionExpiredBanner from './components/SessionExpiredBanner';
 import ResetPassword from './pages/ResetPassword';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import RoleGuard from './components/auth/RoleGuard';
-import { logout } from './store/slices/authSlice';
 import Layout from './components/layout/Layout';
 import Articles from './pages/Articles';
 import Skills from './pages/Skills';
@@ -59,14 +60,26 @@ axios.interceptors.request.use((config) => {
   return config;
 });
 
-// Redirige vers /login si le serveur répond 401 (token expiré ou invalide)
+// 401 → BANDEAU « session expirée », plus de redirection immédiate.
+//
+// Décision d'Andrianina, 19 août 2026. La redirection tuait une génération en
+// cours : un 401 venu d'un sondage secondaire (notifications, file d'attente)
+// faisait perdre un appel payé et plusieurs minutes de travail, sans un mot.
+// Le signal est PARTAGÉ avec la couche `fetch` de /api/data (firebase.mysql.js),
+// qui ne traitait pas le 401 du tout — deux couches réseau ne peuvent pas avoir
+// deux comportements différents sur la même panne.
+//
+// `logout()` n'est PLUS dispatché ici : il vide le store, donc l'écran perdrait
+// l'article affiché — exactement le travail qu'on cherche à préserver. Le jeton,
+// lui, est bien retiré (par `signalSessionExpired`).
+//
+// `/api/auth/*` est EXCLU : un mot de passe erroné répond 401 lui aussi, et
+// annoncer « session expirée » sur un échec de connexion serait un message faux.
 axios.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && error.config?.url?.startsWith('/api')) {
-      sessionStorage.removeItem(TOKEN_KEY);
-      store.dispatch(logout());
-      window.location.replace('/login');
+    if (error.response?.status === 401 && isAuthenticatedApiUrl(error.config?.url)) {
+      signalSessionExpired();
     }
     return Promise.reject(error);
   }
@@ -559,6 +572,9 @@ export default function App() {
   return (
     <Provider store={store}>
       <BrowserRouter>
+        {/* AU-DESSUS DE TOUT : un travail qui ne s'enregistre plus est un problème
+            qu'on ne doit pas pouvoir manquer. */}
+        <SessionExpiredBanner />
         <SplashRemover />
         <SettingsLoader />
         <PricingLoader />
