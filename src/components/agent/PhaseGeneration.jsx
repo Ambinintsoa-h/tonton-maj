@@ -13,7 +13,8 @@
  * PR 3 ; ici la consigne libre existante en tient lieu.
  */
 import { motion } from 'framer-motion';
-import { Sparkles, Loader2, Check, AlertTriangle, ArrowRight, FileText, RotateCcw, Save } from 'lucide-react';
+import { useState } from 'react';
+import { Sparkles, Loader2, Check, AlertTriangle, ArrowRight, FileText, RotateCcw, Save, ChevronUp, ChevronDown } from 'lucide-react';
 import {
   MAJ_SCOPES, SCOPE_SIMPLE, scopeProposedByAudit, scopeRecommendationSource, wordsAddedReport,
   auditAmpleurDecision,
@@ -88,19 +89,32 @@ export default function PhaseGeneration({
   const bilan = dejaGenere ? wordsAddedReport(originalHtml, generatedHtml, retenu) : null;
   const reste = Math.max(0, MAX_INSTRUCTION_CHARS - (prompt || '').length);
   const simple = retenu === SCOPE_SIMPLE;
+  // DÉPLIABLE, DÉPLIÉ PAR DÉFAUT (demande d'Andrianina, 19/08). L'ampleur et son
+  // sélecteur occupent le haut de la phase 2 ; les replier fait remonter les cases
+  // de l'audit et les directives, donc la vue diff. Déplié par défaut : c'est la
+  // décision qui pilote toute la génération, on ne la cache pas d'office.
+  const [ouvert, setOuvert] = useState(true);
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-5 space-y-4">
 
       {/* Ce que l'audit recommande */}
       <div className="space-y-1">
-        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOuvert((v) => !v)}
+          className="flex items-center gap-2 group"
+          title={ouvert ? 'Replier' : 'Déplier'}
+        >
           <Sparkles size={14} className="text-sage-500" />
-          Ampleur de la mise à jour
-        </h3>
+          <h3 className="text-sm font-semibold text-gray-800">Ampleur de la mise à jour</h3>
+          {ouvert
+            ? <ChevronUp size={14} className="text-gray-400 group-hover:text-gray-700" />
+            : <ChevronDown size={14} className="text-gray-400 group-hover:text-gray-700" />}
+        </button>
         {/* La justification dit sur QUOI elle repose : une déduction ne doit jamais
             être présentée comme une décision de l'audit. */}
-        {source === 'ampleur' ? (
+        {!ouvert ? null : source === 'ampleur' ? (
           <p className="text-[11px] text-gray-500">
             L'audit recommande une <strong className="text-gray-700">{LIBELLE_DECISION[decision] || decision}</strong>.
             {justification ? ` ${justification}` : ''}
@@ -117,7 +131,10 @@ export default function PhaseGeneration({
         )}
       </div>
 
-      {/* Le rédacteur tranche */}
+      {/* Le rédacteur tranche — masqué avec le bloc, mais l'ampleur RETENUE reste
+          visible dans l'en-tête replié : on ne cache jamais la décision, seulement
+          les moyens de la changer. */}
+      {ouvert && (
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
           {Object.entries(MAJ_SCOPES).map(([cle, m]) => {
@@ -155,6 +172,7 @@ export default function PhaseGeneration({
           </p>
         )}
       </div>
+      )}
 
       {/* ── DEUX COLONNES : l'audit se coche à gauche, la vision s'écrit à droite ──
           La largeur suit l'AMPLEUR, elle n'est pas figée à 50/50 : en refonte

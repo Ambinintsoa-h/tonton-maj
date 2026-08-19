@@ -69,6 +69,14 @@ import { useNavigate } from 'react-router-dom';
 
 import QatAuditPanel from './QatAuditPanel';
 
+/**
+ * Hauteur de la barre du haut (celle de « Vider le cache »), MESURÉE dans le
+ * navigateur. Elle sert à deux endroits — le seuil de bascule du stepper flottant
+ * et son `top` — et deux littéraux séparés auraient fini par diverger : le stepper
+ * se serait alors collé un pixel trop haut ou trop bas, sans que rien ne le dise.
+ */
+const TOPBAR_HEIGHT = 62;
+
 const TAB_AUDIT = 'audit';
 const TAB_AVANT = 'avant';
 const TAB_APRES = 'apres';
@@ -202,24 +210,36 @@ export default function ArticleResult() {
   // l'autosave existant : on ne tient pas un second compteur en parallele.
   const phase       = agent.phase || PHASE_AUDIT;
   const phaseStatus = agent.phaseStatus || {};
-  // ── HAUTEUR RÉELLE DU STEPPER FLOTTANT ─────────────────────────────────────
-  // Le stepper est `fixed` (voir son rendu plus bas) et sort donc du flux : il faut
-  // réserver sa place, sinon le haut de l'article passe dessous. La hauteur est
-  // MESURÉE et non écrite en dur : elle change avec la largeur de la fenêtre (les
-  // libellés des quatre phases passent à la ligne) et avec le zoom du navigateur.
-  // Un `ResizeObserver` suffit — il couvre le redimensionnement ET le changement de
-  // contenu (un statut qui passe de « à faire » à « en cours… »).
+  // ── STEPPER : EN PLACE, PUIS FLOTTANT DÈS QU'IL SORT DE L'ÉCRAN ────────────
+  //
+  // Corrigé le 19 août 2026 : la première version le rendait `fixed` en
+  // permanence, et il MASQUAIT le titre « Articles » et le bouton « Nouvel
+  // article », qui vivent tout en haut de la page — au-dessus de ce composant,
+  // donc impossibles à décaler d'ici. Un bandeau qui cache le titre est pire que
+  // pas de bandeau.
+  //
+  // Le stepper reste donc DANS LE FLUX à sa place d'origine, et une copie
+  // `fixed` prend le relais uniquement quand l'original passe sous la barre du
+  // haut. Aucune réserve de place n'est nécessaire : l'original occupe toujours sa
+  // place dans le document, il est simplement hors écran quand la copie s'affiche.
+  // Deux avantages sur la version précédente : rien n'est jamais masqué, et il n'y
+  // a aucun décalage de mise en page au premier rendu.
   const stepperRef = useRef(null);
-  const [stepperHeight, setStepperHeight] = useState(0);
+  const [stepperFlottant, setStepperFlottant] = useState(false);
   useEffect(() => {
     const el = stepperRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
-    const maj = () => setStepperHeight(el.offsetHeight);
-    maj();
-    const ro = new ResizeObserver(maj);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [phase, phaseStatus]);
+    if (!el) return undefined;
+    // `IntersectionObserver` avec une marge haute de -62 px : l'original cesse
+    // d'« intersecter » exactement quand il passe sous la barre du haut. Plus sobre
+    // qu'un écouteur de défilement, qui se déclencherait à chaque pixel.
+    if (typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver(
+      ([e]) => setStepperFlottant(!e.isIntersecting),
+      { rootMargin: `-${TOPBAR_HEIGHT}px 0px 0px 0px`, threshold: 0 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
   // Vrai si un skill SKILL.md est actif → l'onglet Audit est attendu (affiché même vide).
   const hasBrainSkill = (skills || []).some(s => s?.format === 'skillmd' && s.active !== false && s.body);
 
@@ -347,6 +367,15 @@ export default function ArticleResult() {
   const [showSources, setShowSources] = useState(false);  // Sources vérifiées
   const [showAnalysis, setShowAnalysis] = useState(false); // Synthèse de l'agent — repliée : les onglets Audit/Avant/Après restent visibles directement
   const [showCatsBlock, setShowCatsBlock] = useState(false); // Catégories WordPress — repliées par défaut (bloc volumineux, rarement modifié)
+  // ── TROIS BLOCS DÉPLIABLES, DÉPLIÉS PAR DÉFAUT (demande d'Andrianina, 19/08) ──
+  // L'objectif est nommé : « pouvoir accéder rapidement à la Vue diff / Vue finale ».
+  // Sur un article long, ces trois blocs repoussaient l'éditeur loin sous la ligne
+  // de flottaison. Dépliés par défaut parce qu'ils portent des informations qu'on
+  // veut voir au premier coup d'œil — c'est le REPLI qui est l'option, pas
+  // l'affichage : replier par défaut aurait caché le bilan de l'analyse.
+  const [showStats, setShowStats]     = useState(true);   // bandeau « Analyse terminée »
+  const [showSeoMeta, setShowSeoMeta] = useState(true);   // SEO Meta (Yoast / SEOPress)
+  const [showAmpleur, setShowAmpleur] = useState(true);   // Ampleur de la mise à jour
   // Titre éditable de l'article
   const [editedTitle, setEditedTitle] = useState('');
   // titleDirty = true uniquement si l'utilisateur a tapé dans le champ
@@ -4040,16 +4069,27 @@ export default function ArticleResult() {
   return (
     <div className="space-y-4 pb-28"> {/* pb-28 : dégage la barre d'actions épinglée en bas */}
 
-      {/* ── Barre de stats ── */}
+      {/* ── Barre de stats — DÉPLIABLE, dépliée par défaut ──────────────────────
+          Repliée, elle laisse « Analyse terminée » seul sur une ligne : le bilan
+          reste lisible, et l'éditeur remonte de toute la hauteur du bandeau. */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         className="glass-card p-4 flex flex-wrap items-center gap-x-6 gap-y-2"
       >
-        <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setShowStats((v) => !v)}
+          className="flex items-center gap-2 group"
+          title={showStats ? 'Replier le bilan' : 'Déplier le bilan'}
+        >
           <CheckCircle2 size={16} className="text-sage-500" />
           <span className="text-sm font-semibold text-gray-800">Analyse terminée</span>
-        </div>
+          {showStats
+            ? <ChevronUp size={14} className="text-gray-400 group-hover:text-gray-700" />
+            : <ChevronDown size={14} className="text-gray-400 group-hover:text-gray-700" />}
+        </button>
+        {showStats && (<>
         <div className="h-4 w-px bg-gray-200 hidden sm:block" />
         {/* Modifications proposées dans l'article — « proposées » et non « appliquées » :
             chacune reste à accepter ✓ ou rejeter ✗ en Vue diff avant de sortir de l'éditeur
@@ -4202,6 +4242,7 @@ export default function ArticleResult() {
             </div>
           )}
         </div>
+        </>)}
       </motion.div>
 
       {/* ── Analyse globale — accordéon replié par défaut (même pattern que
@@ -4650,11 +4691,22 @@ export default function ArticleResult() {
             `md:left-60` dégage la barre latérale, comme la barre du bas ; `top: 62`
             reste la hauteur mesurée de la barre du haut, et le z-index passe
             DESSOUS elle (100). */}
-        {createPortal(
+        {/* L'ORIGINAL, dans le flux : il occupe sa place et ne masque rien. */}
+        <div ref={stepperRef} className="px-6 pt-4 pb-3">
+          <PhaseStepper
+            phase={phase}
+            phaseStatus={phaseStatus}
+            onSelect={(p) => dispatch(setPhase(p))}
+          />
+        </div>
+
+        {/* LA COPIE FLOTTANTE, seulement quand l'original est sorti de l'écran.
+            `md:left-60` dégage la barre latérale, comme la barre du bas ; le z-index
+            passe DESSOUS la barre du haut (100) et non dessus. */}
+        {stepperFlottant && createPortal(
           <div
-            ref={stepperRef}
-            className="fixed left-0 right-0 md:left-60 z-[90] px-6 pt-4 pb-3 bg-[#eceef1]/95 backdrop-blur-md border-b border-gray-200/70"
-            style={{ top: 62 }}
+            className="fixed left-0 right-0 md:left-60 z-[90] px-6 pt-3 pb-3 bg-[#eceef1]/95 backdrop-blur-md border-b border-gray-200/70 shadow-sm"
+            style={{ top: TOPBAR_HEIGHT }}
           >
             <PhaseStepper
               phase={phase}
@@ -4664,11 +4716,6 @@ export default function ArticleResult() {
           </div>,
           document.body,
         )}
-        {/* RÉSERVE DE PLACE. Un élément `fixed` sort du flux : sans ce bloc, le haut
-            de l'article passerait SOUS le stepper et resterait illisible. La hauteur
-            est MESURÉE, jamais devinée — elle change avec la largeur (les libellés
-            passent à la ligne) et avec le zoom du navigateur. */}
-        <div aria-hidden="true" style={{ height: stepperHeight }} />
 
         {/* PHASE 4 — le relevé des patterns est un WIDGET FLOTTANT : il se place
             lui-même (position: fixed + portal document.body, cf. PhaseRelecture)
@@ -5125,10 +5172,21 @@ export default function ArticleResult() {
                     initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
                     className="flex flex-col gap-2.5 bg-white border border-gray-200 rounded-xl px-4 py-3"
                   >
-                    {/* En-tête */}
+                    {/* En-tête — CLIQUABLE : le bloc se replie pour dégager la vue
+                        diff (demande d'Andrianina, 19/08). Déplié par défaut. */}
                     <div className="flex items-center gap-2">
-                      <Search size={16} className="shrink-0" />
-                      <span className="text-[11px] font-medium text-gray-500 shrink-0">SEO Meta</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowSeoMeta((v) => !v)}
+                        className="flex items-center gap-2 group shrink-0"
+                        title={showSeoMeta ? 'Replier SEO Meta' : 'Déplier SEO Meta'}
+                      >
+                        <Search size={16} className="shrink-0" />
+                        <span className="text-[11px] font-medium text-gray-500 shrink-0">SEO Meta</span>
+                        {showSeoMeta
+                          ? <ChevronUp size={13} className="text-gray-400 group-hover:text-gray-700" />
+                          : <ChevronDown size={13} className="text-gray-400 group-hover:text-gray-700" />}
+                      </button>
                       {seoGenerating && <Loader size={11} className="animate-spin text-gray-400 ml-1" />}
                       {/* Ce badge signifie seulement « metas remplies » — le verdict SEO
                           réel est donné par l'Analyse SEO ci-dessous (critères plugins) */}
@@ -5148,6 +5206,7 @@ export default function ArticleResult() {
                       <span className="text-[10px] text-gray-400">Yoast SEO &amp; SEOPress</span>
                     </div>
 
+                    {showSeoMeta && (<>
                     {/* Meta Title */}
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] font-medium text-gray-400 w-20 shrink-0">Meta Title</span>
@@ -5206,6 +5265,7 @@ export default function ArticleResult() {
                         <span className="text-[10px] text-gray-400 shrink-0 w-28 text-right">date WP inchangée</span>
                       )}
                     </div>
+                    </>)}
 
                     {/* Le champ « Instruction » a été retiré d'ici : la consigne libre
                         se saisit désormais dans le PROMPT de la phase 2, que le rédacteur
