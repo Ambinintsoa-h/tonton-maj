@@ -31,6 +31,23 @@ import { runQatRewrite } from './agentQat';
 // eslint-disable-next-line import/first
 import { callClaudeWithProgress, callClaudeStream, callClaude, scrapeSource } from './agent';
 
+/**
+ * Nombre d'appels de GÉNÉRATION, la passe de gras exclue.
+ *
+ * Depuis le 19/08/2026, `runQatRewrite` émet un SECOND appel IA — la passe de
+ * gras dédiée (`agentBold.js`). Compter les appels bruts rendait donc l'assertion
+ * ambiguë : « 2 » pouvait signifier « génération + gras » ou « deux tentatives de
+ * génération », et c'est le second sens que ces tests protègent (un rejet relance
+ * la génération, ce qui coûte cher et doit rester exceptionnel).
+ * On filtre sur le LABEL, qui est le 5e argument de callClaudeWithProgress.
+ */
+const appelsGeneration = () => callClaudeWithProgress.mock.calls
+  .filter(([, , , , label]) => !/Mise en gras/i.test(String(label || ''))).length;
+
+/** Nombre d'appels de la PASSE DE GRAS. */
+const appelsGras = () => callClaudeWithProgress.mock.calls
+  .filter(([, , , , label]) => /Mise en gras/i.test(String(label || ''))).length;
+
 const SKILLS = [{
   name: 'tonton', format: 'skillmd', active: true,
   body: '# Méthode\nAudit puis refonte.',
@@ -160,7 +177,7 @@ describe('runQatRewrite — cas nominal', () => {
     // confusion que R2 supprime : ce que le modèle DIT est conservé à part.
     expect(article.ancresPlacees).toHaveLength(0);
     expect(article.ancresDeclareesIa).toHaveLength(1);
-    expect(callClaudeWithProgress).toHaveBeenCalledTimes(1);
+    expect(appelsGeneration()).toBe(1);
   });
 
   test('l\'ampleur imposée par le rédacteur prime sur l\'audit et lève overridden', async () => {
@@ -193,7 +210,7 @@ describe('runQatRewrite — verrou liens externes', () => {
     const { article } = await runQatRewrite(baseArgs(withLink));
 
     expect(article.html).toContain('https://ademe.fr/guide');
-    expect(callClaudeWithProgress).toHaveBeenCalledTimes(2);
+    expect(appelsGeneration()).toBe(2);
     // Le second appel doit porter la consigne de reprise ET l'URL perdue.
     const secondPrompt = callClaudeWithProgress.mock.calls[1][1].messages[0].content;
     expect(secondPrompt).toContain('VERROU LIENS EXTERNES DÉCLENCHÉ');
@@ -204,7 +221,7 @@ describe('runQatRewrite — verrou liens externes', () => {
     callClaudeWithProgress.mockResolvedValue(reply({ article_html: '<p>Toujours sans le lien.</p>' }));
     await expect(runQatRewrite(baseArgs(withLink)))
       .rejects.toThrow(/Verrou liens externes/);
-    expect(callClaudeWithProgress).toHaveBeenCalledTimes(3);
+    expect(appelsGeneration()).toBe(3);
   });
 });
 
@@ -233,7 +250,32 @@ describe('runQatRewrite — R1 liens internes', () => {
     expect(article.missingInternalLinks).toEqual([]);
     expect(article.restoredInternalLinks.map(l => l.href))
       .toEqual(['/prix', 'https://isolation-phonique.com/faq']);
-    expect(callClaudeWithProgress).toHaveBeenCalledTimes(1);   // jamais de relance
+    expect(appelsGeneration()).toBe(1);   // jamais de relance
+    // La passe de gras est INCONTOURNABLE (décision d'Andrianina) : elle part
+    // automatiquement, sans bouton. Un bouton qu'on oublie de cliquer ramènerait
+    // exactement le défaut mesuré — 5 sections H2 sans aucun gras.
+    expect(appelsGras()).toBe(1);
+  });
+
+  test('la passe de gras ne part PAS sans mot-clé cible — on ne paie pas sans critère', async () => {
+    callClaudeWithProgress.mockResolvedValueOnce(reply({
+      article_html: '<h2>Tarifs</h2><p>Consultez nos prix avant de lancer les travaux.</p>',
+    }));
+    await runQatRewrite({ ...baseArgs(), targetKeyword: '' });
+    expect(appelsGras()).toBe(0);
+  });
+
+  test('un ÉCHEC de la passe de gras ne perd PAS l\'article généré', async () => {
+    // L'article a coûté un appel bien plus cher que la passe de gras. Le perdre
+    // pour un gras manquant serait une très mauvaise affaire.
+    callClaudeWithProgress
+      .mockResolvedValueOnce(reply({
+        article_html: '<h2>Tarifs</h2><p>Consultez nos prix avant de lancer les travaux.</p>',
+      }))
+      .mockRejectedValueOnce(new Error('surcharge API'));
+    const { article } = await runQatRewrite(baseArgs());
+    expect(article).toBeTruthy();
+    expect(article.html).toContain('Consultez nos prix');
   });
 
   test('ancre disparue → AVERTISSEMENT non bloquant : l\'article est livré quand même', async () => {
@@ -244,7 +286,7 @@ describe('runQatRewrite — R1 liens internes', () => {
     expect(article.html).toContain('55');
     expect(article.missingInternalLinks.map(l => l.href))
       .toEqual(['/prix', 'https://isolation-phonique.com/faq']);
-    expect(callClaudeWithProgress).toHaveBeenCalledTimes(1);   // aucun rejet déclenché
+    expect(appelsGeneration()).toBe(1);   // aucun rejet déclenché
   });
 
   test('brief de maillage VIDE : la consigne distingue reproduire l\'existant d\'ajouter du neuf', async () => {
@@ -328,7 +370,7 @@ describe('runQatRewrite — réponses non conformes', () => {
     callClaudeWithProgress.mockResolvedValue({ text: 'Voilà votre article !', usage: {} });
     await expect(runQatRewrite(baseArgs('<p>x</p>')))
       .rejects.toThrow(/pas produit d'article exploitable après 3 essais/);
-    expect(callClaudeWithProgress).toHaveBeenCalledTimes(3);
+    expect(appelsGeneration()).toBe(3);
   });
 
   test('article_html vide → traité comme illisible, avec consigne de reprise', async () => {

@@ -41,8 +41,8 @@ const norm = (s = '') => String(s).replace(/\s+/g, ' ').trim();
 /**
  * Emplacements où un gras posé par du code n'a rien à faire.
  *
- * EXPORTÉ pour `keywordBold.js` (R8) : deux mécanismes qui posent du gras sans
- * appel IA ne peuvent pas se donner chacun leur liste d'interdits — c'est
+ * EXPORTÉ pour `boldApply.js` (la passe de gras dédiée) : deux mécanismes qui
+ * posent du gras ne peuvent pas se donner chacun leur liste d'interdits — c'est
  * exactement l'erreur que R1 et R2 avaient commise avec les zones de liens avant
  * que `linkZones.js` ne devienne leur source unique.
  */
