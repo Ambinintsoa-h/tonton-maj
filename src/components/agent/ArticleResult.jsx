@@ -1710,14 +1710,44 @@ export default function ArticleResult() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent.currentArticleId]);
 
-  // Pre-cochage PAR AMPLEUR, tant que le redacteur n'a rien touche : changer
-  // d'ampleur doit se refleter dans les cases, comme dans les directives. Une
-  // MAJ simple (+200 mots, un H2) ne porte pas les trente consignes d'une
-  // refonte — c'est tout l'interet du dispositif.
+  // ── PRÉ-COCHAGE : DEUX EFFETS, DEUX INTENTIONS ─────────────────────────────
+  //
+  // Il n'y en avait qu'un, et le réamorçage par article l'écrasait. Constaté par un
+  // parcours complet en production le 19 août 2026, sur un article NEUF : les dix
+  // cases restaient décochées alors que la règle 12 impose Factuel + fraîcheur + P1
+  // sur une refonte.
+  //
+  // Et le pire n'était pas le décochage. `filterAuditBySelection(audit, null)` ne
+  // filtre RIEN : l'audit partait donc EN ENTIER pendant que l'écran affichait
+  // « rien de coché ». Vérifié dans le prompt — « Ce que l'audit demande de
+  // corriger » présent, « écarté par le rédacteur » absent. C'est la trappe des
+  // cases décoratives que la règle 12 devait fermer, prise à l'envers : le rédacteur
+  // ne voyait pas partir ce qui partait.
+  //
+  // L'enchaînement fautif : l'audit arrive → le pré-cochage pose les défauts →
+  // l'article est enregistré → `agent.currentArticleId` change → le réamorçage
+  // remet `auditSelection` à `null` → et le pré-cochage NE REJOUE PAS, aucune de ses
+  // dépendances n'ayant bougé.
+  //
+  // A. COMBLER LE VIDE. Se déclenche dès que la sélection est nulle, ce qui couvre
+  //    le réamorçage. Pas de boucle : dès qu'elle est posée, la garde sort.
+  useEffect(() => {
+    if (!auditJson || selectionTouchee || auditSelection) return;
+    setAuditSelection(defaultAuditSelection(ampleurRetenue));
+  }, [auditJson, ampleurRetenue, selectionTouchee, auditSelection]);
+
+  // B. SUIVRE L'AMPLEUR. Changer d'ampleur doit se refléter dans les cases, comme
+  //    dans les directives : une MAJ simple (+200 mots, un H2) ne porte pas les
+  //    trente consignes d'une refonte. Séparé de A parce que A ne doit PAS rejouer
+  //    à chaque changement d'ampleur une fois la sélection posée — sinon il
+  //    écraserait un choix du rédacteur qui n'a pas encore coché.
   useEffect(() => {
     if (!auditJson || selectionTouchee) return;
     setAuditSelection(defaultAuditSelection(ampleurRetenue));
-  }, [auditJson, ampleurRetenue, selectionTouchee]);
+    // Volontairement limité à l'ampleur : la présence de `auditSelection` ici
+    // rendrait cet effet identique à A et ramènerait la boucle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ampleurRetenue]);
 
   // ── PRÉ-REMPLISSAGE par les suggestions de l'AUDIT ─────────────────────────
   // L'audit produit `internal_linking.liens_entrants` et le panneau QAT les

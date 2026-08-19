@@ -272,6 +272,25 @@ export default function AuditChecklist({
         </p>
       )}
 
+      {/* CEINTURE — L'ÉCRAN NE DOIT JAMAIS CONTREDIRE CE QUI PART.
+          `selection` à `null` signifie « aucun filtre » : `filterAuditBySelection`
+          laisse alors passer l'audit EN ENTIER. Or les cases s'affichent toutes
+          décochées dans ce cas. Constaté en production le 19 août 2026 sur un
+          article neuf : dix cases vides à l'écran, et l'audit complet dans le
+          prompt. C'est la trappe des cases décoratives prise à l'envers — le
+          rédacteur ne voyait pas partir ce qui partait.
+          L'amorçage est corrigé (ArticleResult), mais si un autre chemin laissait
+          `null`, ce bandeau dit la vérité au lieu de la taire. */}
+      {!selection && (
+        <p className="flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+          <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+          <span>
+            Sélection non initialisée : <strong>l'audit part EN ENTIER</strong>, malgré les cases décochées
+            ci-dessus. Cochez ou décochez une case pour reprendre la main.
+          </span>
+        </p>
+      )}
+
       {isSelectionEmpty(selection) && (
         <p className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-600">
           Tout est décoché : l'audit ne pèsera pas sur cette génération. Seules vos directives partiront.
