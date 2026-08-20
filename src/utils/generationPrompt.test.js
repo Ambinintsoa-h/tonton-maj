@@ -2,7 +2,7 @@
 // Exigence centrale — le prompt ne doit RIEN inventer : ce qui vient de l'audit y
 // figure tel quel, et un audit vide se dit au lieu de se combler.
 /* eslint-env jest */
-import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, MAX_INSTRUCTION_CHARS } from './generationPrompt';
+import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, MAX_INSTRUCTION_CHARS, couperInstruction } from './generationPrompt';
 import { SCOPE_SIMPLE, SCOPE_REFONTE, MIN_WORDS_ADDED_SIMPLE } from '../constants/majPhases';
 
 const AUDIT = {
@@ -241,15 +241,23 @@ describe('plafond de l\'instruction — on tient dedans, et on dit ce qui n\'y t
   });
 
   test('ce qui est écarté est ANNONCÉ, jamais coupé en silence', () => {
-    // Audit VOLONTAIREMENT hors gabarit : 14 actions à détail long. Même en forme
-    // courte il faut écarter, et c'est ce cas-là qui doit parler.
+    // Deux leçons du passage de 1 500 à 2 500, le 20 août 2026.
+    //
+    // 1. Le NOMBRE d'actions ne sature rien : `MAX_ACTIONS` en retient 8 quoi qu'il
+    //    arrive, et la forme courte (titre seul) les fait toutes tenir. Ce test
+    //    passait au vert en ayant cessé de vérifier quoi que ce soit.
+    // 2. À 2 500, l'audit SEUL ne peut plus déborder — 8 actions et 5 données
+    //    obsolètes sont bornées. Le débordement vient de ce qui n'est PAS borné :
+    //    les directives permanentes du rédacteur. C'est le cas réel mesuré à
+    //    l'écran (les siennes font 800 caractères), donc c'est celui qu'on teste.
     const p = buildGenerationPrompt({
+      template: 'Directive permanente du rédacteur, une ligne de plus. '.repeat(30),
       audit: {
         ...AUDIT_LOURD,
         priority_actions: Array.from({ length: 14 }, (_, i) => ({
           priority: 'P1',
           title: `Action très longue numéro ${i + 1} portant sur la structure et le fond de cet article`,
-          detail: "Détail volumineux, deux phrases entières, pour saturer le plafond de l'instruction à coup sûr et vérifier le message.",
+          detail: 'Détail volumineux, deux phrases entières, pour saturer le plafond à coup sûr. ',
         })),
       },
       scope: SCOPE_REFONTE,
@@ -298,5 +306,116 @@ describe('plafond de l\'instruction — on tient dedans, et on dit ce qui n\'y t
     // disparaissait toujours en entier, alors que ce sont les chiffres.
     const p = buildGenerationPrompt({ audit: AUDIT_LOURD, scope: SCOPE_REFONTE });
     expect(p).toContain('Données à actualiser :');
+  });
+});
+
+/**
+ * VERROU : le code ne pré-remplit JAMAIS au-delà du plafond qu'il impose.
+ *
+ * Mesuré à l'écran en production le 20 août 2026, avec les directives
+ * personnalisées d'Andrianina : compteur à 2 183 pour un plafond de 1 500. Deux
+ * blocs n'entraient dans aucun budget — les directives du rédacteur et le RÉSUMÉ
+ * EXÉCUTIF de l'audit (~700 caractères) — et `runQatRewrite` ampute par la FIN,
+ * donc c'est l'audit détaillé qui disparaissait, en silence.
+ */
+describe('le resume executif ne mange plus la place du concret', () => {
+  const DIRECTIVES_LONGUES = 'Tutoie le lecteur. '.repeat(42);      // ~800 caracteres
+  const RESUME_LONG = 'L article couvre bien le sujet mais le mot-cle exact est absent du titre et des sous-titres, '
+    + 'plusieurs chiffres demandent verification, un lien est mort et un H2 melange deux sujets distincts. '
+    + 'La structure gagnerait a etre reprise pour clarifier le fan-out des questions. '
+    + 'Le maillage interne est dense mais mal reparti entre les sections.';
+
+  const AUDIT = {
+    executive_summary: RESUME_LONG,
+    priority_actions: Array.from({ length: 8 }, (_, i) => ({
+      priority: i < 4 ? 'P1' : 'P2',
+      title: `Action prioritaire numero ${i + 1} sur la structure`,
+      detail: 'Detail de deux phrases entieres pour occuper de la place.',
+    })),
+    recent_context: {
+      donnees_obsoletes: Array.from({ length: 5 }, (_, i) => ({
+        element: `Donnee perimee numero ${i + 1}`,
+        valeur_article: `ancienne ${i + 1}`,
+        valeur_actuelle: `nouvelle ${i + 1} mesuree en aout 2026`,
+      })),
+    },
+  };
+
+  test('LE CAS REEL : directives de 800 caracteres + audit complet tiennent', () => {
+    const p = buildGenerationPrompt({
+      audit: AUDIT, template: DIRECTIVES_LONGUES, scope: SCOPE_REFONTE,
+      targetKeyword: 'quel ordre suivre god of war',
+    });
+    expect(p.length).toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS);
+    expect(p).toContain('Tutoie le lecteur.');        // ses directives survivent
+  });
+
+  test('le CONCRET passe avant la prose de synthese', () => {
+    // L ordre de sacrifice est le coeur du correctif : si quelque chose doit
+    // sauter, c est le resume, pas les chiffres perimes.
+    const p = buildGenerationPrompt({
+      audit: AUDIT, template: DIRECTIVES_LONGUES, scope: SCOPE_REFONTE,
+      targetKeyword: 'quel ordre suivre god of war',
+    });
+    expect(p).toContain('Données à actualiser :');
+    expect(p).toContain('Donnee perimee numero 1');
+  });
+
+  test('un resume OMIS est ANNONCE, jamais tu', () => {
+    // Directives enormes : il ne reste rien pour le resume.
+    const p = buildGenerationPrompt({
+      audit: AUDIT, template: 'Consigne. '.repeat(190), scope: SCOPE_REFONTE,
+    });
+    expect(p.length).toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS);
+    expect(p).toMatch(/Résumé de l'audit non repris ici/);
+  });
+
+  test('le resume garde des PHRASES ENTIERES, jamais une moitie de phrase', () => {
+    const p = buildGenerationPrompt({
+      audit: AUDIT, template: 'Consigne courte.', scope: SCOPE_REFONTE,
+    });
+    const i = p.indexOf('L article couvre');
+    if (i >= 0) {
+      // Ce qui est repris du resume se termine par une ponctuation forte.
+      const repris = p.slice(i).split('\n')[0].trim();
+      expect(repris).toMatch(/[.!?…]$/);
+    }
+  });
+});
+
+describe('couperInstruction — le dernier rempart, et il parle', () => {
+  test('ce qui tient passe intact', () => {
+    const r = couperInstruction('Trois lignes.\nDeux.\nUne.');
+    expect(r.coupe).toBe(false);
+    expect(r.perdus).toBe(0);
+    expect(r.texte).toContain('Une.');
+  });
+
+  test('coupe a la derniere FIN DE LIGNE, pas au caractere', () => {
+    // Une consigne a moitie lue est une consigne fausse.
+    const lignes = Array.from({ length: 80 }, (_, i) => `Consigne numero ${i + 1} du redacteur.`).join('\n');
+    const r = couperInstruction(lignes);
+    expect(r.coupe).toBe(true);
+    expect(r.texte.length).toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS);
+    expect(r.texte.endsWith('.')).toBe(true);          // ligne entiere
+    expect(r.texte).not.toMatch(/Consigne numero \d+ du$/);
+  });
+
+  test('l avertissement CHIFFRE ce qui manque et dit OU', () => {
+    const r = couperInstruction('x'.repeat(50) + '\n' + 'y '.repeat(2000));
+    expect(r.avertissement).toMatch(/caractère\(s\) non envoyés/);
+    expect(r.avertissement).toMatch(/FIN de vos directives/);
+    expect(r.perdus).toBeGreaterThan(0);
+  });
+
+  test('un seul bloc sans saut de ligne retombe sur la derniere espace', () => {
+    const r = couperInstruction('mot '.repeat(1200));
+    expect(r.texte.length).toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS);
+    expect(r.texte.endsWith('mot')).toBe(true);
+  });
+
+  test('une entree vide ne casse rien', () => {
+    expect(couperInstruction('').texte).toBe('');
+    expect(couperInstruction(null).coupe).toBe(false);
   });
 });

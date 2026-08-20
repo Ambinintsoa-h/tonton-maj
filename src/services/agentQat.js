@@ -28,9 +28,10 @@ import {
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import { auditAmpleurDecision } from '../constants/majPhases';
 import { stripUncertaintyMarkers, uncertaintyReportLine } from '../utils/uncertaintyMarkers';
-// Plafond de l'instruction — MÊME littéral que la saisie et le compteur
+// Plafond de l'instruction — MÊME source que la saisie et le compteur
 // (utils/generationPrompt.js). Trois copies, c'est trois divergences possibles.
-import { MAX_INSTRUCTION_CHARS } from '../utils/generationPrompt';
+// La coupure est déléguée pour ne pas amputer une ligne de consigne en silence.
+import { couperInstruction } from '../utils/generationPrompt';
 // Le filtrage de l'audit par les cases de la phase 2 vit dans UN SEUL module,
 // partagé avec le textarea (utils/generationPrompt.js). Deux filtres, ce serait
 // deux sélections divergentes — donc une case décochée qui part quand même.
@@ -847,6 +848,13 @@ export const runQatRewrite = async ({
     throw new Error('Le mode « Audit QAT + Refonte » exige un skill cerveau (SKILL.md) actif dans le menu SKILLS IA.');
   }
   const { fr } = getDateContext();
+  // ── PLAFOND DE L'INSTRUCTION : COUPÉ PROPREMENT, ET ANNONCÉ ────────────────
+  // C'était un `slice()` nu au milieu du template : coupe au caractère près et
+  // silence complet. Le pré-remplissage est désormais borné (`buildGenerationPrompt`),
+  // mais le rédacteur peut coller plus long — et un plafond appliqué sans le dire
+  // fait disparaître ses consignes sans qu'il l'apprenne jamais.
+  const instr = couperInstruction(instruction);
+  if (instr.coupe) onStep(`⚠️ ${instr.avertissement}`);
   const resolved = resolveQatDepth(depth, audit);
   const brief = buildBriefBlock({ targetKeyword, articleType, seoPlugin, targetWords, internalLinks, articleUrl });
 
@@ -932,7 +940,7 @@ ${buildSkillsBlock(
     'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — OBLIGATOIRES'
   )}${buildKnowledgeBlock(knowledge)}
 
-${brief}${instruction?.trim() ? `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instruction.trim().slice(0, MAX_INSTRUCTION_CHARS)}\nElle prime sur les règles générales, sauf le verrou liens externes.` : ''}`;
+${brief}${instr.texte ? `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instr.texte}\nElle prime sur les règles générales, sauf le verrou liens externes.` : ''}`;
 
   const system = [
     { type: 'text', text: socle, cache_control: { type: 'ephemeral', ttl: '1h' } },

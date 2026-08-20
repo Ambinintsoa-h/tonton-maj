@@ -13,7 +13,7 @@ import {
   unselectedFactualFields, selectedPriorities, auditItemLines, sourceHost,
   defaultSelectionScope, isDefaultSelection, matchesScopeDefault,
 } from './auditSelection';
-import { buildGenerationPrompt, buildFreshnessSuggestion } from './generationPrompt';
+import { buildGenerationPrompt, buildFreshnessSuggestion, MAX_INSTRUCTION_CHARS } from './generationPrompt';
 import { SCOPE_SIMPLE, SCOPE_REFONTE } from '../constants/majPhases';
 
 const AUDIT = {
@@ -216,7 +216,7 @@ describe('suggestion de fraîcheur pré-remplie', () => {
     const txt = buildGenerationPrompt({
       audit: gros, scope: SCOPE_SIMPLE, selection: defaultAuditSelection(SCOPE_SIMPLE),
     });
-    expect(txt.length).toBeLessThanOrEqual(1500);
+    expect(txt.length).toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS);
   });
 });
 
