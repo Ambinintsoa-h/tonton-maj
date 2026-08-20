@@ -143,7 +143,14 @@ export default function Articles() {
       // Métadonnées d'édition (titre édité, SEO Meta, date MAJ, image à la une,
       // catégories) : rehydratées par ArticleResult — AUSSI au retour SPA
       // (full=false), car ses états locaux sont perdus au démontage.
-      if (d.editorMeta) dispatch(setEditorMeta(d.editorMeta));
+      // Dispatché MÊME À VIDE, comme `setWpData` : sous condition, un brouillon
+      // sans métas laissait en place celles de l'article ouvert PRÉCÉDEMMENT, qui
+      // s'affichaient alors comme les siennes — et partaient à la publication.
+      // L'`articleId` du brouillon voyage avec, c'est lui que `metaValidee`
+      // compare (le brouillon est unique par membre, pas par article).
+      dispatch(setEditorMeta(d.editorMeta
+        ? { ...d.editorMeta, articleId: d.editorMeta.articleId || d.currentArticleId || null }
+        : null));
       dispatch(setUpdatedContent(d.html));
       dispatch(setStatus('done'));
     };

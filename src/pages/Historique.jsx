@@ -17,7 +17,7 @@ import {
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit, setWpData,
   setAuditJson, setQatArticle, restorePhaseStatus, setPhase, setMajScope, setObsolescenceReport,
-  markArchiveOpened,
+  markArchiveOpened, setEditorMeta, setTargetKeyword,
 } from '../store/slices/agentSlice';
 import { derivePhaseStatus, maxReachablePhase } from '../constants/majPhases';
 import { deleteArticle, fetchArticleHtml, getArticles, isLockActive, archiveArticle } from '../services/firebase';
@@ -884,6 +884,29 @@ export default function Historique() {
     dispatch(setMajScope(article.majScope || null));
     dispatch(setObsolescenceReport(article.obsolescenceReport || null));
     dispatch(setCurrentArticleId(article.id));
+    // MÉTAS D'ÉDITION — titre édité, Meta Title, Meta Description, date de MAJ.
+    // Elles manquaient à l'appel, et `agent.editorMeta` est un brouillon unique
+    // par MEMBRE : rouvrir un article d'ici affichait donc le titre et les métas
+    // du DERNIER article travaillé, lues en priorité sur les vraies (voir
+    // `metaValidee`, ArticleResult). Constaté en production le 20 août 2026 — un
+    // article de terrassier.net portant les métas d'un article de fosseseptique.fr,
+    // publiables telles quelles. Même classe que le `wpData` ci-dessus, et
+    // dispatché pour la même raison MÊME À VIDE : reprendre les métas d'un autre
+    // article est pire que des champs vides, qui se régénèrent.
+    dispatch(setEditorMeta({
+      articleId:      article.id,
+      editedTitle:    article.editedTitle || '',
+      titleDirty:     !!article.editedTitle,
+      seoTitle:       article.seoMeta?.seoTitle       || '',
+      seoDescription: article.seoMeta?.seoDescription || '',
+      publishDate:    article.publishDate || '',
+    }));
+    // MOT-CLÉ CIBLE — il nourrit toute l'analyse SEO (`analyzeSeo`) et l'audit.
+    // Sans ce dispatch, l'article était analysé contre la cible du précédent : un
+    // rapport « 6 critères au rouge » exact dans son calcul et faux dans son
+    // entrée — « aucune occurrence », « absent du H1 », « 0/14 sous-titre ». Un
+    // rapport faux qui a l'air sérieux est plus nuisible qu'aucun rapport.
+    dispatch(setTargetKeyword((article.targetKeyword || article.keyword || '').trim()));
     // RÉOUVERTURE DÉLIBÉRÉE — ce qu'on vient de charger fait foi. Interdit à un
     // brouillon d'autosave antérieur de le remplacer (voir Articles.jsx) : c'est ce
     // qui écrasait le travail d'un article déjà terminé.
