@@ -12,10 +12,10 @@
  * cases pilotent le CONTENU, rien d'autre (décision Andrianina, août 2026).
  */
 import { useState } from 'react';
-import { AlertTriangle, ShieldCheck, Clock, ListChecks, Sparkles } from 'lucide-react';
+import { AlertTriangle, ShieldCheck, Clock, ListChecks, Sparkles, RotateCcw } from 'lucide-react';
 import {
   AUDIT_BLOCKS, FACTUAL_FIELDS, isFieldSelected, selectedPriorities, isSelectionEmpty,
-  auditItemLines,
+  auditItemLines, defaultAuditSelection, defaultSelectionScope, matchesScopeDefault,
 } from '../../utils/auditSelection';
 import { SCOPE_SIMPLE, MIN_WORDS_ADDED_SIMPLE } from '../../constants/majPhases';
 
@@ -159,6 +159,21 @@ export default function AuditChecklist({
   const factuelDecoche = FACTUAL_FIELDS.filter((f) => !isFieldSelected(selection, f) && compte(audit, f) > 0);
   const simple = scope === SCOPE_SIMPLE;
 
+  // ── LA SÉLECTION SUIT-ELLE L'AMPLEUR AFFICHÉE ? ────────────────────────────
+  // Le pré-cochage dépend de l'ampleur (règle 12). Deux situations distinctes se
+  // ressemblaient à l'écran, et aucune n'était dite :
+  //   • la sélection est le pré-cochage d'une AUTRE ampleur → elle a été héritée,
+  //     personne ne l'a arbitrée. C'est le défaut du 20 août 2026 (choisir « MAJ
+  //     simple » ne redécochait plus les P1) ; l'amorçage est corrigé, mais on le
+  //     dit quand même — même rôle de ceinture que le bandeau « sélection non
+  //     initialisée » plus bas ;
+  //   • la sélection porte un arbitrage du rédacteur → on n'y touche pas, on offre
+  //     seulement le retour au pré-cochage. Un bouton, pas un avertissement : son
+  //     choix n'est pas une anomalie.
+  const suitLAmpleur    = matchesScopeDefault(selection, scope);
+  const ampleurHeritee  = !suitLAmpleur && !!defaultSelectionScope(selection);
+  const libelleAmpleur  = simple ? 'MAJ simple' : 'refonte';
+
   return (
     <div className="space-y-4">
       <div>
@@ -295,6 +310,29 @@ export default function AuditChecklist({
         <p className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-600">
           Tout est décoché : l'audit ne pèsera pas sur cette génération. Seules vos directives partiront.
         </p>
+      )}
+
+      {/* CEINTURE — une sélection HÉRITÉE d'une autre ampleur. */}
+      {ampleurHeritee && (
+        <p className="flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+          <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+          <span>
+            Ces cases sont le pré-cochage d'une <strong>autre ampleur</strong> — personne ne les a arbitrées pour
+            cette {libelleAmpleur}.
+          </span>
+        </p>
+      )}
+
+      {/* RECOURS, sans jugement : le rédacteur peut avoir personnalisé exprès. */}
+      {selection && !suitLAmpleur && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange?.(defaultAuditSelection(scope))}
+          className="flex items-center gap-1.5 text-[11px] font-medium text-blue-600 hover:text-blue-700 disabled:opacity-50"
+        >
+          <RotateCcw size={11} /> Revenir au pré-cochage {libelleAmpleur}
+        </button>
       )}
     </div>
   );

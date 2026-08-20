@@ -60,6 +60,22 @@ export const isAuthenticatedApiUrl = (url = '') => {
  */
 export const signalSessionExpired = () => {
   if (expiree) return;
+  // ── UN 401 SANS JETON N'EST PAS UNE EXPIRATION ─────────────────────────────
+  // C'est une absence de connexion. Constaté en production le 20 août 2026, sur
+  // un onglet neuf : huit requêtes `/api/data/*` partent quand même au
+  // chargement, répondent 401, et le bandeau « Votre session a expiré »
+  // s'affichait PAR-DESSUS L'ÉCRAN DE CONNEXION — à quelqu'un qui n'avait jamais
+  // eu de session. Un message faux de plus, le travers exact que ce module
+  // corrige.
+  //
+  // La garde vient APRÈS `if (expiree)` : la PREMIÈRE des huit requêtes voit
+  // encore le jeton et signale, les suivantes sont couvertes par l'idempotence.
+  // Le raisonnement porte sur le jeton, pas sur la route affichée — il couvre
+  // ainsi l'écran de connexion ET tout autre écran, contrairement à un test sur
+  // `/login`.
+  let jeton = null;
+  try { jeton = sessionStorage.getItem(TOKEN_KEY); } catch { /* stockage indisponible */ }
+  if (!jeton) return;
   expiree = true;
   try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* stockage indisponible */ }
   abonnes.forEach((fn) => { try { fn(); } catch { /* un abonné ne doit pas bloquer les autres */ } });
