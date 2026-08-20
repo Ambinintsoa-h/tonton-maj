@@ -48,10 +48,109 @@ const MAX_OBSOLETES = 5;
  * Exporté pour que la saisie (compteur bloquant, PhaseGeneration), le
  * pré-remplissage (ci-dessous) et l'envoi partagent LE MÊME littéral. Trois
  * copies d'un plafond, c'est trois occasions de divergence.
+ *
+ * ── 1 500 → 2 500, décision Andrianina le 20 août 2026 ─────────────────────
+ * Mesuré à l'écran sur un article réel, avec ses directives permanentes
+ * personnalisées : compteur à **2 183/1 500** en MAJ simple, 1 551 en refonte.
+ * Décomposition à 1 500 : directives 825 + ampleur 311 + mot-clé 80 = 1 216 de
+ * texte incompressible, donc **174 caractères** pour un audit qui en demande 950.
+ * À ce plafond, les directives du rédacteur et l'audit ne peuvent PAS tenir
+ * ensemble — le template par défaut fait 298 caractères, le sien 800, et
+ * personnaliser ses directives est précisément l'usage prévu.
+ *
+ * Ce plafond n'a jamais été une contrainte technique : l'instruction pèse ~2 % du
+ * prompt de refonte (82 000 caractères). Il existe pour qu'elle ne noie pas les
+ * règles. À 2 500 elle en pèse 3 % : la hiérarchie tient, et l'audit rentre.
  */
-export const MAX_INSTRUCTION_CHARS = 1500;
+export const MAX_INSTRUCTION_CHARS = 2500;
 
 const ligne = (v) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+
+/**
+ * ── COUPE L'INSTRUCTION SANS AMPUTER UNE LIGNE, ET LE DIT ───────────────────
+ *
+ * `runQatRewrite` faisait `instruction.slice(0, MAX_INSTRUCTION_CHARS)` : coupe au
+ * caractère près, au milieu d'un mot, et sans un mot au rédacteur. Le
+ * pré-remplissage est désormais borné, mais cette fonction reste le dernier
+ * rempart — le rédacteur peut coller un texte plus long, et un plafond qu'on
+ * applique en silence est un plafond dont personne n'apprend rien.
+ *
+ * On coupe à la dernière FIN DE LIGNE qui tient : les directives sont une liste
+ * de consignes, et une consigne à moitié lue est une consigne fausse. À défaut de
+ * saut de ligne (un seul paragraphe), on retombe sur la dernière espace.
+ *
+ * @returns {{texte: string, coupe: boolean, perdus: number, avertissement: string}}
+ */
+export const couperInstruction = (instruction = '', max = MAX_INSTRUCTION_CHARS) => {
+  const t = String(instruction || '').trim();
+  if (t.length <= max) return { texte: t, coupe: false, perdus: 0, avertissement: '' };
+
+  const tete = t.slice(0, max);
+  const coupureLigne = tete.lastIndexOf('\n');
+  const coupureMot = tete.lastIndexOf(' ');
+  // Un repli trop précoce (moins de la moitié du plafond) rendrait la coupure plus
+  // destructrice que la troncature qu'on corrige : on garde alors la tête entière.
+  const seuil = Math.floor(max / 2);
+  const fin = coupureLigne >= seuil ? coupureLigne
+    : coupureMot >= seuil ? coupureMot
+      : max;
+  const texte = t.slice(0, fin).trim();
+  const perdus = t.length - texte.length;
+  return {
+    texte,
+    coupe: true,
+    perdus,
+    avertissement: `Instruction trop longue : ${perdus} caractère(s) non envoyés `
+      + `(plafond ${max}). Ce qui manque se trouve en FIN de vos directives.`,
+  };
+};
+
+/**
+ * Sous ce seuil, on ne met pas de résumé du tout : une seule demi-phrase de
+ * synthèse ne renseigne rien et occupe la place d'une donnée chiffrée.
+ */
+const MIN_RESUME_CHARS = 90;
+
+/** Dit au rédacteur que le résumé a sauté — le silence était le défaut d'origine. */
+const LIGNE_RESUME_OMIS =
+  '(Résumé de l\'audit non repris ici, faute de place — les points ci-dessus le détaillent.)';
+
+/**
+ * Points d'audit qui ne tiennent pas dans l'instruction.
+ *
+ * « avec l'audit COMPLET » se lisait « l'audit NON FILTRÉ » — et c'est cette
+ * phrase qui a fait douter Andrianina de l'utilité des cases le 20 août 2026 : il
+ * a compris que tout partait quand même, cases décochées ou non. L'audit du second
+ * canal est filtré par la MÊME sélection ; la note doit le dire, sinon le
+ * dispositif passe pour un décor.
+ *
+ * Au niveau du module, et pas dans la fonction : la réserve de la suggestion de
+ * fraîcheur a besoin de sa longueur AVANT que la section audit soit construite.
+ */
+const NOTE_POINTS_ECARTES = (n) =>
+  `(+ ${n} point(s) d'audit non repris ici, faute de place — ils partent avec l'audit, filtré par les mêmes cases.)`;
+
+/**
+ * Garde les phrases ENTIÈRES qui tiennent dans `max`, et rien de plus.
+ *
+ * Couper au caractère près produirait une synthèse amputée en milieu de phrase,
+ * qui se lit comme une affirmation tronquée — pire qu'une synthèse absente. Le
+ * découpage se fait sur la ponctuation forte suivie d'une espace : un « 39,99 € »
+ * ou un « 1er nov. 2022 » ne doit pas être pris pour une fin de phrase.
+ */
+const phrasesQuiTiennent = (txt, max) => {
+  const t = ligne(txt);
+  if (!t || max < MIN_RESUME_CHARS) return '';
+  if (t.length <= max) return t;
+  const phrases = t.match(/[^.!?…]+[.!?…]+(?:\s|$)|[^.!?…]+$/g) || [t];
+  let out = '';
+  for (const p of phrases) {
+    if ((out + p).trim().length > max) break;
+    out += p;
+  }
+  out = out.trim();
+  return out.length >= MIN_RESUME_CHARS ? out : '';
+};
 
 /** Actions prioritaires de l'audit, de la plus urgente à la moins urgente. */
 const actionsDeLAudit = (audit) => {
@@ -278,9 +377,16 @@ export const buildGenerationPrompt = ({
   }
 
   // ── Insertion de la suggestion de fraîcheur, à la place retenue plus haut ───
-  // Réserve : l'en-tête « Ce que l'audit demande de corriger » et la note de
-  // points non repris s'ajoutent hors budget dans la section suivante.
-  const RESERVE_AUDIT = 160;
+  // Réserve : l'en-tête « Ce que l'audit demande de corriger » et les DEUX notes
+  // possibles de la section suivante s'ajoutent hors de ce budget-ci.
+  //
+  // CALCULÉE, plus jamais devinée. Elle valait 160 en dur : quand la ligne
+  // « résumé non repris » (89 caractères) est apparue, ces 160 ne couvraient plus
+  // rien et le prompt sortait à 2 548 pour un plafond de 2 500 — verrouillé par un
+  // test. Une réserve estimée est une réserve qui périme au premier ajout.
+  const RESERVE_AUDIT = 60                       // en-tête de section + lignes vides
+    + LIGNE_RESUME_OMIS.length + 2
+    + NOTE_POINTS_ECARTES(99).length + 2;
   if (scope === SCOPE_SIMPLE) {
     const suggestion = buildFreshnessSuggestion(
       audit, MAX_INSTRUCTION_CHARS - bloc.join('\n').length - RESERVE_AUDIT,
@@ -319,7 +425,21 @@ export const buildGenerationPrompt = ({
     }
   } else {
     bloc.push('', '## Ce que l\'audit demande de corriger');
-    if (resume) bloc.push(resume);
+    // ── LE RÉSUMÉ PASSE EN DERNIER DANS LE BUDGET, ET S'AFFICHE EN PREMIER ────
+    // Il était poussé ICI, donc AVANT tout calcul de budget : sur un audit réel,
+    // 700 caractères de prose de synthèse consommés d'entrée, et 174 laissés aux
+    // données à actualiser et aux actions. Le total sortait alors du plafond
+    // (2 183 mesuré à l'écran le 20 août 2026), et `runQatRewrite` ampute par la
+    // FIN — donc c'est le concret qui disparaissait, en silence.
+    //
+    // L'ordre de sacrifice est désormais explicite : si quelque chose doit sauter,
+    // c'est le résumé, pas les chiffres périmés. Le résumé SYNTHÉTISE ce que les
+    // listes détaillent ; l'inverse n'est pas vrai.
+    //
+    // On retient sa place pour qu'il reste EN TÊTE à la lecture (c'est là qu'il
+    // est utile au rédacteur), mais il ne se sert qu'en dernier — même patron que
+    // la suggestion de fraîcheur plus haut.
+    const POS_RESUME = bloc.length;
 
     // ── ON TIENT DANS LE PLAFOND, ET ON DIT CE QUI N'Y TIENT PAS ─────────────
     // Avant : tout était empilé, puis `runQatRewrite` coupait à 1 500 caractères
@@ -332,15 +452,13 @@ export const buildGenerationPrompt = ({
     // modèle par l'autre canal — filtrées par la MÊME sélection qu'ici. Ce qui se
     // joue à cet endroit, c'est la place dans l'instruction de PRIORITÉ HAUTE, et
     // la relecture par le rédacteur.
-    // « avec l'audit COMPLET » se lisait « l'audit NON FILTRÉ » — et c'est cette
-    // phrase qui a fait douter Andrianina de l'utilité des cases le 20 août 2026 :
-    // il a compris que tout partait quand même, cases décochées ou non. L'audit du
-    // second canal est filtré par la MÊME sélection ; la note doit le dire, sinon
-    // le dispositif passe pour un décor.
-    const NOTE = (n) => `(+ ${n} point(s) d'audit non repris ici, faute de place — ils partent avec l'audit, filtré par les mêmes cases.)`;
+    const NOTE = NOTE_POINTS_ECARTES;
     // Réserve calculée sur la note la PLUS LONGUE possible, jamais estimée : une
-    // marge « à peu près » laissait le total à 1 537 caractères.
-    const reserve = NOTE(actions.length + obsoletes.length).length + 2;
+    // marge « à peu près » laissait le total à 1 537 caractères. La ligne
+    // « résumé non repris » est réservée dès qu'un résumé EXISTE : sans ça, la
+    // pousser après coup ferait dépasser le plafond qu'on vient de respecter.
+    const reserve = NOTE(actions.length + obsoletes.length).length + 2
+      + (resume ? LIGNE_RESUME_OMIS.length + 2 : 0);
 
     // Les DONNÉES À ACTUALISER passent AVANT les actions : ce sont les chiffres
     // périmés, le cœur d'une mise à jour de fraîcheur, et elles étaient les
@@ -381,7 +499,22 @@ export const buildGenerationPrompt = ({
       empile(null, restants, Infinity);
     }
 
+    // ── LE RÉSUMÉ SE SERT SUR CE QUI RESTE ───────────────────────────────────
+    // Coupé à la dernière phrase ENTIÈRE qui tient : une synthèse amputée en
+    // milieu de phrase est pire qu'une synthèse absente, elle se lit comme une
+    // affirmation tronquée. Sous `MIN_RESUME_CHARS`, on n'en met pas du tout et on
+    // le DIT — le silence était le défaut d'origine.
+    let resumeOmis = false;
+    if (resume) {
+      // `budget()` réserve déjà la ligne « résumé non repris » (voir `reserve`),
+      // donc ce qu'il annonce est réellement disponible pour le résumé lui-même.
+      const tenu = phrasesQuiTiennent(resume, budget());
+      if (tenu) bloc.splice(POS_RESUME, 0, tenu);
+      else resumeOmis = true;
+    }
+
     if (rejetes.length) bloc.push('', NOTE(rejetes.length));
+    if (resumeOmis) bloc.push('', LIGNE_RESUME_OMIS);
   }
 
   return bloc.join('\n');
