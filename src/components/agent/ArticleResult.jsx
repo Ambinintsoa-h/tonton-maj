@@ -23,6 +23,7 @@ import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertN
 import { weaveBriefLinks } from '../../utils/internalWeave';
 import { carryOverImages } from '../../utils/imageCarry';
 import { analyzeSeo } from '../../utils/seoCheck';
+import { editorMetaForArticle } from '../../utils/editorMeta';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
@@ -397,8 +398,32 @@ export default function ArticleResult() {
   // `qatArticle` ci-dessous réécrivait alors les champs avec les métas GÉNÉRÉES,
   // effaçant en silence la retouche du rédacteur. Elle était pourtant bien en
   // base : c'est la RELECTURE qui manquait, pas l'écriture.
+  //
+  // ── ET IL DOIT ÊTRE LE BROUILLON DE CET ARTICLE ────────────────────────────
+  // `agent.editorMeta` est un brouillon par MEMBRE, pas par article, et il est lu
+  // en PRIORITÉ juste en dessous. Une réouverture qui ne le redispatchait pas
+  // laissait donc les métas du DERNIER article travaillé gagner contre celles de
+  // l'article ouvert. Constaté en production le 20 août 2026 : un article de
+  // terrassier.net rouvert depuis l'Historique affichait le titre, le meta title,
+  // la meta description et le mot-clé cible d'un article de fosseseptique.fr.
+  // Ce n'était pas cosmétique — ces métas partent dans `postData.seoMeta` à la
+  // publication, donc le meta title d'un autre site était publiable.
+  //
+  // Six champs avaient déjà reçu ce correctif UN PAR UN (wpData, auditJson,
+  // qatArticle, targetKeyword, briefLinkRows, auditSelection), chacun avec son
+  // commentaire « dispatché même à vide ». Le rappel ne tient pas à l'échelle :
+  // on change le PORTEUR. Le brouillon dit désormais à quel article il appartient,
+  // et celui d'un autre article est écarté EN ENTIER — pas seulement ses métas
+  // SEO : `editedTitle`, `publishDate`, l'ALT de l'image à la une et les
+  // catégories fuyaient par le même trou (et une catégorie change le permalien).
+  //
+  // `articleId` absent = brouillon écrit avant ce correctif, ou article encore
+  // jamais enregistré : accepté, exactement comme avant. Le prochain autosave le
+  // datera. La garde ne se déclenche que sur une NON-CORRESPONDANCE constatée.
   const metaValidee = useMemo(() => {
-    const m = agent.editorMeta;
+    // La règle vit dans `utils/editorMeta.js`, pour être VERROUILLÉE PAR UN TEST :
+    // ce trou s'est déjà rouvert six fois, chaque fois sur un champ différent.
+    const m = editorMetaForArticle(agent.editorMeta, agent.currentArticleId);
     if (m && (m.seoTitle || m.seoDescription)) return m;   // le brouillon est le plus frais
     const src = currentArticle || cqItem?.majResult || null;
     const sm = src?.seoMeta;
@@ -413,7 +438,7 @@ export default function ArticleResult() {
       };
     }
     return m || null;
-  }, [agent.editorMeta, currentArticle, cqItem]);
+  }, [agent.editorMeta, agent.currentArticleId, currentArticle, cqItem]);
   const [seoGenerating,  setSeoGenerating]  = useState(false);
   // Date de publication de la MAJ (optionnelle) — format input datetime-local
   // « YYYY-MM-DDTHH:mm ». Vide = WordPress garde la date existante du post.
@@ -1170,6 +1195,10 @@ export default function ArticleResult() {
       // Métadonnées d'édition (états locaux du composant) : perdues au
       // rechargement sans ça — restaurées via agent.editorMeta (applyDraft).
       editorMeta: {
+        // À QUEL ARTICLE CE BROUILLON APPARTIENT. Le brouillon est unique par
+        // membre : sans cette marque, rien ne permet à la relecture de voir qu'il
+        // vient d'un AUTRE article (voir `metaValidee`).
+        articleId: agent.currentArticleId || null,
         editedTitle, titleDirty,
         seoTitle, seoDescription,
         publishDate,

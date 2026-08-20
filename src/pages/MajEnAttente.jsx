@@ -1803,6 +1803,13 @@ export default function MajEnAttente() {
       // ouverte par ce chemin (« mot-clé cible manquant ») alors que la ligne le
       // porte. Voir le même dispatch dans handleViewDiff.
       dispatch(setTargetKeyword((item.keyword || '').trim()));
+      // MÉTAS D'ÉDITION — remises à ZÉRO, et c'est le geste juste ici : cet
+      // article vient d'être analysé, il n'a aucune méta retouchée à la main. Sans
+      // ce dispatch, le brouillon (unique par MEMBRE) gardait le titre et les
+      // métas SEO de l'article travaillé AVANT, qui s'affichaient comme les
+      // siennes et partaient à la publication. Rien n'est perdu : ce que l'article
+      // porte réellement en base est relu par le repli de `metaValidee`.
+      dispatch(setEditorMeta(null));
       dispatch(setCurrentArticleId(item.id));
       dispatch(setStatus('done'));
       navigate('/');
@@ -1978,6 +1985,10 @@ export default function MajEnAttente() {
     // l'édition), repli sur majResult (Terminer CQ les y écrit aussi).
     const metaSrc = (arch && (arch.seoMeta || arch.publishDate || arch.editedTitle || arch.instruction)) ? arch : r;
     dispatch(setEditorMeta({
+      // À QUEL ARTICLE CES MÉTAS APPARTIENNENT — le brouillon est unique par
+      // membre, c'est cette marque que `metaValidee` compare pour ne jamais
+      // appliquer les métas d'un autre article.
+      articleId:      item.id,
       editedTitle:    metaSrc.editedTitle || '',
       titleDirty:     !!metaSrc.editedTitle,
       seoTitle:       metaSrc.seoMeta?.seoTitle       || '',
