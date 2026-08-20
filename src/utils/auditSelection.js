@@ -26,7 +26,7 @@
  * `keyword_repositioning` porte le mot-clé cible. Les décocher ne nuancerait pas
  * la génération, elle la casserait.
  */
-import { SCOPE_SIMPLE } from '../constants/majPhases';
+import { SCOPE_SIMPLE, SCOPE_REFONTE } from '../constants/majPhases';
 
 /**
  * Les quatre blocs, dans l'ordre d'affichage de la colonne de gauche.
@@ -117,6 +117,58 @@ export const selectedPriorities = (selection) => {
   const v = selection?.priority_actions;
   return Array.isArray(v) ? v : [];
 };
+
+/** Deux sélections décrivent-elles le MÊME choix ? (ordre des priorités indifférent) */
+const memeSelection = (a, b) => SELECTABLE_FIELDS.every((f) => {
+  const va = a?.[f];
+  const vb = b?.[f];
+  if (Array.isArray(va) || Array.isArray(vb)) {
+    const la = [...(Array.isArray(va) ? va : [])].sort();
+    const lb = [...(Array.isArray(vb) ? vb : [])].sort();
+    return la.length === lb.length && la.every((x, i) => x === lb[i]);
+  }
+  return !!va === !!vb;
+});
+
+/**
+ * ── UNE SÉLECTION QUI N'EXPRIME AUCUN CHOIX PROPRE ──────────────────────────
+ *
+ * De quelle ampleur cette sélection est-elle le PRÉ-COCHAGE ? `null` si elle
+ * n'est le pré-cochage d'aucune des deux, donc si elle porte un arbitrage.
+ *
+ * À quoi ça sert. Le pré-cochage dépend de l'AMPLEUR (règle 12) : refonte =
+ * Factuel + fraîcheur + P1, MAJ simple = fraîcheur seule. Basculer d'ampleur doit
+ * donc rejouer le pré-cochage — sauf si le rédacteur a exprimé un choix propre,
+ * qu'on n'écrase pas.
+ *
+ * Le défaut corrigé : `selectionTouchee` était mis à VRAI par la simple RELECTURE
+ * de la sélection enregistrée (`ArticleResult`, réamorçage sur l'article). Comme
+ * l'autosave tourne en continu, choisir « MAJ simple » ne redécochait plus rien
+ * dès le premier enregistrement : les trente consignes d'une refonte partaient sur
+ * une mise à jour de 200 mots — le conflit exact que le pré-cochage par ampleur
+ * existait pour ne pas créer (une action « réduire à 2 500 mots » avait RACCOURCI
+ * un article de 935 mots). Constaté le 20 août 2026 : note « + 9 points d'audit non
+ * repris », chiffre du pré-cochage d'une REFONTE, sur un écran affichant MAJ simple.
+ *
+ * Ce n'est pas une heuristique : une sélection identique à un pré-cochage est
+ * INDISCERNABLE de l'automatique, elle n'exprime donc aucun choix à protéger. Le
+ * seul effet de bord — le rédacteur a coché à la main exactement le pré-cochage,
+ * puis change d'ampleur — donne le pré-cochage de la nouvelle ampleur, c'est-à-dire
+ * ce qu'il demande en changeant d'ampleur.
+ */
+export const defaultSelectionScope = (selection) => {
+  if (!selection) return null;
+  if (memeSelection(selection, defaultAuditSelection(SCOPE_SIMPLE)))  return SCOPE_SIMPLE;
+  if (memeSelection(selection, defaultAuditSelection(SCOPE_REFONTE))) return SCOPE_REFONTE;
+  return null;
+};
+
+/** La sélection est-elle le pré-cochage d'une ampleur, donc sans arbitrage humain ? */
+export const isDefaultSelection = (selection) => !!defaultSelectionScope(selection);
+
+/** La sélection correspond-elle au pré-cochage de CETTE ampleur ? */
+export const matchesScopeDefault = (selection, scope) =>
+  !!selection && memeSelection(selection, defaultAuditSelection(scope));
 
 /**
  * Filtre l'audit selon la sélection. Retourne un NOUVEL objet : l'audit d'origine

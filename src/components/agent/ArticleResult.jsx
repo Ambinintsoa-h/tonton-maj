@@ -44,7 +44,7 @@ import {
 import { cleanLinkRows, emptyLinkRow } from '../../constants/majMode';
 import { auditSuggestedLinkRows, mergeLinkRows } from '../../utils/auditSuggestions';
 import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, DEFAULT_VERIFICATION_TEMPLATE } from '../../utils/generationPrompt';
-import { defaultAuditSelection, unselectedFactualFields } from '../../utils/auditSelection';
+import { defaultAuditSelection, unselectedFactualFields, isDefaultSelection } from '../../utils/auditSelection';
 import { decodeEntities } from '../../utils/htmlText';
 import { setProfile } from '../../store/slices/authSlice';
 import PhaseStepper from './PhaseStepper';
@@ -1733,7 +1733,16 @@ export default function ArticleResult() {
     // SANS le dire — le scenario exact de `agent.targetKeyword`.
     const brief = currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {};
     setAuditSelection(brief.auditSelection || null);
-    setSelectionTouchee(!!brief.auditSelection);
+    // « TOUCHÉE » VEUT DIRE ARBITRÉE, PAS RELUE. Ce drapeau passait à vrai sur la
+    // simple présence d'une sélection enregistrée — or l'autosave tourne en
+    // continu, donc dès le premier enregistrement l'effet « suivre l'ampleur »
+    // sortait immédiatement et choisir « MAJ simple » ne redécochait plus les
+    // actions P1 : les consignes d'une refonte partaient sur une mise à jour de
+    // 200 mots. Constaté le 20 août 2026 (note « + 9 points », chiffre du
+    // pré-cochage d'une refonte, sur un écran affichant MAJ simple).
+    // Une sélection identique à un pré-cochage n'exprime aucun choix propre : elle
+    // est indiscernable de l'automatique, il n'y a donc rien à protéger.
+    setSelectionTouchee(!!brief.auditSelection && !isDefaultSelection(brief.auditSelection));
     // `currentArticle`/`cqItem` sont recalculés à chaque rendu : seul l'id doit
     // déclencher le réamorçage, sinon la saisie en cours serait écrasée.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -11,6 +11,7 @@ import {
   AUDIT_BLOCKS, SELECTABLE_FIELDS, FACTUAL_FIELDS, ALWAYS_SENT_FIELDS,
   defaultAuditSelection, filterAuditBySelection, isSelectionEmpty,
   unselectedFactualFields, selectedPriorities, auditItemLines, sourceHost,
+  defaultSelectionScope, isDefaultSelection, matchesScopeDefault,
 } from './auditSelection';
 import { buildGenerationPrompt, buildFreshnessSuggestion } from './generationPrompt';
 import { SCOPE_SIMPLE, SCOPE_REFONTE } from '../constants/majPhases';
@@ -271,5 +272,67 @@ describe('les cases MONTRENT les faits, pas seulement leur nombre', () => {
     expect(sourceHost('https://www.metacritic.com/game/x?a=1')).toBe('metacritic.com');
     expect(sourceHost('pas-une-url')).toBe('');
     expect(sourceHost(null)).toBe('');
+  });
+});
+
+/**
+ * VERROU : les cases SUIVENT l'ampleur.
+ *
+ * Défaut du 20 août 2026 — `selectionTouchee` passait à vrai sur la simple
+ * RELECTURE de la sélection enregistrée. Comme l'autosave tourne en continu,
+ * choisir « MAJ simple » ne redécochait plus les actions P1 dès le premier
+ * enregistrement : les trente consignes d'une refonte partaient sur une mise à
+ * jour de 200 mots. Le conflit exact que le pré-cochage par ampleur existe pour
+ * ne pas créer (une action « réduire à 2 500 mots » avait RACCOURCI un article
+ * de 935 mots).
+ */
+describe('une selection qui n exprime aucun choix propre', () => {
+  it('reconnait le pre-cochage de chaque ampleur', () => {
+    expect(defaultSelectionScope(defaultAuditSelection(SCOPE_SIMPLE))).toBe(SCOPE_SIMPLE);
+    expect(defaultSelectionScope(defaultAuditSelection(SCOPE_REFONTE))).toBe(SCOPE_REFONTE);
+    expect(isDefaultSelection(defaultAuditSelection(SCOPE_SIMPLE))).toBe(true);
+  });
+
+  it('une selection ARBITREE n est le pre-cochage d aucune ampleur', () => {
+    const arbitree = { ...defaultAuditSelection(SCOPE_SIMPLE), tldr: true };
+    expect(defaultSelectionScope(arbitree)).toBeNull();
+    expect(isDefaultSelection(arbitree)).toBe(false);
+  });
+
+  it('l ordre des priorites est indifferent — P1,P2 vaut P2,P1', () => {
+    const a = { ...defaultAuditSelection(SCOPE_REFONTE), priority_actions: ['P2', 'P1'] };
+    const b = { ...defaultAuditSelection(SCOPE_REFONTE), priority_actions: ['P1', 'P2'] };
+    // Ni l un ni l autre n est un pre-cochage (le defaut refonte est ['P1'] seul),
+    // mais ils doivent etre juges IDENTIQUEMENT.
+    expect(defaultSelectionScope(a)).toBe(defaultSelectionScope(b));
+  });
+
+  it('un tableau vide et un faux sont le MEME choix : rien de coche', () => {
+    // `priority_actions: []` et `priority_actions: false` disent tous deux
+    // « aucune action ». Les distinguer ferait passer une selection par defaut
+    // pour un arbitrage.
+    const avecFaux = { ...defaultAuditSelection(SCOPE_SIMPLE), priority_actions: false };
+    expect(defaultSelectionScope(avecFaux)).toBe(SCOPE_SIMPLE);
+  });
+
+  it('CAS REEL : le pre-cochage d une REFONTE sur un ecran en MAJ simple', () => {
+    // Ce qu Andrianina voyait : cases de refonte, ampleur MAJ simple, note
+    // « + 9 points d audit non repris ».
+    const heritee = defaultAuditSelection(SCOPE_REFONTE);
+    expect(matchesScopeDefault(heritee, SCOPE_SIMPLE)).toBe(false);   // ne suit pas l ampleur
+    expect(isDefaultSelection(heritee)).toBe(true);                   // donc rejouable sans rien ecraser
+  });
+
+  it('matchesScopeDefault repond faux sur une selection absente', () => {
+    expect(matchesScopeDefault(null, SCOPE_SIMPLE)).toBe(false);
+  });
+
+  it('les P1 REDEVIENNENT decochees en MAJ simple — la promesse du dispositif', () => {
+    // Bout en bout : on part du pre-cochage refonte, on rejoue celui de la MAJ
+    // simple, et l audit filtre ne porte plus aucune action.
+    const rejoue = defaultAuditSelection(SCOPE_SIMPLE);
+    expect(filterAuditBySelection(AUDIT, rejoue).priority_actions).toEqual([]);
+    expect(filterAuditBySelection(AUDIT, defaultAuditSelection(SCOPE_REFONTE)).priority_actions)
+      .toHaveLength(1);
   });
 });

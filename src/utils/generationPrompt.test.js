@@ -257,7 +257,11 @@ describe('plafond de l\'instruction — on tient dedans, et on dit ce qui n\'y t
     });
     expect(p.length).toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS);
     expect(p).toMatch(/point\(s\) d'audit non repris ici, faute de place/);
-    expect(p).toMatch(/partent au modèle avec l'audit complet/);
+    // La note doit dire que l'audit du second canal est FILTRÉ par les mêmes
+    // cases. « avec l'audit complet » se lisait « l'audit non filtré » — c'est
+    // cette phrase qui a fait douter Andrianina de l'utilité des cases.
+    expect(p).toMatch(/filtré par les mêmes cases/);
+    expect(p).not.toMatch(/audit complet/);
   });
 
   test('aucune ligne n\'est coupée au milieu — chaque puce est entière', () => {

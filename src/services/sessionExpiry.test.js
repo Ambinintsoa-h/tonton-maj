@@ -37,6 +37,32 @@ describe('ce qui compte comme une expiration', () => {
   });
 });
 
+describe('sans jeton, il ne se passe RIEN', () => {
+  it('un 401 sans jeton n\'est pas une expiration — c\'est une absence de connexion', () => {
+    // Constaté en production le 20 août 2026 : onglet neuf, aucun jeton, huit
+    // requêtes /api/data partent quand même et répondent 401 → le bandeau
+    // « Votre session a expiré » s'affichait sur l'ÉCRAN DE CONNEXION, à
+    // quelqu'un qui n'avait jamais eu de session.
+    sessionStorage.removeItem('tonton_auth_token');
+    const vu = jest.fn();
+    onSessionExpired(vu);
+    signalSessionExpired();
+    signalSessionExpired();
+    expect(vu).not.toHaveBeenCalled();
+    expect(isSessionExpired()).toBe(false);
+  });
+
+  it('et le signal reste possible ENSUITE, une fois connecté', () => {
+    // La garde ne doit pas condamner la session suivante.
+    sessionStorage.removeItem('tonton_auth_token');
+    signalSessionExpired();
+    expect(isSessionExpired()).toBe(false);
+    sessionStorage.setItem('tonton_auth_token', 'jeton-frais');
+    signalSessionExpired();
+    expect(isSessionExpired()).toBe(true);
+  });
+});
+
 describe('le signal', () => {
   it('retire le JETON — sinon les sondages repartent avec un jeton mort', () => {
     signalSessionExpired();

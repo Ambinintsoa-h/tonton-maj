@@ -332,7 +332,12 @@ export const buildGenerationPrompt = ({
     // modèle par l'autre canal — filtrées par la MÊME sélection qu'ici. Ce qui se
     // joue à cet endroit, c'est la place dans l'instruction de PRIORITÉ HAUTE, et
     // la relecture par le rédacteur.
-    const NOTE = (n) => `(+ ${n} point(s) d'audit non repris ici, faute de place — ils partent au modèle avec l'audit complet.)`;
+    // « avec l'audit COMPLET » se lisait « l'audit NON FILTRÉ » — et c'est cette
+    // phrase qui a fait douter Andrianina de l'utilité des cases le 20 août 2026 :
+    // il a compris que tout partait quand même, cases décochées ou non. L'audit du
+    // second canal est filtré par la MÊME sélection ; la note doit le dire, sinon
+    // le dispositif passe pour un décor.
+    const NOTE = (n) => `(+ ${n} point(s) d'audit non repris ici, faute de place — ils partent avec l'audit, filtré par les mêmes cases.)`;
     // Réserve calculée sur la note la PLUS LONGUE possible, jamais estimée : une
     // marge « à peu près » laissait le total à 1 537 caractères.
     const reserve = NOTE(actions.length + obsoletes.length).length + 2;
