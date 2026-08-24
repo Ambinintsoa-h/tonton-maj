@@ -4797,6 +4797,10 @@ export default function ArticleResult() {
           <PhaseRelecture
             key={relectureTick}
             html={contentRef.current || agent.updatedContent || ''}
+            // Mot-clé RÉSOLU, comme partout ailleurs : `agent.targetKeyword` seul
+            // laisserait la mesure de suroptimisation muette sur toute review
+            // rouverte depuis la file (le mot-clé y vit dans `cqItem`).
+            targetKeyword={(agent.targetKeyword || currentArticle?.keyword || cqItem?.keyword || '').trim()}
             onRefresh={() => setRelectureTick((t) => t + 1)}
             onAccept={handleAcceptStyleFix}
             onLocate={handleLocateStyle}

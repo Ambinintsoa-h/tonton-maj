@@ -346,18 +346,33 @@ describe('ce que la chaîne ne doit PAS faire', () => {
     expect(article.constatGras).toBeTruthy();                        // mesure du gras
   });
 
-  test('TROU CONNU — le rapport de R5 ne franchit PAS le retour', async () => {
-    // `sanitized.restoredBold` et `sanitized.missingBold` sont bien calculés, et
-    // s'arrêtent là : ils ne sont pas exposés sur `article`, donc jamais
-    // persistés. C'est EXACTEMENT le défaut corrigé pour `constatGras` et
-    // `boldPass` — trois mesures avaient été oubliées dans ce geste, et R5 est la
-    // quatrième. Conséquence : on ne peut pas signaler à la publication le gras
-    // d'origine perdu, faute de savoir lequel manquait.
+  test('le rapport de R5 franchit le retour — trou comblé', async () => {
+    // `sanitized.restoredBold` et `sanitized.missingBold` étaient calculés puis
+    // ABANDONNÉS : jamais exposés sur `article`, donc jamais persistés. Le même
+    // défaut que `constatGras` et `boldPass` avant leur correction — R5 était la
+    // quatrième mesure oubliée dans ce geste. Sans `missingBold`, impossible de
+    // signaler à la publication le gras d'origine perdu, faute de savoir lequel
+    // manquait.
     //
-    // Ce test CONSTATE le trou au lieu de le taire. Il est à INVERSER dès que les
-    // champs sont renvoyés — c'est le signal qui dit que le travail est fait.
+    // Ce test a d'abord CONSTATÉ le trou (`toBeUndefined`) plutôt que de le taire.
+    // Il est inversé ici : c'est le signal qui dit que le travail est fait.
     const { article } = await lancerChaine();
-    expect(article.restoredBold).toBeUndefined();
-    expect(article.missingBold).toBeUndefined();
+    expect(Array.isArray(article.restoredBold)).toBe(true);
+    expect(Array.isArray(article.missingBold)).toBe(true);
+    // Sur cet article, les deux <strong> d'origine sont replacés par R5.
+    expect(article.restoredBold.length).toBe(2);
+  });
+
+  test('les trois mesures de style voyagent AVEC l\'article', async () => {
+    // Elles étaient calculées, dites une fois en `onStep`, puis perdues. Le
+    // plafond de 20 mots reste recalculable en phase 4 ; la suroptimisation et
+    // les élisions étaient perdues pour de bon.
+    const { article } = await lancerChaine();
+    expect(Array.isArray(article.phrasesLongues)).toBe(true);
+    expect(Array.isArray(article.elisions)).toBe(true);
+    // `suroptimisation` est un OBJET de comptage, jamais `undefined` : la couche
+    // de persistance refuse les champs indéfinis.
+    expect(article.suroptimisation).not.toBeUndefined();
+    expect(article.suroptimisation).toHaveProperty('h2Total');
   });
 });
