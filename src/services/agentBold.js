@@ -20,7 +20,7 @@
  * d'être généré — il a coûté un appel bien plus cher. En cas d'erreur on rend le
  * HTML d'entrée inchangé, et on le dit.
  */
-import { callClaudeWithProgress } from './agent';
+import { callClaudeWithProgress, selectModel } from './agent';
 import { parseJsonLoose } from './agentQat';
 import {
   buildBoldPrompt, normalizeBoldProposals, boldPassReportLine, formeInattendue,
@@ -96,7 +96,7 @@ export const runBoldPass = async ({
   try {
     const res = await callClaudeWithProgress(
       null,
-      { system: SYSTEME, messages: [{ role: 'user', content: prompt }], max_tokens: MAX_TOKENS_GRAS },
+      { system: SYSTEME, messages: [{ role: 'user', content: prompt }], max_tokens: MAX_TOKENS_GRAS, model: selectModel('gras') },
       onStep, onReplace, 'Mise en gras',
     );
     usage = (res && res.usage) || null;

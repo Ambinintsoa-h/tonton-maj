@@ -18,7 +18,9 @@ export const DEFAULT_MODEL_PRICING = {
   'claude-haiku-4-5':  { input: 1.00,  output: 5.00  },
   'claude-sonnet-5':   { input: 3.00,  output: 15.00 },
   'claude-sonnet-4-5': { input: 3.00,  output: 15.00 },
-  'claude-opus-4-5':   { input: 15.00, output: 75.00 },
+  // 5.00/25.00 — pas 15.00/75.00 (tarif Opus 4.1) : corrigé en miroir de
+  // TOKEN_PRICING_FALLBACK (services/agent.js), verrouillé par modelMigration.test.js.
+  'claude-opus-4-5':   { input: 5.00,  output: 25.00 },
 };
 
 // Charge les paramètres sauvegardés depuis localStorage au démarrage.

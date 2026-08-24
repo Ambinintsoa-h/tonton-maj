@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { selectModel } from './agent';
 
 // ── Service Commentaires ───────────────────────────────────────────────────────
 // Lecture/modération via le proxy (qui parle à l'API REST WordPress avec les
@@ -27,13 +28,14 @@ export const moderateComment = async ({ site, commentId, action }) => {
 };
 
 /**
- * Rédige un BROUILLON de réponse de marque (Sonnet) — toujours relu/édité par un
- * humain avant publication. Retourne le texte brut (chaîne vide si échec).
+ * Rédige un BROUILLON de réponse de marque — toujours relu/édité par un
+ * humain avant publication. Modèle piloté par le registre des passes
+ * (`commentaire_reponse`, agent.js). Retourne le texte brut (chaîne vide si échec).
  */
 export const generateReply = async ({ comment, siteName = '' }) => {
   try {
     const { data } = await axios.post(CLAUDE_PROXY, {
-      model: 'claude-sonnet-4-5',
+      model: selectModel('commentaire_reponse'),
       max_tokens: 500,
       system: `Tu écris la réponse de la marque/du site${siteName ? ` « ${siteName} »` : ''} à un commentaire de lecteur. Elle est publiée sous le compte officiel et relue par un humain avant publication.
 
@@ -89,7 +91,7 @@ Réponds UNIQUEMENT avec un JSON valide, sans texte autour :
 const classifyChunk = async (batch) => {
   try {
     const { data } = await axios.post(CLAUDE_PROXY, {
-      model: 'claude-haiku-4-5',
+      model: selectModel('commentaire_tri'),
       max_tokens: 4000,
       system: CLASSIFY_SYSTEM,
       messages: [{ role: 'user', content: `Commentaires à classer :\n${JSON.stringify(batch)}` }],
@@ -141,7 +143,7 @@ export const translateComment = async ({ text }) => {
   if (!src) return '';
   try {
     const { data } = await axios.post(CLAUDE_PROXY, {
-      model: 'claude-haiku-4-5',
+      model: selectModel('commentaire_traduction'),
       max_tokens: 1000,
       system: `Tu es un traducteur. Traduis le texte de l'utilisateur en français naturel et fidèle. Réponds UNIQUEMENT par la traduction, sans guillemets, sans préambule ni commentaire. Si le texte est déjà en français, renvoie-le tel quel.`,
       messages: [{ role: 'user', content: src }],
