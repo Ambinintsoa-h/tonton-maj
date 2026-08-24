@@ -24,6 +24,9 @@ import { cleanLinkRows } from '../../constants/majMode';
 // Le compteur et le blocage de saisie s'appuient donc sur le même littéral que
 // l'envoi — un compteur qui mentirait sur la limite serait pire que rien.
 import { MAX_INSTRUCTION_CHARS } from '../../utils/generationPrompt';
+// Les MÊMES littéraux que la consigne de génération et que la détection de la
+// phase 4 : trois copies d'un seuil, ce serait trois occasions de divergence.
+import { MOTS_MAX_PHRASE, MAX_H2_AVEC_MOT_CLE } from '../../utils/stylePatterns';
 import InternalLinksField from './InternalLinksField';
 import AuditChecklist from './AuditChecklist';
 
@@ -87,6 +90,46 @@ export default function PhaseGeneration({
   const contredit = !!scope && scope !== propose;
   const dejaGenere = !!generatedHtml && !!qatArticle;
   const bilan = dejaGenere ? wordsAddedReport(originalHtml, generatedHtml, retenu) : null;
+
+  // ── LES TROIS CONSTATS DE LA GÉNÉRATION ───────────────────────────────────
+  // Lus sur `qatArticle`, où ils sont désormais persistés (agentQat.js). Aucune
+  // nouvelle prop : ils voyagent avec l'article, comme `constatGras`.
+  // Une mesure à ZÉRO n'est pas affichée : une ligne « 0 élision orpheline » à
+  // chaque génération apprendrait au rédacteur à ne plus lire ce bloc, et le
+  // jour où le chiffre monte il ne le verrait pas.
+  const constats = [];
+  if (qatArticle?.phrasesLongues?.length) {
+    const plus = qatArticle.phrasesLongues[0]?.mots;
+    constats.push({
+      cle: 'phrases', icone: '✏️',
+      texte: `${qatArticle.phrasesLongues.length} phrase(s) de plus de ${MOTS_MAX_PHRASE} mots`
+        + `${plus ? ` — la plus longue en compte ${plus}` : ''}. À couper en relecture.`,
+    });
+  }
+  if (qatArticle?.suroptimisation?.excesH2 > 0) {
+    const s = qatArticle.suroptimisation;
+    constats.push({
+      cle: 'suropt', icone: '🔍',
+      texte: `Mot-clé exact dans ${s.h2AvecMotCle} titres H2 sur ${s.h2Total} `
+        + `(maximum ${MAX_H2_AVEC_MOT_CLE}) — suroptimisation à corriger.`,
+    });
+  }
+  if (qatArticle?.elisions?.length) {
+    constats.push({
+      cle: 'elisions', icone: '⚠️',
+      texte: `${qatArticle.elisions.length} élision(s) orpheline(s) — `
+        + `« ${qatArticle.elisions.slice(0, 2).join(' », « ')} ». À corriger à la main.`,
+    });
+  }
+  // R5 — le gras d'origine non replacé. Un CONSTAT, jamais une réparation : un
+  // lien perdu n'est jamais un choix, un gras retiré peut l'être.
+  if (qatArticle?.missingBold?.length) {
+    constats.push({
+      cle: 'gras', icone: '🅱️',
+      texte: `${qatArticle.missingBold.length} terme(s) en gras d'origine non replacé(s) — `
+        + 'les mots ne figurent plus dans le texte réécrit.',
+    });
+  }
   const reste = Math.max(0, MAX_INSTRUCTION_CHARS - (prompt || '').length);
   const simple = retenu === SCOPE_SIMPLE;
   // DÉPLIABLE, DÉPLIÉ PAR DÉFAUT (demande d'Andrianina, 19/08). L'ampleur et son
@@ -336,6 +379,29 @@ export default function PhaseGeneration({
               🔒 {qatArticle.strippedExternalLinks.length} lien(s) externe(s) ajouté(s) par l'IA ont été retiré(s) — règle liens externes.
             </p>
           )}
+        </div>
+      )}
+
+      {/* ── CE QUE LA GÉNÉRATION A RÉELLEMENT PRODUIT ────────────────────────
+          Les trois mesures étaient calculées, dites une fois en `onStep`, puis
+          perdues : les étapes se replient et rien n'est conservé. Le plafond de
+          20 mots est au moins recalculable en phase 4 ; la suroptimisation et les
+          élisions étaient perdues pour de bon.
+
+          Même ton que le bilan de longueur : un CHIFFRE, pas un jugement. Rien
+          n'est réparé ici — une élision orpheline demande le genre du mot suivant,
+          et un code qui devine écrit « le toiture ». On dit, le rédacteur tranche. */}
+      {dejaGenere && !generating && (constats.length > 0) && (
+        <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-3 space-y-1">
+          <p className="text-xs font-semibold text-gray-700">Sur le texte produit</p>
+          {constats.map((c) => (
+            <p key={c.cle} className="text-[11px] text-gray-600">
+              {c.icone} {c.texte}
+            </p>
+          ))}
+          <p className="text-[10px] text-gray-400">
+            Mesuré à la génération. Recomptable sur le texte courant en phase 4.
+          </p>
         </div>
       )}
     </motion.div>

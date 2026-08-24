@@ -1324,6 +1324,23 @@ N'ajoute aucun AUTRE lien externe.`;
         html: withBold.html,
         restoredBold: withBold.restored,
         missingBold: withBold.missing,
+        // ── LES TROIS MESURES QUI DISPARAISSAIENT ───────────────────────────
+        // Calculées plus haut, émises en `onStep`… et abandonnées là. Or `onStep`
+        // meurt avec l'écran de génération : les étapes se replient et rien n'est
+        // conservé. C'est le défaut déjà corrigé pour `constatGras` et `boldPass`,
+        // et trois mesures avaient été oubliées dans ce geste.
+        //
+        // Le plafond de 20 mots est au moins RECALCULABLE en phase 4 (fonction
+        // pure sur le HTML). La suroptimisation et les élisions, elles, étaient
+        // perdues pour de bon : personne ne pouvait plus savoir, une heure ou
+        // trois semaines plus tard, ce que la génération avait produit.
+        //
+        // Valeurs par défaut TOUJOURS posées, jamais `undefined` : la couche de
+        // persistance refuse les champs indéfinis, et un article ne doit pas
+        // échouer à s'enregistrer pour une mesure absente.
+        phrasesLongues:  tropLongues || [],
+        suroptimisation: suropt || null,
+        elisions:        elisions || [],
         constatGras: gras,
         // RAPPORT DE LA PASSE DE GRAS, PERSISTÉ. Les messages `onStep` disparaissent
         // dès que la génération se termine — les étapes se replient et rien n'est
@@ -1424,6 +1441,21 @@ N'ajoute aucun AUTRE lien externe.`;
       // replacées (avertissement, jamais un rejet).
       restoredImages: sanitized.restoredImages || [],
       missingImages:  sanitized.missingImages  || [],
+      // R5 — le gras d'origine. Ces deux champs étaient calculés puis ABANDONNÉS :
+      // `sanitized.restoredBold` et `sanitized.missingBold` ne franchissaient pas
+      // ce retour, donc n'étaient jamais persistés. Trouvé par le test de la
+      // chaîne de verrous (`chaineVerrous.test.js`) : R5 était la QUATRIÈME mesure
+      // oubliée dans le geste qui a persisté `constatGras` et `boldPass`.
+      // Sans `missingBold`, on ne peut pas signaler à la publication le gras
+      // d'origine perdu — faute de savoir lequel manquait.
+      restoredBold: sanitized.restoredBold || [],
+      missingBold:  sanitized.missingBold  || [],
+      // ── LES TROIS MESURES DE STYLE, RENDUES AVEC L'ARTICLE ─────────────────
+      // Une consigne qu'on ne mesure jamais est une consigne dont on ne sait
+      // rien ; une mesure qu'on ne conserve pas revient au même.
+      phrasesLongues:  sanitized.phrasesLongues  || [],
+      suroptimisation: sanitized.suroptimisation || null,
+      elisions:        sanitized.elisions        || [],
     },
     articleRaw: raw,
     tokenUsage: { ...tokenAcc, costUsd: calcCost(tokenAcc.calls, modelPricing) },

@@ -33,7 +33,10 @@ import {
   ShieldCheck, AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Check, X, Sparkles,
   ArrowLeftRight,
 } from 'lucide-react';
-import { detectStylePatterns } from '../../utils/stylePatterns';
+import {
+  detectStylePatterns, phrasesTropLongues, suroptimisationMotCle, elisionsOrphelines,
+  MOTS_MAX_PHRASE, MAX_H2_AVEC_MOT_CLE,
+} from '../../utils/stylePatterns';
 import { proposeMechanicalFix } from '../../utils/styleFixes';
 
 // Même clé que côté service (`stylePrompt.js` → `flattenAiOccurrences`) : le
@@ -101,6 +104,9 @@ const bornerDecalage = (el, dx, dy, actuel) => {
 export default function PhaseRelecture({
   html = '', onRefresh, onAccept, onLocate,
   onRunStyleFix, styleFixRunning = false, styleFixStep = '', aiProposals = {},
+  // Mot-clé cible : sans lui, la mesure de suroptimisation ne veut rien dire —
+  // elle n'est alors pas affichée plutôt que rendue à zéro (voir `mesures`).
+  targetKeyword = '',
 }) {
   const [ouvert, setOuvert] = useState(null);
   // Panneau replié en languette : l'article redevient entièrement lisible sans
@@ -158,6 +164,46 @@ export default function PhaseRelecture({
   // n'écrit rien dans l'article, il retire simplement la ligne de la liste.
   const [ignores, setIgnores] = useState([]);
   const rapport = useMemo(() => detectStylePatterns(html), [html]);
+
+  // ── LES TROIS MESURES, RECOMPTÉES SUR LE TEXTE COURANT ─────────────────────
+  // Motif : les chiffres affichés en phase 2 décrivent le texte SORTI DE LA
+  // GÉNÉRATION. Après les phases 3 et 4 — suggestions d'obsolescence reprises,
+  // passages réécrits, corrections acceptées une à une — ils décrivent un texte
+  // qui n'existe plus. Un chiffre périmé présenté comme actuel est pire qu'aucun
+  // chiffre : le rédacteur croit avoir corrigé ce qu'il n'a pas corrigé.
+  //
+  // AUCUN NOUVEAU BOUTON. Les trois fonctions sont PURES, calculées sur `html` :
+  // le bouton « Recalculer » du pied remonte déjà ce composant à chaque clic (et
+  // le parent le remonte aussi à chaque « Accepter », via `key={relectureTick}`).
+  // Ajouter un second bouton « recompter » donnerait deux commandes pour le même
+  // geste, et laisserait croire qu'elles font des choses différentes.
+  const mesures = useMemo(() => {
+    const longues = phrasesTropLongues(html);
+    const suropt = suroptimisationMotCle(html, targetKeyword);
+    const elisions = elisionsOrphelines(html);
+    const out = [];
+    if (longues.length) {
+      out.push({
+        cle: 'phrases', icone: '✏️',
+        texte: `${longues.length} phrase(s) de plus de ${MOTS_MAX_PHRASE} mots`,
+      });
+    }
+    // Sans mot-clé, la mesure ne veut rien dire : ne pas afficher « 0 sur 9 »,
+    // qui se lirait comme un feu vert.
+    if (targetKeyword && suropt.excesH2 > 0) {
+      out.push({
+        cle: 'suropt', icone: '🔍',
+        texte: `Mot-clé exact dans ${suropt.h2AvecMotCle} H2 sur ${suropt.h2Total} (max ${MAX_H2_AVEC_MOT_CLE})`,
+      });
+    }
+    if (elisions.length) {
+      out.push({
+        cle: 'elisions', icone: '⚠️',
+        texte: `${elisions.length} élision(s) orpheline(s) : « ${elisions.slice(0, 2).join(' », « ')} »`,
+      });
+    }
+    return out;
+  }, [html, targetKeyword]);
   const propre = rapport.findings.length === 0;
   // Occurrences sans correction mécanique : celles que seule l'IA peut traiter.
   const aManquant = useMemo(() => rapport.findings.reduce((n, f) => n + f.exemples.filter(
@@ -371,6 +417,17 @@ export default function PhaseRelecture({
       {/* ── Pied FIXE : les actions globales restent atteignables sans remonter
              la liste (elle peut faire 66 entrées). Mêmes handlers, mêmes
              conditions d'affichage qu'avant. ── */}
+      {/* Les trois mesures que la phase 2 affiche sur le texte SORTI de la
+          génération, recomptées ici sur le texte COURANT. Le bouton
+          « Recalculer » juste en dessous les rafraîchit — c'est le même geste. */}
+      {mesures.length > 0 && (
+        <div className="px-2.5 py-1.5 border-t border-gray-100 bg-amber-50/50 shrink-0 space-y-0.5">
+          {mesures.map((m) => (
+            <p key={m.cle} className="text-[10px] text-amber-800 leading-snug">{m.icone} {m.texte}</p>
+          ))}
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-1 px-2.5 py-1.5 border-t border-gray-100 bg-gray-50/60 shrink-0 flex-wrap">
         <span className="text-[11px] text-gray-400 px-1">{rapport.phrases} phrases analysées</span>
         <div className="flex items-center gap-1">
