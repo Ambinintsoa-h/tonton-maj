@@ -11,7 +11,7 @@
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
-import { selectModel, callClaudeStream, callClaude, extractTextBlocks } from './agent';
+import { selectModel, MODEL_PASSES, callClaudeStream, callClaude, extractTextBlocks } from './agent';
 
 jest.mock('axios');
 
@@ -21,19 +21,32 @@ const proxySrc = () => fs.readFileSync(path.join(__dirname, '..', '..', 'proxy.j
 const agentSrc    = () => fs.readFileSync(path.join(__dirname, 'agent.js'), 'utf8');
 const settingsSrc = () => fs.readFileSync(path.join(__dirname, '..', 'store', 'slices', 'settingsSlice.js'), 'utf8');
 
-describe('modèle utilisé pour générer les articles', () => {
-  test('la génération passe par Sonnet 5', () => {
-    expect(selectModel('update_generation')).toBe('claude-sonnet-5');
+describe('registre des passes IA (MODEL_PASSES)', () => {
+  test('la refonte et l\'audit QAT passent par Sonnet 5', () => {
+    expect(selectModel('refonte')).toBe('claude-sonnet-5');
+    expect(selectModel('audit_qat')).toBe('claude-sonnet-5');
   });
 
   test("l'extraction de mots-clés reste sur Haiku (tâche courte, pas de raison de payer plus)", () => {
     expect(selectModel('query_extraction')).toBe('claude-haiku-4-5');
   });
 
-  test('PANNE SILENCIEUSE — le modèle généré est dans la liste blanche du proxy', () => {
-    // Sans cette ligne dans MODEL_CASCADE, `MODEL_CASCADE.includes(model)` est
-    // faux et le proxy retombe sur MODEL_FALLBACK (Haiku) sans le dire.
-    expect(proxySrc()).toContain(`'${selectModel('update_generation')}'`);
+  test('une passe non déclarée retombe sur Haiku ET le signale (jamais silencieux)', () => {
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(selectModel('passe_qui_nexiste_pas')).toBe('claude-haiku-4-5');
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('passe_qui_nexiste_pas'));
+    spy.mockRestore();
+  });
+
+  test('PANNE SILENCIEUSE — TOUS les modèles du registre sont dans la liste blanche du proxy', () => {
+    // Sans son entrée dans MODEL_CASCADE, un modèle du registre ferait retomber
+    // le proxy sur MODEL_FALLBACK (Haiku) sans le dire. On vérifie l'ensemble du
+    // registre, pas une seule tâche — c'est tout l'intérêt d'un registre unique.
+    const src = proxySrc();
+    const manquants = Object.entries(MODEL_PASSES)
+      .filter(([, { model }]) => !src.includes(`'${model}'`))
+      .map(([pass, { model }]) => `${pass} → ${model}`);
+    expect(manquants).toEqual([]);
   });
 });
 
@@ -46,6 +59,11 @@ describe('tarifs — le suivi de coûts ne doit pas mentir', () => {
   test('Haiku 4.5 est à 1.00/5.00 — 0.80/4.00 sous-estimait la facture', () => {
     expect(agentSrc()).toMatch(/'claude-haiku-4-5':\s*\{\s*input:\s*1\.00,\s*output:\s*5\.00\s*\}/);
     expect(settingsSrc()).toMatch(/'claude-haiku-4-5':\s*\{\s*input:\s*1\.00,\s*output:\s*5\.00\s*\}/);
+  });
+
+  test('Opus 4.5 est à 5.00/25.00 — 15.00/75.00 (tarif Opus 4.1) surestimait la facture de 3x', () => {
+    expect(agentSrc()).toMatch(/'claude-opus-4-5':\s*\{\s*input:\s*5\.00,\s*output:\s*25\.00\s*\}/);
+    expect(settingsSrc()).toMatch(/'claude-opus-4-5':\s*\{\s*input:\s*5\.00,\s*output:\s*25\.00\s*\}/);
   });
 });
 
@@ -149,5 +167,23 @@ describe('CAUSE RACINE — un bloc de raisonnement ne doit plus vider la répons
     // Exactement DEUX appels : la voie clé API et la voie OAuth. Les deux doivent
     // y passer — corriger une seule laissait la panne intacte en production.
     expect((proxySrc().match(/textFromAnthropic\(/g) || []).length).toBe(2);
+  });
+});
+
+describe('verrou de cascade — le repli sur Haiku ne doit plus être silencieux', () => {
+  // Avant resolveRequestedModel, `MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK`
+  // était dupliqué trois fois (executeClaudeCall, /api/claude-stream, /api/claude-tools)
+  // et aucune des trois copies ne logguait la substitution.
+  test('les TROIS voies passent par resolveRequestedModel — plus de ternaire dupliqué', () => {
+    const s = proxySrc();
+    expect((s.match(/const requestedModel = resolveRequestedModel\(model\);/g) || []).length).toBe(3);
+    // La substitution silencieuse ne doit plus exister nulle part hors de la fonction elle-même.
+    expect((s.match(/MODEL_CASCADE\.includes\(model\) \? model : MODEL_FALLBACK/g) || []).length).toBe(1);
+  });
+
+  test('resolveRequestedModel avertit en console quand elle substitue', () => {
+    const s = proxySrc();
+    expect(s).toMatch(/const resolveRequestedModel = \(model\) => \{/);
+    expect(s).toMatch(/console\.warn\(`\[proxy\] Modèle/);
   });
 });

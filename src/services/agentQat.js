@@ -427,7 +427,7 @@ const fmtElapsed = (ms) => {
  * Une génération de refonte dure 8-9 minutes : sans ce retour, l'écran reste
  * muet et le rédacteur croit l'application bloquée.
  */
-const callWithLiveText = async ({ params, label, onStep, onReplace, onDelta, onProgress, trackCall, progressFrom = 0, progressTo = 0 }) => {
+const callWithLiveText = async ({ params, label, pass, onStep, onReplace, onDelta, onProgress, trackCall, progressFrom = 0, progressTo = 0 }) => {
   const t0 = Date.now();
   const maxChars = (params.max_tokens || 32000) * 3.5;   // ~3,5 caractères par token
   try {
@@ -440,7 +440,7 @@ const callWithLiveText = async ({ params, label, onStep, onReplace, onDelta, onP
         onProgress(Math.round(progressFrom + (progressTo - progressFrom) * ratio));
       }
     });
-    trackCall(res.usage);
+    trackCall(res.usage, pass);
     onReplace(`${label} — terminé en ${fmtElapsed(Date.now() - t0)}`);
     return res;
   } catch (e) {
@@ -450,12 +450,12 @@ const callWithLiveText = async ({ params, label, onStep, onReplace, onDelta, onP
     // Anthropic. Sans cette estimation, le repli relançait la génération entière
     // et le coût affiché n'en comptait qu'une seule — sous-estimation silencieuse.
     if (e.charsReceived > 0) {
-      trackCall({ model: params.model, input_tokens: 0, output_tokens: Math.round(e.charsReceived / 3.5) });
+      trackCall({ model: params.model, input_tokens: 0, output_tokens: Math.round(e.charsReceived / 3.5) }, pass);
       console.warn(`[qat] ${e.charsReceived} caractères déjà produits avant l'échec du flux — comptés en estimation`);
     }
     onStep(`${label} — flux direct indisponible, bascule sur le transport classique...`);
     const res = await callClaudeWithProgress(null, params, onStep, onReplace, `${label} (estimation)`);
-    trackCall(res.usage);
+    trackCall(res.usage, pass);
     onReplace(`${label} — terminé en ${fmtElapsed(Date.now() - t0)}`);
     return res;
   }
@@ -546,7 +546,7 @@ const gatherFreshnessSources = async (content, targetKeyword, onStep, trackCall)
         content: `Article à vérifier (extrait) :\n${stripHtml(content).slice(0, 1500)}\n\nMot-clé cible : ${targetKeyword}\n\nDonne AU MAXIMUM ${MAX_QAT_SEARCHES} requêtes : la première sur les dernières actualités du sujet, la seconde sur le fait le plus susceptible d'être obsolète (prix, montant d'aide, norme, date). Inclus l'année ${year}. Format : ["requête 1", "requête 2"]`,
       }],
     });
-    trackCall(usage);
+    trackCall(usage, 'query_extraction');
     const parsed = parseJsonLoose(`{"q":${text}}`) || {};
     queries = Array.isArray(parsed.q) ? parsed.q.filter(q => typeof q === 'string') : [];
   } catch (e) {
@@ -708,8 +708,9 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
         // sortie), tous tronqués donc illisibles, 0,55 $ dépensés pour un
         // `auditJson` null. On s'aligne sur la refonte (32 000), très en dessous
         // du maximum du modèle.
-        params: { system, max_tokens: 32000, model: selectModel('update_generation'), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
+        params: { system, max_tokens: 32000, model: selectModel('audit_qat'), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
         label: attempt === 1 ? 'Audit QAT' : `Audit QAT — essai ${attempt}/3`,
+        pass: 'audit_qat',
         onStep, onReplace, onProgress, onDelta, trackCall,
         progressFrom: 25, progressTo: 40,
       });
@@ -1080,8 +1081,9 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
       const { text } = await callWithLiveText({
         // Voir le commentaire de l'audit : raisonnement désactivé pour la bascule,
         // sinon il mangerait le budget de 32 000 tokens destiné à l'article.
-        params: { system, max_tokens: 32000, model: selectModel('update_generation'), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
+        params: { system, max_tokens: 32000, model: selectModel('refonte'), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
         label: attempt === 1 ? 'Rédaction de l\'article' : `Rédaction — essai ${attempt}/3`,
+        pass: 'refonte',
         onStep, onReplace, onProgress, onDelta, trackCall,
         progressFrom: 55, progressTo: 88,
       });
@@ -1288,7 +1290,7 @@ N'ajoute aucun AUTRE lien externe.`;
         onStep, onReplace,
       });
       if (passeGras.posed.length) withBold.html = passeGras.html;
-      if (passeGras.tokenUsage) trackCall(passeGras.tokenUsage);
+      if (passeGras.tokenUsage) trackCall(passeGras.tokenUsage, 'gras');
 
       // ── CONSTAT — le gras est COMPTÉ PAR SECTION, pas seulement demandé ──────
       // La reprise ci-dessus ne dit rien du gras NEUF : le prompt exige 2 à 4

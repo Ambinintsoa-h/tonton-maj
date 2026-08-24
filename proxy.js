@@ -1913,6 +1913,21 @@ const MODEL_CASCADE = [
 ];
 const MODEL_FALLBACK = 'claude-haiku-4-5';
 
+/**
+ * Résout le modèle réellement envoyé à Anthropic pour UNE requête entrante.
+ * C'était le vrai piège : `MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK`
+ * était dupliqué trois fois (executeClaudeCall, /api/claude-stream,
+ * /api/claude-tools), et aucune des trois copies ne signalait la substitution —
+ * un modèle demandé mais absent de la liste blanche retombait sur Haiku sans
+ * qu'aucun log, aucune erreur, ne le trahisse. Centralisé ici pour que le log
+ * couvre les trois voies d'un coup.
+ */
+const resolveRequestedModel = (model) => {
+  if (MODEL_CASCADE.includes(model)) return model;
+  console.warn(`[proxy] Modèle « ${model} » absent de MODEL_CASCADE — repli SILENCIEUX sur ${MODEL_FALLBACK}. Si c'est volontaire, ajouter le modèle à MODEL_CASCADE et redéployer.`);
+  return MODEL_FALLBACK;
+};
+
 // ─── Appel API Anthropic via clé API (x-api-key) ─────────────────────────────
 // Utilisé quand le client fournit sa propre clé Anthropic plutôt que le token OAuth.
 // Le call est fait côté serveur (Node.js) — la clé ne transite jamais vers Anthropic
@@ -2225,7 +2240,7 @@ const executeClaudeCall = async ({ system, messages, max_tokens = 4096, model, t
   const systemBlock = system ? `[SYSTEM]\n${system}\n\n[USER]\n` : '';
   const cliContent = systemBlock + messages.map(m => m.content).join('\n');
 
-  const requestedModel = MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK;
+  const requestedModel = resolveRequestedModel(model);
 
   // ── Stratégie 0 : clé API du serveur ───────────────────────────────────────
   // Le call est fait ici côté serveur (Node.js) → la clé Anthropic ne transite
@@ -2394,7 +2409,7 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
   const send = (data) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`); };
 
   // ── Corps de la requête Anthropic (streaming activé) ──────────────────────────
-  const requestedModel = MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK;
+  const requestedModel = resolveRequestedModel(model);
   const requestBody = { model: requestedModel, max_tokens, messages, stream: true };
   if (system) requestBody.system = system;
   // Voie réellement empruntée par l'audit et la refonte (cf. diagnostic ci-dessous) :
@@ -3652,7 +3667,7 @@ app.post('/api/claude-tools', requireAuth, async (req, res) => {
   const clientApiKey = (_sak && _sak !== 'local') ? _sak : bodyApiKey;
   if (!messages?.length) return res.status(400).json({ error: 'messages requis' });
 
-  const requestedModel = MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK;
+  const requestedModel = resolveRequestedModel(model);
   const toolCallLog = [];
   let currentMessages = [...messages];
   let totalUsage = { input_tokens: 0, output_tokens: 0 };

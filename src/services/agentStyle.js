@@ -13,7 +13,7 @@
  * passage en relecture déclencherait un appel payant, y compris quand la
  * rédactrice ne fait que relire.
  */
-import { callClaudeWithProgress, makeTokenTracker } from './agent';
+import { callClaudeWithProgress, makeTokenTracker, selectModel } from './agent';
 import { parseJsonLoose } from './agentQat';
 import {
   flattenAiOccurrences, buildStyleFixPrompt, normalizeStyleProposals,
@@ -44,13 +44,14 @@ export const runStyleFixAgent = async ({
       system: SYSTEME,
       messages: [{ role: 'user', content: buildStyleFixPrompt(occurrences) }],
       max_tokens: 8000,
+      model: selectModel('style'),
     },
     onStep,
     onReplace,
     'Corrections de style',
   );
 
-  track(res && res.usage);
+  track(res && res.usage, 'style');
   // `salvage` : une réponse coupée par la limite de tokens garde ses premières
   // propositions, plutôt que de tout perdre.
   const json = parseJsonLoose(String((res && res.text) || ''), { salvage: true });

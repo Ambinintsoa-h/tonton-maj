@@ -77,12 +77,49 @@ const MODELS = {
   BEST: 'claude-opus-4-5',
 };
 
-export const selectModel = (task) => {
-  switch (task) {
-    case 'query_extraction': return MODELS.FAST;
-    case 'update_generation': return MODELS.SMART;
-    default: return MODELS.FAST;
+/**
+ * Registre des passes IA — UN SEUL ENDROIT.
+ *
+ * Avant ce registre, `selectModel` ne connaissait que deux tâches et un
+ * `default` qui attrapait tout le reste : c'est précisément pour ça que la
+ * passe de gras et la passe de style tournaient sur Haiku sans que personne
+ * ne l'ait décidé (elles n'appelaient pas `selectModel` du tout — `callClaude`
+ * retombe sur `MODELS.FAST` quand `model` est omis). Toute passe qui appelle
+ * Claude DOIT avoir une entrée ici ; il n'y a plus de repli muet qui absorbe
+ * une tâche non déclarée.
+ *
+ * Chaque modèle utilisé ici DOIT figurer dans `MODEL_CASCADE` (proxy.js),
+ * sinon le serveur le substitue lui aussi — verrouillé par
+ * `modelMigration.test.js`, qui vérifie l'ensemble du registre, pas une tâche
+ * isolée.
+ */
+export const MODEL_PASSES = {
+  audit_qat:              { model: MODELS.SMART, label: 'Audit QAT' },
+  refonte:                { model: MODELS.SMART, label: 'Refonte' },
+  obsolescence:           { model: MODELS.SMART, label: 'Obsolescence' },
+  reecriture_passage:     { model: MODELS.SMART, label: 'Réécriture — passage sélectionné' },
+  reecriture_section:     { model: MODELS.SMART, label: 'Réécriture — section entière' },
+  gras:                   { model: MODELS.SMART, label: 'Passe de gras' },
+  style:                  { model: MODELS.SMART, label: 'Passe de style' },
+  query_extraction:       { model: MODELS.FAST,  label: 'Extraction de requêtes' },
+  seo_meta:               { model: MODELS.FAST,  label: 'SEO meta' },
+  commentaire_reponse:    { model: MODELS.FAST,  label: 'Réponse commentaire' },
+  commentaire_tri:        { model: MODELS.FAST,  label: 'Tri des commentaires' },
+  commentaire_traduction: { model: MODELS.FAST,  label: 'Traduction commentaire' },
+};
+
+/**
+ * Résout le modèle d'une passe. Une passe ABSENTE du registre retombe sur
+ * Haiku (jamais d'erreur qui casserait une génération en cours) mais le DIT
+ * en console — le silence total était le piège d'origine.
+ */
+export const selectModel = (pass) => {
+  const entry = MODEL_PASSES[pass];
+  if (!entry) {
+    console.warn(`[selectModel] Passe « ${pass} » absente de MODEL_PASSES — repli sur Haiku.`);
+    return MODELS.FAST;
   }
+  return entry.model;
 };
 
 // ── Helpers date ──────────────────────────────────────────────────────────────
@@ -106,7 +143,11 @@ const TOKEN_PRICING_FALLBACK = {
   'claude-haiku-4-5':  { input: 1.00,  output: 5.00  }, // USD/MTok (corrigé : 0.80/4.00 sous-estimait)
   'claude-sonnet-5':   { input: 3.00,  output: 15.00 }, // USD/MTok
   'claude-sonnet-4-5': { input: 3.00,  output: 15.00 }, // USD/MTok
-  'claude-opus-4-5':   { input: 15.00, output: 75.00 }, // USD/MTok
+  // 15.00/75.00 → 5.00/25.00 (corrigé) : ce repli ne sert QUE si LiteLLM est
+  // injoignable, et cet échec est silencieux (cf. fetchModelPricing, proxy.js)
+  // — l'ancien chiffre datait d'Opus 4.1 et surestimait la facture de 3× sans
+  // qu'aucun signal ne le trahisse.
+  'claude-opus-4-5':   { input: 5.00,  output: 25.00 }, // USD/MTok
 };
 // pricing : objet { 'claude-xxx': { input, output } } — vient du Redux store settings.modelPricing
 export const calcCost = (calls, pricing = TOKEN_PRICING_FALLBACK) => calls.reduce((t, c) => {
@@ -797,7 +838,10 @@ const parseJsonResponse = (text, fallback = {}, warnLabel = '') => {
 /** Crée un accumulateur de tokens avec sa fonction de suivi. */
 export const makeTokenTracker = () => {
   const acc = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, calls: [] };
-  const track = (usage) => {
+  // `pass` : identifiant du registre (MODEL_PASSES) qui a déclenché l'appel —
+  // ex. 'audit_qat', 'gras'. Optionnel : un appelant qui ne le fournit pas
+  // n'aura simplement pas de ventilation par passe sur cet appel.
+  const track = (usage, pass) => {
     if (!usage) return;
     acc.input += usage.input_tokens || 0;
     acc.output += usage.output_tokens || 0;
@@ -809,6 +853,7 @@ export const makeTokenTracker = () => {
     acc.cacheRead += usage.cache_read_input_tokens || 0;
     acc.calls.push({
       model: usage.model,
+      pass: pass || null,
       input: usage.input_tokens || 0,
       output: usage.output_tokens || 0,
       cacheWrite: usage.cache_creation_input_tokens || 0,
@@ -1918,7 +1963,7 @@ Article (extrait) :
 ${content.substring(0, 3000)}`,
       }],
     });
-    trackCall(u1);
+    trackCall(u1, 'query_extraction');
     const parsed = parseJsonResponse(step1Text, {}, '[review] Query extraction failed:');
     queries = parsed.queries || [];
     const code = (v) => (typeof v === 'string' && /^[a-z]{2}$/i.test(v.trim())) ? v.trim().toLowerCase() : null;
@@ -1975,7 +2020,7 @@ ${content.substring(0, 3000)}`,
   onProgress(48);
 
   // ── Étape 3 : Génération de l'enrichissement ─────────────────────────────────
-  const model3 = selectModel('update_generation');
+  const model3 = selectModel('obsolescence');
   const modelLabel = model3.includes('sonnet') ? 'Sonnet' : model3.includes('opus') ? 'Opus' : 'Haiku';
   onStep(`Enrichissement et vérification Skills/Knowledge (${modelLabel})...`);
   onProgress(58);
@@ -2018,7 +2063,7 @@ ${content}
     model: model3,
     messages: [{ role: 'user', content: userMsg }],
   });
-  trackCall(u3);
+  trackCall(u3, 'obsolescence');
 
   onStep('Finalisation de la deuxième passe...');
   onProgress(90);
@@ -2057,7 +2102,7 @@ export const rewriteSelection = async ({ text, instruction }) => {
   const { text: out } = await callClaude(null, {
     system: `Tu es un rédacteur web senior francophone. Tu réécris le passage fourni selon la consigne, en respectant STRICTEMENT : même sens et mêmes informations (chiffres, noms, faits conservés), même langue, voix active uniquement, phrases de 20 mots maximum, aucun participe présent, aucun tiret cadratin (—) ni demi-cadratin (–), aucune formule creuse (« il est important de noter »…). Réponds UNIQUEMENT avec le texte réécrit — sans commentaire, sans guillemets d'encadrement, sans balise HTML.`,
     max_tokens: 2000,
-    model: selectModel('update_generation'),
+    model: selectModel('reecriture_passage'),
     messages: [{ role: 'user', content: `Consigne : ${instruction}\n\nPassage à réécrire :\n\n${text}` }],
   });
   const cleaned = (out || '').trim();
@@ -2087,7 +2132,7 @@ export const rewriteSection = async ({ html, instruction }) => {
 - TOUS les liens <a href="..."> présents DOIVENT être conservés À L'IDENTIQUE (même href, même texte d'ancre, même position relative) — ne les supprime jamais, ne les déplace pas, n'en ajoute aucun nouveau
 Réponds UNIQUEMENT avec le HTML réécrit (mêmes balises racines que l'entrée), sans commentaire, sans balise <html>/<body>, sans bloc de code markdown.`,
     max_tokens: 4000,
-    model: selectModel('update_generation'),
+    model: selectModel('reecriture_section'),
     messages: [{ role: 'user', content: `Consigne : ${instruction}\n\nSection HTML à réécrire :\n\n${html}` }],
   });
   const cleaned = (out || '').trim()
@@ -2110,7 +2155,7 @@ export const generateSeoMeta = async (articleHtml = '', articleTitle = '') => {
 
   try {
     const { text } = await callClaude(null, {
-      model: MODELS.FAST,
+      model: selectModel('seo_meta'),
       max_tokens: 250,
       system: 'Tu génères des balises SEO optimisées pour des articles de blog français. Réponds UNIQUEMENT avec le JSON demandé, sans texte autour.',
       messages: [{
