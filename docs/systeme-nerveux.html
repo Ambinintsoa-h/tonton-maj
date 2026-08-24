@@ -1,0 +1,1360 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Système nerveux Tonton AI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   JETONS — palette complète en clair sur :root nu, redéfinie deux fois pour
+   le sombre (préférence système non estampillée, puis choix explicite).
+   ═══════════════════════════════════════════════════════════════════════ */
+:root{
+  --ground:#e7ebf1;
+  --surface:#ffffff;
+  --surface-2:#f2f5f9;
+  --sunk:#dde3ec;
+  --ink:#141a22;
+  --ink-2:#3d4a5c;
+  --ink-3:#697788;
+  --hair:#c7d0dc;
+  --hair-2:#dbe2ea;
+
+  --signal:#3b34c4;          /* accent : le « signal » — appel IA, lien actif */
+  --signal-soft:#e6e5fb;
+  --rejet:#a8253a;           /* bloquant : la génération est rejetée */
+  --rejet-soft:#fbe6e9;
+  --repare:#0a666d;          /* le code répare, jamais bloquant */
+  --repare-soft:#dff1f2;
+  --constat:#845200;         /* mesuré, dit, jamais réparé */
+  --constat-soft:#fbeed8;
+
+  --shadow:0 1px 2px rgba(20,26,34,.06), 0 8px 24px -16px rgba(20,26,34,.24);
+  --rail:264px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0c1117;
+    --surface:#141b23;
+    --surface-2:#1a232d;
+    --sunk:#0f161d;
+    --ink:#dde5ee;
+    --ink-2:#a9b6c6;
+    --ink-3:#7e8d9f;
+    --hair:#2a3644;
+    --hair-2:#212c38;
+
+    --signal:#8d90ff;
+    --signal-soft:#1e2244;
+    --rejet:#f5859a;
+    --rejet-soft:#371a22;
+    --repare:#48c3ca;
+    --repare-soft:#0f2c2e;
+    --constat:#e4a94f;
+    --constat-soft:#2f2313;
+
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0c1117;
+  --surface:#141b23;
+  --surface-2:#1a232d;
+  --sunk:#0f161d;
+  --ink:#dde5ee;
+  --ink-2:#a9b6c6;
+  --ink-3:#7e8d9f;
+  --hair:#2a3644;
+  --hair-2:#212c38;
+
+  --signal:#8d90ff;
+  --signal-soft:#1e2244;
+  --rejet:#f5859a;
+  --rejet-soft:#371a22;
+  --repare:#48c3ca;
+  --repare-soft:#0f2c2e;
+  --constat:#e4a94f;
+  --constat-soft:#2f2313;
+
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:15px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--signal);text-decoration-thickness:1px;text-underline-offset:2px}
+:focus-visible{outline:2px solid var(--signal);outline-offset:2px;border-radius:2px}
+code,.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+
+/* ── Ossature ─────────────────────────────────────────────────────────── */
+.shell{display:grid;grid-template-columns:var(--rail) minmax(0,1fr);gap:0;max-width:1560px;margin:0 auto}
+
+.rail{
+  position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+  padding:34px 22px 60px;border-right:1px solid var(--hair);
+  background:var(--surface);
+}
+.rail-mark{font-family:"Archivo",sans-serif;font-weight:700;font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);margin:0 0 4px}
+.rail-sub{font-size:11.5px;color:var(--ink-3);margin:0 0 26px;letter-spacing:.02em}
+.rail nav{display:flex;flex-direction:column;gap:1px}
+.rail nav a{
+  display:flex;align-items:baseline;gap:9px;padding:6px 9px;border-radius:5px;
+  color:var(--ink-2);text-decoration:none;font-size:13px;line-height:1.35;
+  border-left:2px solid transparent;
+}
+.rail nav a .n{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--ink-3);min-width:20px}
+.rail nav a:hover{background:var(--surface-2);color:var(--ink)}
+.rail nav a[aria-current="true"]{background:var(--signal-soft);color:var(--signal);border-left-color:var(--signal);font-weight:600}
+.rail nav a[aria-current="true"] .n{color:var(--signal)}
+.rail-div{height:1px;background:var(--hair-2);margin:14px 2px}
+
+main{padding:40px clamp(20px,3.4vw,54px) 120px;min-width:0}
+
+/* ── En-tête ──────────────────────────────────────────────────────────── */
+.eyebrow{
+  font-family:"Archivo",sans-serif;font-size:11px;font-weight:600;
+  letter-spacing:.17em;text-transform:uppercase;color:var(--ink-3);margin:0 0 14px;
+}
+h1{
+  font-family:"Archivo",sans-serif;font-weight:700;
+  font-size:clamp(34px,4.6vw,58px);line-height:1.02;letter-spacing:-.022em;
+  margin:0 0 18px;text-wrap:balance;
+}
+.lede{font-size:17px;line-height:1.6;color:var(--ink-2);max-width:66ch;margin:0 0 8px}
+.lede strong{color:var(--ink);font-weight:600}
+.stamp{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-3);margin:20px 0 0;display:flex;flex-wrap:wrap;gap:6px 18px}
+
+.figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:1px;background:var(--hair-2);border:1px solid var(--hair);border-radius:8px;overflow:hidden;margin:34px 0 0}
+.fig{background:var(--surface);padding:15px 16px}
+.fig b{display:block;font-family:"Archivo",sans-serif;font-size:27px;font-weight:700;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
+.fig span{display:block;font-size:11.5px;color:var(--ink-3);margin-top:6px;line-height:1.35}
+
+/* ── Titres de section ────────────────────────────────────────────────── */
+section{margin-top:74px;scroll-margin-top:24px}
+.sec-head{display:flex;align-items:flex-start;gap:14px;padding-bottom:14px;border-bottom:2px solid var(--ink);margin-bottom:26px}
+.sec-n{font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:500;color:var(--ink-3);padding-top:9px;letter-spacing:.04em}
+.sec-t{flex:1}
+h2{font-family:"Archivo",sans-serif;font-weight:700;font-size:clamp(21px,2.3vw,29px);letter-spacing:-.015em;line-height:1.12;margin:0;text-wrap:balance}
+.sec-t p{margin:7px 0 0;color:var(--ink-2);font-size:14px;max-width:74ch}
+h3{font-family:"Archivo",sans-serif;font-weight:600;font-size:16px;letter-spacing:-.005em;margin:38px 0 14px;color:var(--ink)}
+
+/* ── Schéma du chemin de signal ───────────────────────────────────────── */
+.schema{
+  border:1px solid var(--hair);border-radius:10px;background:var(--surface);
+  padding:22px;margin:36px 0 0;box-shadow:var(--shadow);
+}
+.schema-legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:0 0 20px;font-size:11.5px;color:var(--ink-3)}
+.schema-legend i{display:inline-flex;align-items:center;gap:6px;font-style:normal}
+.dot{width:9px;height:9px;border-radius:50%;flex:none}
+.bands{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;position:relative}
+.band{display:flex;flex-direction:column;gap:7px;min-width:0}
+.band-h{font-family:"Archivo",sans-serif;font-size:10.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);padding:0 0 8px;border-bottom:1px solid var(--hair-2);margin-bottom:3px}
+.node{
+  appearance:none;text-align:left;width:100%;cursor:pointer;
+  background:var(--surface-2);border:1px solid var(--hair-2);border-left:3px solid var(--ink-3);
+  border-radius:5px;padding:8px 10px;color:var(--ink);font:inherit;font-size:12.5px;line-height:1.3;
+  transition:background .13s,border-color .13s,transform .13s;
+}
+.node:hover{background:var(--signal-soft);border-color:var(--signal);transform:translateX(2px)}
+.node .k{display:block;font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--ink-3);letter-spacing:.05em}
+.node[data-c="ia"]{border-left-color:var(--signal)}
+.node[data-c="rejet"]{border-left-color:var(--rejet)}
+.node[data-c="repare"]{border-left-color:var(--repare)}
+.node[data-c="constat"]{border-left-color:var(--constat)}
+
+/* ── Barre d'outils : filtres + recherche ─────────────────────────────── */
+.tools{
+  position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:9px;align-items:center;
+  padding:12px 0;margin:34px 0 0;background:var(--ground);
+  border-bottom:1px solid var(--hair);
+}
+.chip{
+  appearance:none;cursor:pointer;font:inherit;font-size:12px;
+  padding:5px 12px;border-radius:99px;border:1px solid var(--hair);
+  background:var(--surface);color:var(--ink-2);display:inline-flex;align-items:center;gap:7px;
+  transition:background .13s,color .13s,border-color .13s;
+}
+.chip:hover{border-color:var(--ink-3);color:var(--ink)}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+.chip[data-c="ia"][aria-pressed="true"]{background:var(--signal);border-color:var(--signal);color:#fff}
+.chip[data-c="rejet"][aria-pressed="true"]{background:var(--rejet);border-color:var(--rejet);color:#fff}
+.chip[data-c="repare"][aria-pressed="true"]{background:var(--repare);border-color:var(--repare);color:#fff}
+.chip[data-c="constat"][aria-pressed="true"]{background:var(--constat);border-color:var(--constat);color:#fff}
+.search{flex:1;min-width:180px;display:flex;align-items:center;gap:8px;margin-left:auto}
+.search input{
+  flex:1;font:inherit;font-size:13px;padding:6px 11px;border-radius:6px;
+  border:1px solid var(--hair);background:var(--surface);color:var(--ink);
+}
+.search input::placeholder{color:var(--ink-3)}
+.count{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-3);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+/* ── Module ───────────────────────────────────────────────────────────── */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr));gap:14px}
+.mod{
+  background:var(--surface);border:1px solid var(--hair);border-radius:8px;
+  border-left:3px solid var(--ink-3);padding:16px 18px;min-width:0;
+  box-shadow:var(--shadow);scroll-margin-top:86px;
+}
+.mod[data-c="ia"]{border-left-color:var(--signal)}
+.mod[data-c="rejet"]{border-left-color:var(--rejet)}
+.mod[data-c="repare"]{border-left-color:var(--repare)}
+.mod[data-c="constat"]{border-left-color:var(--constat)}
+.mod.dim{opacity:.24;filter:saturate(.3)}
+.mod.hide{display:none}
+.mod.flash{animation:flash 1.5s ease-out}
+@keyframes flash{0%,22%{background:var(--signal-soft);border-color:var(--signal)}100%{background:var(--surface)}}
+@media (prefers-reduced-motion:reduce){
+  .mod.flash{animation:none;background:var(--signal-soft)}
+  .node:hover{transform:none}
+}
+
+.mod-top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.mod-id{font-family:"IBM Plex Mono",monospace;font-size:10.5px;font-weight:500;letter-spacing:.06em;color:var(--ink-3)}
+.mod-t{font-family:"Archivo",sans-serif;font-weight:600;font-size:15px;letter-spacing:-.005em;margin:0;flex:1;min-width:140px;line-height:1.25}
+.tag{
+  font-family:"IBM Plex Mono",monospace;font-size:9.5px;font-weight:500;letter-spacing:.08em;
+  text-transform:uppercase;padding:2.5px 7px;border-radius:3px;white-space:nowrap;
+  background:var(--sunk);color:var(--ink-3);
+}
+.tag[data-c="ia"]{background:var(--signal-soft);color:var(--signal)}
+.tag[data-c="rejet"]{background:var(--rejet-soft);color:var(--rejet)}
+.tag[data-c="repare"]{background:var(--repare-soft);color:var(--repare)}
+.tag[data-c="constat"]{background:var(--constat-soft);color:var(--constat)}
+.mod p{margin:9px 0 0;font-size:13.5px;line-height:1.58;color:var(--ink-2)}
+.mod p strong{color:var(--ink);font-weight:600}
+.mod ul{margin:9px 0 0;padding-left:17px;font-size:13.5px;color:var(--ink-2)}
+.mod li{margin:3px 0}
+.mod li::marker{color:var(--ink-3)}
+.ref{
+  display:block;margin-top:11px;font-family:"IBM Plex Mono",monospace;font-size:11px;
+  color:var(--ink-3);word-break:break-word;padding-top:9px;border-top:1px dashed var(--hair-2);
+}
+.ref b{color:var(--ink-2);font-weight:500}
+kbd{
+  font-family:"IBM Plex Mono",monospace;font-size:11.5px;background:var(--sunk);
+  color:var(--ink);padding:1px 5px;border-radius:3px;border:1px solid var(--hair-2);
+}
+
+/* ── Cicatrice (détails repliés) ──────────────────────────────────────── */
+details.scar{margin-top:12px;border-top:1px dashed var(--hair-2);padding-top:9px}
+details.scar>summary{
+  cursor:pointer;list-style:none;font-family:"Archivo",sans-serif;font-size:11px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);display:flex;align-items:center;gap:7px;
+}
+details.scar>summary::-webkit-details-marker{display:none}
+details.scar>summary::before{content:"+";font-family:"IBM Plex Mono",monospace;font-size:13px;line-height:1;color:var(--signal)}
+details.scar[open]>summary::before{content:"−"}
+details.scar>summary:hover{color:var(--ink)}
+details.scar>div{font-size:13px;line-height:1.56;color:var(--ink-2);margin-top:9px;padding-left:14px;border-left:2px solid var(--constat)}
+
+/* ── Chaîne ordonnée ──────────────────────────────────────────────────── */
+.chain{display:flex;flex-direction:column;gap:10px;counter-reset:step}
+.chain .mod{position:relative;padding-left:60px}
+.chain .mod::before{
+  counter-increment:step;content:counter(step,decimal-leading-zero);
+  position:absolute;left:16px;top:15px;
+  font-family:"IBM Plex Mono",monospace;font-size:15px;font-weight:500;color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
+}
+.chain .mod.hide{display:none}
+
+/* ── Tableaux ─────────────────────────────────────────────────────────── */
+.tw{overflow-x:auto;border:1px solid var(--hair);border-radius:8px;background:var(--surface);box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:620px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--hair-2);vertical-align:top}
+thead th{
+  font-family:"Archivo",sans-serif;font-size:10.5px;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3);background:var(--surface-2);white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:none}
+td.mono,th.mono{font-family:"IBM Plex Mono",monospace;font-size:11.5px;font-variant-numeric:tabular-nums}
+td.num{text-align:right;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+
+/* ── Encart d'avertissement ───────────────────────────────────────────── */
+.note{
+  border:1px solid var(--hair);border-left:3px solid var(--constat);border-radius:8px;
+  background:var(--surface);padding:16px 18px;margin:22px 0 0;box-shadow:var(--shadow);
+}
+.note h4{font-family:"Archivo",sans-serif;font-size:13px;font-weight:700;letter-spacing:.02em;margin:0 0 7px;color:var(--ink)}
+.note p{margin:0;font-size:13.5px;color:var(--ink-2);max-width:78ch}
+.note p+p{margin-top:8px}
+
+footer{margin-top:96px;padding-top:22px;border-top:1px solid var(--hair);font-size:12px;color:var(--ink-3);max-width:78ch}
+footer p{margin:0 0 7px}
+
+/* ── Adaptation ───────────────────────────────────────────────────────── */
+@media (max-width:1080px){
+  .bands{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:860px){
+  .shell{grid-template-columns:1fr}
+  .rail{position:static;height:auto;border-right:none;border-bottom:1px solid var(--hair);padding:22px 20px}
+  .rail nav{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:2px}
+  .bands{grid-template-columns:1fr}
+  main{padding:26px 18px 80px}
+  .tools{position:static}
+}
+</style>
+
+<div class="shell">
+
+  <aside class="rail">
+    <p class="rail-mark">Tonton AI</p>
+    <p class="rail-sub">Chemin de signal, bout en bout</p>
+    <nav id="rail">
+      <a href="#schema"><span class="n">00</span><span>Vue d'ensemble</span></a>
+      <a href="#entrees"><span class="n">01</span><span>Entrées</span></a>
+      <a href="#pre"><span class="n">02</span><span>Pré-traitement</span></a>
+      <a href="#coeurs"><span class="n">03</span><span>Cœurs de traitement</span></a>
+      <a href="#chaine"><span class="n">04</span><span>Chaîne de verrous</span></a>
+      <a href="#constats"><span class="n">05</span><span>Ce qui est mesuré</span></a>
+      <a href="#sorties"><span class="n">06</span><span>Sorties</span></a>
+      <a href="#publication"><span class="n">07</span><span>Garde-fous à la publication</span></a>
+      <a href="#tables"><span class="n">08</span><span>Constantes de référence</span></a>
+      <a href="#frictions"><span class="n">09</span><span>Points de friction</span></a>
+      <a href="#reste"><span class="n">10</span><span>Ce qu'il reste à faire</span></a>
+    </nav>
+    <div class="rail-div"></div>
+    <p class="rail-sub" style="margin:0">Cliquez n'importe quel nœud du schéma : il ouvre sa fiche.</p>
+  </aside>
+
+  <main>
+
+    <p class="eyebrow">Cartographie du pipeline · lecture du code au 21 août 2026</p>
+    <h1>Le système nerveux de Tonton AI</h1>
+    <p class="lede">
+      Un article WordPress entre par une URL et sort publié. Entre les deux :
+      <strong>trois sources d'entrée possibles</strong>, <strong>six appels payants à un modèle</strong>,
+      et une chaîne de <strong>neuf passes déterministes</strong> dont une seule peut annuler tout le travail.
+      Cette page suit ce parcours dans l'ordre réel d'exécution, avec les fichiers, les lignes et les
+      constantes exactes.
+    </p>
+    <p class="lede">
+      Trois classes de comportement structurent tout le reste, et les confondre est la première source
+      d'erreur de lecture : <strong>ce qui rejette</strong> (la génération est jetée, on repaie),
+      <strong>ce qui répare en silence</strong> (le code corrige et le dit), et
+      <strong>ce qui se contente de mesurer</strong> (le chiffre est affiché, rien n'est touché).
+    </p>
+    <p class="stamp">
+      <span>branche <b>fix/plafond-instruction-2500-et-resume-en-dernier</b></span>
+      <span>HEAD <b>eb0ea3e</b></span>
+      <span>772 tests · 44 suites</span>
+    </p>
+
+    <div class="figures">
+      <div class="fig"><b>4</b><span>phases du parcours</span></div>
+      <div class="fig"><b>6</b><span>appels IA sur un parcours complet</span></div>
+      <div class="fig"><b>9</b><span>passes déterministes après génération</span></div>
+      <div class="fig"><b>1</b><span>seul motif de rejet, et c'est voulu</span></div>
+      <div class="fig"><b>32 k</b><span>tokens de sortie, audit et refonte</span></div>
+      <div class="fig"><b>~82 k</b><span>caractères de prompt de refonte</span></div>
+    </div>
+
+    <!-- ══════════════════════════ SCHÉMA ══════════════════════════ -->
+    <section id="schema">
+      <div class="sec-head">
+        <span class="sec-n">00</span>
+        <div class="sec-t">
+          <h2>Vue d'ensemble</h2>
+          <p>Cinq bandes, de la gauche vers la droite. Chaque nœud est cliquable et mène à sa fiche détaillée.</p>
+        </div>
+      </div>
+
+      <div class="schema">
+        <div class="schema-legend">
+          <i><span class="dot" style="background:var(--signal)"></span>appel IA payant</i>
+          <i><span class="dot" style="background:var(--rejet)"></span>peut rejeter la génération</i>
+          <i><span class="dot" style="background:var(--repare)"></span>répare, jamais bloquant</i>
+          <i><span class="dot" style="background:var(--constat)"></span>mesure et signale seulement</i>
+          <i><span class="dot" style="background:var(--ink-3)"></span>transformation neutre</i>
+        </div>
+
+        <div class="bands">
+          <div class="band">
+            <div class="band-h">Entrées</div>
+            <button class="node" data-go="E1"><span class="k">E1</span>WordPress MCP</button>
+            <button class="node" data-go="E2"><span class="k">E2</span>Scraping Readability</button>
+            <button class="node" data-go="E3"><span class="k">E3</span>Contenu collé</button>
+            <button class="node" data-go="E4"><span class="k">E4</span>Brief du rédacteur</button>
+            <button class="node" data-go="E5"><span class="k">E5</span>Skills &amp; connaissances</button>
+            <button class="node" data-go="E6" data-c="ia"><span class="k">E6</span>Recherche de fraîcheur</button>
+            <button class="node" data-go="E7"><span class="k">E7</span>File d'attente MAJ</button>
+            <button class="node" data-go="E8"><span class="k">E8</span>Directives (2 500 car.)</button>
+            <button class="node" data-go="E9"><span class="k">E9</span>Cases de l'audit</button>
+          </div>
+
+          <div class="band">
+            <div class="band-h">Pré-traitement</div>
+            <button class="node" data-go="P1"><span class="k">P1</span>Source de vérité unique</button>
+            <button class="node" data-go="P2"><span class="k">P2</span>Comptage des liens</button>
+            <button class="node" data-go="P3"><span class="k">P3</span>Trois inventaires jumeaux</button>
+            <button class="node" data-go="P4"><span class="k">P4</span>Bloc de brief</button>
+            <button class="node" data-go="P5"><span class="k">P5</span>Socle mis en cache 1 h</button>
+          </div>
+
+          <div class="band">
+            <div class="band-h">Cœurs</div>
+            <button class="node" data-go="C1" data-c="ia"><span class="k">C1</span>Extraction de requêtes</button>
+            <button class="node" data-go="C2" data-c="ia"><span class="k">C2</span>Audit QAT — phase 1</button>
+            <button class="node" data-go="C3" data-c="ia"><span class="k">C3</span>Refonte — phase 2</button>
+            <button class="node" data-go="C4" data-c="ia"><span class="k">C4</span>Passe de gras</button>
+            <button class="node" data-go="C5" data-c="ia"><span class="k">C5</span>Obsolescence — phase 3</button>
+            <button class="node" data-go="C6" data-c="ia"><span class="k">C6</span>Style — phase 4</button>
+            <button class="node" data-go="C7"><span class="k">C7</span>Transport &amp; repli modèle</button>
+          </div>
+
+          <div class="band">
+            <div class="band-h">Verrous</div>
+            <button class="node" data-go="V0" data-c="rejet"><span class="k">V0</span>Liens externes</button>
+            <button class="node" data-go="V1" data-c="repare"><span class="k">R1</span>Liens internes d'origine</button>
+            <button class="node" data-go="V2" data-c="repare"><span class="k">R2a</span>Déliage zone interdite</button>
+            <button class="node" data-go="V3" data-c="repare"><span class="k">R2</span>Maillage forcé à 100 %</button>
+            <button class="node" data-go="V4" data-c="repare"><span class="k">R6</span>Renvois en encart</button>
+            <button class="node" data-go="V5" data-c="repare"><span class="k">R7</span>Marqueurs de doute</button>
+            <button class="node" data-go="V6" data-c="constat"><span class="k">—</span>Quatre constats</button>
+            <button class="node" data-go="V7" data-c="repare"><span class="k">R4</span>Images d'origine</button>
+            <button class="node" data-go="V8" data-c="repare"><span class="k">R5</span>Gras d'origine</button>
+          </div>
+
+          <div class="band">
+            <div class="band-h">Sorties</div>
+            <button class="node" data-go="S1"><span class="k">S1</span>Éditeur &amp; diff</button>
+            <button class="node" data-go="S2"><span class="k">S2</span>Brouillon automatique</button>
+            <button class="node" data-go="S3"><span class="k">S3</span>Persistance MySQL</button>
+            <button class="node" data-go="S4"><span class="k">S4</span>Export HTML</button>
+            <button class="node" data-go="S5" data-c="repare"><span class="k">S5</span>Filets de publication</button>
+            <button class="node" data-go="S6"><span class="k">S6</span>Publication WordPress</button>
+            <button class="node" data-go="S7" data-c="constat"><span class="k">S7</span>Tokens &amp; coût</button>
+            <button class="node" data-go="S8"><span class="k">S8</span>Suivi SEO Haloscan</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tools" role="group" aria-label="Filtres">
+        <button class="chip" aria-pressed="true" data-f="all">Tout</button>
+        <button class="chip" data-c="ia" data-f="ia"><span class="dot" style="background:currentColor"></span>Appels IA</button>
+        <button class="chip" data-c="rejet" data-f="rejet"><span class="dot" style="background:currentColor"></span>Bloquant</button>
+        <button class="chip" data-c="repare" data-f="repare"><span class="dot" style="background:currentColor"></span>Réparation</button>
+        <button class="chip" data-c="constat" data-f="constat"><span class="dot" style="background:currentColor"></span>Constat</button>
+        <div class="search">
+          <input id="q" type="search" placeholder="Filtrer : weaveBriefLinks, nofollow, 32000…" aria-label="Filtrer les fiches">
+          <span class="count" id="count"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ ENTRÉES ══════════════════════════ -->
+    <section id="entrees">
+      <div class="sec-head">
+        <span class="sec-n">01</span>
+        <div class="sec-t">
+          <h2>Entrées</h2>
+          <p>Ce qui entre dans le système. Neuf canaux, dont trois seulement portent l'article lui-même — les six autres portent les consignes, et c'est là que se décide presque tout.</p>
+        </div>
+      </div>
+
+      <div class="grid">
+
+        <article class="mod" id="E1">
+          <div class="mod-top"><span class="mod-id">E1</span><h3 class="mod-t" style="margin:0">WordPress MCP</h3><span class="tag">privilégié</span></div>
+          <p>Si l'hôte de l'URL correspond à un site configuré, l'article est lu par l'API REST plutôt que scrapé. C'est le seul chemin qui rapporte l'identité WordPress de l'article.</p>
+          <ul>
+            <li><code>wp_get_post</code> → <code>postId</code>, <code>postType</code>, <code>featuredMediaId</code>, <code>postLink</code></li>
+            <li>Échec silencieux : un <code>console.warn</code>, puis on repart sur le scraping</li>
+          </ul>
+          <span class="ref"><b>callWpTool</b> src/services/agent.js:60 · <b>runQatAudit</b> src/services/agentQat.js:611 · route <code>POST /api/wp-tool</code> proxy.js:3332</span>
+        </article>
+
+        <article class="mod" id="E2">
+          <div class="mod-top"><span class="mod-id">E2</span><h3 class="mod-t" style="margin:0">Scraping Readability</h3><span class="tag">repli</span></div>
+          <p>Le proxy passe la page dans <code>@mozilla/readability</code> sur un DOM jsdom et renvoie <code>content</code> (HTML structuré) plus <code>textContent</code>. Seuil d'acceptation : <strong>100 caractères</strong>.</p>
+          <p>Deuxième repli : le lecteur Jina, qui ne rend que du texte brut — donc sans balises <code>&lt;a&gt;</code>, ce qui a des conséquences directes sur le verrou des liens.</p>
+          <span class="ref"><b>scrapeUrl</b> src/services/scraper.js · <code>POST /api/scrape</code> proxy.js:2612 · <code>POST /api/jina</code> proxy.js:2831</span>
+        </article>
+
+        <article class="mod" id="E3">
+          <div class="mod-top"><span class="mod-id">E3</span><h3 class="mod-t" style="margin:0">Contenu collé à la main</h3></div>
+          <p>Troisième source, et la plus contraignante : sans URL d'article, il n'y a plus d'hôte de référence. <strong>Toute URL absolue est alors traitée comme externe</strong>, y compris un lien vers le propre site du rédacteur.</p>
+          <p>Conséquence concrète sur le maillage : seuls les chemins relatifs (<code>/ma-page</code>) peuvent être placés. C'est dit avant le lancement, pas après.</p>
+          <span class="ref"><b>point de passage unique des trois sources</b> src/pages/Articles.jsx:332 · <b>unverifiableLinkRows</b> src/constants/majMode.js</span>
+        </article>
+
+        <article class="mod" id="E4">
+          <div class="mod-top"><span class="mod-id">E4</span><h3 class="mod-t" style="margin:0">Brief du rédacteur</h3></div>
+          <p>Saisi à l'écran de lancement. Il est <strong>prioritaire sur les valeurs par défaut des ressources du skill</strong>, et le prompt le dit explicitement.</p>
+          <ul>
+            <li>Mot-clé cible — forme <em>exacte</em> imposée au titre SEO, au H1, et une fois au premier paragraphe. Varié partout ailleurs.</li>
+            <li>Type d'article : <code>dossier</code> (mot-clé dans 50 à 75 % des sous-titres) ou <code>actus</code> (au moins un)</li>
+            <li>Plugin SEO : <code>yoast</code> · <code>seopress</code> · <code>aucun</code> — change la terminologie de la checklist</li>
+            <li>Longueur cible : <strong>2 500 mots</strong> par défaut, bornes 800 à 5 000</li>
+            <li>Maillage : 3 lignes au départ, <strong>15 au maximum</strong></li>
+          </ul>
+          <span class="ref"><b>QatBriefFields.jsx</b> · constantes src/constants/majMode.js (<code>DEFAULT_TARGET_WORDS</code>, <code>INTERNAL_LINK_ROWS_MAX</code>)</span>
+          <details class="scar"><summary>Pourquoi 2 500 et pas 1 500</summary><div>Médiane relevée sur dix MAJ réellement publiées par l'équipe : ~2 500 mots, 7 à 9 H2. Les 1 500 mots du prompt d'origine produisaient des articles 40 % trop courts. Le plafond a été porté à 5 000 après qu'un article de prix soit monté à 4 500.</div></details>
+        </article>
+
+        <article class="mod" id="E5">
+          <div class="mod-top"><span class="mod-id">E5</span><h3 class="mod-t" style="margin:0">Skills &amp; base de connaissances</h3><span class="tag" data-c="rejet">pré-requis dur</span></div>
+          <p>Trois niveaux, injectés à des endroits différents du prompt :</p>
+          <ul>
+            <li><strong>Skill cerveau</strong> (<code>format === 'skillmd'</code>) — corps + ressources. Dédoublonné par nom, le plus récent gagne. <strong>Sans lui, l'audit lève une exception et ne part pas.</strong></li>
+            <li><strong>Règles d'équipe</strong> — cadrées « à auditer » en phase 1, « à appliquer » en phase 2. Les octets diffèrent volontairement.</li>
+            <li><strong>Base de connaissances</strong> — checklist obligatoire, un manquement doit remonter en <code>priority_actions</code>.</li>
+          </ul>
+          <span class="ref"><b>getBrainSkills</b> agent.js:891 · <b>buildSkillsBlock</b> agent.js:849 · <b>buildKnowledgeBlock</b> agent.js:937 · <b>buildSkillMethodBlock</b> agentQat.js:341</span>
+          <details class="scar"><summary>« Skills pas encore chargés » n'est pas « aucun skill »</summary><div><code>skills.bootstrapped</code> distingue les deux états. Avant, l'audit était refusé pendant la seconde de chargement avec un message faux — « exige un skill cerveau actif » — qui basculait la phase 1 en échec et envoyait fouiller un menu pour rien. Deux états, deux messages, deux gestes : patienter, ou aller en créer un.</div></details>
+        </article>
+
+        <article class="mod" id="E6" data-c="ia">
+          <div class="mod-top"><span class="mod-id">E6</span><h3 class="mod-t" style="margin:0">Recherche de fraîcheur</h3><span class="tag" data-c="ia">web</span></div>
+          <p>Deux requêtes au maximum, générées par le modèle rapide, puis exécutées en parallèle sur trois moteurs. Le résultat est dédoublonné par URL, coupé à six sources, et les trois premières sans contenu sont scrapées.</p>
+          <ul>
+            <li><code>MAX_QAT_SEARCHES = 2</code> · <code>MAX_SOURCES_INJECTED = 6</code></li>
+            <li>Brave (<code>freshness pm</code> puis <code>py</code>), Tavily (<code>advanced</code>, 365 jours), SearXNG</li>
+            <li>Sans source : le prompt ordonne de marquer la vérification « non vérifiable » <strong>plutôt que d'inventer</strong></li>
+          </ul>
+          <span class="ref"><b>gatherFreshnessSources</b> agentQat.js:536 · <b>searchWeb</b> src/services/search.js · routes <code>/api/brave</code>, <code>/api/tavily</code>, <code>/api/searxng</code></span>
+        </article>
+
+        <article class="mod" id="E7">
+          <div class="mod-top"><span class="mod-id">E7</span><h3 class="mod-t" style="margin:0">File d'attente MAJ</h3><span class="tag" data-c="constat">particularité</span></div>
+          <p>Les audits en lot passent par cet écran. Il force <code>internalLinks: []</code> — et cette valeur vide était <strong>enregistrée dans le <code>qatBrief</code></strong>.</p>
+          <p>Pendant des mois, tout article passé par la file sortait sans un seul lien interne nouveau : le forçage à 100 % s'appliquait à zéro paire. Garantie exacte, effet nul, aucun recours depuis l'interface. D'où le bloc de maillage rendu <strong>aussi en phase 2</strong>, le seul écran que tous les articles traversent.</p>
+          <span class="ref"><b>MajEnAttente.jsx:1465</b> (<code>internalLinks: []</code> ligne 1481) · <b>InternalLinksField.jsx</b> rendu à deux endroits</span>
+          <details class="scar"><summary>Et un audit vide n'est plus « phase 1 faite »</summary><div>La file marquait <code>phaseStatus.audit = done</code> inconditionnellement, même quand <code>result.audit</code> valait <code>null</code> : phase 1 affichée terminée, phase 2 ouverte sans ampleur ni score, et rien n'indiquait qu'il fallait relancer. L'item part maintenant en <code>status: 'error'</code>, relançable — et le garde-fou est placé <em>après</em> la comptabilité des tokens, parce que les essais ont été payés.</div></details>
+        </article>
+
+        <article class="mod" id="E8">
+          <div class="mod-top"><span class="mod-id">E8</span><h3 class="mod-t" style="margin:0">Directives de la phase 2</h3></div>
+          <p>Un textarea pré-rempli par le code puis relu par le rédacteur. Plafond partagé par la saisie, le pré-remplissage et l'envoi : <strong>un seul littéral</strong>, <code>MAX_INSTRUCTION_CHARS = 2500</code>.</p>
+          <ul>
+            <li>Coupure à la dernière <strong>fin de ligne</strong> qui tient — jamais au caractère près : « une consigne à moitié lue est une consigne fausse »</li>
+            <li>La coupure est <strong>annoncée</strong> avec le nombre de caractères perdus</li>
+            <li>Le pré-remplissage assemble données à actualiser et actions, avec une note explicite quand des points d'audit ne tiennent pas</li>
+            <li>La directive de fraîcheur (MAJ simple) est assemblée <strong>en dur, sans appel IA</strong>, et s'ajoute sous les directives permanentes</li>
+          </ul>
+          <span class="ref"><b>MAX_INSTRUCTION_CHARS</b> generationPrompt.js:65 · <b>couperInstruction</b> :84 · <b>buildGenerationPrompt</b> :327 · <b>buildFreshnessSuggestion</b> :235</span>
+          <details class="scar"><summary>1 500 → 2 500, mesuré à l'écran</summary><div>Sur un article réel avec directives personnalisées : compteur à <strong>2 183/1 500</strong> en MAJ simple. Décomposition : 825 de directives + 311 d'ampleur + 80 de mot-clé = 1 216 incompressibles, donc 174 caractères pour un audit qui en demande 950. À ce plafond, les directives du rédacteur et l'audit ne pouvaient pas tenir ensemble. L'instruction pèse ~2 % du prompt de refonte — le plafond n'a jamais été une contrainte technique, il existe pour qu'elle ne noie pas les règles.</div></details>
+        </article>
+
+        <article class="mod" id="E9">
+          <div class="mod-top"><span class="mod-id">E9</span><h3 class="mod-t" style="margin:0">Cases de l'audit</h3></div>
+          <p>L'audit ne part plus en bloc : le rédacteur coche. Quatre blocs, sept champs cochables, <strong>un seul filtre</strong> pour les deux canaux d'envoi.</p>
+          <ul>
+            <li><strong>Factuel</strong> — <code>a_supprimer</code>, <code>sources_check</code>. Bloc à part : c'est de la véracité, pas de la qualité.</li>
+            <li><strong>Fraîcheur</strong> — <code>recent_context</code>. Seul champ pré-coché en MAJ simple.</li>
+            <li><strong>Actions prioritaires</strong> — <code>priority_actions</code>, P1 d'abord.</li>
+            <li><strong>Améliorations</strong> — <code>seo_geo_gaps</code>, <code>eeat_recommendations</code>, <code>strategic_recommendation</code>, <code>tldr</code>.</li>
+          </ul>
+          <p><code>ampleur</code> et <code>keyword_repositioning</code> partent <strong>toujours</strong> : ils ne décrivent pas du contenu mais le cadre de la réécriture. Les décocher ne nuancerait pas la génération, elle la casserait.</p>
+          <span class="ref"><b>AUDIT_BLOCKS</b> auditSelection.js:41 · <b>filterAuditBySelection</b> :181 · <b>ALWAYS_SENT_FIELDS</b> :78 · <b>AuditChecklist.jsx</b></span>
+          <details class="scar"><summary>Pourquoi les cases pilotent DEUX canaux</summary><div>L'audit voyageait par deux chemins simultanés : le JSON brut (<code>summarizeAuditForRewrite</code>) et la prose du textarea (<code>buildGenerationPrompt</code>). Filtrer un seul donnait des cases décoratives — le pire résultat possible : le rédacteur voit disparaître de son écran une consigne qui part quand même. Une catégorie décochée est d'ailleurs <em>absente</em>, jamais mise à <code>null</code> : « <code>seo_geo_gaps : null</code> » se lit « l'audit n'a rien trouvé », ce qui est faux et invite le modèle à combler de lui-même.</div></details>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ PRÉ-TRAITEMENT ══════════════════════════ -->
+    <section id="pre">
+      <div class="sec-head">
+        <span class="sec-n">02</span>
+        <div class="sec-t">
+          <h2>Pré-traitement</h2>
+          <p>Ce que le code établit avant d'écrire une seule ligne de prompt. Aucun appel IA ici — mais c'est ce qui décide si les verrous en aval vont tenir.</p>
+        </div>
+      </div>
+
+      <div class="grid">
+
+        <article class="mod" id="P1">
+          <div class="mod-top"><span class="mod-id">P1</span><h3 class="mod-t" style="margin:0">Une seule source de vérité</h3><span class="tag">invariant</span></div>
+          <p><code>sourceHtml = contentHtml || content</code>, dans l'audit comme dans la refonte. Le verrou des liens travaille sur le <strong>HTML</strong>.</p>
+          <p>Sur le chemin scraping, <code>content</code> est du texte brut : les balises <code>&lt;a&gt;</code> ont disparu. Envoyer <code>content</code> au modèle lui demanderait de reproduire des liens qu'il ne voit nulle part — <strong>rejet systématique des trois essais</strong> sur tout site non connecté en WordPress MCP.</p>
+          <span class="ref">agentQat.js:646 (audit) et :964 (refonte)</span>
+        </article>
+
+        <article class="mod" id="P2">
+          <div class="mod-top"><span class="mod-id">P2</span><h3 class="mod-t" style="margin:0">Comptage des liens et des mots</h3></div>
+          <p>Chiffres calculés côté code et injectés dans le prompt d'audit sous l'intitulé « <em>comptées automatiquement — fiables, reprends-les telles quelles</em> » : liens internes, liens externes, longueur en mots.</p>
+          <p>Le principe est constant dans tout le projet : un indicateur vérifiable, jamais une promesse du modèle.</p>
+          <span class="ref"><b>analyzeLinks</b> agent.js:864 · <b>stripHtml</b> agent.js:953</span>
+        </article>
+
+        <article class="mod" id="P3">
+          <div class="mod-top"><span class="mod-id">P3</span><h3 class="mod-t" style="margin:0">Trois inventaires jumeaux</h3><span class="tag">prévention</span></div>
+          <p>Liens externes, liens internes et médias sont <strong>listés un par un</strong> dans le message utilisateur de la refonte. Le motif est le même pour les trois : <em>nommer évite la perte, alors que réparer coûte une passe déterministe ou un rejet</em>.</p>
+          <ul>
+            <li>Liens externes : « il en manque un seul et toute la génération est rejetée »</li>
+            <li>Liens internes : « ce ne sont pas des liens nouveaux, et les reproduire n'est pas facultatif »</li>
+            <li>Médias : balise recopiée telle quelle — <code>src</code>, <code>srcset</code>, <code>sizes</code>, <code>alt</code>, <code>loading</code>. Une image dans un <code>&lt;figure&gt;</code> reste dans son <code>&lt;figure&gt;</code>.</li>
+            <li>Garde-fou de volume : au-delà de <code>IMAGE_BLOCK_MAX = 12000</code> caractères, on ne recopie plus les balises — le HTML complet est de toute façon juste au-dessus dans le même message.</li>
+          </ul>
+          <span class="ref"><b>listExternalLinks</b> diff.js:1122 · <b>listInternalLinks</b> diff.js:1387 · <b>listArticleImages</b> imageCarry.js:243</span>
+          <details class="scar"><summary>Le bloc médias est arrivé en dernier</summary><div>Le prompt détaillait longuement la reprise de chaque lien externe et interne, et ne disait <em>rien</em> des images. Le modèle laissait tomber les <code>&lt;img&gt;</code> sans qu'aucun verrou s'en aperçoive.</div></details>
+        </article>
+
+        <article class="mod" id="P4">
+          <div class="mod-top"><span class="mod-id">P4</span><h3 class="mod-t" style="margin:0">Bloc de brief, deux variantes</h3></div>
+          <p><code>buildBriefBlock({ redaction })</code> est partagé par l'audit et la refonte. L'audit reçoit la <strong>liste</strong> des ancres (il en a besoin pour recommander un plan qui leur fasse une place), <strong>sans les consignes d'exécution</strong> — celles-ci seraient du bruit de prompt payé à chaque audit, sur un appel qui n'écrit pas une ligne d'article.</p>
+          <p><code>articleUrl</code> branche le filtre de domaine : une URL d'un autre site saisie par erreur n'est <strong>même pas proposée</strong> au modèle, puisque le code la placerait lui-même — ce serait un lien externe ajouté.</p>
+          <span class="ref"><b>buildBriefBlock</b> agentQat.js:362 · <b>cleanLinkRows</b> / <b>filterSameSiteLinks</b> majMode.js + diff.js:983</span>
+        </article>
+
+        <article class="mod" id="P5">
+          <div class="mod-top"><span class="mod-id">P5</span><h3 class="mod-t" style="margin:0">Socle mis en cache, 1 heure</h3><span class="tag">coût</span></div>
+          <p>Le prompt système est en deux blocs. Le premier — le <strong>skill seul</strong> — porte <code>cache_control: { ephemeral, ttl: '1h' }</code> et doit rester identique <strong>octet pour octet</strong> entre l'audit et la refonte. C'est ce qui autorise une lecture de cache <em>croisée entre phases</em>.</p>
+          <p>Les règles d'équipe et la base de connaissances restent dans le bloc volatil : leur cadrage diffère légitimement (« à auditer » ici, « à appliquer » là), donc leurs octets ne coïncideraient jamais.</p>
+          <span class="ref"><b>buildAuditSystem</b> agentQat.js:500 · <b>consigne + socle</b> agentQat.js:~940 · verrouillé par un test</span>
+          <details class="scar"><summary>Le TTL par défaut expirait avant la fin du premier appel</summary><div>Diagnostiqué en production : le cache écrivait à chaque appel sans jamais être lu. Confirmé par empreinte SHA-256 du bloc stable, identique entre deux audits réels et pourtant jamais relu. Cause : un audit complet est un <em>pipeline</em> de plusieurs appels (extraction de requêtes, recherche web, rédaction) qui dure souvent plus de 5 minutes de bout en bout. Le TTL de 5 minutes expirait donc avant même la fin du premier appel qui l'utilise.</div></details>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ CŒURS ══════════════════════════ -->
+    <section id="coeurs">
+      <div class="sec-head">
+        <span class="sec-n">03</span>
+        <div class="sec-t">
+          <h2>Cœurs de traitement</h2>
+          <p>Les six appels au modèle, dans l'ordre où ils partent, avec leur plafond de sortie et leur politique de reprise. Tout ce qui est facturé est ici.</p>
+        </div>
+      </div>
+
+      <div class="grid">
+
+        <article class="mod" id="C1" data-c="ia">
+          <div class="mod-top"><span class="mod-id">C1</span><h3 class="mod-t" style="margin:0">Extraction de requêtes</h3><span class="tag" data-c="ia">haiku 4.5</span></div>
+          <p>Deux requêtes maximum : la première sur les dernières actualités du sujet, la seconde sur le fait le plus susceptible d'être obsolète (prix, montant d'aide, norme, date). L'année en cours est incluse.</p>
+          <ul>
+            <li><code>max_tokens: 300</code> · <code>selectModel('query_extraction')</code></li>
+            <li>Repli si l'extraction échoue : <code>[mot-clé + année]</code></li>
+          </ul>
+          <span class="ref">agentQat.js:541 · <b>selectModel</b> agent.js:80</span>
+        </article>
+
+        <article class="mod" id="C2" data-c="ia">
+          <div class="mod-top"><span class="mod-id">C2</span><h3 class="mod-t" style="margin:0">Audit QAT — phase 1</h3><span class="tag" data-c="ia">sonnet 5</span></div>
+          <p>Produit un objet JSON d'audit conforme au schéma du skill. Aucun article n'est écrit ici.</p>
+          <ul>
+            <li><code>max_tokens: 32000</code> · <code>thinking: { type: 'disabled' }</code> — <strong>explicite</strong></li>
+            <li><strong>3 essais</strong>, avec <em>reprise instruite</em> : le prompt de relance nomme l'échec et demande de laisser <code>tldr</code>, <code>comparative_table</code> et <code>faq</code> à <code>null</code></li>
+            <li>Au 3<sup>e</sup> essai, <code>salvage: true</code> : un audit tronqué mais exploitable vaut mieux que rien</li>
+            <li>Enveloppe imposée côté code : <code>liens_entrants</code> entre <strong>6 et 10</strong> paires, « ce plafond prime sur toute autre limite »</li>
+            <li>Deux causes d'échec distinctes et jamais confondues : <code>apiError</code> (appel en échec) et <code>parseFailed</code> (réponse illisible)</li>
+          </ul>
+          <span class="ref"><b>runQatAudit</b> agentQat.js:583 · verrouillé par src/services/runQatAudit.test.js</span>
+          <details class="scar"><summary>20 000 → 32 000, et 0,55 $ pour un audit null</summary><div>Le plafond avait été calibré sur Sonnet 4.5. Le tokenizer de Sonnet 5 compte ~30 % de tokens en plus pour le même texte, et le même audit ne rentrait plus. Mesuré en production : trois essais (17 450, 11 790 puis 12 096 tokens de sortie), tous tronqués donc illisibles, <strong>0,55 $ dépensés pour un <code>auditJson</code> null</strong>. Le plafond de <code>liens_entrants</code> tient pour la même raison : sans borne, la liste faisait gonfler le JSON jusqu'à la troncature.</div></details>
+        </article>
+
+        <article class="mod" id="C3" data-c="ia">
+          <div class="mod-top"><span class="mod-id">C3</span><h3 class="mod-t" style="margin:0">Refonte — phase 2</h3><span class="tag" data-c="ia">sonnet 5</span><span class="tag" data-c="rejet">rejetable</span></div>
+          <p>L'appel central. <code>max_tokens: 32000</code>, <code>thinking: { type: 'disabled' }</code>, 3 essais. Il renvoie un JSON dont <code>article_html</code> porte l'article entier, quelle que soit l'ampleur — une MAJ ciblée renvoie aussi les parties conservées, à l'identique.</p>
+          <p><strong>Trois ampleurs</strong>, résolues par <code>resolveQatDepth</code> : l'audit propose, le rédacteur tranche, et un choix explicite prime toujours.</p>
+          <ul>
+            <li><code>ciblee</code> — corriger le faux, retirer ce que liste <code>a_supprimer</code>, ajouter TL;DR / FAQ / tableau</li>
+            <li><code>restructuration</code> — le fond tient, on refait le plan : 6 à 8 sections denses, le nombre de H2 peut <em>baisser</em></li>
+            <li><code>refonte</code> — tout est réécrit, aucune tournure générique conservée</li>
+          </ul>
+          <p>Deux contraintes rédactionnelles sont tenues <strong>en dur</strong> dans le message utilisateur, pas dans le skill : <strong>aucune phrase de plus de 20 mots</strong> (« PLAFOND, pas une moyenne ») et le <strong>gras sémantique</strong>.</p>
+          <p>Le prompt complet est journalisé dans la console à chaque génération — système et utilisateur, avec le décompte de caractères. C'est le seul endroit où il est connu en entier.</p>
+          <span class="ref"><b>runQatRewrite</b> agentQat.js:820 · <b>redactionConstraintsBlock</b> :110 · <b>resolveQatDepth</b> :797 · <b>summarizeAuditForRewrite</b> :766</span>
+          <details class="scar"><summary>Pourquoi le prompt est journalisé</summary><div>Demande explicite du 19 août 2026 : « l'ensemble des règles envoyées à l'IA quand une génération est lancée — ça me permettra d'évaluer les résultats ». Reconstituer le prompt de mémoire à partir du code est justement ce qui fait croire qu'une consigne est envoyée alors qu'elle ne l'est pas : trois cas venaient d'être corrigés — gras jamais vérifié, <code>[à vérifier]</code> réintroduit, maillage forcé sur zéro paire.</div></details>
+        </article>
+
+        <article class="mod" id="C4" data-c="ia">
+          <div class="mod-top"><span class="mod-id">C4</span><h3 class="mod-t" style="margin:0">Passe de gras</h3><span class="tag" data-c="ia">modèle par défaut</span></div>
+          <p>Automatique à chaque génération. <strong>L'IA nomme, le code applique</strong> : le modèle renvoie une liste de passages en <em>texte nu</em>, jamais de HTML ; le code vérifie que chaque passage figure <strong>mot pour mot</strong> dans la section citée, puis l'enveloppe.</p>
+          <ul>
+            <li><code>max_tokens: 16000</code>. L'article est soumis <strong>section par section</strong> — demander « 2 à 4 par section » sur un mur de texte revient à ne rien demander.</li>
+            <li>FAQ et TL;DR <strong>ne sont même pas soumis</strong> au modèle : il ne peut pas proposer ce qu'il n'a pas vu.</li>
+            <li>Bornes qui ne demandent aucun jugement : doublons, longueur du passage (<code>GRAS_MAX_MOTS = 4</code>), emplacements. <strong>Aucun plafond par section</strong> — le modèle juge le nombre.</li>
+            <li>Plancher conservé : <code>GRAS_MIN_PAR_H2 = 2</code>. Une section H2 sans gras est un fragment muet pour un moteur génératif.</li>
+            <li><strong>Non bloquante</strong> : un échec rend le HTML inchangé. Le rapport est persisté dans <code>sanitized.boldPass</code>.</li>
+          </ul>
+          <span class="ref"><b>runBoldPass</b> src/services/agentBold.js · <b>buildBoldPrompt</b> boldPrompt.js:147 · <b>applyBoldPassages</b> boldApply.js:71</span>
+          <details class="scar"><summary>Deux tentatives ont échoué avant celle-ci</summary><div><strong>(1) La consigne dans le prompt de refonte</strong> — le modèle a posé 29 puis 33 passages, dont 19 puis 22 de <em>purs chiffres</em>, et 5 sections H2 sans aucun gras. Il sait faire, mais la consigne est une ligne parmi une quarantaine dans un prompt de 82 000 caractères. <strong>(2) La pose déterministe par le code</strong> — « War III », « jeu God », « premiers God » : des moitiés de noms propres. Le module a été <em>supprimé</em>, pas débranché : du code mort qui décrit une approche abandonnée est un piège pour le prochain lecteur.<br><br>Le plafond de sortie est passé de 4 000 à 16 000 après un troisième échec mesuré : trois appels dans la journée (7 482, 5 273 puis 9 419 caractères) — la plus longue est la seule qui a échoué, JSON coupé en plein tableau. « On ne paie pas moins cher en tronquant, on paie pour rien. »</div></details>
+        </article>
+
+        <article class="mod" id="C5" data-c="ia">
+          <div class="mod-top"><span class="mod-id">C5</span><h3 class="mod-t" style="margin:0">Obsolescence — phase 3</h3><span class="tag" data-c="ia">2 appels</span></div>
+          <p>Vérifie le texte <strong>réellement produit en phase 2, diffs résolus</strong>, pas l'article d'origine. Rend des suggestions prêtes à coller, une par une.</p>
+          <ul>
+            <li>Requêtes complémentaires — modèle rapide, <code>max_tokens: 600</code>, marché de l'article détecté (langue, pays, devise)</li>
+            <li>Rapport — Sonnet 5, <code>max_tokens: 24000</code></li>
+            <li><code>texteVerifie</code> est persisté avec le rapport : c'est le texte <em>exact</em> envoyé à l'agent, indispensable au repérage des passages dans l'éditeur</li>
+          </ul>
+          <span class="ref"><b>runReviewAgent</b> agent.js:1863 · <b>handleVerify</b> ArticleResult.jsx:2002</span>
+          <details class="scar"><summary>35 suggestions sur 36 sans repère</summary><div>La vérification part de <code>getFinalHtml({ pendingChanges: 'accept' })</code>, qui <em>supprime</em> les <code>&lt;del&gt;</code>. Le volet gauche affichait <code>updatedContent</code>, où les paires <code>&lt;del&gt;ancien&lt;/del&gt;&lt;mark&gt;nouveau&lt;/mark&gt;</code> sont encore là : les passages cités par l'agent y étaient introuvables. Mesuré sur un article à 52 diffs en attente.</div></details>
+        </article>
+
+        <article class="mod" id="C6" data-c="ia">
+          <div class="mod-top"><span class="mod-id">C6</span><h3 class="mod-t" style="margin:0">Corrections de style — phase 4</h3><span class="tag" data-c="ia">sur bouton</span></div>
+          <p>Un seul appel pour tout l'article : envoyer 79 occurrences une par une coûterait 79 appels pour un résultat moins cohérent. <code>max_tokens: 8000</code>, <code>salvage: true</code> à la lecture.</p>
+          <p><strong>Déclenché par un bouton, jamais à l'ouverture de la phase</strong> — sinon chaque passage en relecture déclencherait un appel payant, y compris quand la rédactrice ne fait que relire.</p>
+          <p>Répartition des rôles : <code>styleFixes.js</code> corrige ce qui est <em>calculable</em> (tirets cadratins, adverbes en -ment) ; l'IA ne traite que ce qui demande de comprendre la phrase. Toute proposition portant du balisage est rejetée (<code>PORTE_BALISAGE</code>) — c'est le verrou liens qui parle.</p>
+          <span class="ref"><b>runStyleFixAgent</b> src/services/agentStyle.js · <b>MECHANICAL_IDS</b> / <b>AI_IDS</b> styleFixes.js:17 · <b>PORTE_BALISAGE</b> stylePrompt.js:150</span>
+        </article>
+
+        <article class="mod" id="C7">
+          <div class="mod-top"><span class="mod-id">C7</span><h3 class="mod-t" style="margin:0">Transport et repli de modèle</h3><span class="tag">infrastructure</span></div>
+          <p>Trois transports, deux modes de repli, et une liste blanche qui décide silencieusement.</p>
+          <ul>
+            <li><strong>SSE</strong> <code>POST /api/claude-stream</code> — pour les générations longues (8 à 9 min). Un <code>fetch</code> brut, donc l'en-tête <code>Authorization</code> est ajouté à la main : l'intercepteur axios ne le voit pas. <code>STREAM_STALL_MS = 120 s</code>.</li>
+            <li><strong>Job + polling</strong> <code>POST /api/claude-job</code> → <code>GET /api/claude-job/:id</code>. <code>JOB_MAX_WAIT_MS = 12 min</code>.</li>
+            <li><strong>Legacy</strong> <code>POST /api/claude</code> — bascule sans consommer d'essai si la route job est absente (fenêtre de déploiement).</li>
+            <li>Relance automatique sur coupure : <code>CLAUDE_RETRY_DELAYS_MS = [2000, 5000]</code>.</li>
+            <li><code>MODEL_CASCADE</code> : <code>opus-4-5 → sonnet-5 → sonnet-4-5 → haiku-4-5</code>. <strong>Un modèle absent de la liste blanche retombe silencieusement sur Haiku.</strong></li>
+          </ul>
+          <span class="ref"><b>callClaudeStream</b> agent.js:205 · <b>callClaude</b> agent.js:518 · <b>MODEL_CASCADE</b> proxy.js:1908</span>
+          <details class="scar"><summary>La panne du 14 au 17 août : <code>content[0].text</code></summary><div>Les deux voies d'appel lisaient <code>content?.[0]?.text || ''</code>. Ça tenait aussi longtemps que le premier bloc était du texte. Depuis la bascule vers Sonnet 5, le modèle raisonne <em>par défaut</em> : la réponse commence alors par un bloc <code>{ type: 'thinking' }</code>, dont <code>.text</code> est <code>undefined</code>. Le <code>|| ''</code> transformait ça en chaîne vide — sans erreur, sans log, sans indice. D'où <code>extractTextBlocks</code>, qui concatène <em>tous</em> les blocs de texte, et le <code>thinking: disabled</code> explicite partout ailleurs.</div></details>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ CHAÎNE ══════════════════════════ -->
+    <section id="chaine">
+      <div class="sec-head">
+        <span class="sec-n">04</span>
+        <div class="sec-t">
+          <h2>La chaîne de verrous</h2>
+          <p>Ce qui arrive au HTML entre la réponse du modèle et son affichage dans l'éditeur. L'ordre n'est pas cosmétique : chaque position est justifiée, et plusieurs le sont par un incident. Numérotation = ordre d'exécution réel.</p>
+        </div>
+      </div>
+
+      <div class="note">
+        <h4>Une seule sanction bloquante, et c'est une décision</h4>
+        <p>Seul le verrou des liens externes rejette. Aucune autre passe ne peut interrompre une génération, et la raison est mécanique : <code>currentUser</code> est réécrit à chaque rejet pour porter la consigne de reprise. Un quatrième motif de rejet écraserait le message qui nomme les liens externes perdus — le verrou de la règle 8 s'affaiblirait de lui-même.</p>
+      </div>
+
+      <div class="chain">
+
+        <article class="mod" id="V0" data-c="rejet">
+          <div class="mod-top"><span class="mod-id">verrou liens externes</span><h3 class="mod-t" style="margin:0">sanitizeFullArticle</h3><span class="tag" data-c="rejet">rejette</span></div>
+          <p>Le chapô est replacé en tête <strong>avant</strong> le contrôle, pour qu'il passe lui aussi par le verrou. Puis, en deux temps :</p>
+          <ul>
+            <li>Les liens externes <em>ajoutés</em> par le modèle sont désenveloppés — le texte est conservé, la balise part.</li>
+            <li>Un lien externe <em>perdu</em> est ré-enveloppé sur son ancre d'origine si elle survit. Sinon il entre dans <code>missing</code> et <strong>toute la génération est rejetée</strong>.</li>
+          </ul>
+          <p>La reprise <strong>nomme les liens perdus et leur ancre</strong>, et interdit titre, TL;DR, tableau et FAQ. Sans ce retour, les trois essais repartaient du même prompt et échouaient de la même façon : « trois fois 8 minutes pour rien ».</p>
+          <span class="ref"><b>sanitizeFullArticle</b> diff.js:1225 · <b>enforceExternalLinkPolicy</b> diff.js:1037</span>
+        </article>
+
+        <article class="mod" id="V1" data-c="repare">
+          <div class="mod-top"><span class="mod-id">R1</span><h3 class="mod-t" style="margin:0">Liens internes d'origine</h3><span class="tag" data-c="repare">répare</span></div>
+          <p>Ré-enveloppe chaque lien interne de l'article d'origine sur son ancre, quand elle existe encore. Sinon : <strong>avertissement, jamais un rejet</strong> — sanction volontairement asymétrique avec l'externe.</p>
+          <p>Placé <em>après</em> le verrou externe, jamais avant : ré-envelopper des ancres en amont ferait échouer silencieusement <code>Range.surroundContents</code> sur une ancre à cheval sur des balises, et augmenterait mécaniquement le taux de rejet du verrou externe.</p>
+          <span class="ref"><b>carryOverInternalLinks</b> diff.js:1455</span>
+        </article>
+
+        <article class="mod" id="V2" data-c="repare">
+          <div class="mod-top"><span class="mod-id">R2a</span><h3 class="mod-t" style="margin:0">Déliage en zone interdite</h3><span class="tag" data-c="repare">répare</span></div>
+          <p>Un lien interne que le <em>modèle</em> a posé dans un titre, une FAQ, un tableau ou le TL;DR est <strong>délié</strong>. Le texte de l'ancre est toujours conservé : on retire la balise, pas les mots — une FAQ ne perd jamais une phrase.</p>
+          <p>Position critique : <strong>entre R1 et R2</strong>. Le lien délié redevient « absent » pour le tissage juste en dessous, qui le <em>replace dans le corps</em>. La violation devient un bon placement au lieu d'être perdue.</p>
+          <p><strong>N'agit que sur l'interne.</strong> Délier un externe serait le supprimer, et le verrou a déjà validé le texte à ce stade : personne ne le verrait.</p>
+          <span class="ref"><b>unwrapForbiddenInternalLinks</b> internalWeave.js:408 · zones : <b>linkZones.js</b></span>
+          <details class="scar"><summary>« Aucun lien dans la FAQ » était écrit trois fois</summary><div>La consigne figurait trois fois dans le skill, et le code s'interdisait déjà ces emplacements pour <em>ses</em> liens — mais rien n'empêchait le modèle d'en poser. <code>countPlacedBriefLinks</code> ne faisait que le <em>constater</em> (<code>misplaced</code>), et seulement pour les paires du brief. Une quatrième formulation de la consigne ne fermait pas le trou.</div></details>
+        </article>
+
+        <article class="mod" id="V3" data-c="repare">
+          <div class="mod-top"><span class="mod-id">R2</span><h3 class="mod-t" style="margin:0">Maillage forcé à 100 %</h3><span class="tag" data-c="repare">le code rédige</span></div>
+          <p>Toutes les paires ancre + URL du brief sont placées — pas « la plupart ». Le code tisse l'ancre là où son texte figure déjà et, <strong>si l'ancre n'apparaît nulle part, il rédige lui-même une clause courte</strong> en fin du paragraphe le plus pertinent. Insertion déterministe, aucun appel IA, aucune phrase existante triturée.</p>
+          <p>Contrepartie non négociable : la clause est <strong>marquée visiblement</strong> dans l'éditeur (<code>.lien-redige</code>, fond jaune) pour être relue et reformulée. La marque est retirée à l'export, le lien reste. Et la publication <strong>demande confirmation</strong> quand le code a dû écrire.</p>
+          <p><strong>L'exception est affichée, pas maquillée</strong> : si aucun paragraphe n'est éligible (article réduit à un tableau ou à une FAQ, paragraphes sous <code>MIN_PARAGRAPH_CHARS = 40</code>), rien n'est fabriqué. La garantie exacte est « 100 % <em>sauf</em> absence d'emplacement autorisé ».</p>
+          <p>Une URL hors domaine est écartée par <code>filterSameSiteLinks</code> — URL protocol-relative <code>//host</code> comprises — et le motif est dit au rédacteur <strong>pendant la saisie</strong>, quand la correction ne coûte rien.</p>
+          <span class="ref"><b>weaveBriefLinks</b> internalWeave.js:446 · <b>countPlacedBriefLinks</b> :358 · <b>briefLinkReportLine</b> :503</span>
+        </article>
+
+        <article class="mod" id="V4" data-c="repare">
+          <div class="mod-top"><span class="mod-id">R6</span><h3 class="mod-t" style="margin:0">Renvois « À lire aussi » en encart</h3><span class="tag" data-c="repare">déplace</span></div>
+          <p><strong>Déplacement, pas réécriture</strong> : aucun mot ajouté ni retiré, le texte de l'ancre est conservé au caractère près. Seule l'amorce est normalisée sur celle du code (<code>À lire aussi : </code>) pour que les renvois du modèle et ceux du code se présentent pareil.</p>
+          <p>Appelé <strong>après R2</strong>, jamais avant : le tissage doit voir la prose du modèle telle qu'elle est. Un lien déjà placé reste placé.</p>
+          <p>Les amorces reconnues sont une liste <strong>explicite et courte</strong> — <em>à lire / découvrir / voir aussi / également</em>, accent optionnel. Une détection large (« voir », « lire ») découperait de la prose ordinaire ; c'est verrouillé par un test.</p>
+          <span class="ref"><b>promoteInlineRenvois</b> internalWeave.js:615</span>
+          <details class="scar"><summary>Ce n'était pas une clause du code — c'est le modèle qui l'écrit</summary><div>Relevé tel quel sur l'article publié, au navigateur : <code>…Le résultat dépasse toutes les prévisions. À lire aussi les &lt;a&gt;actualités PlayStation 5&lt;/a&gt;.&lt;/p&gt;</code> — « À lire aussi <em>les</em> », sans deux-points, et <strong>aucun <code>data-lien-redige</code> dans toute la page</strong>. Corriger l'encart de R2 ne pouvait donc rien y changer. La leçon : un correctif visant le code ne couvre pas ce que le modèle produit, et seule une vérification de la sortie réelle le montre.</div></details>
+        </article>
+
+        <article class="mod" id="V5" data-c="repare">
+          <div class="mod-top"><span class="mod-id">R7</span><h3 class="mod-t" style="margin:0">Marqueurs de doute</h3><span class="tag" data-c="repare">retire et remonte</span></div>
+          <p>On retire la <strong>marque</strong> (<code>[à vérifier]</code>, <code>(à confirmer)</code>…) et on <strong>remonte la phrase</strong> au rédacteur. Effacer en silence rendrait le doute invisible juste avant la publication.</p>
+          <span class="ref"><b>stripUncertaintyMarkers</b> uncertaintyMarkers.js:89 · <b>uncertaintyReportLine</b> :121</span>
+          <details class="scar"><summary>Trois marqueurs dans un article dont l'audit demandait de les lever</summary><div>Mesuré le 19 août : l'article produit en portait trois, alors que l'audit avait mis en action P1 « Lever les mentions [à vérifier] » et que cette action était <em>cochée</em>. Le modèle a lu la consigne puis en a écrit trois de plus. Même leçon que le gras et le plafond de 20 mots : une consigne qu'on ne mesure jamais est une consigne dont on ne sait rien.</div></details>
+        </article>
+
+        <article class="mod" id="V6" data-c="constat">
+          <div class="mod-top"><span class="mod-id">constats</span><h3 class="mod-t" style="margin:0">Quatre mesures, aucune réparation</h3><span class="tag" data-c="constat">mesure</span></div>
+          <p>Calculées sur le HTML tissé, affichées au rédacteur, jamais corrigées automatiquement.</p>
+          <ul>
+            <li><strong>Liens du brief</strong> — recomptés sur le HTML final. On ne croit ni le modèle (<code>ancres_placees</code> est une auto-déclaration jamais vérifiée) ni le rapport du tissage. La déclaration du modèle est conservée à part, pour constater l'écart sans le confondre avec la réalité.</li>
+            <li><strong>Phrases &gt; 20 mots</strong> — nombre et longueur de la plus longue.</li>
+            <li><strong>Suroptimisation</strong> — mot-clé exact dans les H2, maximum 2. « Le chiffre qui trahit, c'est le nombre de H2 portant la forme exacte, pas la densité : 1,1 % passe inaperçu, 8 titres sur 9 non. »</li>
+            <li><strong>Élisions orphelines</strong> — signalées, jamais réparées : choisir entre « le » et « la » demande le genre, et un code qui devine écrit « le toiture ».</li>
+          </ul>
+          <span class="ref"><b>phrasesTropLongues</b> / <b>suroptimisationMotCle</b> / <b>elisionsOrphelines</b> stylePatterns.js:180, :338, :374</span>
+        </article>
+
+        <article class="mod" id="V7" data-c="repare">
+          <div class="mod-top"><span class="mod-id">R4</span><h3 class="mod-t" style="margin:0">Images d'origine</h3><span class="tag" data-c="repare">répare</span></div>
+          <p>Réinsère les médias que le modèle a laissé tomber. Le champ <code>how</code> dit <strong>comment</strong>, et c'est le point important : <code>contexte</code> = place exacte retrouvée ; <code>section</code> = <strong>placement approximatif</strong>, annoncé comme tel au rédacteur.</p>
+          <p>Placé <em>après</em> R1 et R2 : ceux-ci posent des liens dans la prose, et doivent travailler sur celle du modèle, pas sur du HTML que le code vient de réinjecter.</p>
+          <p>Limite assumée : un média dont les voisins totalisent moins de <code>MIN_SIG_CHARS = 40</code> caractères et qui n'a pas de titre au-dessus n'a aucun point d'ancrage — il est déclaré non replacé plutôt que posé au hasard.</p>
+          <span class="ref"><b>carryOverImages</b> imageCarry.js:372 · <b>MEDIA_SEL</b> = <code>img, iframe, video</code></span>
+        </article>
+
+        <article class="mod" id="V8" data-c="repare">
+          <div class="mod-top"><span class="mod-id">R5</span><h3 class="mod-t" style="margin:0">Gras d'origine</h3><span class="tag" data-c="repare">répare</span></div>
+          <p>Un <code>&lt;strong&gt;</code> de l'article d'origine est un <strong>choix éditorial déjà validé par un humain</strong> — le perdre à la réécriture est une régression que personne ne voit. Le remettre n'est pas un jugement, c'est une restitution.</p>
+          <ul>
+            <li><code>MIN_CARS = 4</code>, <code>MAX_MOTS = 6</code>, <code>MAX_REMIS = 20</code>, une seule occurrence par terme</li>
+            <li>Zones interdites : titres, liens, <code>summary</code>, <code>figcaption</code>, <code>del</code>, <code>ins</code>, <code>mark</code>, <code>code</code>, <code>pre</code></li>
+            <li><strong>No-op strict</strong> si l'article d'origine ne contient aucun gras</li>
+          </ul>
+          <p>En dernier, après R1/R2/R4 : on baliserait sinon des mots que le code s'apprête à réécrire. Puis la passe de gras (C4) prend la suite, et <code>constatGras</code> mesure le résultat par section.</p>
+          <span class="ref"><b>carryOverBold</b> boldCarry.js · <b>constatGras</b> boldCarry.js:177</span>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ CONSTATS ══════════════════════════ -->
+    <section id="constats">
+      <div class="sec-head">
+        <span class="sec-n">05</span>
+        <div class="sec-t">
+          <h2>Ce qui est mesuré et rendu au rédacteur</h2>
+          <p>La colonne vertébrale méthodologique du projet : chaque exigence porte un chiffre vérifiable, et aucun chiffre n'est une promesse du modèle.</p>
+        </div>
+      </div>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Mesure</th><th>Seuil</th><th>Où</th><th>Sanction</th></tr></thead>
+          <tbody>
+            <tr><td>Phrases de plus de 20 mots</td><td class="mono">MOTS_MAX_PHRASE = 20</td><td>génération + phase 4</td><td>affichée, avec le pourcentage</td></tr>
+            <tr><td>Titres de plus de 10 mots</td><td class="mono">MOTS_MAX_TITRE = 10</td><td>phase 4</td><td>affichée</td></tr>
+            <tr><td>Mot-clé exact dans les H2</td><td class="mono">MAX_H2_AVEC_MOT_CLE = 2</td><td>génération</td><td>affichée</td></tr>
+            <tr><td>Gras par section H2</td><td class="mono">GRAS_MIN_PAR_H2 = 2</td><td>génération</td><td>plancher signalé, pas de plafond</td></tr>
+            <tr><td>Longueur d'un passage en gras</td><td class="mono">GRAS_MAX_MOTS = 4</td><td>passe de gras</td><td>proposition écartée</td></tr>
+            <tr><td>Part de gras purement chiffré</td><td>mesurée par section</td><td>génération</td><td>affichée (<code>partChiffres</code>)</td></tr>
+            <tr><td>Mots ajoutés — MAJ simple</td><td class="mono">MIN_WORDS_ADDED_SIMPLE = 200</td><td>fin de phase 2</td><td>déclarée non conforme</td></tr>
+            <tr><td>Liens internes suggérés par l'audit</td><td class="mono">6 à 10</td><td>audit</td><td>enveloppe imposée au prompt</td></tr>
+            <tr><td>Patterns d'écriture IA</td><td>13 règles</td><td>phase 4</td><td>liste + extraits localisables</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Les treize règles de la phase 4</h3>
+      <div class="grid">
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">mécanique</span><h3 class="mod-t" style="margin:0">Corrigeable par le code</h3></div>
+          <ul>
+            <li><strong>Tirets cadratins</strong> — remplacés par une virgule, deux points, ou deux phrases</li>
+            <li><strong>Adverbes en -ment</strong> — avec une liste d'exclusion des <em>noms</em> en -ment (document, bâtiment, traitement…) pour ne pas confondre</li>
+          </ul>
+          <span class="ref"><b>MECHANICAL_IDS</b> styleFixes.js:17 · <b>proposeMechanicalFix</b> :80</span>
+        </article>
+        <article class="mod" data-c="ia">
+          <div class="mod-top"><span class="mod-id">ia</span><h3 class="mod-t" style="margin:0">Demande de comprendre la phrase</h3></div>
+          <ul>
+            <li>Phrases coupées ou amputées (ponctuation, suspension, minuscule initiale)</li>
+            <li>Verbes interdits · Participe présent · Voix passive</li>
+            <li>Phrases de plus de 20 mots · Clichés bannis · Méta-commentaires</li>
+          </ul>
+          <p>Les listes complètes de verbes, participes, clichés et méta sont <strong>partagées</strong> entre la détection et le prompt de correction : « une liste coupée laisse passer justement les tournures qu'on ne cite pas ».</p>
+          <span class="ref"><b>AI_IDS</b> styleFixes.js:30 · <b>VERBES_INTERDITS</b> / <b>PARTICIPES</b> / <b>CLICHES</b> / <b>META</b> stylePatterns.js:131-165</span>
+        </article>
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">contrat</span><h3 class="mod-t" style="margin:0">Tout extrait doit être localisable</h3></div>
+          <p>Le contrat implicite qui manquait : un passage proposé au rédacteur doit pouvoir être <em>remplacé dans le DOM</em>. Sinon l'interface répond « Passage introuvable » et la correction se fait à la main.</p>
+          <p>La cause était un aplatissement du texte : chaque balise devenait une espace, collant un titre non ponctué au paragraphe suivant. D'où <code>texteParBlocs</code>, qui insère une frontière de bloc, et l'exclusion des titres du flux de phrases.</p>
+          <span class="ref"><b>texteParBlocs</b> / <b>phrasesDe</b> stylePatterns.js:56, :70 · <b>rangeForPassage</b> / <b>replacePassageInDom</b> locatePassage.js:126, :301</span>
+        </article>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ SORTIES ══════════════════════════ -->
+    <section id="sorties">
+      <div class="sec-head">
+        <span class="sec-n">06</span>
+        <div class="sec-t">
+          <h2>Sorties</h2>
+          <p>Où le travail atterrit. Huit destinations, dont une seule est irréversible.</p>
+        </div>
+      </div>
+
+      <div class="grid">
+
+        <article class="mod" id="S1">
+          <div class="mod-top"><span class="mod-id">S1</span><h3 class="mod-t" style="margin:0">Éditeur et diff</h3></div>
+          <p>Un <code>contentEditable</code> avec diff par segments : <code>&lt;del class="deleted-content"&gt;</code> et <code>&lt;mark class="updated-content"&gt;</code>, acceptables ou rejetables un par un au survol.</p>
+          <p><code>getFinalHtml()</code> est le point de lecture unique. Son option <code>pendingChanges</code> décide du sort des diffs non résolus — et cette nuance a des conséquences en cascade sur les phases 3 et 4.</p>
+          <span class="ref"><b>ArticleResult.jsx</b> (6 606 lignes) · <b>applyAllDiffs</b> diff.js:1584 · <b>repairStructure</b> :587</span>
+        </article>
+
+        <article class="mod" id="S2">
+          <div class="mod-top"><span class="mod-id">S2</span><h3 class="mod-t" style="margin:0">Brouillon automatique</h3></div>
+          <p>Deux niveaux : localStorage immédiat, base distante temporisée.</p>
+          <ul>
+            <li><code>REMOTE_IDLE_MS = 3000</code> — 3 s après la dernière modification</li>
+            <li><code>REMOTE_MIN_INTERVAL_MS = 12000</code> — au plus une écriture toutes les 12 s</li>
+            <li><code>MAX_REMOTE_HTML = 900 000</code> caractères — au-delà, pas d'écriture distante</li>
+          </ul>
+          <p><strong>Purge obligatoire au « Terminer ».</strong> Sans elle, le brouillon survivait à l'archivage, figé sur l'état d'<em>avant</em>, et remplaçait le HTML final à la réouverture — puis l'autosave réécrivait cette version périmée en base. Le travail était perdu pour de bon.</p>
+          <span class="ref"><b>saveDraft</b> / <b>clearDraft</b> src/services/articleDraft.js · arbitrage <code>archiveOpenedAt</code> agentSlice.js</span>
+        </article>
+
+        <article class="mod" id="S3">
+          <div class="mod-top"><span class="mod-id">S3</span><h3 class="mod-t" style="margin:0">Persistance</h3></div>
+          <p>Base MySQL depuis le 27 juillet 2026, via une couche d'abstraction qui conserve la signature Firestore historique. Le HTML des articles est stocké <strong>en ligne, dans la base</strong> — pas de bucket de stockage.</p>
+          <p>Ce qui voyage avec l'article : <code>auditJson</code>, <code>qatArticle</code> (sans son <code>html</code>, déjà dans <code>updatedContent</code>), <code>phaseStatus</code>, <code>majScope</code>, <code>seoMeta</code>, et le <code>qatBrief</code> — qui porte <strong>le maillage et la sélection des cases</strong>, pour que génération, filet de publication et réouverture voient les mêmes valeurs.</p>
+          <span class="ref"><b>firebase.mysql.js</b> · <b>firebase.firestore.js</b> · <b>derivePhaseStatus</b> majPhases.js</span>
+          <details class="scar"><summary>Le contenu a le dernier mot sur l'avancement</summary><div>Un <code>phaseStatus</code> enregistré était repris tel quel, ce qui ouvrait une régression en boucle : le lancement écrit <code>{ audit: done }</code> et ne le complète plus jamais, si bien qu'une réouverture rabaissait la phase 2 à « à faire » alors que l'article réécrit était là, dans le même enregistrement. L'autosave recopiait ce recul dans le brouillon, et vider le cache n'y changeait rien puisque la valeur fausse était des deux côtés. Règle actuelle : une phase prouvée par le contenu est terminée, rien ne peut l'annuler.<br><br>Piège adjacent : le store appelle ce tableau <code>diff</code>, l'archive le persiste sous <code>updates</code>. Il faut lire les deux.</div></details>
+        </article>
+
+        <article class="mod" id="S4">
+          <div class="mod-top"><span class="mod-id">S4</span><h3 class="mod-t" style="margin:0">Export HTML</h3><span class="tag">passage obligatoire</span></div>
+          <p><code>exportAsHtml(content, articleUrl)</code> est le point de sortie unique de tout ce qui est publié. Il applique, dans l'ordre :</p>
+          <ul>
+            <li><strong>La politique de suivi des liens</strong> — interne (même domaine ou href relatif) : les jetons bloquants <code>nofollow</code> / <code>ugc</code> / <code>sponsored</code> sont <em>retirés</em>. Externe : <code>nofollow</code> est <em>ajouté</em>.</li>
+            <li><code>noopener</code> / <code>noreferrer</code> sont <strong>conservés des deux côtés</strong> : garde-fous navigateur, pas des directives de suivi.</li>
+            <li>Sans <code>articleUrl</code> exploitable, tout href absolu est traité comme externe — protection maximale.</li>
+            <li>FAQ convertie en <code>&lt;details&gt;/&lt;summary&gt;</code> avec le <code>&lt;h3&gt;</code> conservé <em>dans</em> le summary, puis thème appliqué en styles <strong>inline</strong> : le HTML publié ne transporte ni classe ni feuille de style.</li>
+            <li>Nettoyage des <code>font-size</code> parasites, retrait des marques de relecture.</li>
+          </ul>
+          <span class="ref"><b>exportAsHtml</b> export.js:244 · <b>applyLinkFollowPolicy</b> :76 · <b>FOLLOW_BLOCKERS</b> :51</span>
+          <details class="scar"><summary>Pourquoi les externes sont en nofollow, et pas l'inverse</summary><div>Cette règle <strong>inverse</strong> une décision antérieure qui mettait tout en dofollow. Correction d'août 2026 : les liens externes de ces articles <em>sont</em> les articles sponsorisés payants, et un lien payant suivi expose le site à une pénalité Google.<br><br>À noter, une divergence volontaire : l'ingestion WordPress normalise tout en dofollow <em>à l'intérieur de l'outil</em> ; la politique réelle est réappliquée à la publication. Rétablir la « parité stricte » ferait un faux verrou.</div></details>
+        </article>
+
+        <article class="mod" id="S5" data-c="repare">
+          <div class="mod-top"><span class="mod-id">S5</span><h3 class="mod-t" style="margin:0">Filets ultimes</h3><span class="tag" data-c="repare">dernier recours</span></div>
+          <p>R1, R2 et R4 sont posés <em>à la génération</em>. Or six chemins d'écriture la contournent ensuite : « Appliquer » une suggestion en attente, les correctifs de style des phases 3 et 4, et toute écriture humaine (collage, lien posé à la main).</p>
+          <p>Le cas concret : une suggestion de phase 3 acceptée remplace un paragraphe qui portait un lien du brief — le lien disparaît, définitivement et en silence. La garantie « 100 % » ne vaut que revérifiée <strong>au seul passage obligatoire</strong>.</p>
+          <p><strong>No-op strict si la référence est vide</strong> : après un F5 sur un article dont le contenu a été déchargé, <code>originalContent</code> vaut <code>''</code> — sans cette garde, on croirait tous les liens perdus et on en réinjecterait au hasard.</p>
+          <span class="ref"><b>handlePublish</b> ArticleResult.jsx:3759 · mêmes paires que la génération (<code>briefLinkRows</code>)</span>
+        </article>
+
+        <article class="mod" id="S6">
+          <div class="mod-top"><span class="mod-id">S6</span><h3 class="mod-t" style="margin:0">Publication WordPress</h3><span class="tag" data-c="rejet">irréversible</span></div>
+          <p><code>POST /wp-json/wp/v2/{posts|pages}/{id}</code> via le proxy, qui contourne le blocage CORS de l'en-tête <code>Authorization</code>.</p>
+          <ul>
+            <li>Métas écrites pour <strong>les trois plugins à la fois</strong> — Yoast, SEOPress, RankMath. WordPress ignore silencieusement les champs des plugins absents.</li>
+            <li>Le <strong>mot-clé cible</strong> part aussi comme <em>focus keyphrase</em> dans les trois conventions.</li>
+            <li>Titre envoyé <strong>seulement s'il a été modifié</strong> : ne rien envoyer = WordPress conserve le titre existant.</li>
+            <li><code>figure[data-featured]</code> est retiré <strong>systématiquement</strong> du contenu publié — c'est un artefact d'aperçu, et le thème affiche déjà l'image à la une par son propre widget. L'inclure crée un doublon visuel.</li>
+            <li>Chaque <code>&lt;table&gt;</code> part enveloppée dans un conteneur à défilement horizontal, en styles inline, indépendants du thème.</li>
+            <li>Sécurité : <code>delete body.author</code> — jamais d'auteur dans une mise à jour.</li>
+          </ul>
+          <span class="ref"><b>updatePost</b> src/services/wordpress.js · <code>POST /api/wordpress</code> proxy.js:3737</span>
+        </article>
+
+        <article class="mod" id="S7" data-c="constat">
+          <div class="mod-top"><span class="mod-id">S7</span><h3 class="mod-t" style="margin:0">Tokens et coût</h3><span class="tag" data-c="constat">mesure</span></div>
+          <p><code>makeTokenTracker()</code> accumule les <code>usage</code> <strong>bruts</strong> de l'API, appel par appel, avec le modèle utilisé. <code>calcCost</code> applique les tarifs de <code>settings.json</code>, avec une table de repli en dur.</p>
+          <p>Détail qui compte : la passe de gras renvoie son <code>usage</code> <em>brut</em> et non pré-agrégé. Lui passer un accumulateur ajouterait zéro en silence, et le coût de la passe disparaîtrait de la facture affichée.</p>
+          <p><strong>Attention à la lecture</strong> : le compteur qui défile <em>pendant</em> un appel est simulé — <code>callClaudeWithProgress</code> incrémente ~90 à 160 jetons toutes les 700 ms pour donner un retour visuel. Seul le total final vient de l'API.</p>
+          <span class="ref"><b>makeTokenTracker</b> agent.js:798 · <b>calcCost</b> agent.js:112 · <b>callClaudeWithProgress</b> agent.js:124</span>
+        </article>
+
+        <article class="mod" id="S8">
+          <div class="mod-top"><span class="mod-id">S8</span><h3 class="mod-t" style="margin:0">Suivi SEO Haloscan</h3></div>
+          <p>Un instantané des positions est capturé au lancement (J+0), puis complété par un cron aux échéances J+7 et J+30. Le champ <code>seoTracking</code> est <strong>exclu de toute écriture</strong> depuis l'éditeur : l'inclure ferait un <code>updateDoc</code> qui écrase le champ entier, donc les instantanés déjà pris.</p>
+          <span class="ref">Articles.jsx:511 · <code>POST /api/haloscan/check</code> proxy.js:1617 · <code>/api/haloscan/evolution</code> :1666</span>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ PUBLICATION ══════════════════════════ -->
+    <section id="publication">
+      <div class="sec-head">
+        <span class="sec-n">07</span>
+        <div class="sec-t">
+          <h2>Garde-fous à la publication</h2>
+          <p>Le dernier écran avant que le texte quitte l'outil. Deux questions bloquantes, trois messages non bloquants — et rien ne se déclenche si le code n'a rien eu à réparer.</p>
+        </div>
+      </div>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Déclencheur</th><th>Forme</th><th>Effet du refus</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><b>Factuel écarté en phase 2</b><br><span style="color:var(--ink-3);font-size:12.5px">cases <code>a_supprimer</code> ou <code>sources_check</code> décochées</span></td>
+              <td>confirmation bloquante</td>
+              <td>publication arrêtée, retour en phase 2 pour recocher puis régénérer</td>
+            </tr>
+            <tr>
+              <td><b>Clauses rédigées par le code</b><br><span style="color:var(--ink-3);font-size:12.5px">liens du brief replacés par R2 au moment de publier</span></td>
+              <td>confirmation bloquante, liste des paires</td>
+              <td>le HTML <strong>marqué</strong> est réinjecté dans l'éditeur — les phrases apparaissent surlignées en jaune, à reformuler</td>
+            </tr>
+            <tr>
+              <td>Liens internes réparés ou non repris</td>
+              <td>message, 8 s</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>Images remises, dont celles au placement approximatif</td>
+              <td>message, 9 s</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>Diffs encore en attente</td>
+              <td>acceptés automatiquement</td>
+              <td>l'article part exactement tel qu'il s'affiche dans « Après »</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <h4>Le contrat était structurellement intenable sur ce chemin</h4>
+        <p>Le contrat passé avec le rédacteur est « le code marque ce qu'il écrit, tu le relis ». À la publication, la clause était écrite dans une variable locale, <code>exportAsHtml</code> en retirait la marque dans la même foulée, et le texte partait sur le site <strong>sans avoir jamais été affiché</strong> — le seul signal étant un <code>console.warn</code>. D'où le rétablissement de l'étape de relecture, au seul endroit où elle a un sens.</p>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ TABLES ══════════════════════════ -->
+    <section id="tables">
+      <div class="sec-head">
+        <span class="sec-n">08</span>
+        <div class="sec-t">
+          <h2>Constantes de référence</h2>
+          <p>Les valeurs que l'on cherche quand on doit intervenir, avec leur fichier d'origine.</p>
+        </div>
+      </div>
+
+      <h3>Appels au modèle</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Appel</th><th class="mono">modèle</th><th class="mono">max_tokens</th><th>Essais</th><th>Bloquant</th></tr></thead>
+          <tbody>
+            <tr><td>Extraction de requêtes (audit)</td><td class="mono">claude-haiku-4-5</td><td class="num">300</td><td>1</td><td>non</td></tr>
+            <tr><td>Audit QAT</td><td class="mono">claude-sonnet-5</td><td class="num">32 000</td><td>3</td><td><b style="color:var(--rejet)">oui</b> — pas d'audit, pas de refonte</td></tr>
+            <tr><td>Refonte</td><td class="mono">claude-sonnet-5</td><td class="num">32 000</td><td>3</td><td><b style="color:var(--rejet)">oui</b> — verrou liens externes</td></tr>
+            <tr><td>Passe de gras</td><td class="mono">défaut → claude-haiku-4-5</td><td class="num">16 000</td><td>1</td><td>non</td></tr>
+            <tr><td>Obsolescence — requêtes</td><td class="mono">claude-haiku-4-5</td><td class="num">600</td><td>1</td><td>non</td></tr>
+            <tr><td>Obsolescence — rapport</td><td class="mono">claude-sonnet-5</td><td class="num">24 000</td><td>1</td><td>non</td></tr>
+            <tr><td>Corrections de style</td><td class="mono">défaut → claude-haiku-4-5</td><td class="num">8 000</td><td>1</td><td>non</td></tr>
+            <tr><td>Métas SEO · catégorie · alt d'image</td><td class="mono">claude-haiku-4-5</td><td class="num">250 / 30 / —</td><td>1</td><td>non</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Plafonds, seuils et bornes</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Constante</th><th class="mono">Valeur</th><th>Fichier</th><th>Ce qu'elle protège</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">MAX_INSTRUCTION_CHARS</td><td class="num">2 500</td><td class="mono">generationPrompt.js:65</td><td>que les directives ne noient pas les règles</td></tr>
+            <tr><td class="mono">MIN_LIENS_ENTRANTS / MAX</td><td class="num">6 / 10</td><td class="mono">agentQat.js:69,84</td><td>plancher de maillage · JSON qui tient en une réponse</td></tr>
+            <tr><td class="mono">INTERNAL_LINK_ROWS_MAX</td><td class="num">15</td><td class="mono">majMode.js</td><td>borne de <em>saisie</em>, sans rapport avec le plafond ci-dessus</td></tr>
+            <tr><td class="mono">DEFAULT_TARGET_WORDS</td><td class="num">2 500</td><td class="mono">majMode.js</td><td>bornes 800 – 5 000</td></tr>
+            <tr><td class="mono">MIN_WORDS_ADDED_SIMPLE</td><td class="num">200</td><td class="mono">majPhases.js</td><td>minimum strict d'une MAJ simple</td></tr>
+            <tr><td class="mono">MOTS_MAX_PHRASE</td><td class="num">20</td><td class="mono">stylePatterns.js:166</td><td>un seul littéral pour la consigne et la détection</td></tr>
+            <tr><td class="mono">MAX_H2_AVEC_MOT_CLE</td><td class="num">2</td><td class="mono">stylePatterns.js:326</td><td>suroptimisation</td></tr>
+            <tr><td class="mono">GRAS_MIN_PAR_H2 / MAX_MOTS</td><td class="num">2 / 4</td><td class="mono">boldCarry.js:23,26</td><td>plancher structurel · longueur d'un passage</td></tr>
+            <tr><td class="mono">MAX_QAT_SEARCHES</td><td class="num">2</td><td class="mono">agentQat.js:50</td><td>coût de la recherche web</td></tr>
+            <tr><td class="mono">MAX_SOURCES_INJECTED</td><td class="num">6</td><td class="mono">agentQat.js:51</td><td>taille du prompt</td></tr>
+            <tr><td class="mono">IMAGE_BLOCK_MAX</td><td class="num">12 000</td><td class="mono">agentQat.js</td><td>un srcset WordPress complet fait des centaines de caractères</td></tr>
+            <tr><td class="mono">MIN_SIG_CHARS</td><td class="num">40</td><td class="mono">imageCarry.js:87</td><td>seuil d'ancrage d'un média</td></tr>
+            <tr><td class="mono">MIN_PARAGRAPH_CHARS</td><td class="num">40</td><td class="mono">internalWeave.js:192</td><td>paragraphe éligible à une clause</td></tr>
+            <tr><td class="mono">JOB_MAX_WAIT_MS</td><td class="num">12 min</td><td class="mono">agent.js:401</td><td>attente d'un appel long</td></tr>
+            <tr><td class="mono">STREAM_STALL_MS</td><td class="num">120 s</td><td class="mono">agent.js:203</td><td>flux figé → bascule sur le transport job</td></tr>
+            <tr><td class="mono">MAX_REMOTE_HTML</td><td class="num">900 000</td><td class="mono">articleDraft.js:19</td><td>limite de document</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Le parcours en quatre phases</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Phase</th><th>Ce qui est produit</th><th>Preuve enregistrée</th><th>Navigation</th></tr></thead>
+          <tbody>
+            <tr><td><b>1 · Audit</b></td><td>audit JSON, ampleur proposée, scores, 6 à 10 liens suggérés</td><td class="mono">auditJson</td><td>relançable</td></tr>
+            <tr><td><b>2 · Génération</b></td><td>article entier + neuf passes déterministes + passe de gras</td><td class="mono">qatArticle · diff/updates</td><td>on reste en phase 2 pour lire le bilan de longueur</td></tr>
+            <tr><td><b>3 · Obsolescence</b></td><td>suggestions sur le texte <em>produit</em></td><td class="mono">obsolescenceReport</td><td>—</td></tr>
+            <tr><td><b>4 · Relecture</b></td><td>patterns d'écriture IA, corrections, finitions</td><td class="mono">phaseStatus (pas d'artefact propre)</td><td>« Terminer » archive</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:13px;color:var(--ink-2);margin-top:12px;max-width:74ch">
+        Revenir en arrière est toujours permis ; sauter une phase en avant ne l'est pas — sinon les artefacts
+        enregistrés ne correspondent plus entre eux. Une vérification d'obsolescence n'a pas de sens sans texte généré.
+      </p>
+    </section>
+
+    <!-- ══════════════════════════ FRICTIONS ══════════════════════════ -->
+    <section id="frictions">
+      <div class="sec-head">
+        <span class="sec-n">09</span>
+        <div class="sec-t">
+          <h2>Points de friction relevés à la lecture</h2>
+          <p>Observations factuelles, vérifiables ligne par ligne. Aucune n'a été corrigée ici — ce sont des arbitrages qui t'appartiennent.</p>
+        </div>
+      </div>
+
+      <div class="grid">
+
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">01</span><h3 class="mod-t" style="margin:0">Deux passes tournent sur Haiku par défaut</h3></div>
+          <p><code>runBoldPass</code> et <code>runStyleFixAgent</code> appellent <code>callClaudeWithProgress</code> <strong>sans passer <code>model</code></strong>. La destructuration de <code>callClaude</code> applique alors <code>model = MODELS.FAST</code>, c'est-à-dire <code>claude-haiku-4-5</code>.</p>
+          <p>La passe de gras est décrite comme « incontournable, très importante » et doit poser un jugement éditorial — désigner la phrase qui répond à la requête, distinguer une entité d'un chiffre. Ce n'est pas un choix explicite dans le code : c'est le défaut qui s'applique.</p>
+          <span class="ref">agentBold.js (appel) · agentStyle.js (appel) · <b>callClaude</b> agent.js:519 (<code>model = MODELS.FAST</code>)</span>
+        </article>
+
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">02</span><h3 class="mod-t" style="margin:0">Tarif Opus périmé</h3></div>
+          <p><code>TOKEN_PRICING_FALLBACK</code> porte <code>claude-opus-4-5: { input: 15, output: 75 }</code>. Le calcul de coût est donc surestimé d'un facteur 3 sur toute génération qui emprunterait la cascade jusqu'à Opus.</p>
+          <p>Sans effet aujourd'hui — <code>selectModel</code> ne rend jamais Opus — mais la table est aussi le repli quand <code>settings.json</code> ne répond pas.</p>
+          <span class="ref">agent.js:105 · table jumelle côté proxy</span>
+        </article>
+
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">03</span><h3 class="mod-t" style="margin:0">Un modèle figé hors de <code>selectModel</code></h3></div>
+          <p><code>generateReply</code> (brouillons de réponse aux commentaires) envoie <code>model: 'claude-sonnet-4-5'</code> écrit en dur dans le corps de la requête. C'est le seul appel du code applicatif qui ne passe pas par <code>selectModel</code> : un changement de modèle centralisé ne l'atteindra pas.</p>
+          <span class="ref">src/services/comments.js:36</span>
+        </article>
+
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">04</span><h3 class="mod-t" style="margin:0">Le flux historique est toujours là</h3></div>
+          <p><code>runAgent</code> occupe 675 lignes de <code>agent.js</code> et implémente le parcours « MAJ classique » (audit markdown + <code>updates[]</code>), annoncé comme temporaire dans <code>majMode.js</code>. Le parcours en quatre phases l'a remplacé, mais le code et les constantes coexistent.</p>
+          <p>Conséquence déjà documentée : <code>filterSameSiteLinks</code> et le plancher de 3 liens n'ont jamais tourné en production — leur seul appelant est ce chemin.</p>
+          <span class="ref">agent.js:1188 · src/constants/majMode.js (<code>DOUBLE FLUX TEMPORAIRE</code>)</span>
+        </article>
+
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">05</span><h3 class="mod-t" style="margin:0">La liste blanche est vérifiée, mais sur un seul modèle</h3></div>
+          <p>Un modèle absent de <code>MODEL_CASCADE</code> (proxy) retombe sur <code>MODEL_FALLBACK = claude-haiku-4-5</code> <strong>sans erreur ni avertissement</strong>.</p>
+          <p>Le garde-fou existe et il est bien nommé : <code>modelMigration.test.js</code> assère que <code>selectModel('update_generation')</code> figure dans le source du proxy. Le modèle qui écrit les articles est donc couvert.</p>
+          <p>Le reste de <code>MODELS</code> ne l'est pas. Aujourd'hui sans conséquence — <code>FAST</code> <em>est</em> le repli, et <code>BEST</code> n'est jamais rendu par <code>selectModel</code>. Mais le jour où une tâche renverra <code>MODELS.BEST</code>, rien n'assèrera qu'Opus est dans la cascade. Une boucle sur les valeurs de <code>MODELS</code> ferme le trou en une ligne.</p>
+          <span class="ref">proxy.js:1908, :2228 · agent.js:71 · <b>modelMigration.test.js:36</b></span>
+        </article>
+
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">06</span><h3 class="mod-t" style="margin:0">Deux plafonds de 6 à 10 se ressemblent sans se ressembler</h3></div>
+          <p><code>MIN_LIENS_ENTRANTS</code> / <code>MAX_LIENS_ENTRANTS</code> (6 / 10) bornent ce que <em>l'audit</em> propose. <code>INTERNAL_LINK_ROWS_MAX</code> (15) borne ce que <em>le rédacteur</em> saisit. Les deux alimentent le même champ de la phase 2 par <code>mergeLinkRows</code>.</p>
+          <p>Rien n'est cassé, mais les deux noms invitent à la confusion, et le plafond de 10 vit côté code par exception assumée à la règle « les règles rédactionnelles s'éditent dans SKILLS IA ».</p>
+          <span class="ref">agentQat.js:69,84 · majMode.js · <b>auditSuggestions.js</b></span>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ RESTE À FAIRE ══════════════════════════ -->
+    <section id="reste">
+      <div class="sec-head">
+        <span class="sec-n">10</span>
+        <div class="sec-t">
+          <h2>Ce qu'il reste à faire</h2>
+          <p>Classé par nature du problème, et dans l'ordre où je le prendrais : d'abord ce qui ne change aucun comportement, ensuite ce qui demande un arbitrage, enfin ce qui ajoute. Chaque point a été vérifié par grep ou par lecture, jamais déduit.</p>
+        </div>
+      </div>
+
+      <h3>A · Des mesures qui disparaissent — aucun risque, valeur immédiate</h3>
+      <div class="grid">
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">A1</span><h3 class="mod-t" style="margin:0">Trois constats partent dans le vide</h3><span class="tag" data-c="constat">vérifié</span></div>
+          <p><code>phrasesTropLongues</code>, <code>suroptimisationMotCle</code> et <code>elisionsOrphelines</code> sont calculés à la génération, émis en <code>onStep</code>… et <strong>absents de l'objet renvoyé</strong>. Un seul appelant chacun, aucune persistance.</p>
+          <p>Or les messages <code>onStep</code> disparaissent dès la fin de la génération : les étapes se replient et rien n'est conservé. <strong>C'est exactement le défaut déjà corrigé pour la passe de gras</strong>, dont le rapport est persisté dans <code>sanitized.boldPass</code> précisément pour cette raison. Trois mesures ont été oubliées au passage.</p>
+          <p>Nuance à connaître : la règle des 20 mots est <em>recalculée</em> en phase 4 par <code>detectStylePatterns</code>. La suroptimisation et les élisions, non — <strong>elles sont perdues pour de bon</strong>.</p>
+          <p><strong>Correctif :</strong> trois champs de plus dans le retour, comme <code>constatGras</code>. Aucun changement de comportement.</p>
+          <span class="ref">agentQat.js:1228, :1234, :1240 (calcul) · retour :1395-1440 (absents)</span>
+        </article>
+
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">A2</span><h3 class="mod-t" style="margin:0">Rien ne recompte après la main humaine</h3></div>
+          <p>Les constats portent sur le HTML <em>sorti de la génération</em>. Après les phases 3 et 4, après les collages et les corrections, les chiffres affichés décrivent un texte qui n'existe plus.</p>
+          <p><strong>Correctif :</strong> un bouton « recompter » en phase 4, sur le HTML courant. Les fonctions sont pures et déjà là — c'est du câblage.</p>
+          <span class="ref">stylePatterns.js:180, :338, :374</span>
+        </article>
+      </div>
+
+      <h3>B · Une asymétrie de filet — demande un arbitrage, pas un correctif</h3>
+      <div class="grid">
+        <article class="mod" data-c="repare">
+          <div class="mod-top"><span class="mod-id">B1</span><h3 class="mod-t" style="margin:0">R5 n'a pas de filet à la publication</h3><span class="tag" data-c="constat">à trancher</span></div>
+          <p><code>handlePublish</code> rejoue R1 (ligne 3784), R2 (3814) et R4 (3844), au motif que six chemins d'écriture contournent les verrous posés à la génération. <strong>R5 — le gras d'origine — n'y est pas.</strong></p>
+          <p>Le scénario est le même que celui qui a justifié les trois autres : une suggestion de phase 3 acceptée, ou une correction de style en phase 4, remplace un paragraphe qui portait un <code>&lt;strong&gt;</code> d'origine. Il disparaît en silence.</p>
+          <p><strong>Mais la symétrie s'arrête là, et c'est le point à trancher.</strong> Un lien perdu n'est jamais un choix ; un gras retiré peut l'être. Rejouer <code>carryOverBold</code> à la publication remettrait du gras que le rédacteur a peut-être ôté exprès — le code se battrait contre lui.</p>
+          <p><strong>Recommandation :</strong> un <em>constat</em>, pas une réparation. « N termes en gras de l'article d'origine ne sont plus dans le texte publié. » C'est la doctrine que le projet applique déjà aux élisions orphelines : signalées, jamais réparées, parce qu'un code qui devine écrit « le toiture ».</p>
+          <span class="ref">ArticleResult.jsx:3759-3860 · boldCarry.js</span>
+        </article>
+      </div>
+
+      <h3>C · Des choix de modèle que personne n'a faits</h3>
+      <div class="grid">
+        <article class="mod" data-c="ia">
+          <div class="mod-top"><span class="mod-id">C1</span><h3 class="mod-t" style="margin:0">La passe de gras tourne sur le modèle le moins cher</h3><span class="tag" data-c="ia">décision</span></div>
+          <p><code>runBoldPass</code> et <code>runStyleFixAgent</code> appellent <code>callClaudeWithProgress</code> <strong>sans passer <code>model</code></strong>. La destructuration de <code>callClaude</code> applique alors <code>model = MODELS.FAST</code>.</p>
+          <p>Ce n'est pas forcément une erreur — Haiku peut suffire, et une passe non bloquante n'a pas à coûter cher. Ce qui manque, c'est <strong>la décision</strong> : partout ailleurs dans ce code, un choix de modèle porte son commentaire. Ici il n'y en a aucun, parce qu'il n'y a pas eu de choix.</p>
+          <p>Le contexte pèse dans l'arbitrage : cette passe doit désigner « la phrase qui répond à la requête », distinguer une entité d'un chiffre, et deux tentatives ont déjà échoué sur ce jugement précis. C'est de la sélection sémantique, pas du repérage mécanique.</p>
+          <span class="ref">agentBold.js (appel) · agentStyle.js (appel) · <b>callClaude</b> agent.js:519</span>
+        </article>
+
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">C2</span><h3 class="mod-t" style="margin:0">Tarif Opus faux, et non testé</h3></div>
+          <p><code>claude-opus-4-5</code> est tarifé <code>15 / 75</code> alors qu'il est à <code>5 / 25</code> — le coût serait <strong>surestimé d'un facteur 3</strong>.</p>
+          <p>Détail révélateur : <code>modelMigration.test.js</code> verrouille les tarifs de Sonnet 5 et de Haiku 4.5 dans les <em>deux</em> tables, avec un commentaire disant « le suivi de coûts ne doit pas mentir ». Opus a été oublié de ce verrou — c'est pour ça que la valeur a pu vieillir.</p>
+          <span class="ref">agent.js:105 · settingsSlice.js · modelMigration.test.js:40-49</span>
+        </article>
+
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">C3</span><h3 class="mod-t" style="margin:0">Un modèle figé hors de <code>selectModel</code></h3></div>
+          <p><code>generateReply</code> écrit <code>model: 'claude-sonnet-4-5'</code> en dur dans le corps de la requête. Seul appel du code applicatif à contourner <code>selectModel</code> : une bascule centralisée ne l'atteindra pas.</p>
+          <span class="ref">src/services/comments.js:36</span>
+        </article>
+
+        <article class="mod" data-c="constat">
+          <div class="mod-top"><span class="mod-id">C4</span><h3 class="mod-t" style="margin:0">Étendre le verrou de cascade</h3></div>
+          <p>Le test ne couvre que <code>selectModel('update_generation')</code>. Une boucle sur toutes les valeurs de <code>MODELS</code> ferme le trou en une ligne, avant qu'une tâche future ne renvoie <code>MODELS.BEST</code>.</p>
+          <span class="ref">modelMigration.test.js:36</span>
+        </article>
+      </div>
+
+      <h3>D · Du code mort — votre propre règle, appliquée</h3>
+      <div class="grid">
+        <article class="mod">
+          <div class="mod-top"><span class="mod-id">D1</span><h3 class="mod-t" style="margin:0">Le « double flux temporaire » n'a plus qu'un flux</h3><span class="tag" data-c="constat">vérifié : 0 appelant</span></div>
+          <p><code>runAgent</code> — <strong>675 lignes</strong> de <code>agent.js</code> — n'est appelé de nulle part. Même constat pour <code>MAJ_MODES</code>, <code>isQatMode</code>, <code>modeMeta</code> et <code>DEFAULT_MODE</code> : zéro usage hors de leur définition.</p>
+          <p>Le projet a supprimé <code>keywordBold.js</code> pour cette raison exacte, et l'a écrit noir sur blanc : « du code mort qui décrit une approche abandonnée est un piège pour le prochain lecteur ». C'est le même cas, en trente fois plus gros — et ce code porte ses <em>propres copies</em> des règles métier, qui ne tournent jamais.</p>
+          <p><strong>Attention au périmètre :</strong> <code>MAJ_DEPTHS</code>, <code>depthMeta</code> et <code>MAJ_SCOPES</code> sont bien vivants (6, 5 et 6 usages). Ne toucher que la moitié « mode ».</p>
+          <span class="ref">agent.js:1188 · constants/majMode.js · constants/majDepth.js (vivant)</span>
+        </article>
+      </div>
+
+      <h3>E · Le test qui manque — la composition, pas les pièces</h3>
+      <div class="grid">
+        <article class="mod" data-c="rejet">
+          <div class="mod-top"><span class="mod-id">E1</span><h3 class="mod-t" style="margin:0">Rien ne teste l'ordre de la chaîne</h3><span class="tag" data-c="rejet">priorité</span></div>
+          <p>49 fichiers de test, tous unitaires. <code>sanitizeFullArticle.test.js</code> teste la fonction ; <code>internalWeave.test.js</code> teste le tissage ; <code>boldCarry.test.js</code> teste la reprise du gras. <strong>Aucun ne les enchaîne.</strong></p>
+          <p>Or l'ordre est précisément ce que le code décrit comme fragile, et chaque position porte une justification écrite : R2a <em>entre</em> R1 et R2 pour que le lien délié soit replacé ; R6 <em>après</em> R2 pour que le tissage voie la prose du modèle ; R4 et R5 <em>en dernier</em> pour ne pas baliser du HTML que le code va réécrire.</p>
+          <p>Ces trois invariants ne sont tenus par rien d'autre qu'un commentaire. Un réordonnancement malheureux passerait les 772 tests au vert.</p>
+          <p><strong>Le test à écrire :</strong> un article d'entrée avec un lien externe, un lien interne, une image, du gras et un lien du brief dont l'ancre est absente — puis assérer, sur la sortie, que le lien externe est intact, l'interne repris, l'image replacée, le gras conservé, la clause rédigée <em>et marquée</em>, et le lien de FAQ délié puis replacé dans le corps. C'est l'ajout au meilleur rapport valeur / risque de toute cette liste.</p>
+          <span class="ref">à créer : src/services/chaineVerrous.test.js</span>
+        </article>
+      </div>
+
+      <h3>F · Fonctionnalités à ajouter</h3>
+      <div class="grid">
+        <article class="mod">
+          <div class="mod-top"><span class="mod-id">F1</span><h3 class="mod-t" style="margin:0">Un rapport de génération persisté</h3></div>
+          <p>Le raisonnement qui a fait persister <code>boldPass</code> vaut pour toute la génération : quels champs d'audit sont partis, quelle instruction, combien de tokens, quels verrous ont agi, quoi n'a pas pu être placé. Aujourd'hui tout cela vit dans <code>onStep</code>, et meurt avec l'écran.</p>
+          <p>C'est ce qui permettrait de répondre à « pourquoi cet article est sorti comme ça » <strong>trois semaines plus tard</strong>, sans relancer une génération payante.</p>
+        </article>
+
+        <article class="mod">
+          <div class="mod-top"><span class="mod-id">F2</span><h3 class="mod-t" style="margin:0">Saisir l'URL de l'article sur le flux collé</h3></div>
+          <p>Sans URL, aucun lien interne à URL absolue ne peut être placé : faute d'hôte de référence, le verrou traite tout absolu comme externe. C'est dit au rédacteur, mais il n'a <strong>aucun moyen de corriger</strong> — un champ « URL de l'article » débloquerait le maillage sur ce flux.</p>
+          <span class="ref">unverifiableLinkRows · majMode.js</span>
+        </article>
+
+        <article class="mod" data-c="rejet">
+          <div class="mod-top"><span class="mod-id">F3</span><h3 class="mod-t" style="margin:0">Récupérer un essai rejeté ?</h3><span class="tag" data-c="rejet">je déconseille</span></div>
+          <p>Un rejet du verrou externe jette l'<code>article_html</code> produit. Trois essais peuvent partir, donc jusqu'à trois articles complets payés et perdus pour un seul lien manquant.</p>
+          <p><strong>Je ne le recommande pas.</strong> Conserver un texte non conforme quelque part, c'est créer le chemin par lequel il finira publié — et la règle 8 est le verrou le plus cher du projet à re-gagner. La reprise instruite qui nomme les liens perdus est la bonne réponse ; elle existe déjà.</p>
+        </article>
+      </div>
+
+      <div class="note">
+        <h4>Ce que je n'ai pas lu, donc ce que cette liste ne couvre pas</h4>
+        <p>Authentification et rôles, tickets, commentaires, statistiques d'équipe, et l'intérieur de l'éditeur (presse-papiers de blocs, verrou d'édition collaboratif, undo/redo). Ces sous-systèmes ne participent pas au parcours de mise à jour, mais l'absence de constat n'est pas un constat d'absence : je n'y ai pas cherché.</p>
+      </div>
+    </section>
+
+    <footer>
+      <p><strong>Méthode de lecture.</strong> Tout ce qui figure sur cette page vient du code du dépôt à <code>eb0ea3e</code>, lu directement : signatures, constantes, ordre d'appel et commentaires. Les incidents cités sont ceux consignés dans le code et dans <code>.claude/CLAUDE.md</code> — ils ne sont pas reconstitués.</p>
+      <p>Ce qui <em>n'est pas</em> couvert ici : authentification et rôles, tickets, commentaires, statistiques d'équipe, et le détail de l'éditeur (presse-papiers de blocs, verrou d'édition collaboratif, undo/redo). Ces sous-systèmes ne participent pas au parcours de mise à jour d'un article.</p>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ── Nœuds du schéma → fiche correspondante ────────────────────────────────
+  document.querySelectorAll('.node[data-go]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var cible = document.getElementById(btn.getAttribute('data-go'));
+      if (!cible) return;
+      // Un filtre actif pourrait masquer la fiche visée : on rend la main au « Tout ».
+      if (cible.classList.contains('hide') || cible.classList.contains('dim')) reset();
+      cible.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      cible.classList.remove('flash');
+      void cible.offsetWidth;              // relance l'animation même sur un second clic
+      cible.classList.add('flash');
+      cible.querySelectorAll('details.scar').forEach(function(d){ d.open = true; });
+    });
+  });
+
+  // ── Filtres par classe + recherche plein texte ────────────────────────────
+  var mods   = Array.prototype.slice.call(document.querySelectorAll('.mod'));
+  var chips  = Array.prototype.slice.call(document.querySelectorAll('.chip'));
+  var champ  = document.getElementById('q');
+  var compte = document.getElementById('count');
+  var filtre = 'all';
+
+  function appliquer(){
+    var q = (champ.value || '').trim().toLowerCase();
+    var vus = 0;
+    mods.forEach(function(m){
+      var classeOk = filtre === 'all' || m.getAttribute('data-c') === filtre;
+      var texteOk  = !q || (m.textContent || '').toLowerCase().indexOf(q) !== -1;
+      m.classList.toggle('hide', !texteOk);
+      m.classList.toggle('dim', texteOk && !classeOk);
+      if (texteOk && classeOk) vus++;
+    });
+    compte.textContent = (filtre === 'all' && !q) ? mods.length + ' fiches' : vus + ' / ' + mods.length;
+  }
+
+  function reset(){
+    filtre = 'all';
+    champ.value = '';
+    chips.forEach(function(c){ c.setAttribute('aria-pressed', String(c.getAttribute('data-f') === 'all')); });
+    appliquer();
+  }
+
+  chips.forEach(function(chip){
+    chip.addEventListener('click', function(){
+      var f = chip.getAttribute('data-f');
+      filtre = (filtre === f && f !== 'all') ? 'all' : f;
+      chips.forEach(function(c){ c.setAttribute('aria-pressed', String(c.getAttribute('data-f') === filtre)); });
+      appliquer();
+    });
+  });
+  champ.addEventListener('input', appliquer);
+  champ.addEventListener('keydown', function(e){ if (e.key === 'Escape') reset(); });
+  appliquer();
+
+  // ── Repérage de la section courante dans le rail ──────────────────────────
+  var liens    = Array.prototype.slice.call(document.querySelectorAll('#rail a'));
+  var sections = liens.map(function(a){ return document.querySelector(a.getAttribute('href')); }).filter(Boolean);
+
+  function marquer(){
+    var pivot = window.scrollY + window.innerHeight * 0.28;
+    var actif = sections[0];
+    sections.forEach(function(s){ if (s.offsetTop <= pivot) actif = s; });
+    liens.forEach(function(a){
+      a.setAttribute('aria-current', String(a.getAttribute('href') === '#' + actif.id));
+    });
+  }
+
+  var enAttente = false;
+  window.addEventListener('scroll', function(){
+    if (enAttente) return;
+    enAttente = true;
+    window.requestAnimationFrame(function(){ marquer(); enAttente = false; });
+  }, { passive: true });
+  marquer();
+})();
+</script>
