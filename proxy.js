@@ -2119,7 +2119,14 @@ app.get('/api/models', requireAuth, async (req, res) => {
   const discoveredList = (discovered || [])
     .filter(m => !MODEL_CASCADE.includes(m.id))
     .map(m => ({ ...m, indicativePricing: indicativePricingFor(m.id) }));
-  res.json({ curated: MODEL_CASCADE, discovered: discoveredList });
+  res.json({
+    curated: MODEL_CASCADE,
+    discovered: discoveredList,
+    // Résultat du DERNIER test explicite (POST /api/models/check-availability),
+    // pas un re-test à chaque chargement — voir le commentaire de ce endpoint.
+    availability: _modelAvailabilityCache.data,
+    availabilityCheckedAt: _modelAvailabilityCache.fetchedAt || null,
+  });
 });
 
 // ─── Appel API Anthropic via clé API (x-api-key) ─────────────────────────────
@@ -2349,6 +2356,71 @@ const callWithModelCascade = async (token, bodyObj) => {
 
   throw new Error(`Tous les modèles ont échoué (cascade depuis ${requestedModel})`);
 };
+
+/**
+ * Disponibilité RÉELLE d'un modèle — à la demande, jamais en tâche de fond.
+ *
+ * `GET /api/models` ne dit que ce qu'Anthropic CONNAÎT (API Modèles) : un
+ * modèle peut y figurer et pourtant échouer à l'usage (429, quota, non activé
+ * sur ce compte). Constaté en conditions réelles le 25/08/2026 : `claude-opus-4-5`
+ * configuré sur la passe Audit QAT a silencieusement cascadé vers Haiku
+ * (`callWithModelCascade`, 429) — le coût affiché a trahi la bascule, rien
+ * d'autre. Ce test appelle CHAQUE modèle INDIVIDUELLEMENT (sans cascade) pour
+ * distinguer « ce modèle précis répond » de « un modèle de la liste a répondu ».
+ *
+ * Toujours déclenché par un clic (`POST /api/models/check-availability`) : un
+ * appel Anthropic réel par modèle testé, donc jamais automatique ni sur un
+ * simple chargement de page.
+ */
+const _modelAvailabilityCache = { data: {}, fetchedAt: 0 };
+
+const classifyModelError = (message = '') => {
+  if (message === 'RATE_LIMITED') return 'rate_limited';
+  if (/not.?found|does not exist|invalid model|no such model|unknown model/i.test(message)) return 'not_found';
+  return 'error';
+};
+
+const testOneModel = async (modelId) => {
+  const serverSettings = readServerSettings();
+  const clientApiKey = serverSettings.anthropicKey && serverSettings.anthropicKey !== 'local'
+    ? serverSettings.anthropicKey
+    : null;
+  // max_tokens minimal, un seul message court : le test doit coûter le moins
+  // possible tout en touchant réellement l'API (pas un ping local).
+  const body = { model: modelId, max_tokens: 8, messages: [{ role: 'user', content: 'ping' }] };
+  try {
+    if (clientApiKey) {
+      await callAnthropicWithApiKey(clientApiKey, body);
+    } else {
+      await callAnthropicDirect(getOAuthToken(), body);
+    }
+    return { ok: true, checkedAt: Date.now() };
+  } catch (e) {
+    return { ok: false, reason: classifyModelError(e.message), message: e.message, checkedAt: Date.now() };
+  }
+};
+
+// POST /api/models/check-availability — teste tous les modèles (curated +
+// découverts) un par un, avec un court délai entre chaque appel : en rafale,
+// une vraie limite de débit serait amplifiée et se lirait comme une panne
+// générale au lieu d'une mesure par modèle.
+app.post('/api/models/check-availability', requireAuth, requireRole('super_admin'), async (req, res) => {
+  try {
+    const discovered = await fetchAvailableModels();
+    const allIds = [...new Set([...MODEL_CASCADE, ...(discovered || []).map(m => m.id)])];
+    const results = {};
+    for (const id of allIds) {
+      results[id] = await testOneModel(id);
+      await new Promise(r => setTimeout(r, 300));
+    }
+    _modelAvailabilityCache.data      = results;
+    _modelAvailabilityCache.fetchedAt = Date.now();
+    res.json({ availability: results, checkedAt: _modelAvailabilityCache.fetchedAt });
+  } catch (e) {
+    console.error('[proxy] /api/models/check-availability erreur:', e.message);
+    res.status(500).json({ error: safeError(e, 'Test de disponibilité échoué') });
+  }
+});
 
 // ─── Fallback : claude.exe CLI ────────────────────────────────────────────────
 const callClaude = (prompt) => new Promise((resolve, reject) => {
