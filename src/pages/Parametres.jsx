@@ -3,10 +3,22 @@ import { STORAGE_KEYS } from '../constants/storage';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink, Flame, Shield, Zap, AlertTriangle } from 'lucide-react';
+import { Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink, Flame, Shield, Zap, AlertTriangle, Cpu, RotateCcw } from 'lucide-react';
 import axios from 'axios';
 import { setSettings, setFirebaseReady } from '../store/slices/settingsSlice';
 import { initFirebase, saveSettings } from '../services/firebase';
+import { MODEL_PASSES } from '../services/agent';
+import { recentAvgForPass, N_RECENTS } from '../utils/modelCosts';
+
+// Groupes d'affichage — présentation uniquement, aucun impact sur le registre
+// (MODEL_PASSES, agent.js) : juste pour rendre 12 lignes plates plus lisibles.
+const MODEL_PASS_GROUPS = [
+  { title: 'Génération d\'article', passes: ['audit_qat', 'refonte', 'obsolescence', 'gras', 'style', 'reecriture_passage', 'reecriture_section'] },
+  { title: 'Tâches mécaniques',     passes: ['query_extraction', 'seo_meta'] },
+  { title: 'Commentaires',          passes: ['commentaire_reponse', 'commentaire_tri', 'commentaire_traduction'] },
+];
+
+const fmtPrice = (p) => p ? `$${p.input.toFixed(2)} / $${p.output.toFixed(2)}` : null;
 
 function SecretInput({ label, value, onChange, placeholder, hint }) {
   const [show, setShow] = useState(false);
@@ -37,12 +49,19 @@ function SecretInput({ label, value, onChange, placeholder, hint }) {
 export default function Parametres() {
   const dispatch = useDispatch();
   const stored = useSelector(s => s.settings);
+  const stats  = useSelector(s => s.stats);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testingHaloscan, setTestingHaloscan] = useState(false);
   const [haloscanStatus, setHaloscanStatus] = useState(null);
   const [proxyStatus, setProxyStatus] = useState(null);
   const [checkingProxy, setCheckingProxy] = useState(false);
+  // Catalogue de modèles (GET /api/models) — curated = testé par l'équipe
+  // (prix exact), discovered = vu par l'API Anthropic mais non testé (prix
+  // indicatif). Chargé une fois, pas dans le store settings : ce n'est pas
+  // un réglage, juste des données de référence pour construire le sélecteur.
+  const [modelCatalog, setModelCatalog] = useState({ curated: [], discovered: [] });
+  const [loadingModels, setLoadingModels] = useState(true);
 
   const [form, setForm] = useState({
     anthropicKey:              stored.anthropicKey || '',
@@ -63,9 +82,35 @@ export default function Parametres() {
     smtpFrom:    stored.smtpFrom    || '',
     defaultTicketAssigneeEmail: stored.defaultTicketAssigneeEmail || '',
     haloscanKey: stored.haloscanKey || '',
+    modelSelections: stored.modelSelections || {},
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const setModelSelection = (passId, model) =>
+    setForm(f => ({ ...f, modelSelections: { ...f.modelSelections, [passId]: model } }));
+  const resetModelSelection = (passId) =>
+    setForm(f => {
+      const next = { ...f.modelSelections };
+      delete next[passId];
+      return { ...f, modelSelections: next };
+    });
+
+  useEffect(() => {
+    axios.get('/api/models')
+      .then(r => setModelCatalog({ curated: r.data?.curated || [], discovered: r.data?.discovered || [] }))
+      .catch(() => {})
+      .finally(() => setLoadingModels(false));
+  }, []);
+
+  // Prix d'un modèle : exact (LiteLLM, modelPricing) s'il est curated, sinon
+  // indicatif (déjà porté par l'entrée `discovered`), sinon rien à afficher.
+  const priceForModel = (modelId) => {
+    if (modelCatalog.curated.includes(modelId) && stored.modelPricing?.[modelId]) {
+      return { ...stored.modelPricing[modelId], indicative: false };
+    }
+    const found = modelCatalog.discovered.find(m => m.id === modelId);
+    return found?.indicativePricing ? { ...found.indicativePricing, indicative: true } : null;
+  };
 
   const buildFirebaseConfig = () => ({
     apiKey:            form.firebaseApiKey,
@@ -123,6 +168,7 @@ export default function Parametres() {
       smtpFrom:    form.smtpFrom,
       defaultTicketAssigneeEmail: form.defaultTicketAssigneeEmail,
       haloscanKey: form.haloscanKey,
+      modelSelections: form.modelSelections,
     };
 
     // 1. Init Firebase si config fournie
@@ -191,6 +237,7 @@ export default function Parametres() {
       smtpFrom:    stored.smtpFrom    || '',
       defaultTicketAssigneeEmail: stored.defaultTicketAssigneeEmail || '',
       haloscanKey: stored.haloscanKey || '',
+      modelSelections: stored.modelSelections || {},
     }));
   }, [stored]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -269,6 +316,89 @@ export default function Parametres() {
           placeholder="sk-ant-..."
           hint="Trouvez votre clé sur console.anthropic.com"
         />
+      </motion.div>
+
+      {/* Gestion des modèles IA — un modèle par passe du registre (MODEL_PASSES, agent.js) */}
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.02 }} className="glass-card p-6 space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center">
+            <Cpu size={16} className="text-white" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">Gestion des modèles IA</h2>
+            <p className="text-xs text-gray-400">Quel modèle Claude pour chaque passe — coût mesuré sur les {N_RECENTS} derniers articles</p>
+          </div>
+          {loadingModels && <Loader size={15} className="animate-spin text-gray-400 ml-auto" />}
+        </div>
+
+        {MODEL_PASS_GROUPS.map(group => (
+          <div key={group.title} className="space-y-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{group.title}</p>
+            <div className="space-y-2">
+              {group.passes.map(passId => {
+                const entry = MODEL_PASSES[passId];
+                if (!entry) return null;
+                const current = form.modelSelections[passId] || entry.model;
+                const price = priceForModel(current);
+                const recent = recentAvgForPass(stats.history, passId);
+                const isOverridden = !!form.modelSelections[passId];
+                const isDiscovered = !modelCatalog.curated.includes(current);
+                return (
+                  <div key={passId} className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate flex items-center gap-1.5">
+                        {entry.label}
+                        {isDiscovered && !loadingModels && (
+                          <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 rounded-full px-1.5 py-0.5">non testé</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-gray-400">
+                        {price ? `${fmtPrice(price)} /Mtok${price.indicative ? ' (indicatif)' : ''}` : 'Prix inconnu'}
+                        {recent && ` · ~$${recent.avg.toFixed(4)}/article (${recent.n})`}
+                      </p>
+                    </div>
+                    <select
+                      value={current}
+                      onChange={e => setModelSelection(passId, e.target.value)}
+                      className="input-glass text-xs w-56 flex-shrink-0"
+                    >
+                      <optgroup label="Testés par l'équipe">
+                        {modelCatalog.curated.map(id => (
+                          <option key={id} value={id}>{id}{id === entry.model ? ' (défaut)' : ''}</option>
+                        ))}
+                      </optgroup>
+                      {modelCatalog.discovered.length > 0 && (
+                        <optgroup label="Découverts (non testés)">
+                          {modelCatalog.discovered.map(m => (
+                            <option key={m.id} value={m.id}>{m.displayName}</option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {/* Valeur actuelle absente des deux listes (catalogue pas encore chargé,
+                          ou modèle retiré côté Anthropic depuis) — jamais masquée en silence. */}
+                      {!modelCatalog.curated.includes(current) && !modelCatalog.discovered.some(m => m.id === current) && (
+                        <option value={current}>{current} (actuel, non vérifié)</option>
+                      )}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => resetModelSelection(passId)}
+                      disabled={!isOverridden}
+                      title="Revenir au modèle par défaut de cette passe"
+                      className="text-gray-400 hover:text-gray-600 disabled:opacity-0 flex-shrink-0"
+                    >
+                      <RotateCcw size={14} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-xs text-amber-700">
+          Un modèle « découvert » n'a pas été testé avec les prompts de cette appli (raisonnement, longueur de réponse…) — le prix affiché est indicatif, pas garanti pour ce modèle précis.
+        </div>
       </motion.div>
 
       {/* Brave Search */}
