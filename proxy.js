@@ -1422,22 +1422,26 @@ app.get('/api/settings', requireAuth, (req, res) => {
 });
 
 // POST /api/settings — sauvegarde les paramètres partagés (super_admin seulement)
-app.post('/api/settings', requireAuth, requireRole('super_admin'), (req, res) => {
+app.post('/api/settings', requireAuth, requireRole('super_admin'), async (req, res) => {
   try {
     const incoming = req.body || {};
-    // modelSelections : { [passe]: modele }. Rejeté si un modèle n'appartient pas
-    // à MODEL_CASCADE — sans ce garde-fou, une valeur invalide écrite ici
-    // tournerait quand même (resolveRequestedModel la rattrape à l'exécution),
-    // mais l'admin qui vient de sauvegarder ne le saurait qu'en lisant les logs
-    // serveur plus tard, au lieu d'un refus immédiat et lisible.
+    // modelSelections : { [passe]: modele }. Rejeté si le modèle n'existe ni
+    // dans MODEL_CASCADE (testé par l'équipe) ni dans l'API Modèles
+    // d'Anthropic (fetchAvailableModels, mise en cache 6h) — sans ce
+    // garde-fou, une faute de frappe écrite ici ne se découvrirait qu'au
+    // premier usage réel de la passe, au lieu d'un refus immédiat et lisible.
+    // Un modèle hors MODEL_CASCADE reste accepté (décision du 25/08/2026) :
+    // seule son EXISTENCE est vérifiée, pas son appartenance à la liste testée.
     if (incoming.modelSelections !== undefined) {
       const sel = incoming.modelSelections;
       if (typeof sel !== 'object' || sel === null || Array.isArray(sel)) {
         return res.status(400).json({ error: 'modelSelections invalide — objet attendu' });
       }
+      const discovered = await fetchAvailableModels();
+      const knownModels = new Set([...MODEL_CASCADE, ...(discovered || []).map(m => m.id)]);
       for (const [pass, model] of Object.entries(sel)) {
-        if (typeof model !== 'string' || !MODEL_CASCADE.includes(model)) {
-          return res.status(400).json({ error: `modelSelections.${pass} : modèle « ${model} » absent de la liste blanche` });
+        if (typeof model !== 'string' || !knownModels.has(model)) {
+          return res.status(400).json({ error: `modelSelections.${pass} : modèle « ${model} » introuvable (ni testé par l'équipe, ni connu d'Anthropic)` });
         }
       }
     }
@@ -1459,6 +1463,11 @@ app.post('/api/settings', requireAuth, requireRole('super_admin'), (req, res) =>
 const ANTHROPIC_MODELS  = ['claude-opus-4-5', 'claude-sonnet-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'];
 const PRICING_TTL_MS    = 6 * 60 * 60 * 1000; // 6h
 const _pricingCache     = { data: null, fetchedAt: 0 };
+// Blob LiteLLM COMPLET (pas seulement ANTHROPIC_MODELS) — sert de source de prix
+// INDICATIF pour un modèle « découvert » via l'API Modèles d'Anthropic mais pas
+// encore testé par l'équipe (donc absent de MODEL_CASCADE). Tarif communautaire,
+// jamais montré comme définitif — voir indicativePricingFor.
+const _litellmRawCache  = { data: null, fetchedAt: 0 };
 
 const fetchModelPricing = async () => {
   if (_pricingCache.data && Date.now() - _pricingCache.fetchedAt < PRICING_TTL_MS) {
@@ -1470,6 +1479,8 @@ const fetchModelPricing = async () => {
       { timeout: 15000 }
     );
     const all = resp.data || {};
+    _litellmRawCache.data      = all;
+    _litellmRawCache.fetchedAt = Date.now();
     const pricing = {};
     for (const modelId of ANTHROPIC_MODELS) {
       const entry = all[modelId];
@@ -1492,6 +1503,23 @@ const fetchModelPricing = async () => {
     console.warn('[pricing] ATTENTION LiteLLM inaccessible — fallback hardcodé :', e.message);
   }
   return _pricingCache.data;
+};
+
+/**
+ * Prix INDICATIF d'un modèle absent de MODEL_CASCADE, lu dans le blob LiteLLM
+ * complet (déjà en cache — aucun appel réseau supplémentaire). `null` si le
+ * modèle n'y figure pas ou si le blob n'a encore jamais été récupéré (ex.
+ * juste après un redémarrage serveur, avant le premier fetchModelPricing()).
+ * Même validation de plage que le prix curated : une valeur aberrante ne doit
+ * pas s'afficher comme un prix indicatif crédible.
+ */
+const indicativePricingFor = (modelId) => {
+  const entry = _litellmRawCache.data && _litellmRawCache.data[modelId];
+  if (!entry || entry.input_cost_per_token == null) return null;
+  const input  = parseFloat(entry.input_cost_per_token)  * 1_000_000;
+  const output = parseFloat(entry.output_cost_per_token) * 1_000_000;
+  if (!(input > 0 && output > 0 && input < 200 && output < 200)) return null;
+  return { input, output };
 };
 
 // Fetch non bloquant au démarrage du serveur
@@ -1916,11 +1944,14 @@ function getOAuthToken() {
 }
 
 // ─── Catalogue de modèles ─────────────────────────────────────────────────────
-// ORDRE = PRÉFÉRENCE : le repli emprunte `MODEL_CASCADE.slice(idx)`, donc un
-// modèle absent de cette liste retombe SILENCIEUSEMENT sur MODEL_FALLBACK
-// (Haiku) — aucune erreur, juste des articles nettement moins bons. Tout
-// changement de modèle côté client DOIT donc passer par ici, et par un
-// redéploiement serveur.
+// LISTE TESTÉE PAR L'ÉQUIPE — plus « la seule chose autorisée » (ça a changé,
+// voir resolveRequestedModel ci-dessous), mais toujours : (1) l'ORDRE DE
+// PRÉFÉRENCE pour le repli sur rate-limit (`MODEL_CASCADE.slice(idx)`),
+// (2) le périmètre exact du prix CURATED (fetchModelPricing → ANTHROPIC_MODELS,
+// la même liste), (3) les modèles dont on sait que les prompts/`thinking`/
+// parsing de cette appli se comportent bien. Un modèle en dehors de cette
+// liste peut être choisi (voir GET /api/models → `discovered`), mais sans
+// aucune de ces trois garanties.
 const MODEL_CASCADE = [
   'claude-opus-4-5',
   'claude-sonnet-5',
@@ -1931,27 +1962,108 @@ const MODEL_FALLBACK = 'claude-haiku-4-5';
 
 /**
  * Résout le modèle réellement envoyé à Anthropic pour UNE requête entrante.
- * C'était le vrai piège : `MODEL_CASCADE.includes(model) ? model : MODEL_FALLBACK`
- * était dupliqué trois fois (executeClaudeCall, /api/claude-stream,
- * /api/claude-tools), et aucune des trois copies ne signalait la substitution —
- * un modèle demandé mais absent de la liste blanche retombait sur Haiku sans
- * qu'aucun log, aucune erreur, ne le trahisse. Centralisé ici pour que le log
- * couvre les trois voies d'un coup.
+ *
+ * Jusqu'ici (PR #328/#329), un modèle absent de MODEL_CASCADE retombait
+ * SILENCIEUSEMENT sur Haiku — MODEL_CASCADE était alors la seule chose
+ * sélectionnable. Décision explicite d'Andrianina (25/08/2026) : le panneau
+ * superadmin doit aussi pouvoir choisir un modèle « découvert » via l'API
+ * Modèles d'Anthropic, pas seulement les 4 déjà testés. Le remplacement
+ * silencieux n'a donc plus sa place ici — un modèle hors liste testée est
+ * désormais TENTÉ TEL QUEL, avec un avertissement (pas un silence). S'il
+ * n'existe pas vraiment, Anthropic renvoie sa propre erreur, visible dans le
+ * flux normal de la requête — c'est une régression bien plus facile à
+ * diagnostiquer qu'un article discrètement généré par le mauvais modèle.
+ *
+ * `model` vide/absent reste un cas dégénéré (bug amont, jamais un choix
+ * délibéré) : replié sur Haiku comme avant.
  */
 const resolveRequestedModel = (model) => {
+  if (!model) return MODEL_FALLBACK;
   if (MODEL_CASCADE.includes(model)) return model;
-  console.warn(`[proxy] Modèle « ${model} » absent de MODEL_CASCADE — repli SILENCIEUX sur ${MODEL_FALLBACK}. Si c'est volontaire, ajouter le modèle à MODEL_CASCADE et redéployer.`);
-  return MODEL_FALLBACK;
+  console.warn(`[proxy] Modèle « ${model} » hors de MODEL_CASCADE (liste testée par l'équipe) — tenté tel quel, PAS substitué. Si Anthropic le refuse, l'erreur remonte normalement.`);
+  return model;
 };
 
-// GET /api/models — la liste blanche elle-même, exposée à l'interface.
-// Raison d'être : un sélecteur de modèle côté client ne doit JAMAIS proposer un
-// choix que le serveur ignore — sinon c'est exactement le piège que
-// resolveRequestedModel corrige : l'admin choisit Opus, le serveur ne le connaît
-// pas, la passe tourne sur Haiku sans que personne ne l'apprenne. La liste vient
-// d'ici, jamais d'une copie codée en dur côté client.
-app.get('/api/models', requireAuth, (req, res) => {
-  res.json({ models: MODEL_CASCADE });
+/**
+ * Liste vivante des modèles Anthropic disponibles pour ce compte (API
+ * Modèles, `GET /v1/models`) — mise en cache 6h comme le pricing LiteLLM.
+ * Sert à peupler `discovered` (GET /api/models) et à valider un choix de
+ * modèle hors MODEL_CASCADE à l'écriture (POST /api/settings) : accepter
+ * n'importe quelle chaîne aurait laissé passer une faute de frappe sans le
+ * dire avant le premier usage réel de la passe.
+ *
+ * Best-effort : une panne Anthropic renvoie le cache existant (même expiré)
+ * plutôt que null — sans ça, une coupure momentanée ferait rejeter à la
+ * sauvegarde un modèle pourtant valide et déjà utilisé.
+ */
+const MODELS_TTL_MS = 6 * 60 * 60 * 1000; // 6h
+const _modelsCache  = { data: null, fetchedAt: 0 };
+
+const httpsGetJson = (hostname, path, headers) => new Promise((resolve, reject) => {
+  const req = https.request({ hostname, path, method: 'GET', headers }, (res) => {
+    res.setEncoding('utf8');
+    let data = '';
+    res.on('data', d => { data += d; });
+    res.on('end', () => {
+      try {
+        const json = JSON.parse(data);
+        if (res.statusCode !== 200) return reject(new Error(json.error?.message || `HTTP ${res.statusCode}`));
+        resolve(json);
+      } catch (e) { reject(new Error('Réponse invalide')); }
+    });
+  });
+  req.on('error', reject);
+  req.end();
+});
+
+const fetchAvailableModels = async () => {
+  if (_modelsCache.data && Date.now() - _modelsCache.fetchedAt < MODELS_TTL_MS) {
+    return _modelsCache.data;
+  }
+  try {
+    const serverSettings = readServerSettings();
+    const clientApiKey = serverSettings.anthropicKey && serverSettings.anthropicKey !== 'local'
+      ? serverSettings.anthropicKey
+      : null;
+    const headers = { 'anthropic-version': '2023-06-01' };
+    if (clientApiKey) {
+      headers['x-api-key'] = clientApiKey;
+    } else {
+      headers['Authorization'] = `Bearer ${getOAuthToken()}`;
+    }
+    // limit=100 sans pagination : Anthropic ne liste qu'une poignée de dizaines
+    // de modèles au total, une seule page suffit largement. À revoir seulement
+    // si `has_more` apparaît un jour dans la réponse.
+    const json = await httpsGetJson('api.anthropic.com', '/v1/models?limit=100', headers);
+    const models = (json.data || [])
+      .filter(m => m && typeof m.id === 'string')
+      .map(m => ({ id: m.id, displayName: m.display_name || m.id }));
+    if (models.length > 0) {
+      _modelsCache.data      = models;
+      _modelsCache.fetchedAt = Date.now();
+    }
+  } catch (e) {
+    console.warn('[models] ATTENTION API Modèles Anthropic inaccessible — repli sur le cache existant :', e.message);
+  }
+  return _modelsCache.data;
+};
+
+// Fetch non bloquant au démarrage du serveur
+fetchAvailableModels().catch(() => {});
+
+// GET /api/models — DEUX niveaux, pas une liste unique.
+// `curated`    : MODEL_CASCADE — testé par l'équipe, prix LiteLLM exact.
+// `discovered` : le reste des modèles Anthropic vus par l'API Modèles, avec
+//                un prix INDICATIF (LiteLLM, pas garanti pour ce modèle
+//                précis) quand il existe. Jamais une copie codée en dur côté
+//                client — c'est tout l'objet de cet endpoint.
+app.get('/api/models', requireAuth, async (req, res) => {
+  const discovered = await fetchAvailableModels();
+  await fetchModelPricing(); // assure _litellmRawCache pour le prix indicatif (déjà appelé au démarrage — no-op si le cache est frais)
+  const discoveredList = (discovered || [])
+    .filter(m => !MODEL_CASCADE.includes(m.id))
+    .map(m => ({ ...m, indicativePricing: indicativePricingFor(m.id) }));
+  res.json({ curated: MODEL_CASCADE, discovered: discoveredList });
 });
 
 // ─── Appel API Anthropic via clé API (x-api-key) ─────────────────────────────

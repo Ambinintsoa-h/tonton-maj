@@ -73,14 +73,14 @@ describe('overrides — choix du superadmin (settings.modelSelections)', () => {
     spy.mockRestore();
   });
 
-  test('GET /api/models existe et expose MODEL_CASCADE — le sélecteur ne doit JAMAIS proposer un modèle inconnu du serveur', () => {
-    expect(proxySrc()).toMatch(/app\.get\('\/api\/models', requireAuth, \(req, res\) => \{\s*\n\s*res\.json\(\{ models: MODEL_CASCADE \}\);/);
+  test('GET /api/models existe et expose curated (MODEL_CASCADE) — voir la describe dédiée pour le niveau discovered', () => {
+    expect(proxySrc()).toMatch(/app\.get\('\/api\/models', requireAuth, async \(req, res\) => \{/);
   });
 
-  test('POST /api/settings rejette un modèle absent de MODEL_CASCADE dans modelSelections', () => {
+  test('POST /api/settings rejette un modèle introuvable dans modelSelections (ni testé ni connu d\'Anthropic)', () => {
     const s = proxySrc();
     expect(s).toMatch(/if \(incoming\.modelSelections !== undefined\)/);
-    expect(s).toMatch(/!MODEL_CASCADE\.includes\(model\)/);
+    expect(s).toMatch(/!knownModels\.has\(model\)/);
   });
 
   test("'modelSelections' est whitelisté pour la sauvegarde des paramètres équipe", () => {
@@ -255,13 +255,61 @@ describe('verrou de cascade — le repli sur Haiku ne doit plus être silencieux
   test('les TROIS voies passent par resolveRequestedModel — plus de ternaire dupliqué', () => {
     const s = proxySrc();
     expect((s.match(/const requestedModel = resolveRequestedModel\(model\);/g) || []).length).toBe(3);
-    // La substitution silencieuse ne doit plus exister nulle part hors de la fonction elle-même.
-    expect((s.match(/MODEL_CASCADE\.includes\(model\) \? model : MODEL_FALLBACK/g) || []).length).toBe(1);
+    // Ce ternaire précis (substitution silencieuse) ne doit exister NULLE PART —
+    // ni dans le code (déjà vrai depuis resolveRequestedModel), ni dans un
+    // commentaire qui laisserait croire que le comportement actuel est encore ça.
+    expect((s.match(/MODEL_CASCADE\.includes\(model\) \? model : MODEL_FALLBACK/g) || []).length).toBe(0);
   });
 
-  test('resolveRequestedModel avertit en console quand elle substitue', () => {
+  test('resolveRequestedModel avertit en console pour un modèle hors liste testée', () => {
     const s = proxySrc();
     expect(s).toMatch(/const resolveRequestedModel = \(model\) => \{/);
     expect(s).toMatch(/console\.warn\(`\[proxy\] Modèle/);
+  });
+});
+
+describe('DÉCISION 25/08/2026 — un modèle hors MODEL_CASCADE est désormais TENTÉ, pas substitué', () => {
+  // Changement de contrat volontaire (décision Andrianina) : le panneau superadmin
+  // doit pouvoir choisir un modèle « découvert » via l'API Modèles d'Anthropic, pas
+  // seulement les 4 déjà testés. La substitution silencieuse vers Haiku aurait rendu
+  // ce choix inopérant sans le dire — exactement le piège que ce dispositif corrige
+  // depuis le début, cette fois appliqué au NOUVEAU comportement désiré.
+  test('resolveRequestedModel ne remplace plus un modèle réel par Haiku — seul un modèle vide/absent retombe sur MODEL_FALLBACK', () => {
+    const s = proxySrc();
+    expect(s).toMatch(/if \(!model\) return MODEL_FALLBACK;/);
+    expect(s).toMatch(/if \(MODEL_CASCADE\.includes\(model\)\) return model;/);
+    // La fonction doit se terminer par `return model;` (le modèle TEL QUEL),
+    // jamais par `return MODEL_FALLBACK;` — c'est le cœur du changement de
+    // contrat. On isole le corps de resolveRequestedModel avant de vérifier.
+    const fnMatch = s.match(/const resolveRequestedModel = \(model\) => \{[\s\S]*?\n\};/);
+    expect(fnMatch).not.toBeNull();
+    expect(fnMatch[0]).toMatch(/console\.warn\(`\[proxy\] Modèle « \$\{model\} » hors de MODEL_CASCADE/);
+    expect(fnMatch[0].trim().endsWith('return model;\n};')).toBe(true);
+  });
+
+  test("GET /api/models expose DEUX niveaux : curated (testé, prix exact) et discovered (API Anthropic, prix indicatif)", () => {
+    const s = proxySrc();
+    expect(s).toMatch(/app\.get\('\/api\/models', requireAuth, async \(req, res\) => \{/);
+    expect(s).toMatch(/res\.json\(\{ curated: MODEL_CASCADE, discovered: discoveredList \}\);/);
+  });
+
+  test('fetchAvailableModels existe, est mis en cache, et retombe sur le cache existant en cas de panne (jamais null après un premier succès)', () => {
+    const s = proxySrc();
+    expect(s).toMatch(/const fetchAvailableModels = async \(\) => \{/);
+    expect(s).toMatch(/MODELS_TTL_MS = 6 \* 60 \* 60 \* 1000/);
+    expect(s).toMatch(/return _modelsCache\.data;/);
+  });
+
+  test("POST /api/settings valide modelSelections contre MODEL_CASCADE OU la liste découverte — plus contre MODEL_CASCADE seul", () => {
+    const s = proxySrc();
+    expect(s).toMatch(/const discovered = await fetchAvailableModels\(\);/);
+    expect(s).toMatch(/knownModels = new Set\(\[\.\.\.MODEL_CASCADE, \.\.\.\(discovered \|\| \[\]\)\.map\(m => m\.id\)\]\);/);
+    expect(s).toMatch(/!knownModels\.has\(model\)/);
+  });
+
+  test('indicativePricingFor existe et réutilise le blob LiteLLM déjà en cache (aucun appel réseau supplémentaire)', () => {
+    const s = proxySrc();
+    expect(s).toMatch(/const indicativePricingFor = \(modelId\) => \{/);
+    expect(s).toMatch(/_litellmRawCache\.data && _litellmRawCache\.data\[modelId\]/);
   });
 });
