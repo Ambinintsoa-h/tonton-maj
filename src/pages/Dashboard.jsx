@@ -72,11 +72,26 @@ const KpiCard = ({ icon: Icon, label, value, sub, color = 'gray', delay = 0, lar
 };
 
 // ── Widget Coût API (super_admin — le plus important) ─────────────────────────
-const CostWidget = ({ stats, delay = 0 }) => {
+// Libellés d'affichage seulement — les PRIX viennent de modelPricing (live,
+// settings.modelPricing), jamais codés en dur ici. C'était le défaut : cette
+// ligne affichait Haiku à $0.80/$4.00 (corrigé à 1.00/5.00 depuis) et Opus à
+// $15.00/$75.00 (tarif Opus 4.1, corrigé à 5.00/25.00 pour Opus 4.5) — une
+// troisième copie de tarif, différente des deux déjà corrigées ailleurs.
+const TARIFF_LABELS = [
+  ['claude-haiku-4-5', 'Haiku 4.5'],
+  ['claude-sonnet-5',  'Sonnet 5'],
+  ['claude-opus-4-5',  'Opus 4.5'],
+];
+
+const CostWidget = ({ stats, delay = 0, modelPricing }) => {
   const todayCost  = stats.history.filter(h => isToday(h.createdAt)).reduce((s, h) => s + (h.costUsd || 0), 0);
   const weekCost   = stats.history.filter(h => isThisWeek(h.createdAt)).reduce((s, h) => s + (h.costUsd || 0), 0);
   const totalTokens = (stats.totalInputTokens || 0) + (stats.totalOutputTokens || 0);
   const inputPct   = totalTokens > 0 ? Math.round(((stats.totalInputTokens || 0) / totalTokens) * 100) : 50;
+  const tariffLine = TARIFF_LABELS
+    .filter(([id]) => modelPricing?.[id])
+    .map(([id, label]) => `${label} $${modelPricing[id].input.toFixed(2)}/$${modelPricing[id].output.toFixed(2)}`)
+    .join(' · ');
 
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay }}
@@ -129,7 +144,7 @@ const CostWidget = ({ stats, delay = 0 }) => {
         </div>
       </div>
       <p className="text-[10px] text-gray-300 mt-3 text-right">
-        Tarifs : Haiku 4.5 $0.80/$4.00 · Sonnet 4.5 $3.00/$15.00 · Opus 4.5 $15.00/$75.00 (USD/MTok ↑/↓)
+        {tariffLine ? `Tarifs : ${tariffLine} (USD/MTok ↑/↓)` : 'Tarifs indisponibles'}
       </p>
     </motion.div>
   );
@@ -698,7 +713,7 @@ const TeamActivityWidget = ({ delay = 0 }) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // SUPER ADMIN — Vue globale
 // ══════════════════════════════════════════════════════════════════════════════
-function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, dispatch }) {
+function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, dispatch, modelPricing }) {
   const activeItems = pendingItems.filter(i => i.status !== 'done');
   const memberStats = users
     .filter(u => ['cq_ia', 'manager'].includes(u.role))
@@ -748,7 +763,7 @@ function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, di
 
       {/* Widget coût — en premier, le plus important */}
       <div className="grid grid-cols-1">
-        <CostWidget stats={stats} delay={0} />
+        <CostWidget stats={stats} delay={0} modelPricing={modelPricing} />
       </div>
 
       {/* KPIs globaux */}
@@ -1026,8 +1041,9 @@ export default function Dashboard() {
   const history      = useSelector(s => s.articles.history);
   const pendingItems = useSelector(s => s.pending.list);
   const users        = useSelector(s => s.users.list);
+  const modelPricing = useSelector(s => s.settings.modelPricing);
 
-  const props = { stats, history, pendingItems, users, navigate, dispatch, authUid, authUsername };
+  const props = { stats, history, pendingItems, users, navigate, dispatch, authUid, authUsername, modelPricing };
 
   if (role === 'cq_ia')   return <DashboardCqIa    {...props} />;
   if (role === 'manager') return <DashboardManager {...props} />;
