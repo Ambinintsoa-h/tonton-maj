@@ -109,17 +109,30 @@ export const MODEL_PASSES = {
 };
 
 /**
- * Résout le modèle d'une passe. Une passe ABSENTE du registre retombe sur
- * Haiku (jamais d'erreur qui casserait une génération en cours) mais le DIT
- * en console — le silence total était le piège d'origine.
+ * Résout le modèle d'une passe.
+ *
+ * `overrides` — { [passe]: modele } — vient de `settings.modelSelections`
+ * (choix du superadmin, persisté côté serveur). MÊME DISCIPLINE que
+ * `modelPricing` (calcCost) : passé EXPLICITEMENT par l'appelant, jamais lu
+ * depuis un état global. Une valeur invalide n'est PAS revalidée ici — le
+ * garde-fou existe déjà à l'écriture (`POST /api/settings` rejette tout
+ * modèle absent de MODEL_CASCADE) et à l'exécution côté serveur
+ * (`resolveRequestedModel`, proxy.js). La revalider une troisième fois ici
+ * dupliquerait une liste blanche que le client n'a de toute façon qu'en
+ * passant par `/api/models`.
+ *
+ * Une passe ABSENTE du registre retombe sur Haiku (jamais d'erreur qui
+ * casserait une génération en cours) mais le DIT en console — le silence
+ * total était le piège d'origine.
  */
-export const selectModel = (pass) => {
+export const selectModel = (pass, overrides) => {
   const entry = MODEL_PASSES[pass];
   if (!entry) {
     console.warn(`[selectModel] Passe « ${pass} » absente de MODEL_PASSES — repli sur Haiku.`);
     return MODELS.FAST;
   }
-  return entry.model;
+  const override = overrides && typeof overrides[pass] === 'string' ? overrides[pass] : null;
+  return override || entry.model;
 };
 
 // ── Helpers date ──────────────────────────────────────────────────────────────
@@ -155,6 +168,34 @@ export const calcCost = (calls, pricing = TOKEN_PRICING_FALLBACK) => calls.reduc
   const p = table[c.model] || table['claude-haiku-4-5'] || TOKEN_PRICING_FALLBACK['claude-haiku-4-5'];
   return t + (c.input / 1_000_000) * p.input + (c.output / 1_000_000) * p.output;
 }, 0);
+
+/**
+ * Agrège les appels d'UN article par passe du registre (MODEL_PASSES) —
+ * { [passe]: { model, input, output, costUsd } }. Alimente le cumul par passe
+ * du Dashboard/panneau superadmin (statsSlice.totalByPass).
+ *
+ * Les appels SANS `pass` sont ignorés, pas comptés dans une case « inconnu » :
+ * ce sont des articles traités AVANT que `makeTokenTracker().track()` ne
+ * porte ce label — ce n'est pas une perte de données, juste une agrégation
+ * qui ne pouvait pas exister avant que le label existe.
+ */
+export const aggregateCallsByPass = (calls, pricing = TOKEN_PRICING_FALLBACK) => {
+  const table = pricing || TOKEN_PRICING_FALLBACK;
+  const out = {};
+  for (const c of calls || []) {
+    if (!c.pass) continue;
+    const p = table[c.model] || table['claude-haiku-4-5'] || TOKEN_PRICING_FALLBACK['claude-haiku-4-5'];
+    const costUsd = (c.input / 1_000_000) * p.input + (c.output / 1_000_000) * p.output;
+    const cur = out[c.pass] || { model: c.model, input: 0, output: 0, costUsd: 0 };
+    out[c.pass] = {
+      model:   c.model || cur.model,
+      input:   cur.input   + (c.input   || 0),
+      output:  cur.output  + (c.output  || 0),
+      costUsd: cur.costUsd + costUsd,
+    };
+  }
+  return out;
+};
 
 // ── Appel Claude avec compteur de tokens simulé ───────────────────────────────
 // Lance callClaude normalement (sans SSE) et met à jour onStep toutes les 700ms
@@ -1913,6 +1954,7 @@ export const runReviewAgent = async ({
   knowledge = [],
   manualSources = [],   // sources fournies manuellement par le CQ IA (déjà scrapées)
   modelPricing  = null, // tarifs depuis settings.json — null = fallback hardcodé
+  modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
   depth         = DEFAULT_DEPTH, // profondeur de MAJ (héritée de la passe 1)
   instruction   = '',   // consigne libre de l'équipe — injectée en priorité haute
   onStep,
@@ -1940,7 +1982,7 @@ export const runReviewAgent = async ({
     const { text: step1Text, usage: u1 } = await callClaude(null, {
       system: `Tu es un expert SEO générant des requêtes de recherche complémentaires, ADAPTÉES AU MARCHÉ de l'article (langue, pays, devise), pour enrichir un article déjà partiellement mis à jour.`,
       max_tokens: 600,
-      model: selectModel('query_extraction'),
+      model: selectModel('query_extraction', modelSelections),
       messages: [{
         role: 'user',
         content: `Nous sommes le ${fr}. Une première passe a déjà mis à jour cet article.
@@ -2020,7 +2062,7 @@ ${content.substring(0, 3000)}`,
   onProgress(48);
 
   // ── Étape 3 : Génération de l'enrichissement ─────────────────────────────────
-  const model3 = selectModel('obsolescence');
+  const model3 = selectModel('obsolescence', modelSelections);
   const modelLabel = model3.includes('sonnet') ? 'Sonnet' : model3.includes('opus') ? 'Opus' : 'Haiku';
   onStep(`Enrichissement et vérification Skills/Knowledge (${modelLabel})...`);
   onProgress(58);
@@ -2098,11 +2140,11 @@ ${content}
  * (remplace l'ancien flux Gemini qui exigeait une clé personnelle).
  * Retourne le texte réécrit en clair ; lève une Error à message lisible.
  */
-export const rewriteSelection = async ({ text, instruction }) => {
+export const rewriteSelection = async ({ text, instruction, modelSelections = null }) => {
   const { text: out } = await callClaude(null, {
     system: `Tu es un rédacteur web senior francophone. Tu réécris le passage fourni selon la consigne, en respectant STRICTEMENT : même sens et mêmes informations (chiffres, noms, faits conservés), même langue, voix active uniquement, phrases de 20 mots maximum, aucun participe présent, aucun tiret cadratin (—) ni demi-cadratin (–), aucune formule creuse (« il est important de noter »…). Réponds UNIQUEMENT avec le texte réécrit — sans commentaire, sans guillemets d'encadrement, sans balise HTML.`,
     max_tokens: 2000,
-    model: selectModel('reecriture_passage'),
+    model: selectModel('reecriture_passage', modelSelections),
     messages: [{ role: 'user', content: `Consigne : ${instruction}\n\nPassage à réécrire :\n\n${text}` }],
   });
   const cleaned = (out || '').trim();
@@ -2123,7 +2165,7 @@ export const rewriteSelection = async ({ text, instruction }) => {
  * s'applique ensuite côté appelant comme filet de sécurité).
  * Retourne le HTML réécrit ; lève une Error à message lisible.
  */
-export const rewriteSection = async ({ html, instruction }) => {
+export const rewriteSection = async ({ html, instruction, modelSelections = null }) => {
   const { text: out } = await callClaude(null, {
     system: `Tu es un rédacteur web senior francophone. Tu réécris la section HTML fournie (un titre et tout son contenu) selon la consigne, en respectant STRICTEMENT :
 - Même sens et mêmes informations (chiffres, noms, faits conservés), même langue
@@ -2132,7 +2174,7 @@ export const rewriteSection = async ({ html, instruction }) => {
 - TOUS les liens <a href="..."> présents DOIVENT être conservés À L'IDENTIQUE (même href, même texte d'ancre, même position relative) — ne les supprime jamais, ne les déplace pas, n'en ajoute aucun nouveau
 Réponds UNIQUEMENT avec le HTML réécrit (mêmes balises racines que l'entrée), sans commentaire, sans balise <html>/<body>, sans bloc de code markdown.`,
     max_tokens: 4000,
-    model: selectModel('reecriture_section'),
+    model: selectModel('reecriture_section', modelSelections),
     messages: [{ role: 'user', content: `Consigne : ${instruction}\n\nSection HTML à réécrire :\n\n${html}` }],
   });
   const cleaned = (out || '').trim()
@@ -2149,13 +2191,13 @@ Réponds UNIQUEMENT avec le HTML réécrit (mêmes balises racines que l'entrée
  * à partir du HTML final de l'article. Utilise Haiku (rapide, économique).
  * Retourne { seoTitle, seoDescription } — chaînes vides en cas d'échec.
  */
-export const generateSeoMeta = async (articleHtml = '', articleTitle = '') => {
+export const generateSeoMeta = async (articleHtml = '', articleTitle = '', modelSelections = null) => {
   const { fr } = getDateContext();
   const articleText = stripHtml(articleHtml).substring(0, 3000);
 
   try {
     const { text } = await callClaude(null, {
-      model: selectModel('seo_meta'),
+      model: selectModel('seo_meta', modelSelections),
       max_tokens: 250,
       system: 'Tu génères des balises SEO optimisées pour des articles de blog français. Réponds UNIQUEMENT avec le JSON demandé, sans texte autour.',
       messages: [{

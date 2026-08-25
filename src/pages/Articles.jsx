@@ -20,6 +20,7 @@ import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { stripNonEditorialLinks, stripNonEditorialUrlsFromText } from '../utils/scrapeClean';
 import { runQatAudit } from '../services/agentQat';
+import { aggregateCallsByPass } from '../services/agent';
 import QatBriefFields from '../components/agent/QatBriefFields';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
 import { loadDraftLocal, loadDraftRemote, clearDraft } from '../services/articleDraft';
@@ -400,6 +401,7 @@ export default function Articles() {
         wpSites,
         existingWpData: prefetchedWpData,
         modelPricing:   settings.modelPricing || null,
+        modelSelections: settings.modelSelections || null,
         onStep:     (s) => dispatch(addStep(s)),
         onReplace:  (s) => dispatch(replaceLastStep(s)),
         onProgress: (p) => dispatch(setProgress(p)),
@@ -549,6 +551,7 @@ export default function Articles() {
           createdAt: new Date().toISOString(),
           assigneeId: authUid || authUsername || null,
           pass: 1,
+          byPass: aggregateCallsByPass(result.tokenUsage.calls, settings.modelPricing || null),
         }));
       }
 

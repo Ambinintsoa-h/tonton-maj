@@ -11,4 +11,5 @@ export const STORAGE_KEYS = {
   statsOutput:   'articleai_stats_output',
   statsCost:     'articleai_stats_cost',
   statsHistory:  'articleai_stats_history',
+  statsByPass:   'articleai_stats_by_pass',
 };

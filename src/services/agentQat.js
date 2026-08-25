@@ -533,14 +533,14 @@ ${buildSkillsBlock(
  * Génère au maximum 2 requêtes de vérification de fraîcheur, puis les exécute.
  * Le skill limite volontairement la recherche à 2 appels.
  */
-const gatherFreshnessSources = async (content, targetKeyword, onStep, trackCall) => {
+const gatherFreshnessSources = async (content, targetKeyword, onStep, trackCall, modelSelections) => {
   const { year } = getDateContext();
   let queries = [];
   try {
     const { text, usage } = await callClaude(null, {
       system: 'Tu génères des requêtes de recherche web courtes et ciblées. Réponds uniquement par un tableau JSON de chaînes.',
       max_tokens: 300,
-      model: selectModel('query_extraction'),
+      model: selectModel('query_extraction', modelSelections),
       messages: [{
         role: 'user',
         content: `Article à vérifier (extrait) :\n${stripHtml(content).slice(0, 1500)}\n\nMot-clé cible : ${targetKeyword}\n\nDonne AU MAXIMUM ${MAX_QAT_SEARCHES} requêtes : la première sur les dernières actualités du sujet, la seconde sur le fait le plus susceptible d'être obsolète (prix, montant d'aide, norme, date). Inclus l'année ${year}. Format : ["requête 1", "requête 2"]`,
@@ -594,6 +594,7 @@ export const runQatAudit = async ({
   wpSites = [],
   existingWpData = null,
   modelPricing = null,
+  modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
   onStep = () => {},
   onReplace = () => {},
   onProgress = () => {},
@@ -637,7 +638,7 @@ export const runQatAudit = async ({
 
   // ── Recherche de fraîcheur (2 appels max) ──────────────────────────────────
   onProgress(15);
-  const { sources, queries } = await gatherFreshnessSources(content, targetKeyword, onStep, trackCall);
+  const { sources, queries } = await gatherFreshnessSources(content, targetKeyword, onStep, trackCall, modelSelections);
 
   // ── Une seule source de vérité pour l'article ──────────────────────────────
   // Sur le chemin SCRAPING, Articles.jsx met le TEXTE BRUT dans `content` (les
@@ -708,7 +709,7 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
         // sortie), tous tronqués donc illisibles, 0,55 $ dépensés pour un
         // `auditJson` null. On s'aligne sur la refonte (32 000), très en dessous
         // du maximum du modèle.
-        params: { system, max_tokens: 32000, model: selectModel('audit_qat'), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
+        params: { system, max_tokens: 32000, model: selectModel('audit_qat', modelSelections), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
         label: attempt === 1 ? 'Audit QAT' : `Audit QAT — essai ${attempt}/3`,
         pass: 'audit_qat',
         onStep, onReplace, onProgress, onDelta, trackCall,
@@ -838,6 +839,7 @@ export const runQatRewrite = async ({
   depth = 'auto',
   instruction = '',
   modelPricing = null,
+  modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
   onStep = () => {},
   onReplace = () => {},
   onProgress = () => {},
@@ -1081,7 +1083,7 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
       const { text } = await callWithLiveText({
         // Voir le commentaire de l'audit : raisonnement désactivé pour la bascule,
         // sinon il mangerait le budget de 32 000 tokens destiné à l'article.
-        params: { system, max_tokens: 32000, model: selectModel('refonte'), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
+        params: { system, max_tokens: 32000, model: selectModel('refonte', modelSelections), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
         label: attempt === 1 ? 'Rédaction de l\'article' : `Rédaction — essai ${attempt}/3`,
         pass: 'refonte',
         onStep, onReplace, onProgress, onDelta, trackCall,
@@ -1287,6 +1289,7 @@ N'ajoute aucun AUTRE lien externe.`;
         html: withBold.html,
         targetKeyword,
         secondaires: Array.isArray(article.mots_cles_secondaires) ? article.mots_cles_secondaires : [],
+        modelSelections,
         onStep, onReplace,
       });
       if (passeGras.posed.length) withBold.html = passeGras.html;

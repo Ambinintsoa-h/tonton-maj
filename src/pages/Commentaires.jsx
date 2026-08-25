@@ -44,6 +44,7 @@ const fmtDate = (d) => {
 
 export default function Commentaires() {
   const sites = useSelector(s => s.wordpress.sites) || [];
+  const modelSelections = useSelector(s => s.settings.modelSelections) || null;
 
   const [siteId, setSiteId]     = useState(sites[0]?.id || '');
   const [tab, setTab]           = useState('hold');
@@ -152,7 +153,7 @@ export default function Commentaires() {
     if (todo.length) {
       setAnalyzing(true);
       try {
-        const map = await classifyComments(todo);
+        const map = await classifyComments(todo, modelSelections);
         if (Object.keys(map).length) {
           merged = { ...ai, ...map };
           analyzedCount = Object.keys(map).length;
@@ -188,7 +189,7 @@ export default function Commentaires() {
     } else if (cleaned) {
       toast.success(`${cleaned} spam nettoyé(s) automatiquement`);
     }
-  }, [comments, ai, siteId, autoSpam, tab, applyAutoSpam]);
+  }, [comments, ai, siteId, autoSpam, tab, applyAutoSpam, modelSelections]);
 
   // Nettoyage DIRECT : si l'auto-spam est activé, on analyse + nettoie le spam dès
   // le chargement (une seule fois) — le spam ne reste jamais dans « En attente ».
@@ -226,27 +227,27 @@ export default function Commentaires() {
     if (drafts[comment.id]) return;            // brouillon déjà présent (saisi ou repris du cache)
     setReplyGenId(comment.id);
     try {
-      const text = await generateReply({ comment, siteName: site?.name || '' });
+      const text = await generateReply({ comment, siteName: site?.name || '', modelSelections });
       if (!text) { toast.error('Génération IA indisponible — écris la réponse manuellement.'); return; }
       setDrafts(prev => ({ ...prev, [comment.id]: text }));
       saveCommentAi(siteId, comment.id, { draftReply: text }).catch(() => {});
     } finally {
       setReplyGenId(null);
     }
-  }, [drafts, site, siteId]);
+  }, [drafts, site, siteId, modelSelections]);
 
   // Régénère un brouillon (écrase le texte courant).
   const regenerate = useCallback(async (comment) => {
     setReplyGenId(comment.id);
     try {
-      const text = await generateReply({ comment, siteName: site?.name || '' });
+      const text = await generateReply({ comment, siteName: site?.name || '', modelSelections });
       if (!text) { toast.error('Génération IA indisponible.'); return; }
       setDrafts(prev => ({ ...prev, [comment.id]: text }));
       saveCommentAi(siteId, comment.id, { draftReply: text }).catch(() => {});
     } finally {
       setReplyGenId(null);
     }
-  }, [site, siteId]);
+  }, [site, siteId, modelSelections]);
 
   // Publie la réponse APRÈS confirmation explicite (publication de contenu public).
   const publish = useCallback(async (comment) => {
@@ -279,7 +280,7 @@ export default function Commentaires() {
     }
     setTranslatingId(comment.id);
     try {
-      const fr = await translateComment({ text: comment.content });
+      const fr = await translateComment({ text: comment.content, modelSelections });
       if (siteIdRef.current !== siteId) return;   // l'utilisateur a changé de site pendant la traduction
       if (!fr) { toast.error('Traduction indisponible — réessaie.'); return; }
       setTranslations(prev => ({ ...prev, [comment.id]: fr }));
@@ -288,7 +289,7 @@ export default function Commentaires() {
     } finally {
       setTranslatingId(null);
     }
-  }, [showFr, translations, siteId]);
+  }, [showFr, translations, siteId, modelSelections]);
 
   // Mini-dashboard : répartition par sentiment / priorité sur le lot affiché et analysé.
   const stats = useMemo(() => {

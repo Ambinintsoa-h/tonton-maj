@@ -11,12 +11,14 @@
 import { useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
+import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import { Sparkles, X, Loader, RefreshCw, CheckCircle2, History } from 'lucide-react';
 import { rewriteSelection } from '../../services/agent';
 import { REWRITE_PRESETS, getRecentPrompts, rememberPrompt } from '../../services/rewrite';
 
 export default function RewritePanel({ originalText, onValidate, onClose }) {
+  const modelSelections = useSelector(s => s.settings.modelSelections) || null;
   const [presetId, setPresetId] = useState(REWRITE_PRESETS[0].id);
   const [recent, setRecent]     = useState(getRecentPrompts());
   // Le dernier prompt tapé est proposé d'office (demande équipe)
@@ -30,7 +32,7 @@ export default function RewritePanel({ originalText, onValidate, onClose }) {
     const instruction = extra ? `${preset.prompt}\nConsigne supplémentaire : ${extra}` : preset.prompt;
     setLoading(true);
     try {
-      const text = await rewriteSelection({ text: originalText, instruction });
+      const text = await rewriteSelection({ text: originalText, instruction, modelSelections });
       setResult(text);
       if (extra) { rememberPrompt(extra); setRecent(getRecentPrompts()); }
     } catch (e) {
@@ -38,7 +40,7 @@ export default function RewritePanel({ originalText, onValidate, onClose }) {
     } finally {
       setLoading(false);
     }
-  }, [presetId, custom, originalText]);
+  }, [presetId, custom, originalText, modelSelections]);
 
   return createPortal(
     <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
