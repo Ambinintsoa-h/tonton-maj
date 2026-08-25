@@ -587,6 +587,7 @@ export const saveStats = async (stats) => {
     totalOutputTokens: stats.totalOutputTokens || 0,
     totalCostUsd:      stats.totalCostUsd      || 0,
     history:           stats.history           || [],
+    totalByPass:       stats.totalByPass       || {},
     updatedAt: Date.now(),
   });
 };

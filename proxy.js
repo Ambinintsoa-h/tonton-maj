@@ -133,7 +133,7 @@ const SAFE_USERNAME_RE  = /^[a-zA-Z0-9._-]{1,64}$/; // point autorisé (colonel.
 const SETTINGS_WHITELIST = [
   'anthropicKey', 'groqKey', 'braveKey', 'tavilyKey', 'haloscanKey',
   'smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'smtpFrom',
-  'firebaseConfig', 'useLocalProxy',
+  'firebaseConfig', 'useLocalProxy', 'modelSelections',
 ];
 
 app.use(cors({
@@ -1425,6 +1425,22 @@ app.get('/api/settings', requireAuth, (req, res) => {
 app.post('/api/settings', requireAuth, requireRole('super_admin'), (req, res) => {
   try {
     const incoming = req.body || {};
+    // modelSelections : { [passe]: modele }. Rejeté si un modèle n'appartient pas
+    // à MODEL_CASCADE — sans ce garde-fou, une valeur invalide écrite ici
+    // tournerait quand même (resolveRequestedModel la rattrape à l'exécution),
+    // mais l'admin qui vient de sauvegarder ne le saurait qu'en lisant les logs
+    // serveur plus tard, au lieu d'un refus immédiat et lisible.
+    if (incoming.modelSelections !== undefined) {
+      const sel = incoming.modelSelections;
+      if (typeof sel !== 'object' || sel === null || Array.isArray(sel)) {
+        return res.status(400).json({ error: 'modelSelections invalide — objet attendu' });
+      }
+      for (const [pass, model] of Object.entries(sel)) {
+        if (typeof model !== 'string' || !MODEL_CASCADE.includes(model)) {
+          return res.status(400).json({ error: `modelSelections.${pass} : modèle « ${model} » absent de la liste blanche` });
+        }
+      }
+    }
     const filtered = {};
     for (const key of SETTINGS_WHITELIST) {
       if (key in incoming) filtered[key] = incoming[key];
@@ -1927,6 +1943,16 @@ const resolveRequestedModel = (model) => {
   console.warn(`[proxy] Modèle « ${model} » absent de MODEL_CASCADE — repli SILENCIEUX sur ${MODEL_FALLBACK}. Si c'est volontaire, ajouter le modèle à MODEL_CASCADE et redéployer.`);
   return MODEL_FALLBACK;
 };
+
+// GET /api/models — la liste blanche elle-même, exposée à l'interface.
+// Raison d'être : un sélecteur de modèle côté client ne doit JAMAIS proposer un
+// choix que le serveur ignore — sinon c'est exactement le piège que
+// resolveRequestedModel corrige : l'admin choisit Opus, le serveur ne le connaît
+// pas, la passe tourne sur Haiku sans que personne ne l'apprenne. La liste vient
+// d'ici, jamais d'une copie codée en dur côté client.
+app.get('/api/models', requireAuth, (req, res) => {
+  res.json({ models: MODEL_CASCADE });
+});
 
 // ─── Appel API Anthropic via clé API (x-api-key) ─────────────────────────────
 // Utilisé quand le client fournit sa propre clé Anthropic plutôt que le token OAuth.

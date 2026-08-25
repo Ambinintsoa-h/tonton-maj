@@ -28,6 +28,7 @@ const SYSTEME = 'Tu es correctrice de style pour un média francophone. '
  */
 export const runStyleFixAgent = async ({
   findings = [],
+  modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
   onStep = () => {},
   onReplace = () => {},
 } = {}) => {
@@ -44,7 +45,7 @@ export const runStyleFixAgent = async ({
       system: SYSTEME,
       messages: [{ role: 'user', content: buildStyleFixPrompt(occurrences) }],
       max_tokens: 8000,
-      model: selectModel('style'),
+      model: selectModel('style', modelSelections),
     },
     onStep,
     onReplace,

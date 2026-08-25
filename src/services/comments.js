@@ -32,10 +32,10 @@ export const moderateComment = async ({ site, commentId, action }) => {
  * humain avant publication. Modèle piloté par le registre des passes
  * (`commentaire_reponse`, agent.js). Retourne le texte brut (chaîne vide si échec).
  */
-export const generateReply = async ({ comment, siteName = '' }) => {
+export const generateReply = async ({ comment, siteName = '', modelSelections = null }) => {
   try {
     const { data } = await axios.post(CLAUDE_PROXY, {
-      model: selectModel('commentaire_reponse'),
+      model: selectModel('commentaire_reponse', modelSelections),
       max_tokens: 500,
       system: `Tu écris la réponse de la marque/du site${siteName ? ` « ${siteName} »` : ''} à un commentaire de lecteur. Elle est publiée sous le compte officiel et relue par un humain avant publication.
 
@@ -88,10 +88,10 @@ const CLASSIFY_SYSTEM = `Tu classes des commentaires de blog pour aider un modé
 Réponds UNIQUEMENT avec un JSON valide, sans texte autour :
 {"results":[{"i":<id>,"category":"...","sentiment":"...","priority":"...","confidence":"...","lang":"...","summary":"..."}]}`;
 
-const classifyChunk = async (batch) => {
+const classifyChunk = async (batch, modelSelections) => {
   try {
     const { data } = await axios.post(CLAUDE_PROXY, {
-      model: selectModel('commentaire_tri'),
+      model: selectModel('commentaire_tri', modelSelections),
       max_tokens: 4000,
       system: CLASSIFY_SYSTEM,
       messages: [{ role: 'user', content: `Commentaires à classer :\n${JSON.stringify(batch)}` }],
@@ -118,7 +118,7 @@ const classifyChunk = async (batch) => {
   }
 };
 
-export const classifyComments = async (comments) => {
+export const classifyComments = async (comments, modelSelections = null) => {
   const all = (comments || [])
     .map(c => ({ i: c.id, t: (c.content || '').substring(0, 400) }))
     .filter(c => c.t);
@@ -130,7 +130,7 @@ export const classifyComments = async (comments) => {
   const chunks = [];
   for (let i = 0; i < all.length; i += CHUNK) chunks.push(all.slice(i, i + CHUNK));
 
-  const maps = await Promise.all(chunks.map(classifyChunk));
+  const maps = await Promise.all(chunks.map(chunk => classifyChunk(chunk, modelSelections)));
   return Object.assign({}, ...maps);
 };
 
@@ -138,12 +138,12 @@ export const classifyComments = async (comments) => {
  * Traduit un commentaire en français (Haiku, rapide/éco). Renvoie la traduction
  * brute, ou '' en cas d'échec. Utilisé pour lire les commentaires d'autres langues.
  */
-export const translateComment = async ({ text }) => {
+export const translateComment = async ({ text, modelSelections = null }) => {
   const src = (text || '').trim();
   if (!src) return '';
   try {
     const { data } = await axios.post(CLAUDE_PROXY, {
-      model: selectModel('commentaire_traduction'),
+      model: selectModel('commentaire_traduction', modelSelections),
       max_tokens: 1000,
       system: `Tu es un traducteur. Traduis le texte de l'utilisateur en français naturel et fidèle. Réponds UNIQUEMENT par la traduction, sans guillemets, sans préambule ni commentaire. Si le texte est déjà en français, renvoie-le tel quel.`,
       messages: [{ role: 'user', content: src }],

@@ -53,6 +53,10 @@ const settingsSlice = createSlice({
     haloscanConfigured: false,
     firebaseConfig:     DEFAULT_FIREBASE_CONFIG,
     modelPricing:       DEFAULT_MODEL_PRICING,
+    // { [passe]: modele } — choix du superadmin, persisté côté serveur
+    // (data/settings.json). {} = aucun override, chaque passe utilise le
+    // défaut du registre (MODEL_PASSES, agent.js).
+    modelSelections:    {},
     firebaseReady:      false,
     loading:            false,
     ...loadSavedSettings(),

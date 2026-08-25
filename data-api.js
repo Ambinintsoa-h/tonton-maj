@@ -143,6 +143,10 @@ module.exports = ({ requireAuth, requireRole }) => {
     totalOutputTokens: r.total_output_tokens,
     totalCostUsd: r.total_cost_usd != null ? Number(r.total_cost_usd) : 0,
     history: parseJson(r.history, []),
+    // Cumul par passe du registre IA (agent.js → MODEL_PASSES) — colonne
+    // ajoutée par migration/alter-stats-by-pass.sql, absente sur une base non
+    // encore migrée (r.total_by_pass alors undefined) → repli {}.
+    totalByPass: parseJson(r.total_by_pass, {}),
     updatedAt: r.updated_at,
   });
   router.get('/stats', requireAuth, wrap(async (_req, res) => {
@@ -152,12 +156,12 @@ module.exports = ({ requireAuth, requireRole }) => {
   router.put('/stats', requireAuth, wrap(async (req, res) => {
     const s = req.body || {};
     await q(
-      `INSERT INTO stats (id, total_articles, total_input_tokens, total_output_tokens, total_cost_usd, history, updated_at)
-       VALUES ('main',?,?,?,?,?,?)
+      `INSERT INTO stats (id, total_articles, total_input_tokens, total_output_tokens, total_cost_usd, history, total_by_pass, updated_at)
+       VALUES ('main',?,?,?,?,?,?,?)
        ON DUPLICATE KEY UPDATE total_articles=VALUES(total_articles), total_input_tokens=VALUES(total_input_tokens),
          total_output_tokens=VALUES(total_output_tokens), total_cost_usd=VALUES(total_cost_usd),
-         history=VALUES(history), updated_at=VALUES(updated_at)`,
-      [s.totalArticles || 0, s.totalInputTokens || 0, s.totalOutputTokens || 0, s.totalCostUsd || 0, asJson(s.history || []), Date.now()]
+         history=VALUES(history), total_by_pass=VALUES(total_by_pass), updated_at=VALUES(updated_at)`,
+      [s.totalArticles || 0, s.totalInputTokens || 0, s.totalOutputTokens || 0, s.totalCostUsd || 0, asJson(s.history || []), asJson(s.totalByPass || {}), Date.now()]
     );
     res.json({ ok: true });
   }));

@@ -33,6 +33,7 @@ import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { runQatAudit } from '../services/agentQat';
+import { aggregateCallsByPass } from '../services/agent';
 import { stripNonEditorialLinks, stripNonEditorialUrlsFromText } from '../utils/scrapeClean';
 import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts, createNotification, fetchArticleHtml, getArticle } from '../services/firebase';
 import store from '../store';
@@ -1482,6 +1483,7 @@ export default function MajEnAttente() {
         wpSites,
         existingWpData: item._wpData || null, // déjà lu ci-dessus (wpFetched) → évite un 2e appel MCP
         modelPricing: settings.modelPricing || null,
+        modelSelections: settings.modelSelections || null,
         onStep:     (s) => { if (mirrorGlobal) dispatch(addStep(s)); step(s); },
         onProgress: (p) => { if (mirrorGlobal) dispatch(setProgress(p)); progress(p); },
         onDelta:    () => {},
@@ -1512,6 +1514,7 @@ export default function MajEnAttente() {
           createdAt:    new Date().toISOString(),
           assigneeId:   item.assigneeId || null,
           pass: 1,
+          byPass: aggregateCallsByPass(result.tokenUsage.calls, settings.modelPricing || null),
         }));
       }
 

@@ -44,6 +44,7 @@ const persistMiddleware = (storeAPI) => (next) => (action) => {
       safeSetItem(STORAGE_KEYS.statsOutput,   s.stats.totalOutputTokens);
       safeSetItem(STORAGE_KEYS.statsCost,     s.stats.totalCostUsd);
       safeSetItem(STORAGE_KEYS.statsHistory,  s.stats.history);
+      safeSetItem(STORAGE_KEYS.statsByPass,   s.stats.totalByPass);
     }
   }
   return result;

@@ -17,7 +17,7 @@ import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wo
 import BubbleToolbar from './BubbleToolbar';
 import TableToolbar from './TableToolbar';
 import DocNavigator from './DocNavigator';
-import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory } from '../../services/agent';
+import { runReviewAgent, generateAltText, generateSeoMeta, suggestCategory, aggregateCallsByPass } from '../../services/agent';
 import { scrapeUrl } from '../../services/scraper';
 import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertNearClosestParagraph, repairStructureEl, stripDiffDeletions, wrapLooseTextIntoParagraphs, moveFaqToEnd, normalizeText, enforceExternalLinkPolicy, balanceFragment, carryOverInternalLinks } from '../../utils/diff';
 import { weaveBriefLinks } from '../../utils/internalWeave';
@@ -532,7 +532,7 @@ export default function ArticleResult() {
     const title = wpMcpData?.wpTitle || extractH1FromHtml(agent.originalContent) || '';
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
-        const { seoTitle: t, seoDescription: d } = await generateSeoMeta(agent.updatedContent, title);
+        const { seoTitle: t, seoDescription: d } = await generateSeoMeta(agent.updatedContent, title, settings.modelSelections || null);
         if (t || d) {
           if (t) setSeoTitle(t);
           if (d) setSeoDescription(d);
@@ -1914,6 +1914,7 @@ export default function ArticleResult() {
     try {
       const { proposals, occurrences, tokenUsage } = await runStyleFixAgent({
         findings,
+        modelSelections: settings.modelSelections || null,
         onStep: (t) => setStyleFixStep(t),
       });
       const proposalsByN = new Map(proposals.map((p) => [p.n, p]));
@@ -2015,6 +2016,7 @@ export default function ArticleResult() {
         skills,
         knowledge,
         modelPricing: settings.modelPricing || null,
+        modelSelections: settings.modelSelections || null,
         depth: agent.majDepth,
         instruction: verifPrompt,
         onStep: (t) => setVerifStep(t),
@@ -2151,6 +2153,7 @@ export default function ArticleResult() {
         // Les donnees WordPress deja recuperees evitent un second appel MCP.
         existingWpData: agent.wpData || null,
         modelPricing:   settings.modelPricing || null,
+        modelSelections: settings.modelSelections || null,
         onStep:     (t) => setAuditStep(t),
         onReplace:  (t) => setAuditStep(t),
         onProgress: (p) => setAuditProgress(p),
@@ -2247,6 +2250,7 @@ export default function ArticleResult() {
         // texte que le redacteur a relu et valide juste avant de lancer.
         instruction:    prompt || agent.instruction || '',
         modelPricing:   settings.modelPricing || null,
+        modelSelections: settings.modelSelections || null,
         onStep:     (t) => setGenStep(t),
         onReplace:  (t) => setGenStep(t),
         onProgress: (p) => setGenProgress(p),
@@ -2305,6 +2309,7 @@ export default function ArticleResult() {
         anthropicKey: settings.anthropicKey,
         braveKey: settings.braveKey,
         tavilyKey: settings.tavilyKey,
+        modelSelections: settings.modelSelections || null,
         manualSources,
         onStep: (s) => setReviewStep(s),
         onProgress: (p) => setReviewProgress(p),
@@ -2372,6 +2377,12 @@ export default function ArticleResult() {
             costUsd:     result.tokenUsage.costUsd,
             createdAt:   new Date().toISOString(),
             pass: 2,
+            // mergedTokenUsage.calls, pas result.tokenUsage.calls : ce dispatch
+            // enregistre le total FUSIONNÉ audit + refonte (mêmes chiffres que
+            // inputTokens/outputTokens/costUsd juste au-dessus) — se limiter aux
+            // calls de la refonte seule aurait fait disparaître 'audit_qat' et
+            // 'query_extraction' du détail par passe.
+            byPass: aggregateCallsByPass(mergedTokenUsage.calls, settings.modelPricing || null),
           }));
         }
       }

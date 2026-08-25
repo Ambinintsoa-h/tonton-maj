@@ -66,6 +66,7 @@ export const runBoldPass = async ({
   html = '',
   targetKeyword = '',
   secondaires = [],
+  modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
   onStep = () => {},
   onReplace = () => {},
 } = {}) => {
@@ -96,7 +97,7 @@ export const runBoldPass = async ({
   try {
     const res = await callClaudeWithProgress(
       null,
-      { system: SYSTEME, messages: [{ role: 'user', content: prompt }], max_tokens: MAX_TOKENS_GRAS, model: selectModel('gras') },
+      { system: SYSTEME, messages: [{ role: 'user', content: prompt }], max_tokens: MAX_TOKENS_GRAS, model: selectModel('gras', modelSelections) },
       onStep, onReplace, 'Mise en gras',
     );
     usage = (res && res.usage) || null;

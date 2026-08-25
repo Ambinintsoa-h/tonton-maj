@@ -11,7 +11,9 @@
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
-import { selectModel, MODEL_PASSES, callClaudeStream, callClaude, extractTextBlocks } from './agent';
+import {
+  selectModel, MODEL_PASSES, callClaudeStream, callClaude, extractTextBlocks, aggregateCallsByPass,
+} from './agent';
 
 jest.mock('axios');
 
@@ -47,6 +49,82 @@ describe('registre des passes IA (MODEL_PASSES)', () => {
       .filter(([, { model }]) => !src.includes(`'${model}'`))
       .map(([pass, { model }]) => `${pass} → ${model}`);
     expect(manquants).toEqual([]);
+  });
+});
+
+describe('overrides — choix du superadmin (settings.modelSelections)', () => {
+  test('un override valide prime sur le défaut du registre', () => {
+    expect(selectModel('audit_qat', { audit_qat: 'claude-opus-4-5' })).toBe('claude-opus-4-5');
+  });
+
+  test('sans override pour CETTE passe, le défaut du registre s\'applique — même si d\'autres passes sont surchargées', () => {
+    expect(selectModel('refonte', { audit_qat: 'claude-opus-4-5' })).toBe('claude-sonnet-5');
+  });
+
+  test('overrides absent/null/vide → comportement identique à avant ce dispositif', () => {
+    expect(selectModel('style')).toBe('claude-sonnet-5');
+    expect(selectModel('style', null)).toBe('claude-sonnet-5');
+    expect(selectModel('style', {})).toBe('claude-sonnet-5');
+  });
+
+  test('une passe absente du registre retombe sur Haiku même avec des overrides — la validité de la passe prime', () => {
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(selectModel('passe_qui_nexiste_pas', { passe_qui_nexiste_pas: 'claude-opus-4-5' })).toBe('claude-haiku-4-5');
+    spy.mockRestore();
+  });
+
+  test('GET /api/models existe et expose MODEL_CASCADE — le sélecteur ne doit JAMAIS proposer un modèle inconnu du serveur', () => {
+    expect(proxySrc()).toMatch(/app\.get\('\/api\/models', requireAuth, \(req, res\) => \{\s*\n\s*res\.json\(\{ models: MODEL_CASCADE \}\);/);
+  });
+
+  test('POST /api/settings rejette un modèle absent de MODEL_CASCADE dans modelSelections', () => {
+    const s = proxySrc();
+    expect(s).toMatch(/if \(incoming\.modelSelections !== undefined\)/);
+    expect(s).toMatch(/!MODEL_CASCADE\.includes\(model\)/);
+  });
+
+  test("'modelSelections' est whitelisté pour la sauvegarde des paramètres équipe", () => {
+    expect(proxySrc()).toMatch(/SETTINGS_WHITELIST = \[[\s\S]{0,300}'modelSelections'/);
+  });
+});
+
+describe('aggregateCallsByPass — détail du coût par passe pour UN article', () => {
+  test('agrège plusieurs appels de la même passe et calcule le coût avec le tarif fourni', () => {
+    const calls = [
+      { model: 'claude-sonnet-5', pass: 'audit_qat', input: 1000, output: 500 },
+      { model: 'claude-sonnet-5', pass: 'audit_qat', input: 200, output: 100 },
+    ];
+    const pricing = { 'claude-sonnet-5': { input: 3, output: 15 } };
+    const result = aggregateCallsByPass(calls, pricing);
+    expect(result.audit_qat.input).toBe(1200);
+    expect(result.audit_qat.output).toBe(600);
+    expect(result.audit_qat.model).toBe('claude-sonnet-5');
+    // (1200/1e6)*3 + (600/1e6)*15 = 0.0036 + 0.009 = 0.0126
+    expect(result.audit_qat.costUsd).toBeCloseTo(0.0126, 6);
+  });
+
+  test('sépare les passes différentes, même sur le même modèle', () => {
+    const calls = [
+      { model: 'claude-haiku-4-5', pass: 'query_extraction', input: 100, output: 50 },
+      { model: 'claude-haiku-4-5', pass: 'seo_meta', input: 80, output: 40 },
+    ];
+    const result = aggregateCallsByPass(calls);
+    expect(Object.keys(result).sort()).toEqual(['query_extraction', 'seo_meta']);
+  });
+
+  test('un appel SANS label de passe est ignoré, pas comptabilisé sous une clé "inconnu"', () => {
+    const calls = [
+      { model: 'claude-haiku-4-5', input: 100, output: 50 }, // pas de `pass` — article traité avant ce dispositif
+      { model: 'claude-sonnet-5', pass: 'gras', input: 10, output: 5 },
+    ];
+    const result = aggregateCallsByPass(calls);
+    expect(Object.keys(result)).toEqual(['gras']);
+  });
+
+  test('entrée dégénérée : jamais d\'exception', () => {
+    expect(aggregateCallsByPass(null)).toEqual({});
+    expect(aggregateCallsByPass(undefined)).toEqual({});
+    expect(aggregateCallsByPass([])).toEqual({});
   });
 });
 

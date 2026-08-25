@@ -11,12 +11,14 @@
 import { useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
+import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import { Sparkles, X, Loader, RefreshCw, CheckCircle2, History } from 'lucide-react';
 import { rewriteSection } from '../../services/agent';
 import { REWRITE_PRESETS, getRecentPrompts, rememberPrompt } from '../../services/rewrite';
 
 export default function SectionRewritePanel({ originalHtml, onValidate, onClose }) {
+  const modelSelections = useSelector(s => s.settings.modelSelections) || null;
   const [presetId, setPresetId] = useState(REWRITE_PRESETS[0].id);
   const [recent, setRecent]     = useState(getRecentPrompts());
   const [custom, setCustom]     = useState(recent[0] || '');
@@ -29,7 +31,7 @@ export default function SectionRewritePanel({ originalHtml, onValidate, onClose 
     const instruction = extra ? `${preset.prompt}\nConsigne supplémentaire : ${extra}` : preset.prompt;
     setLoading(true);
     try {
-      const html = await rewriteSection({ html: originalHtml, instruction });
+      const html = await rewriteSection({ html: originalHtml, instruction, modelSelections });
       setResult(html);
       if (extra) { rememberPrompt(extra); setRecent(getRecentPrompts()); }
     } catch (e) {
@@ -37,7 +39,7 @@ export default function SectionRewritePanel({ originalHtml, onValidate, onClose 
     } finally {
       setLoading(false);
     }
-  }, [presetId, custom, originalHtml]);
+  }, [presetId, custom, originalHtml, modelSelections]);
 
   return createPortal(
     <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
