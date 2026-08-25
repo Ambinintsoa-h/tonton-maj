@@ -98,6 +98,56 @@ describe('resetStats — remet totalByPass à zéro avec le reste', () => {
   });
 });
 
+describe('UN ARTICLE, QUATRE PHASES — pass:1..4 s\'additionnent sans collision', () => {
+  // Trouvé en testant en réel (25/08/2026) : seule la génération (pass:2)
+  // alimentait les stats équipe — Obsolescence et Style tournaient (et
+  // coûtaient) sans jamais remonter au Dashboard ni au panneau de coût par
+  // passe. Correctif : chaque phase dispatche sous SON PROPRE numéro de passe
+  // (1=audit, 2=génération, 3=obsolescence, 4=style), chacune avec SES PROPRES
+  // calls dans byPass — jamais les calls fusionnés d'une autre phase, sinon
+  // audit_qat/query_extraction seraient comptés deux fois (pass:1 ET pass:2).
+  test('les 4 dispatches du MÊME article s\'additionnent, un seul comptage d\'article', () => {
+    let state = BASE;
+    state = reducer(state, addArticleStat({
+      id: 'a1', title: 'A1', inputTokens: 1000, outputTokens: 500, costUsd: 0.01, createdAt: 't1', pass: 1,
+      byPass: { audit_qat: { model: 'claude-haiku-4-5', input: 900, output: 400, costUsd: 0.0029 }, query_extraction: { model: 'claude-haiku-4-5', input: 100, output: 100, costUsd: 0.0006 } },
+    }));
+    state = reducer(state, addArticleStat({
+      id: 'a1', title: 'A1', inputTokens: 2000, outputTokens: 1000, costUsd: 0.007, createdAt: 't2', pass: 2,
+      byPass: { refonte: { model: 'claude-haiku-4-5', input: 1500, output: 800, costUsd: 0.0055 }, gras: { model: 'claude-haiku-4-5', input: 500, output: 200, costUsd: 0.0015 } },
+    }));
+    state = reducer(state, addArticleStat({
+      id: 'a1', title: 'A1', inputTokens: 800, outputTokens: 300, costUsd: 0.0023, createdAt: 't3', pass: 3,
+      byPass: { obsolescence: { model: 'claude-haiku-4-5', input: 800, output: 300, costUsd: 0.0023 } },
+    }));
+    state = reducer(state, addArticleStat({
+      id: 'a1', title: 'A1', inputTokens: 100, outputTokens: 50, costUsd: 0.0004, createdAt: 't4', pass: 4,
+      byPass: { style: { model: 'claude-haiku-4-5', input: 100, output: 50, costUsd: 0.0004 } },
+    }));
+
+    // Un seul article compté, malgré 4 dispatches.
+    expect(state.totalArticles).toBe(1);
+    // 4 lignes distinctes dans l'historique (une par phase).
+    expect(state.history).toHaveLength(4);
+    // Totaux : somme des 4 contributions, aucune perte, aucun doublon.
+    expect(state.totalInputTokens).toBe(1000 + 2000 + 800 + 100);
+    expect(state.totalOutputTokens).toBe(500 + 1000 + 300 + 50);
+    expect(state.totalCostUsd).toBeCloseTo(0.01 + 0.007 + 0.0023 + 0.0004, 6);
+    // Chaque passe du registre apparaît UNE SEULE FOIS, avec ses propres chiffres —
+    // c'est exactement le double-comptage (audit_qat/query_extraction via pass:1
+    // ET pass:2) que ce test verrouille contre une régression future.
+    expect(Object.keys(state.totalByPass).sort()).toEqual(
+      ['audit_qat', 'gras', 'obsolescence', 'query_extraction', 'refonte', 'style'].sort()
+    );
+    expect(state.totalByPass.audit_qat.input).toBe(900);
+    expect(state.totalByPass.query_extraction.input).toBe(100);
+    expect(state.totalByPass.refonte.input).toBe(1500);
+    expect(state.totalByPass.gras.input).toBe(500);
+    expect(state.totalByPass.obsolescence.input).toBe(800);
+    expect(state.totalByPass.style.input).toBe(100);
+  });
+});
+
 describe('setStats — restauration depuis le serveur (GET /api/data/stats)', () => {
   test('une base migrée après coup (totalByPass absent du document) ne casse rien — le champ reste vide', () => {
     // Simule getStats() sur une ligne écrite avant migration/alter-stats-by-pass.sql :

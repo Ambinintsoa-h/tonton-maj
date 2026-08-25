@@ -1915,6 +1915,7 @@ export default function ArticleResult() {
       const { proposals, occurrences, tokenUsage } = await runStyleFixAgent({
         findings,
         modelSelections: settings.modelSelections || null,
+        modelPricing: settings.modelPricing || null,
         onStep: (t) => setStyleFixStep(t),
       });
       const proposalsByN = new Map(proposals.map((p) => [p.n, p]));
@@ -1924,7 +1925,33 @@ export default function ArticleResult() {
         if (p) map[`${occ.id}::${occ.extrait}`] = p;
       });
       setStyleAiProposals(map);
-      if (tokenUsage) dispatch(setTokenUsage(tokenUsage));
+      if (tokenUsage) {
+        // Même correctif que l'Obsolescence : fusionner avec le total déjà
+        // affiché, sinon le compteur à l'écran retombe au coût de la seule
+        // passe de style (souvent proche de 0, donc un total qui semble faux).
+        const prevUsage = agent.tokenUsage || { input: 0, output: 0, calls: [], costUsd: 0 };
+        dispatch(setTokenUsage({
+          input:   prevUsage.input   + tokenUsage.input,
+          output:  prevUsage.output  + tokenUsage.output,
+          costUsd: prevUsage.costUsd + tokenUsage.costUsd,
+          calls:   [...(prevUsage.calls || []), ...(tokenUsage.calls || [])],
+        }));
+        // pass: 4 — quatrième contribution additive (1 = audit, 2 = génération,
+        // 3 = obsolescence). tokenUsage.calls (pas fusionné) : même règle que
+        // les autres dispatches, une seule passe par entrée dans byPass.
+        if (agent.currentArticleId) {
+          dispatch(addArticleStat({
+            id:          agent.currentArticleId,
+            title:       currentArticle?.title || cqItem?.title || agent.currentArticleId,
+            inputTokens: tokenUsage.input,
+            outputTokens: tokenUsage.output,
+            costUsd:     tokenUsage.costUsd,
+            createdAt:   new Date().toISOString(),
+            pass: 4,
+            byPass: aggregateCallsByPass(tokenUsage.calls, settings.modelPricing || null),
+          }));
+        }
+      }
       toast.success(proposals.length
         ? `${proposals.length} correction(s) de style proposée(s).`
         : 'Aucune correction de style à proposer sur ces passages.');
@@ -2042,7 +2069,33 @@ export default function ArticleResult() {
         suggestions: propositions, texteVerifie: texte, at: Date.now(),
       }));
       dispatch(setPhaseStatus({ phase: PHASE_OBSOLESCENCE, status: DONE }));
-      if (res.tokenUsage) dispatch(setTokenUsage(res.tokenUsage));
+      if (res.tokenUsage) {
+        // Fusion avec le total déjà affiché (audit + génération), sinon le
+        // compteur à l'écran RETOMBE au coût de la seule Obsolescence — la
+        // panne exacte qui rendait le total illisible en fin de Relecture.
+        const prevUsage = agent.tokenUsage || { input: 0, output: 0, calls: [], costUsd: 0 };
+        dispatch(setTokenUsage({
+          input:   prevUsage.input   + res.tokenUsage.input,
+          output:  prevUsage.output  + res.tokenUsage.output,
+          costUsd: prevUsage.costUsd + res.tokenUsage.costUsd,
+          calls:   [...(prevUsage.calls || []), ...(res.tokenUsage.calls || [])],
+        }));
+        // pass: 3 — troisième contribution additive de CET article (1 = audit
+        // seul, 2 = génération seule). result.tokenUsage.calls (pas fusionné) :
+        // même règle que pass:2, une seule passe par dispatch dans byPass.
+        if (agent.currentArticleId) {
+          dispatch(addArticleStat({
+            id:          agent.currentArticleId,
+            title:       currentArticle?.title || cqItem?.title || agent.currentArticleId,
+            inputTokens: res.tokenUsage.input,
+            outputTokens: res.tokenUsage.output,
+            costUsd:     res.tokenUsage.costUsd,
+            createdAt:   new Date().toISOString(),
+            pass: 3,
+            byPass: aggregateCallsByPass(res.tokenUsage.calls, settings.modelPricing || null),
+          }));
+        }
+      }
       // Enregistrement par le circuit habituel : l'avancement de la phase 3 suit
       // l'article, comme les autres artefacts.
       triggerAutosave();
@@ -2377,12 +2430,14 @@ export default function ArticleResult() {
             costUsd:     result.tokenUsage.costUsd,
             createdAt:   new Date().toISOString(),
             pass: 2,
-            // mergedTokenUsage.calls, pas result.tokenUsage.calls : ce dispatch
-            // enregistre le total FUSIONNÉ audit + refonte (mêmes chiffres que
-            // inputTokens/outputTokens/costUsd juste au-dessus) — se limiter aux
-            // calls de la refonte seule aurait fait disparaître 'audit_qat' et
-            // 'query_extraction' du détail par passe.
-            byPass: aggregateCallsByPass(mergedTokenUsage.calls, settings.modelPricing || null),
+            // result.tokenUsage.calls, PAS mergedTokenUsage.calls — correctif :
+            // la version précédente réutilisait les calls FUSIONNÉS (audit +
+            // refonte), alors que l'audit a déjà sa propre entrée (pass: 1,
+            // dispatchée à l'audit seul, Articles.jsx/MajEnAttente.jsx). Chaque
+            // dispatch ne doit porter QUE la contribution de SA propre phase —
+            // sinon 'audit_qat' et 'query_extraction' sont comptés deux fois
+            // dans totalByPass (une fois via pass:1, une fois via pass:2).
+            byPass: aggregateCallsByPass(result.tokenUsage.calls, settings.modelPricing || null),
           }));
         }
       }

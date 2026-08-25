@@ -275,6 +275,10 @@ const RecentAnalysesWidget = ({ history, limit = 10, delay = 0 }) => (
                 <td className="py-2.5 px-2">
                   {h.pass === 2
                     ? <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-purple-600 bg-purple-50 border border-purple-100 rounded-full px-2 py-0.5"><Sparkles size={9}/> P2</span>
+                    : h.pass === 3
+                    ? <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-100 rounded-full px-2 py-0.5">P3</span>
+                    : h.pass === 4
+                    ? <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-full px-2 py-0.5">P4</span>
                     : <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 rounded-full px-2 py-0.5">P1</span>}
                 </td>
                 <td className="py-2.5 px-2 text-right text-xs text-blue-600 font-medium tabular-nums">{fmt(h.inputTokens)}</td>
