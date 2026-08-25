@@ -1655,8 +1655,48 @@ app.post('/api/haloscan/test', requireAuth, requireRole('super_admin'), async (r
   }
 });
 
+/**
+ * Position Google de l'article pour CHAQUE mot-clé — un appel
+ * `POST /keywords/serp/compare` par mot-clé, Haloscan calcule lui-même le diff.
+ * Partagé par `POST /api/haloscan/check` (appel manuel/J+0) et `_seoSnapshotCheck`
+ * (cron J+7/J+30) — avant ce partage, la même boucle était recopiée aux deux
+ * endroits ; l'un des deux a fini par diverger sans que personne ne le remarque
+ * (le cron n'avait pas les `dates`). Une seule version, deux appelants.
+ */
+const _computeKeywordPositions = async (keywords, articleUrl, haloscanKey, period = '1 month') =>
+  Promise.all((keywords || []).map(async (keyword) => {
+    try {
+      const resp = await axios.post(`${HALOSCAN_BASE}/keywords/serp/compare`, {
+        keyword,
+        period,
+      }, {
+        headers: haloscanHeaders(haloscanKey),
+        timeout: 25000,
+      });
+
+      const data    = resp.data;
+      const newSerp = data?.results?.new_serp || [];
+      const oldSerp = data?.results?.old_serp || [];
+
+      const newEntry = _findInSerp(newSerp, articleUrl);
+      const oldEntry = _findInSerp(oldSerp, articleUrl);
+
+      return {
+        keyword,
+        position:      newEntry?.position ?? null,   // position actuelle (new_serp)
+        positionOld:   oldEntry?.position ?? null,   // position période précédente (old_serp)
+        haloscanDiff:  newEntry?.diff     ?? null,   // diff calculé par Haloscan ex: "+5", "lost", "new"
+        dates:         data?.dates        || [],     // [date_ancienne, date_récente]
+        inSerp:        !!newEntry,                   // false = article absent du top 100
+      };
+    } catch (e) {
+      console.warn(`[haloscan] keyword "${keyword}" :`, e.response?.data || e.message);
+      return { keyword, position: null, positionOld: null, haloscanDiff: null, inSerp: false,
+               error: e.response?.data?.message || e.message };
+    }
+  }));
+
 // POST /api/haloscan/check — position Google de l'article pour chaque mot-clé
-// Utilise POST /keywords/serp/compare (period: "1 month") — Haloscan calcule lui-même le diff
 // Réponse : { keyword, position, positionOld, haloscanDiff, dates, inSerp }
 app.post('/api/haloscan/check', requireAuth, async (req, res) => {
   const { keywords, articleUrl, period = '1 month' } = req.body;
@@ -1666,38 +1706,7 @@ app.post('/api/haloscan/check', requireAuth, async (req, res) => {
   if (!articleUrl)                                  return res.status(400).json({ error: 'articleUrl requis' });
 
   try {
-    const results = await Promise.all(keywords.map(async (keyword) => {
-      try {
-        const resp = await axios.post(`${HALOSCAN_BASE}/keywords/serp/compare`, {
-          keyword,
-          period,
-        }, {
-          headers: haloscanHeaders(haloscanKey),
-          timeout: 25000,
-        });
-
-        const data    = resp.data;
-        const newSerp = data?.results?.new_serp || [];
-        const oldSerp = data?.results?.old_serp || [];
-
-        const newEntry = _findInSerp(newSerp, articleUrl);
-        const oldEntry = _findInSerp(oldSerp, articleUrl);
-
-        return {
-          keyword,
-          position:      newEntry?.position ?? null,   // position actuelle (new_serp)
-          positionOld:   oldEntry?.position ?? null,   // position période précédente (old_serp)
-          haloscanDiff:  newEntry?.diff     ?? null,   // diff calculé par Haloscan ex: "+5", "lost", "new"
-          dates:         data?.dates        || [],     // [date_ancienne, date_récente]
-          inSerp:        !!newEntry,                   // false = article absent du top 100
-        };
-      } catch (e) {
-        console.warn(`[haloscan] keyword "${keyword}" :`, e.response?.data || e.message);
-        return { keyword, position: null, positionOld: null, haloscanDiff: null, inSerp: false,
-                 error: e.response?.data?.message || e.message };
-      }
-    }));
-
+    const results = await _computeKeywordPositions(keywords, articleUrl, haloscanKey, period);
     res.json({ success: true, results });
   } catch (e) {
     console.error('[haloscan]', e.message);
@@ -1744,15 +1753,80 @@ app.post('/api/haloscan/evolution', requireAuth, async (req, res) => {
 
 // ─── Haloscan cron — snapshots SEO automatiques J+7 / J+30 ──────────────────
 // Vérifie toutes les 6h les articles ayant un snapshot en attente.
-// Nécessite Firebase Admin + clé Haloscan configurés.
+//
+// N'écrivait QUE dans Firestore (`db.collection('articles')`) — jamais mis à
+// jour lors du passage à MySQL (bascule prod 2026-07-27). Sur un déploiement
+// DATA_BACKEND=mysql, le J+0 est capturé (il passe par firebase.mysql.js →
+// POST /articles/:id/seo/init, donc écrit bien dans `seo_tracking`), mais
+// aucun code ne relisait jamais cette table pour les échéances J+7/J+30 : le
+// tracking restait bloqué à son premier snapshot pour toujours, sans erreur ni
+// log qui l'aurait trahi — silence identique au piège `resolveRequestedModel`
+// d'avant. Corrigé en donnant au cron une branche MySQL en plus de la branche
+// Firestore existante (conservée à l'identique pour un déploiement Firestore).
 const _seoSnapshotCheck = async () => {
   const haloscanKey = readServerSettings().haloscanKey;
-  if (!haloscanKey || !firebaseAdmin) return;
+  if (!haloscanKey) return;
 
   const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  if (DATA_BACKEND === 'mysql') {
+    const { getPool } = require('./db');
+    try {
+      const [rows] = await getPool().query(
+        `SELECT article_id, keywords, article_url, next_snapshot_type
+           FROM seo_tracking
+          WHERE enabled = 1 AND completed = 0 AND next_snapshot_at <= ?
+          LIMIT 20`,
+        [now]
+      );
+      if (!rows.length) return;
+      console.log(`[seo-cron] ${rows.length} article(s) à mettre à jour (mysql)`);
+
+      for (const row of rows) {
+        const keywords   = typeof row.keywords === 'string' ? JSON.parse(row.keywords) : row.keywords;
+        const articleUrl = row.article_url;
+        if (!keywords?.length || !articleUrl) continue;
+
+        try {
+          const kwResults   = await _computeKeywordPositions(keywords, articleUrl, haloscanKey);
+          const capturedAt  = now;
+          const type        = row.next_snapshot_type || 'after_7d';
+          const isLast      = type === 'after_30d';
+          const nextType    = isLast ? null : 'after_30d';
+          const nextAt      = isLast ? Number.MAX_SAFE_INTEGER : capturedAt + (type === 'after_7d' ? 23 * DAY : DAY);
+
+          const conn = await getPool().getConnection();
+          try {
+            await conn.beginTransaction();
+            await conn.query(
+              `INSERT INTO seo_snapshots (article_id, type, captured_at, data) VALUES (?,?,?,?)
+               ON DUPLICATE KEY UPDATE captured_at=VALUES(captured_at), data=VALUES(data)`,
+              [row.article_id, type, capturedAt, JSON.stringify({ results: kwResults })]);
+            await conn.query(
+              `UPDATE seo_tracking SET last_snapshot_at=?, completed=?, next_snapshot_type=?, next_snapshot_at=? WHERE article_id=?`,
+              [capturedAt, isLast ? 1 : 0, nextType, nextAt, row.article_id]);
+            await conn.commit();
+          } catch (e) {
+            await conn.rollback();
+            throw e;
+          } finally {
+            conn.release();
+          }
+          console.log(`[seo-cron] Snapshot ${type} — article ${row.article_id}`);
+        } catch (e) {
+          console.warn(`[seo-cron] Article ${row.article_id} :`, e.message);
+        }
+      }
+    } catch (e) {
+      console.warn('[seo-cron] Erreur (mysql) :', e.message);
+    }
+    return;
+  }
+
+  if (!firebaseAdmin) return;
   try {
-    const db  = firebaseAdmin.firestore();
-    const now = Date.now();
+    const db = firebaseAdmin.firestore();
 
     // Articles avec nextSnapshotAt dépassé et tracking non terminé
     const snap = await db.collection('articles')
@@ -1770,25 +1844,7 @@ const _seoSnapshotCheck = async () => {
       if (!seo.keywords?.length || !seo.articleUrl) continue;
 
       try {
-        // 1 appel serp/compare par mot-clé → position actuelle + diff Haloscan
-        const kwResults = await Promise.all((seo.keywords || []).map(async (keyword) => {
-          try {
-            const r = await axios.post(`${HALOSCAN_BASE}/keywords/serp/compare`, {
-              keyword, period: '1 month',
-            }, { headers: haloscanHeaders(haloscanKey), timeout: 25000 });
-            const newSerp  = r.data?.results?.new_serp || [];
-            const oldSerp  = r.data?.results?.old_serp || [];
-            const newEntry = _findInSerp(newSerp, seo.articleUrl);
-            const oldEntry = _findInSerp(oldSerp, seo.articleUrl);
-            return {
-              keyword,
-              position:     newEntry?.position ?? null,
-              positionOld:  oldEntry?.position ?? null,
-              haloscanDiff: newEntry?.diff     ?? null,
-              inSerp:       !!newEntry,
-            };
-          } catch { return { keyword, position: null, positionOld: null, haloscanDiff: null, inSerp: false }; }
-        }));
+        const kwResults = await _computeKeywordPositions(seo.keywords, seo.articleUrl, haloscanKey);
 
         const capturedAt = now;
         const type       = seo.nextSnapshotType || 'after_7d';
