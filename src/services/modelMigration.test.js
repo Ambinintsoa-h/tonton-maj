@@ -290,7 +290,8 @@ describe('DÉCISION 25/08/2026 — un modèle hors MODEL_CASCADE est désormais 
   test("GET /api/models expose DEUX niveaux : curated (testé, prix exact) et discovered (API Anthropic, prix indicatif)", () => {
     const s = proxySrc();
     expect(s).toMatch(/app\.get\('\/api\/models', requireAuth, async \(req, res\) => \{/);
-    expect(s).toMatch(/res\.json\(\{ curated: MODEL_CASCADE, discovered: discoveredList \}\);/);
+    expect(s).toMatch(/curated: MODEL_CASCADE,/);
+    expect(s).toMatch(/discovered: discoveredList,/);
   });
 
   test('fetchAvailableModels existe, est mis en cache, et retombe sur le cache existant en cas de panne (jamais null après un premier succès)', () => {
@@ -311,5 +312,41 @@ describe('DÉCISION 25/08/2026 — un modèle hors MODEL_CASCADE est désormais 
     const s = proxySrc();
     expect(s).toMatch(/const indicativePricingFor = \(modelId\) => \{/);
     expect(s).toMatch(/_litellmRawCache\.data && _litellmRawCache\.data\[modelId\]/);
+  });
+});
+
+describe('DISPONIBILITÉ RÉELLE DES MODÈLES (25/08/2026) — un modèle « connu » n\'est pas forcément un modèle qui répond', () => {
+  // Constaté en conditions réelles : claude-opus-4-5, choisi pour la passe
+  // Audit QAT, a cascadé vers Haiku (callWithModelCascade, 429 côté Anthropic)
+  // sans qu'aucun signal à l'écran ne le dise autrement que par le coût final.
+  // `GET /api/models` ne teste rien — il recopie l'API Modèles d'Anthropic, qui
+  // liste ce qui EXISTE, pas ce qui RÉPOND pour ce compte précis.
+  test('POST /api/models/check-availability teste CHAQUE modèle individuellement, sans cascade, et classe l\'échec', () => {
+    const s = proxySrc();
+    expect(s).toMatch(/app\.post\('\/api\/models\/check-availability', requireAuth, requireRole\('super_admin'\), async \(req, res\) => \{/);
+    // Un par un — jamais callWithModelCascade (qui masquerait justement la panne
+    // individuelle qu'on cherche à détecter).
+    const fnMatch = s.match(/const testOneModel = async \(modelId\) => \{[\s\S]*?\n\};/);
+    expect(fnMatch).not.toBeNull();
+    expect(fnMatch[0]).not.toMatch(/callWithModelCascade/);
+    expect(s).toMatch(/const classifyModelError = \(message = ''\) => \{/);
+    expect(s).toMatch(/if \(message === 'RATE_LIMITED'\) return 'rate_limited';/);
+  });
+
+  test('le test d\'un modèle n\'est JAMAIS déclenché automatiquement — un appel Anthropic réel par modèle a un coût', () => {
+    const s = proxySrc();
+    // `fetchAvailableModels` a son "Fetch non bloquant au démarrage du serveur"
+    // (`fetchAvailableModels().catch(() => {})` en dehors de toute route) ;
+    // `testOneModel` ne doit avoir aucun appel équivalent hors de la route POST.
+    expect(s).not.toMatch(/^testOneModel\(/m);
+    expect((s.match(/app\.(get|post)\([^)]*check-availability/g) || []).length).toBe(1);
+  });
+
+  test('GET /api/models expose le dernier résultat de synchronisation SANS re-tester (pas de nouvel appel Anthropic sur un simple chargement de page)', () => {
+    const s = proxySrc();
+    const routeMatch = s.match(/app\.get\('\/api\/models', requireAuth, async \(req, res\) => \{[\s\S]*?\n\}\);/);
+    expect(routeMatch).not.toBeNull();
+    expect(routeMatch[0]).toMatch(/availability: _modelAvailabilityCache\.data,/);
+    expect(routeMatch[0]).not.toMatch(/testOneModel/);
   });
 });

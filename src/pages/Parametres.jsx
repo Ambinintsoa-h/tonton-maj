@@ -60,8 +60,12 @@ export default function Parametres() {
   // (prix exact), discovered = vu par l'API Anthropic mais non testé (prix
   // indicatif). Chargé une fois, pas dans le store settings : ce n'est pas
   // un réglage, juste des données de référence pour construire le sélecteur.
-  const [modelCatalog, setModelCatalog] = useState({ curated: [], discovered: [] });
+  const [modelCatalog, setModelCatalog] = useState({ curated: [], discovered: [], availability: {}, availabilityCheckedAt: null });
   const [loadingModels, setLoadingModels] = useState(true);
+  // Synchronisation = test RÉEL de chaque modèle (un appel Anthropic par
+  // modèle, voir POST /api/models/check-availability) — jamais déclenché seul,
+  // toujours par un clic explicite : chaque test est facturé.
+  const [syncingModels, setSyncingModels] = useState(false);
 
   const [form, setForm] = useState({
     anthropicKey:              stored.anthropicKey || '',
@@ -97,10 +101,37 @@ export default function Parametres() {
 
   useEffect(() => {
     axios.get('/api/models')
-      .then(r => setModelCatalog({ curated: r.data?.curated || [], discovered: r.data?.discovered || [] }))
+      .then(r => setModelCatalog({
+        curated: r.data?.curated || [],
+        discovered: r.data?.discovered || [],
+        availability: r.data?.availability || {},
+        availabilityCheckedAt: r.data?.availabilityCheckedAt || null,
+      }))
       .catch(() => {})
       .finally(() => setLoadingModels(false));
   }, []);
+
+  // Un modèle qui a échoué au dernier test (429, introuvable, erreur) est
+  // retiré du sélecteur — SAUF s'il est la sélection actuelle d'une passe :
+  // le masquer là ferait afficher un <select> vide au lieu d'expliquer
+  // pourquoi ce choix ne tient plus.
+  const isUnavailable = (modelId) => modelCatalog.availability?.[modelId]?.ok === false;
+  const unavailableCount = Object.values(modelCatalog.availability || {}).filter(v => v?.ok === false).length;
+
+  const handleSyncModels = async () => {
+    setSyncingModels(true);
+    try {
+      const r = await axios.post('/api/models/check-availability');
+      const availability = r.data?.availability || {};
+      setModelCatalog(c => ({ ...c, availability, availabilityCheckedAt: r.data?.checkedAt || Date.now() }));
+      const failed = Object.values(availability).filter(v => v?.ok === false).length;
+      if (failed > 0) toast.error(`${failed} modèle(s) indisponible(s) retiré(s) du sélecteur`);
+      else toast.success('Tous les modèles répondent');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Test de disponibilité échoué');
+    }
+    setSyncingModels(false);
+  };
 
   // Prix d'un modèle : exact (LiteLLM, modelPricing) s'il est curated, sinon
   // indicatif (déjà porté par l'entrée `discovered`), sinon rien à afficher.
@@ -329,7 +360,24 @@ export default function Parametres() {
             <p className="text-xs text-gray-400">Quel modèle Claude pour chaque passe — coût mesuré sur les {N_RECENTS} derniers articles</p>
           </div>
           {loadingModels && <Loader size={15} className="animate-spin text-gray-400 ml-auto" />}
+          <button
+            type="button"
+            onClick={handleSyncModels}
+            disabled={syncingModels || loadingModels}
+            className="btn-secondary text-xs ml-auto"
+            title="Teste chaque modèle avec un appel Anthropic réel (coût minime) et retire ceux qui ne répondent pas du sélecteur"
+          >
+            {syncingModels
+              ? <><Loader size={13} className="animate-spin" /> Test en cours...</>
+              : <><RotateCcw size={13} /> Synchroniser</>}
+          </button>
         </div>
+        {modelCatalog.availabilityCheckedAt && (
+          <p className="text-xs text-gray-400 -mt-3">
+            Dernière synchro : {new Date(modelCatalog.availabilityCheckedAt).toLocaleString('fr-FR')}
+            {unavailableCount > 0 && <span className="text-amber-600 font-medium"> · {unavailableCount} modèle(s) indisponible(s) retiré(s)</span>}
+          </p>
+        )}
 
         {MODEL_PASS_GROUPS.map(group => (
           <div key={group.title} className="space-y-2">
@@ -351,6 +399,11 @@ export default function Parametres() {
                         {isDiscovered && !loadingModels && (
                           <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 rounded-full px-1.5 py-0.5">non testé</span>
                         )}
+                        {isUnavailable(current) && (
+                          <span className="text-[10px] font-semibold text-red-600 bg-red-100 rounded-full px-1.5 py-0.5" title={modelCatalog.availability[current]?.message || ''}>
+                            indisponible ({modelCatalog.availability[current]?.reason === 'rate_limited' ? 'limite atteinte' : modelCatalog.availability[current]?.reason === 'not_found' ? 'introuvable' : 'erreur'})
+                          </span>
+                        )}
                       </p>
                       <p className="text-xs text-gray-400">
                         {price ? `${fmtPrice(price)} /Mtok${price.indicative ? ' (indicatif)' : ''}` : 'Prix inconnu'}
@@ -363,14 +416,17 @@ export default function Parametres() {
                       className="input-glass text-xs w-56 flex-shrink-0"
                     >
                       <optgroup label="Testés par l'équipe">
-                        {modelCatalog.curated.map(id => (
-                          <option key={id} value={id}>{id}{id === entry.model ? ' (défaut)' : ''}</option>
+                        {/* Un modèle qui a échoué au dernier test reste visible UNIQUEMENT
+                            s'il est la sélection actuelle — sinon le <select> se viderait
+                            silencieusement au lieu d'expliquer pourquoi ce choix ne tient plus. */}
+                        {modelCatalog.curated.filter(id => id === current || !isUnavailable(id)).map(id => (
+                          <option key={id} value={id}>{id}{id === entry.model ? ' (défaut)' : ''}{isUnavailable(id) ? ' — indisponible' : ''}</option>
                         ))}
                       </optgroup>
                       {modelCatalog.discovered.length > 0 && (
                         <optgroup label="Découverts (non testés)">
-                          {modelCatalog.discovered.map(m => (
-                            <option key={m.id} value={m.id}>{m.displayName}</option>
+                          {modelCatalog.discovered.filter(m => m.id === current || !isUnavailable(m.id)).map(m => (
+                            <option key={m.id} value={m.id}>{m.displayName}{isUnavailable(m.id) ? ' — indisponible' : ''}</option>
                           ))}
                         </optgroup>
                       )}
