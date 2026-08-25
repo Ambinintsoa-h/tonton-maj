@@ -13,7 +13,7 @@
  * passage en relecture déclencherait un appel payant, y compris quand la
  * rédactrice ne fait que relire.
  */
-import { callClaudeWithProgress, makeTokenTracker, selectModel } from './agent';
+import { callClaudeWithProgress, makeTokenTracker, selectModel, calcCost } from './agent';
 import { parseJsonLoose } from './agentQat';
 import {
   flattenAiOccurrences, buildStyleFixPrompt, normalizeStyleProposals,
@@ -29,6 +29,7 @@ const SYSTEME = 'Tu es correctrice de style pour un média francophone. '
 export const runStyleFixAgent = async ({
   findings = [],
   modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
+  modelPricing = null, // tarifs depuis settings.json — null = fallback hardcodé
   onStep = () => {},
   onReplace = () => {},
 } = {}) => {
@@ -58,5 +59,9 @@ export const runStyleFixAgent = async ({
   const json = parseJsonLoose(String((res && res.text) || ''), { salvage: true });
   const proposals = normalizeStyleProposals(json, occurrences);
 
-  return { proposals, occurrences, tokenUsage: acc };
+  // Sans costUsd, cette passe s'affichait toujours à $0.0000 à l'écran (fmtUsd
+  // traite `undefined` comme 0) — un coût réel mais invisible, jamais compté
+  // nulle part. Même calcul que les autres passes (calcCost sur tokenAcc.calls).
+  const costUsd = calcCost(acc.calls, modelPricing);
+  return { proposals, occurrences, tokenUsage: { ...acc, costUsd } };
 };
