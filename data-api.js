@@ -909,6 +909,134 @@ module.exports = ({ requireAuth, requireRole }) => {
     }
   }));
 
+  // ── batches (chantier MAJ en masse via GSheet, Phase 2 — modèle de données) ───
+  // Un batch = un lancement (GSheet ou manuel) regroupant plusieurs `batch_items`.
+  // CRUD simple ici ; l'orchestration (traiter les items un par un, appeler le
+  // runner headless) vit dans une phase ultérieure — ce fichier ne fait QUE
+  // persister l'état, jamais exécuter de pipeline lui-même.
+  const batchToObj = (r) => ({
+    id: r.id,
+    source: r.source,
+    status: r.status,
+    launchedBy: r.launched_by,
+    launchedByName: r.launched_by_name,
+    launchedAt: r.launched_at,
+    ...(r.completed_at != null ? { completedAt: r.completed_at } : {}),
+    rowCount: r.row_count,
+    completedCount: r.completed_count,
+    errorCount: r.error_count,
+    ...(r.total_cost_usd != null ? { totalCostUsd: r.total_cost_usd } : {}),
+    ...(r.total_duration_ms != null ? { totalDurationMs: r.total_duration_ms } : {}),
+    ...parseJson(r.data, {}),
+  });
+  const batchItemToObj = (r) => ({
+    id: r.id,
+    batchId: r.batch_id,
+    rowRef: r.row_ref,
+    site: r.site,
+    articleUrl: r.article_url,
+    majType: r.maj_type,
+    consigne: r.consigne,
+    status: r.status,
+    articleId: r.article_id,
+    errorMessage: r.error_message,
+    startedAt: r.started_at,
+    completedAt: r.completed_at,
+  });
+
+  // GET /batches?limit=20 — liste des batches, plus récents d'abord (supervision).
+  router.get('/batches', requireAuth, wrap(async (req, res) => {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const [rows] = await q('SELECT * FROM batches ORDER BY launched_at DESC LIMIT ?', [limit]);
+    res.json(rows.map(batchToObj));
+  }));
+
+  // GET /batches/:id — un batch avec le détail de ses items.
+  router.get('/batches/:id', requireAuth, wrap(async (req, res) => {
+    const [rows] = await q('SELECT * FROM batches WHERE id=?', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Batch introuvable' });
+    const [items] = await q('SELECT * FROM batch_items WHERE batch_id=? ORDER BY id', [req.params.id]);
+    res.json({ ...batchToObj(rows[0]), items: items.map(batchItemToObj) });
+  }));
+
+  // POST /batches — crée un batch ET ses items en une transaction (soit tout,
+  // soit rien : un batch à moitié écrit laisserait des lignes orphelines que
+  // rien ne relancerait jamais).
+  router.post('/batches', requireAuth, wrap(async (req, res) => {
+    const b = req.body || {};
+    const items = Array.isArray(b.items) ? b.items : [];
+    if (!items.length) return res.status(400).json({ error: 'items (array non vide) requis' });
+    const id = genId();
+    const now = Date.now();
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(
+        `INSERT INTO batches (id, source, status, launched_by, launched_by_name, launched_at, row_count, data)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [id, b.source || 'manual', 'pending', b.launchedBy || null, b.launchedByName || null,
+         now, items.length, asJson(omit(b, ['items', 'source', 'launchedBy', 'launchedByName']))]);
+      for (const item of items) {
+        await conn.query(
+          `INSERT INTO batch_items (id, batch_id, row_ref, site, article_url, maj_type, consigne, status)
+           VALUES (?,?,?,?,?,?,?, 'en_attente')`,
+          [genId(), id, item.rowRef ?? null, item.site ?? null, item.articleUrl ?? null,
+           item.majType ?? null, item.consigne ?? null]);
+      }
+      await conn.commit();
+      res.json({ id });
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }));
+
+  // PUT /batches/:id/items/:itemId — mise à jour d'UN item par l'orchestrateur
+  // (phase ultérieure). Recalcule les compteurs du batch parent et le fait
+  // passer à 'done' quand tous les items sont dans un état terminal — jamais
+  // l'inverse : un batch 'done' ne redevient pas 'running' ici, un item ne se
+  // relance qu'en créant un nouveau batch.
+  const TERMINAL_STATUSES = ['fait', 'erreur', 'a_revoir'];
+  router.put('/batches/:id/items/:itemId', requireAuth, wrap(async (req, res) => {
+    const { id, itemId } = req.params;
+    const { status, articleId, errorMessage, startedAt, completedAt } = req.body || {};
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      const [existing] = await conn.query('SELECT id FROM batch_items WHERE id=? AND batch_id=?', [itemId, id]);
+      if (!existing.length) { await conn.rollback(); return res.status(404).json({ error: 'Item introuvable' }); }
+      await conn.query(
+        `UPDATE batch_items SET
+           status=COALESCE(?, status), article_id=COALESCE(?, article_id),
+           error_message=COALESCE(?, error_message), started_at=COALESCE(?, started_at),
+           completed_at=COALESCE(?, completed_at)
+         WHERE id=?`,
+        [status ?? null, articleId ?? null, errorMessage ?? null, startedAt ?? null, completedAt ?? null, itemId]);
+      const [[counts]] = await conn.query(
+        `SELECT COUNT(*) AS total,
+           SUM(status='fait') AS done_ct,
+           SUM(status='erreur') AS error_ct,
+           SUM(status IN (${TERMINAL_STATUSES.map(() => '?').join(',')})) AS terminal_ct
+         FROM batch_items WHERE batch_id=?`,
+        [...TERMINAL_STATUSES, id]);
+      const batchStatus = Number(counts.terminal_ct) >= Number(counts.total) ? 'done' : 'running';
+      await conn.query(
+        `UPDATE batches SET completed_count=?, error_count=?, status=?,
+           completed_at=CASE WHEN ?='done' THEN ? ELSE completed_at END
+         WHERE id=?`,
+        [counts.done_ct || 0, counts.error_ct || 0, batchStatus, batchStatus, Date.now(), id]);
+      await conn.commit();
+      res.json({ ok: true, batchStatus });
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }));
+
   // GET /articles/:id/lock — état courant du verrou (ou null) pour watchEditLock
   // (polling ~5 s). Renvoie le verrou BRUT ; la péremption est jugée côté client
   // (isLockActive), comme sous Firestore. ETag/304 auto.
