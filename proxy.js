@@ -2422,6 +2422,93 @@ app.post('/api/models/check-availability', requireAuth, requireRole('super_admin
   }
 });
 
+/**
+ * POST /api/internal/run-article-pipeline — endpoint de VÉRIFICATION
+ * TEMPORAIRE (chantier batch GSheet, Phase 1). Exécute le pipeline complet
+ * (Audit → Génération → Obsolescence → Relecture) sur UN article réel, sans
+ * passer par l'UI, pour comparer le résultat au comportement de
+ * ArticleResult.jsx — voir `src/server/pipeline.js` pour l'orchestration.
+ *
+ * Ne publie JAMAIS : la relecture humaine reste le dernier geste, exactement
+ * comme un article lancé depuis l'UI. super_admin seulement — chaque appel
+ * déclenche plusieurs passes IA réelles, donc un coût réel.
+ *
+ * Le pipeline tourne dans un PROCESS SÉPARÉ (`pipelineCli.js`) qui simule le
+ * strict nécessaire (jsdom, sessionStorage) pour exécuter tel quel le code
+ * ESM écrit pour le navigateur (`src/services/agentQat.js` et ses
+ * dépendances) — jamais dans CE process, qui casserait sa propre instance
+ * axios partagée (voir le commentaire de pipelineCli.js).
+ */
+app.post('/api/internal/run-article-pipeline', requireAuth, requireRole('super_admin'), async (req, res) => {
+  const { articleUrl, targetKeyword, instruction, modelSelections } = req.body || {};
+  if (!articleUrl || !targetKeyword) {
+    return res.status(400).json({ error: 'articleUrl et targetKeyword requis' });
+  }
+
+  // Jeton interne, même forme que ceux du login (voir plus haut) — courte
+  // durée de vie, jamais stocké, ne sert qu'au temps de ce run.
+  const internalToken = jwt.sign(
+    { uid: req.user.uid, username: req.user.username, role: req.user.role, jti: require('crypto').randomUUID() },
+    JWT_SECRET,
+    { expiresIn: '20m' }
+  );
+  const modelPricing = await fetchModelPricing();
+
+  const proc = spawn(process.execPath, [path.join(__dirname, 'pipelineCli.js')], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+
+  const steps = [];
+  let resultLine = null;
+  let stderr = '';
+  let buf = '';
+  proc.stdout.setEncoding('utf8');
+  proc.stderr.setEncoding('utf8');
+  proc.stdout.on('data', (chunk) => {
+    buf += chunk;
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.type === 'step') { steps.push(parsed.text); console.log('[pipeline]', parsed.text); }
+        else if (parsed.type === 'result') resultLine = parsed;
+      } catch { /* ligne non-JSON (ne devrait pas arriver) — ignorée */ }
+    }
+  });
+  proc.stderr.on('data', (d) => { stderr += d; });
+
+  proc.stdin.write(JSON.stringify({
+    articleUrl, targetKeyword,
+    instruction: instruction || '',
+    modelSelections: modelSelections || null,
+    modelPricing: modelPricing || null,
+    launchedByUid: req.user.uid,
+    launchedByName: req.user.username,
+    apiBaseUrl: `http://127.0.0.1:${PORT}/api`,
+    authToken: internalToken,
+  }));
+  proc.stdin.end();
+
+  // Un run complet (4 passes IA) peut prendre plusieurs minutes — même ordre
+  // de grandeur qu'une génération lancée depuis l'UI.
+  const timer = setTimeout(() => proc.kill(), 15 * 60 * 1000);
+
+  proc.on('close', (code) => {
+    clearTimeout(timer);
+    if (!resultLine) {
+      return res.status(500).json({ error: 'Le runner n\'a renvoyé aucun résultat', code, stderr, steps });
+    }
+    res.status(resultLine.ok ? 200 : 500).json({ ...resultLine, steps });
+  });
+  proc.on('error', (e) => {
+    clearTimeout(timer);
+    res.status(500).json({ error: `Impossible de démarrer le runner : ${e.message}` });
+  });
+});
+
 // ─── Fallback : claude.exe CLI ────────────────────────────────────────────────
 const callClaude = (prompt) => new Promise((resolve, reject) => {
   const tmp = path.join(os.tmpdir(), `claude_${Date.now()}.txt`);
