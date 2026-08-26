@@ -66,6 +66,13 @@ export default function Parametres() {
   // modèle, voir POST /api/models/check-availability) — jamais déclenché seul,
   // toujours par un clic explicite : chaque test est facturé.
   const [syncingModels, setSyncingModels] = useState(false);
+  // Panneau de test TEMPORAIRE du runner headless (Phase 1, chantier batch) —
+  // voir /api/internal/run-article-pipeline.
+  const [runnerUrl, setRunnerUrl] = useState('');
+  const [runnerKeyword, setRunnerKeyword] = useState('');
+  const [runnerBusy, setRunnerBusy] = useState(false);
+  const [runnerSteps, setRunnerSteps] = useState([]);
+  const [runnerResult, setRunnerResult] = useState(null);
 
   const [form, setForm] = useState({
     anthropicKey:              stored.anthropicKey || '',
@@ -131,6 +138,29 @@ export default function Parametres() {
       toast.error(e.response?.data?.error || 'Test de disponibilité échoué');
     }
     setSyncingModels(false);
+  };
+
+  // Test TEMPORAIRE du runner headless (Phase 1) — POST /api/internal/run-article-pipeline.
+  // Requête bloquante côté client : le run complet peut prendre plusieurs
+  // minutes (4 passes IA), comme une génération lancée depuis l'UI normale.
+  const handleRunPipelineTest = async () => {
+    setRunnerBusy(true);
+    setRunnerSteps([]);
+    setRunnerResult(null);
+    try {
+      const r = await axios.post('/api/internal/run-article-pipeline', {
+        articleUrl: runnerUrl,
+        targetKeyword: runnerKeyword,
+      }, { timeout: 16 * 60 * 1000 });
+      setRunnerSteps(r.data?.steps || []);
+      setRunnerResult(r.data);
+      if (r.data?.ok) toast.success('Pipeline terminé — article en attente de relecture.');
+      else toast.error(r.data?.error || 'Le pipeline a échoué');
+    } catch (e) {
+      setRunnerResult(e.response?.data || { ok: false, error: e.message });
+      toast.error(e.response?.data?.error || e.message);
+    }
+    setRunnerBusy(false);
   };
 
   // Prix d'un modèle : exact (LiteLLM, modelPricing) s'il est curated, sinon
@@ -455,6 +485,57 @@ export default function Parametres() {
         <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-xs text-amber-700">
           Un modèle « découvert » n'a pas été testé avec les prompts de cette appli (raisonnement, longueur de réponse…) — le prix affiché est indicatif, pas garanti pour ce modèle précis.
         </div>
+      </motion.div>
+
+      {/* Runner headless (Phase 1, chantier batch GSheet) — panneau de VÉRIFICATION
+          TEMPORAIRE. À retirer une fois le vrai flux batch câblé (phases suivantes) :
+          il n'existe que pour lancer /api/internal/run-article-pipeline sur un
+          article réel et comparer le résultat au comportement de l'UI. */}
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.03 }} className="glass-card p-6 space-y-4 border-2 border-dashed border-purple-300">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 bg-purple-600 rounded-xl flex items-center justify-center">
+            <Zap size={16} className="text-white" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">Runner headless — test interne (temporaire)</h2>
+            <p className="text-xs text-gray-400">Lance le pipeline complet (Audit → Génération → Obsolescence → Relecture) sur un article réel, sans navigateur. Coût réel. Ne publie jamais.</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <input
+            type="text"
+            value={runnerUrl}
+            onChange={e => setRunnerUrl(e.target.value)}
+            placeholder="https://exemple.fr/article"
+            className="input-glass text-sm"
+          />
+          <input
+            type="text"
+            value={runnerKeyword}
+            onChange={e => setRunnerKeyword(e.target.value)}
+            placeholder="mot-clé cible"
+            className="input-glass text-sm"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={handleRunPipelineTest}
+          disabled={runnerBusy || !runnerUrl || !runnerKeyword}
+          className="btn-secondary text-xs"
+        >
+          {runnerBusy ? <Loader size={13} className="animate-spin" /> : <Zap size={13} />}
+          {runnerBusy ? 'En cours (plusieurs minutes)...' : 'Lancer le pipeline'}
+        </button>
+        {runnerSteps.length > 0 && (
+          <div className="bg-gray-50 rounded-xl px-4 py-3 text-xs text-gray-600 space-y-1 max-h-48 overflow-y-auto">
+            {runnerSteps.map((s, i) => <p key={i}>{s}</p>)}
+          </div>
+        )}
+        {runnerResult && (
+          <pre className="bg-gray-900 text-gray-100 rounded-xl px-4 py-3 text-xs overflow-x-auto whitespace-pre-wrap">
+            {JSON.stringify(runnerResult, null, 2)}
+          </pre>
+        )}
       </motion.div>
 
       {/* Brave Search */}
