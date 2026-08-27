@@ -2487,7 +2487,12 @@ app.post('/api/internal/run-article-pipeline', requireAuth, requireRole('super_a
     modelPricing: modelPricing || null,
     launchedByUid: req.user.uid,
     launchedByName: req.user.username,
-    apiBaseUrl: `http://127.0.0.1:${PORT}/api`,
+    // JAMAIS 127.0.0.1:PORT — l'hébergement Passenger de n0c ne garantit pas
+    // que le process écoute un port TCP local joignable en boucle ; le
+    // process enfant ne partage pas forcément l'environnement réseau du
+    // process parent. Même URL publique que le navigateur, comme partout
+    // ailleurs dans ce fichier (ligne ~431 et suivantes).
+    apiBaseUrl: `${IS_PROD ? 'https://maj.stomos.net' : `http://127.0.0.1:${PORT}`}/api`,
     authToken: internalToken,
   }));
   proc.stdin.end();
