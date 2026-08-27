@@ -50,11 +50,13 @@ jobs:
           for attempt in 1 2 3; do
             echo "Tentative SCP $attempt/3..."
             scp -F ~/.ssh/config \
-              proxy.js data-api.js db.js crypto-util.js package.json package-lock.json \
+              proxy.js data-api.js db.js crypto-util.js pipelineCli.js package.json package-lock.json \
               n0c:~/maj.stomos.net/ && \
             scp -F ~/.ssh/config -r build \
               n0c:~/maj.stomos.net/ && \
             scp -F ~/.ssh/config -r migration \
+              n0c:~/maj.stomos.net/ && \
+            scp -F ~/.ssh/config -r src \
               n0c:~/maj.stomos.net/ && { ok=1; break; }
             echo "Échec tentative $attempt, attente 15s..."
             sleep 15
