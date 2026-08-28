@@ -3,7 +3,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import { motion } from 'framer-motion';
 import {
   Zap, Globe, Settings, Clock, ChevronRight, BarChart3, ListTodo, Users, LogOut, Bug, MessageSquare,
-  Archive,
+  Archive, Layers,
 } from 'lucide-react';
 import { logout } from '../../store/slices/authSlice';
 
@@ -26,6 +26,7 @@ const NAV_TOP_BY_ROLE = {
 const NAV_ALL = [
   { to: '/',               label: 'Faire une MAJ',  icon: TontonIcon },
   { to: '/maj-en-attente', label: 'MAJ en attente',  icon: ListTodo, badge: true },
+  { to: '/lots',           label: 'MAJ en lot',       icon: Layers,   roles: ['super_admin', 'manager'], beta: true },
   { to: '/skills',         label: 'Skills IA',       icon: Zap,      roles: ['super_admin', 'manager'] },
   { to: '/wordpress',      label: 'WordPress',        icon: Globe,    roles: ['super_admin', 'manager', 'support'] },
   { to: '/commentaires',   label: 'Commentaires',     icon: MessageSquare, roles: ['super_admin', 'manager', 'support'], beta: true },
