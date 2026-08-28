@@ -1,13 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import { AnimatePresence, motion } from 'framer-motion';
 import toast from 'react-hot-toast';
+import * as XLSX from 'xlsx';
 import {
   Layers, Plus, Trash2, ExternalLink, ChevronDown, ChevronUp,
-  Loader, RefreshCw, AlertTriangle, Rocket,
+  Loader, RefreshCw, AlertTriangle, Rocket, Upload,
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { listBatches, getBatch, createBatch } from '../services/batches';
+import { parseBatchSheetRows } from '../utils/batchSheetImport';
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -107,6 +109,7 @@ export default function LotsBatch() {
   const [expandedId, setExpandedId] = useState(null);
   const [itemsByBatch, setItemsByBatch] = useState({});
   const [loadingItemsId, setLoadingItemsId] = useState(null);
+  const fileInputRef = useRef(null);
 
   const refreshBatches = useCallback(async () => {
     setLoadingBatches(true);
@@ -125,6 +128,40 @@ export default function LotsBatch() {
   const updateRow = (id, patch) => setRows(rs => rs.map(r => (r.id === id ? { ...r, ...patch } : r)));
   const removeRow = (id) => setRows(rs => (rs.length > 1 ? rs.filter(r => r.id !== id) : rs));
   const addRow = () => setRows(rs => [...rs, newRow()]);
+
+  // Import du fichier Sheet exporté par la rédac (voir batchSheetImport.js) --
+  // les lignes arrivent dans le MÊME éditeur que la saisie manuelle, à relire
+  // avant de lancer : aucun lancement automatique depuis un fichier importé.
+  const handleImportFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // permet de réimporter le même fichier après correction
+    if (!file) return;
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const sheetRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      const { rows: parsed, skipped } = parseBatchSheetRows(sheetRows);
+
+      const skipMsgs = [];
+      if (skipped.notValidated) skipMsgs.push(`${skipped.notValidated} non validée(s)`);
+      if (skipped.noUrl) skipMsgs.push(`${skipped.noUrl} sans URL`);
+      if (skipped.noKeyword) skipMsgs.push(`${skipped.noKeyword} sans mot-clé`);
+
+      if (!parsed.length) {
+        toast.error(`Aucune ligne importable${skipMsgs.length ? ` (${skipMsgs.join(', ')})` : ' -- fichier vide ou format non reconnu'}.`);
+        return;
+      }
+      setRows((rs) => {
+        const existing = rs.filter((r) => r.articleUrl.trim());
+        const added = parsed.map((p) => ({ id: uid(), ...p }));
+        return [...existing, ...added];
+      });
+      toast.success(`${parsed.length} ligne(s) importée(s)${skipMsgs.length ? ` -- ${skipMsgs.join(', ')} ignorée(s)` : ''}.`);
+    } catch (err) {
+      toast.error(`Import impossible : ${err.message}`);
+    }
+  };
 
   // Une URL par ligne. Le type et la consigne se réglent après coup, ligne par
   // ligne -- la consigne commune ci-dessus ne fait que pré-remplir les lignes
@@ -215,7 +252,22 @@ export default function LotsBatch() {
 
       {/* ── Nouveau lot ─────────────────────────────────────────────────── */}
       <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
-        <h2 className="font-medium text-gray-900">Nouveau lot</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="font-medium text-gray-900">Nouveau lot</h2>
+          <div>
+            <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportFile} />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 hover:bg-gray-50 text-sm font-medium text-gray-700 px-3 py-1.5"
+            >
+              <Upload className="w-4 h-4" /> Importer un Sheet (.xlsx)
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-gray-500 -mt-2">
+          Fichier exporté du Google Sheet de suivi -- seules les lignes avec la colonne « Validation » remplie sont importées.
+        </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>

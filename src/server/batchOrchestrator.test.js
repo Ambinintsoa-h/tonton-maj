@@ -15,7 +15,7 @@ function makeConn(claimRows = []) {
   };
 }
 
-function makeDeps({ claimRows = [], spawnPipelineFn, httpPut, concurrency } = {}) {
+function makeDeps({ claimRows = [], spawnPipelineFn, httpPut, concurrency, onBatchDone } = {}) {
   const conn = makeConn(claimRows);
   const getPool = jest.fn(() => ({ getConnection: jest.fn().mockResolvedValue(conn) }));
   const jwt = { sign: jest.fn(() => 'fake-jwt') };
@@ -29,6 +29,7 @@ function makeDeps({ claimRows = [], spawnPipelineFn, httpPut, concurrency } = {}
     httpClientFactory, onLog,
     ...(spawnPipelineFn ? { spawnPipelineFn } : {}),
     ...(concurrency ? { concurrency } : {}),
+    ...(onBatchDone ? { onBatchDone } : {}),
   };
   return { deps, conn, put, httpClientFactory, getPool, onLog };
 }
@@ -158,5 +159,38 @@ describe('createBatchOrchestrator', () => {
     await expect(orch.tick()).resolves.toBeUndefined();
     while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining('impossible de reporter l\'échec'));
+  });
+
+  it('appelle onBatchDone quand le report renvoie shouldNotify:true (dernier item du lot)', async () => {
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
+    const put = jest.fn().mockResolvedValue({ data: { ok: true, batchStatus: 'done', shouldNotify: true } });
+    const onBatchDone = jest.fn().mockResolvedValue();
+    const { deps } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, httpPut: put, onBatchDone });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(onBatchDone).toHaveBeenCalledWith('b1');
+  });
+
+  it('n\'appelle PAS onBatchDone quand shouldNotify est absent -- pas le dernier item', async () => {
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
+    const put = jest.fn().mockResolvedValue({ data: { ok: true, batchStatus: 'running' } });
+    const onBatchDone = jest.fn().mockResolvedValue();
+    const { deps } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, httpPut: put, onBatchDone });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(onBatchDone).not.toHaveBeenCalled();
+  });
+
+  it('un onBatchDone qui échoue ne fait pas planter processItem', async () => {
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
+    const put = jest.fn().mockResolvedValue({ data: { ok: true, batchStatus: 'done', shouldNotify: true } });
+    const onBatchDone = jest.fn().mockRejectedValue(new Error('SMTP down'));
+    const { deps, onLog } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, httpPut: put, onBatchDone });
+    const orch = createBatchOrchestrator(deps);
+    await expect(orch.tick()).resolves.toBeUndefined();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('Notification de fin échouée'));
   });
 });

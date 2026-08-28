@@ -54,6 +54,7 @@ function createBatchOrchestrator(deps) {
     cliPath,
     httpClientFactory,
     onLog = () => {},
+    onBatchDone = async () => {},
   } = deps;
 
   let active = 0;
@@ -131,7 +132,17 @@ function createBatchOrchestrator(deps) {
 
   const reportOutcome = async (item, patch) => {
     const http = httpFor(buildAuthToken(item));
-    await http.put(`/data/batches/${encodeURIComponent(item.batch_id)}/items/${encodeURIComponent(item.id)}`, patch);
+    const res = await http.put(`/data/batches/${encodeURIComponent(item.batch_id)}/items/${encodeURIComponent(item.id)}`, patch);
+    // `shouldNotify` vient de la réclamation atomique côté data-api.js : un
+    // seul item déclencheur par lot, jamais un doublon même si deux items
+    // terminent au même instant.
+    if (res?.data?.shouldNotify) {
+      try {
+        await onBatchDone(item.batch_id);
+      } catch (e) {
+        onLog(`[batch] Notification de fin échouée pour le lot ${item.batch_id} : ${e.message}`);
+      }
+    }
   };
 
   const processItem = async (item) => {
