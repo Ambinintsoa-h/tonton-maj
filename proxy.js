@@ -18,6 +18,7 @@ const path = require('path');
 const os = require('os');
 const multer = require('multer');
 const FormData = require('form-data');
+const { spawnPipeline } = require('./src/server/spawnPipeline');
 
 // ── Décodeur HTML entities (WordPress renvoie &amp; &#8211; etc.) ─────────────
 const decodeHtmlEntities = (str) => {
@@ -1876,6 +1877,32 @@ setTimeout(() => {
   setInterval(_seoSnapshotCheck, 6 * 60 * 60 * 1000);
 }, 30000);
 
+// ─── Orchestrateur de batches (chantier MAJ en masse, Phase 5) ───────────────
+// Réclame les batch_items en_attente et les traite un par un (borné par
+// concurrence) via le runner headless de la Phase 1 -- voir
+// src/server/batchOrchestrator.js pour le détail. MySQL uniquement : les
+// batches (Phase 2) n'existent pas côté Firestore.
+if (DATA_BACKEND === 'mysql') {
+  const { createBatchOrchestrator } = require('./src/server/batchOrchestrator');
+  const { getPool: getBatchPool } = require('./db');
+  const batchOrchestrator = createBatchOrchestrator({
+    getPool: getBatchPool,
+    jwt,
+    jwtSecret: JWT_SECRET,
+    fetchModelPricing,
+    apiBaseUrl: `${IS_PROD ? 'https://maj.stomos.net' : `http://127.0.0.1:${PORT}`}/api`,
+    concurrency: parseInt(process.env.BATCH_ORCHESTRATOR_CONCURRENCY, 10) || 2,
+    onLog: (msg) => console.log(msg),
+  });
+  // Démarrage 10s après le boot (laisse le pool DB se stabiliser), puis un
+  // tick toutes les 15s -- assez réactif pour qu'un lot lancé depuis /lots ne
+  // traîne pas en "en attente", sans marteler la base entre deux lots.
+  setTimeout(() => {
+    batchOrchestrator.tick();
+    setInterval(() => batchOrchestrator.tick(), 15000);
+  }, 10000);
+}
+
 // ─── Sécurité globale : empêche le proxy de crasher sur exceptions non gérées ─
 process.on('uncaughtException', (err) => {
   console.error('[proxy] ATTENTION Exception non gérée (processus maintenu) :', err.message);
@@ -2454,64 +2481,26 @@ app.post('/api/internal/run-article-pipeline', requireAuth, requireRole('super_a
   );
   const modelPricing = await fetchModelPricing();
 
-  const proc = spawn(process.execPath, [path.join(__dirname, 'pipelineCli.js')], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-
-  const steps = [];
-  let resultLine = null;
-  let stderr = '';
-  let buf = '';
-  proc.stdout.setEncoding('utf8');
-  proc.stderr.setEncoding('utf8');
-  proc.stdout.on('data', (chunk) => {
-    buf += chunk;
-    const lines = buf.split('\n');
-    buf = lines.pop();
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.type === 'step') { steps.push(parsed.text); console.log('[pipeline]', parsed.text); }
-        else if (parsed.type === 'result') resultLine = parsed;
-      } catch { /* ligne non-JSON (ne devrait pas arriver) — ignorée */ }
-    }
-  });
-  proc.stderr.on('data', (d) => { stderr += d; });
-
-  proc.stdin.write(JSON.stringify({
-    articleUrl, targetKeyword,
-    instruction: instruction || '',
-    modelSelections: modelSelections || null,
-    modelPricing: modelPricing || null,
-    launchedByUid: req.user.uid,
-    launchedByName: req.user.username,
-    // JAMAIS 127.0.0.1:PORT — l'hébergement Passenger de n0c ne garantit pas
-    // que le process écoute un port TCP local joignable en boucle ; le
-    // process enfant ne partage pas forcément l'environnement réseau du
-    // process parent. Même URL publique que le navigateur, comme partout
-    // ailleurs dans ce fichier (ligne ~431 et suivantes).
-    apiBaseUrl: `${IS_PROD ? 'https://maj.stomos.net' : `http://127.0.0.1:${PORT}`}/api`,
-    authToken: internalToken,
-  }));
-  proc.stdin.end();
-
-  // Un run complet (4 passes IA) peut prendre plusieurs minutes — même ordre
-  // de grandeur qu'une génération lancée depuis l'UI.
-  const timer = setTimeout(() => proc.kill(), 15 * 60 * 1000);
-
-  proc.on('close', (code) => {
-    clearTimeout(timer);
-    if (!resultLine) {
-      return res.status(500).json({ error: 'Le runner n\'a renvoyé aucun résultat', code, stderr, steps });
-    }
-    res.status(resultLine.ok ? 200 : 500).json({ ...resultLine, steps });
-  });
-  proc.on('error', (e) => {
-    clearTimeout(timer);
-    res.status(500).json({ error: `Impossible de démarrer le runner : ${e.message}` });
-  });
+  try {
+    const outcome = await spawnPipeline({
+      articleUrl, targetKeyword,
+      instruction: instruction || '',
+      modelSelections: modelSelections || null,
+      modelPricing: modelPricing || null,
+      launchedByUid: req.user.uid,
+      launchedByName: req.user.username,
+      // JAMAIS 127.0.0.1:PORT — l'hébergement Passenger de n0c ne garantit pas
+      // que le process écoute un port TCP local joignable en boucle ; le
+      // process enfant ne partage pas forcément l'environnement réseau du
+      // process parent. Même URL publique que le navigateur, comme partout
+      // ailleurs dans ce fichier (ligne ~431 et suivantes).
+      apiBaseUrl: `${IS_PROD ? 'https://maj.stomos.net' : `http://127.0.0.1:${PORT}`}/api`,
+      authToken: internalToken,
+    }, { onStep: (text) => console.log('[pipeline]', text) });
+    res.json(outcome);
+  } catch (e) {
+    res.status(500).json({ error: e.message, steps: e.steps || [], stderr: e.stderr });
+  }
 });
 
 // ─── Fallback : claude.exe CLI ────────────────────────────────────────────────

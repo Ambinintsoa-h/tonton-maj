@@ -935,6 +935,7 @@ module.exports = ({ requireAuth, requireRole }) => {
     rowRef: r.row_ref,
     site: r.site,
     articleUrl: r.article_url,
+    targetKeyword: r.target_keyword,
     majType: r.maj_type,
     consigne: r.consigne,
     status: r.status,
@@ -981,10 +982,10 @@ module.exports = ({ requireAuth, requireRole }) => {
          now, items.length, asJson(omit(b, ['items', 'source', 'launchedBy', 'launchedByName']))]);
       for (const item of items) {
         await conn.query(
-          `INSERT INTO batch_items (id, batch_id, row_ref, site, article_url, maj_type, consigne, status)
-           VALUES (?,?,?,?,?,?,?, 'en_attente')`,
+          `INSERT INTO batch_items (id, batch_id, row_ref, site, article_url, target_keyword, maj_type, consigne, status)
+           VALUES (?,?,?,?,?,?,?,?, 'en_attente')`,
           [genId(), id, item.rowRef ?? null, item.site ?? null, item.articleUrl ?? null,
-           item.majType ?? null, item.consigne ?? null]);
+           item.targetKeyword ?? null, item.majType ?? null, item.consigne ?? null]);
       }
       await conn.commit();
       res.json({ id });

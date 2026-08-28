@@ -16,7 +16,7 @@ const MAJ_TYPES = [
   { value: 'refonte', label: 'Refonte' },
 ];
 
-const newRow = () => ({ id: uid(), articleUrl: '', majType: 'maj', consigne: '' });
+const newRow = () => ({ id: uid(), articleUrl: '', targetKeyword: '', majType: 'maj', consigne: '' });
 
 // Meilleur effort, purement informatif (affichage) -- jamais bloquant si l'URL
 // est mal formée, le champ `site` de la table reste facultatif.
@@ -134,7 +134,7 @@ export default function LotsBatch() {
     if (!urls.length) return;
     setRows(rs => {
       const existing = rs.filter(r => r.articleUrl.trim());
-      const added = urls.map(url => ({ id: uid(), articleUrl: url, majType: 'maj', consigne: commonConsigne }));
+      const added = urls.map(url => ({ id: uid(), articleUrl: url, targetKeyword: '', majType: 'maj', consigne: commonConsigne }));
       return [...existing, ...added];
     });
     setBulkPaste('');
@@ -142,10 +142,12 @@ export default function LotsBatch() {
 
   const validRows = rows.filter(r => r.articleUrl.trim());
   const invalidUrlRows = validRows.filter(r => !isLikelyUrl(r.articleUrl));
+  const missingKeywordRows = validRows.filter(r => !r.targetKeyword.trim());
 
   const handleLaunchClick = () => {
     if (!validRows.length) { toast.error('Ajoute au moins une URL avant de lancer le lot.'); return; }
     if (invalidUrlRows.length) { toast.error(`${invalidUrlRows.length} URL(s) ne commencent pas par http(s):// -- corrige-les avant de lancer.`); return; }
+    if (missingKeywordRows.length) { toast.error(`${missingKeywordRows.length} ligne(s) sans mot-clé cible -- l'IA en a besoin pour traiter l'article.`); return; }
     setConfirmLaunch(true);
   };
 
@@ -156,6 +158,7 @@ export default function LotsBatch() {
       const items = validRows.map(r => ({
         site: guessSite(r.articleUrl) || undefined,
         articleUrl: r.articleUrl.trim(),
+        targetKeyword: r.targetKeyword.trim(),
         majType: r.majType,
         consigne: r.consigne?.trim() || undefined,
       }));
@@ -204,9 +207,9 @@ export default function LotsBatch() {
       <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
         <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
         <span>
-          Le traitement automatique de ces lots n'est pas encore branché. Un lot lancé ici est bien enregistré
-          (visible dans l'historique ci-dessous), mais chaque article restera « en attente » tant que
-          l'orchestrateur (prochaine étape du chantier) n'est pas en place.
+          Chaque article est traité automatiquement par l'IA (audit, génération, obsolescence, style) jusqu'à
+          la relecture -- il n'est jamais publié tout seul. Vérifie et publie chaque article depuis l'écran habituel
+          une fois son statut passé à « Fait ».
         </span>
       </div>
 
@@ -255,6 +258,16 @@ export default function LotsBatch() {
                 placeholder="https://..."
                 className={`flex-1 min-w-0 rounded-md border px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 ${
                   r.articleUrl && !isLikelyUrl(r.articleUrl) ? 'border-red-300' : 'border-gray-300'
+                }`}
+              />
+              <input
+                type="text"
+                value={r.targetKeyword}
+                onChange={e => updateRow(r.id, { targetKeyword: e.target.value })}
+                placeholder="Mot-clé cible"
+                title="Mot-clé cible -- obligatoire, l'IA en a besoin pour l'audit et la génération"
+                className={`w-40 flex-shrink-0 rounded-md border px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 ${
+                  r.articleUrl.trim() && !r.targetKeyword.trim() ? 'border-red-300' : 'border-gray-300'
                 }`}
               />
               <select
@@ -345,6 +358,7 @@ export default function LotsBatch() {
                           <thead>
                             <tr className="text-xs text-gray-400 border-b border-gray-100">
                               <th className="text-left font-medium py-1.5">Article</th>
+                              <th className="text-left font-medium py-1.5">Mot-clé</th>
                               <th className="text-left font-medium py-1.5">Type</th>
                               <th className="text-left font-medium py-1.5">Consigne</th>
                               <th className="text-left font-medium py-1.5">Statut</th>
@@ -359,6 +373,7 @@ export default function LotsBatch() {
                                     <ExternalLink className="w-3 h-3 flex-shrink-0" />
                                   </a>
                                 </td>
+                                <td className="py-1.5 pr-2 text-gray-600">{it.targetKeyword || '—'}</td>
                                 <td className="py-1.5 pr-2">{MAJ_TYPES.find(t => t.value === it.majType)?.label || it.majType || '—'}</td>
                                 <td className="py-1.5 pr-2 max-w-xs truncate text-gray-500" title={it.consigne || ''}>{it.consigne || '—'}</td>
                                 <td className="py-1.5">
