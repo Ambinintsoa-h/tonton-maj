@@ -26,6 +26,7 @@ import Equipe from './pages/Equipe';
 import Tickets from './pages/Tickets';
 import SupportDashboard from './pages/SupportDashboard';
 import Archives from './pages/Archives';
+import LotsBatch from './pages/LotsBatch';
 import { setSettings, setFirebaseReady, DEFAULT_FIREBASE_CONFIG } from './store/slices/settingsSlice';
 import { setSkills, setSkillsBootstrapped } from './store/slices/skillsSlice';
 import { countCustomSkills } from './constants/defaultSkills';
@@ -531,6 +532,7 @@ function AppRoutes() {
                 </RoleGuard>
               } />
               <Route path="/equipe"         element={<Equipe />}       />
+              <Route path="/lots"           element={<LotsBatch />}    />
               <Route path="/tickets"           element={<Tickets />}         />
               <Route path="/support-dashboard" element={
                 <RoleGuard allowedRoles={['support']}>

@@ -971,10 +971,13 @@ module.exports = ({ requireAuth, requireRole }) => {
     const conn = await getPool().getConnection();
     try {
       await conn.beginTransaction();
+      // launched_by / launched_by_name viennent du JWT, jamais du corps de la
+      // requête : sinon n'importe quel lancement pourrait s'attribuer à
+      // quelqu'un d'autre (attribution fausse, comme /run-article-pipeline).
       await conn.query(
         `INSERT INTO batches (id, source, status, launched_by, launched_by_name, launched_at, row_count, data)
          VALUES (?,?,?,?,?,?,?,?)`,
-        [id, b.source || 'manual', 'pending', b.launchedBy || null, b.launchedByName || null,
+        [id, b.source || 'manual', 'pending', req.user.uid || null, req.user.username || null,
          now, items.length, asJson(omit(b, ['items', 'source', 'launchedBy', 'launchedByName']))]);
       for (const item of items) {
         await conn.query(
