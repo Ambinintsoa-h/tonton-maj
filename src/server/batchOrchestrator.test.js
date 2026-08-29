@@ -81,6 +81,33 @@ describe('createBatchOrchestrator', () => {
     expect(put).toHaveBeenCalledWith('/data/batches/b1/items/i1', expect.objectContaining({ status: 'fait', articleId: 'art-1' }));
   });
 
+  it('reporte le coût/tokens réels sur un succès -- supervision Phase 8', async () => {
+    const spawnPipelineFn = jest.fn().mockResolvedValue({
+      articleId: 'art-1',
+      tokenUsage: { input: 12000, output: 3000, costUsd: 0.087 },
+    });
+    const { deps, put } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+    expect(put).toHaveBeenCalledWith('/data/batches/b1/items/i1', expect.objectContaining({
+      costUsd: 0.087, inputTokens: 12000, outputTokens: 3000,
+    }));
+  });
+
+  it('ne reporte AUCUN coût sur un échec -- le pipeline ne renvoie pas de tokenUsage partiel', async () => {
+    const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible'));
+    const { deps, put } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+    const [, patch] = put.mock.calls[0];
+    expect(patch).not.toHaveProperty('costUsd');
+    expect(patch).not.toHaveProperty('inputTokens');
+  });
+
   it('l\'échec d\'UN item ne bloque pas les autres -- chacun est reporté indépendamment', async () => {
     const spawnPipelineFn = jest.fn()
       .mockResolvedValueOnce({ articleId: 'art-a' })
