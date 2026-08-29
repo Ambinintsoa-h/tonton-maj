@@ -1031,8 +1031,22 @@ module.exports = ({ requireAuth, requireRole }) => {
            completed_at=CASE WHEN ?='done' THEN ? ELSE completed_at END
          WHERE id=?`,
         [counts.done_ct || 0, counts.error_ct || 0, batchStatus, batchStatus, Date.now(), id]);
+
+      // Réclamation ATOMIQUE du droit d'envoyer l'email de fin de lot : deux
+      // items peuvent terminer au même instant (concurrence de
+      // l'orchestrateur) et arriver TOUS LES DEUX ici avec batchStatus='done'
+      // -- sans ce verrou, chacun enverrait l'email. La ligne `batches` est
+      // déjà verrouillée par la transaction en cours (l'UPDATE juste
+      // au-dessus), donc un seul des deux appels concurrents peut faire
+      // passer email_sent de 0 à 1.
+      let shouldNotify = false;
+      if (batchStatus === 'done') {
+        const [claim] = await conn.query('UPDATE batches SET email_sent=1 WHERE id=? AND email_sent=0', [id]);
+        shouldNotify = claim.affectedRows === 1;
+      }
+
       await conn.commit();
-      res.json({ ok: true, batchStatus });
+      res.json({ ok: true, batchStatus, shouldNotify });
     } catch (e) {
       await conn.rollback();
       throw e;

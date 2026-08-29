@@ -1882,6 +1882,125 @@ setTimeout(() => {
 // concurrence) via le runner headless de la Phase 1 -- voir
 // src/server/batchOrchestrator.js pour le détail. MySQL uniquement : les
 // batches (Phase 2) n'existent pas côté Firestore.
+
+// Échappement minimal pour interpoler du texte (mot-clé, message d'erreur,
+// nom du lanceur) dans le HTML de l'email de fin de lot -- ce texte peut
+// provenir d'une réponse IA (message d'erreur d'audit) ou d'un import Sheet,
+// jamais d'une saisie de confiance.
+const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[c]));
+
+// Destinataire fixe temporaire pour valider le rendu de l'email en conditions
+// réelles (demande explicite d'Andrianina, août 2026) -- à retirer ou rendre
+// paramétrable une fois l'email validé.
+const BATCH_EMAIL_TEST_CC = 'andrianina@publithings.com';
+
+const BATCH_ITEM_STATUS_META = {
+  fait:       { label: 'Fait',       color: '#059669', bg: '#ecfdf5' },
+  erreur:     { label: 'Erreur',     color: '#dc2626', bg: '#fef2f2' },
+  a_revoir:   { label: 'À revoir',   color: '#7c3aed', bg: '#f5f3ff' },
+  en_attente: { label: 'En attente', color: '#d97706', bg: '#fffbeb' },
+  en_cours:   { label: 'En cours',   color: '#2563eb', bg: '#eff6ff' },
+};
+
+/**
+ * Envoie l'email de fin de lot (destinataire + design "Un email bien
+ * désigné" demandés explicitement) -- appelé UNE SEULE fois par lot grâce à
+ * la réclamation atomique de PUT /batches/:id/items/:itemId (`shouldNotify`).
+ * Chaque article "Fait" attend toujours une relecture humaine : l'email le
+ * dit explicitement, aucune publication n'est automatique.
+ */
+const sendBatchCompletionEmail = async (batchId) => {
+  const { getPool: getBatchEmailPool } = require('./db');
+  const pool = getBatchEmailPool();
+  const [[batch]] = await pool.query('SELECT * FROM batches WHERE id=?', [batchId]);
+  if (!batch) return;
+  const [items] = await pool.query('SELECT * FROM batch_items WHERE batch_id=? ORDER BY id', [batchId]);
+  if (!items.length) return;
+
+  let launcherEmail = null;
+  if (batch.launched_by) {
+    const [[user]] = await pool.query('SELECT email FROM users WHERE uid=? LIMIT 1', [batch.launched_by]);
+    launcherEmail = user?.email || null;
+  }
+  const recipients = [...new Set([launcherEmail, BATCH_EMAIL_TEST_CC].filter(Boolean))];
+  if (!recipients.length) return;
+
+  const appUrl = IS_PROD ? 'https://maj.stomos.net' : 'http://localhost:3000';
+  const doneCount = items.filter((i) => i.status === 'fait').length;
+  const errorCount = items.filter((i) => i.status === 'erreur').length;
+
+  const rowsHtml = items.map((it) => {
+    const meta = BATCH_ITEM_STATUS_META[it.status] || { label: it.status, color: '#6b7280', bg: '#f9fafb' };
+    const url = it.article_url || '';
+    return `<tr>
+        <td style="padding:12px 16px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#111">
+          <a href="${escapeHtml(url)}" style="color:#111;text-decoration:none;font-weight:600" target="_blank" rel="noopener noreferrer">${escapeHtml(url.replace(/^https?:\/\//, ''))}</a>
+          <div style="color:#888;font-size:12px;margin-top:2px">${escapeHtml(it.target_keyword || '—')}</div>
+        </td>
+        <td style="padding:12px 16px;border-bottom:1px solid #f0f0f0;text-align:right;white-space:nowrap">
+          <span style="display:inline-block;background:${meta.bg};color:${meta.color};font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;text-transform:uppercase;letter-spacing:0.04em">${escapeHtml(meta.label)}</span>
+          ${it.error_message ? `<div style="color:#dc2626;font-size:11px;margin-top:4px;max-width:220px">${escapeHtml(it.error_message)}</div>` : ''}
+        </td>
+      </tr>`;
+  }).join('');
+
+  const subject = `TONTON AI — Lot terminé (${doneCount}/${items.length} article${items.length > 1 ? 's' : ''})`;
+  const textBody = [
+    `Le lot lancé le ${new Date(batch.launched_at).toLocaleString('fr-FR')} est terminé.`,
+    `${doneCount} fait(s), ${errorCount} erreur(s) sur ${items.length} article(s).`,
+    '',
+    ...items.map((it) => `- [${(BATCH_ITEM_STATUS_META[it.status] || { label: it.status }).label}] ${it.article_url}`),
+    '',
+    `Voir : ${appUrl}/lots`,
+    '',
+    "L'équipe PUBLITHINGS",
+  ].join('\n');
+
+  const htmlBody = `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">
+      <div style="background:#111;padding:32px 36px 24px">
+        <p style="margin:0;color:#fff;font-size:20px;font-weight:800;letter-spacing:-0.02em">TONTON AI</p>
+        <p style="margin:4px 0 0;color:#aaa;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em">MAJ EN LOT</p>
+      </div>
+      <div style="padding:32px 36px 12px">
+        <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#111">Lot terminé</p>
+        <p style="margin:0 0 20px;color:#555;font-size:14px;line-height:1.6">
+          Lancé le ${escapeHtml(new Date(batch.launched_at).toLocaleString('fr-FR'))} par <strong>${escapeHtml(batch.launched_by_name || 'Batch')}</strong>.
+        </p>
+        <table style="width:100%;border-collapse:separate;border-spacing:8px 0;margin:0 0 8px;table-layout:fixed">
+          <tr>
+            <td style="background:#ecfdf5;border-radius:12px;padding:16px;text-align:center">
+              <div style="font-size:22px;font-weight:800;color:#059669">${doneCount}</div>
+              <div style="font-size:11px;color:#059669;text-transform:uppercase;font-weight:700;letter-spacing:0.04em">Fait${doneCount > 1 ? 's' : ''}</div>
+            </td>
+            <td style="background:#fef2f2;border-radius:12px;padding:16px;text-align:center">
+              <div style="font-size:22px;font-weight:800;color:#dc2626">${errorCount}</div>
+              <div style="font-size:11px;color:#dc2626;text-transform:uppercase;font-weight:700;letter-spacing:0.04em">Erreur${errorCount > 1 ? 's' : ''}</div>
+            </td>
+            <td style="background:#f9fafb;border-radius:12px;padding:16px;text-align:center">
+              <div style="font-size:22px;font-weight:800;color:#111">${items.length}</div>
+              <div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;letter-spacing:0.04em">Total</div>
+            </td>
+          </tr>
+        </table>
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        ${rowsHtml}
+      </table>
+      <div style="padding:24px 36px 32px">
+        <a href="${appUrl}/lots" style="display:inline-block;background:#111;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:14px 28px;border-radius:999px">
+          Voir le détail →
+        </a>
+        <p style="margin:20px 0 0;color:#9ca3af;font-size:12px;line-height:1.5">
+          Chaque article « Fait » attend une relecture humaine avant publication -- rien n'a été publié automatiquement.
+        </p>
+      </div>
+    </div>`;
+
+  await sendTicketEmail(recipients, subject, textBody, htmlBody);
+};
+
 if (DATA_BACKEND === 'mysql') {
   const { createBatchOrchestrator } = require('./src/server/batchOrchestrator');
   const { getPool: getBatchPool } = require('./db');
@@ -1893,6 +2012,7 @@ if (DATA_BACKEND === 'mysql') {
     apiBaseUrl: `${IS_PROD ? 'https://maj.stomos.net' : `http://127.0.0.1:${PORT}`}/api`,
     concurrency: parseInt(process.env.BATCH_ORCHESTRATOR_CONCURRENCY, 10) || 2,
     onLog: (msg) => console.log(msg),
+    onBatchDone: sendBatchCompletionEmail,
   });
   // Démarrage 10s après le boot (laisse le pool DB se stabiliser), puis un
   // tick toutes les 15s -- assez réactif pour qu'un lot lancé depuis /lots ne
