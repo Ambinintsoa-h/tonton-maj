@@ -35,6 +35,16 @@ const fmtDate = (ts) => {
   } catch { return '—'; }
 };
 
+const fmtDuration = (ms) => {
+  if (ms == null || ms < 0) return '—';
+  const totalSec = Math.round(ms / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return min > 0 ? `${min} min ${sec}s` : `${sec}s`;
+};
+
+const fmtCost = (usd) => (usd == null ? '—' : `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`);
+
 const BATCH_STATUS_META = {
   pending: { label: 'En attente', color: 'text-amber-600  bg-amber-50  border-amber-200' },
   running: { label: 'En cours',   color: 'text-blue-600   bg-blue-50   border-blue-200' },
@@ -388,9 +398,14 @@ export default function LotsBatch() {
                   <div className="text-xs text-gray-500">Lancé par {b.launchedByName || b.launchedBy || '—'}</div>
                 </div>
                 <Badge meta={BATCH_STATUS_META[b.status]} fallback={b.status} />
-                <div className="text-xs text-gray-500 w-28 text-right">
-                  {b.completedCount || 0}/{b.rowCount} terminés
-                  {b.errorCount ? <span className="text-red-500"> · {b.errorCount} erreur(s)</span> : null}
+                <div className="text-xs text-gray-500 w-36 text-right">
+                  <div>
+                    {b.completedCount || 0}/{b.rowCount} terminés
+                    {b.errorCount ? <span className="text-red-500"> · {b.errorCount} erreur(s)</span> : null}
+                  </div>
+                  {(b.totalCostUsd != null || b.totalDurationMs != null) && (
+                    <div className="text-gray-400">{fmtCost(b.totalCostUsd)} · {fmtDuration(b.totalDurationMs)}</div>
+                  )}
                 </div>
                 {expandedId === b.id ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
               </button>
@@ -413,6 +428,8 @@ export default function LotsBatch() {
                               <th className="text-left font-medium py-1.5">Mot-clé</th>
                               <th className="text-left font-medium py-1.5">Type</th>
                               <th className="text-left font-medium py-1.5">Consigne</th>
+                              <th className="text-left font-medium py-1.5">Durée</th>
+                              <th className="text-left font-medium py-1.5">Coût</th>
                               <th className="text-left font-medium py-1.5">Statut</th>
                             </tr>
                           </thead>
@@ -428,6 +445,10 @@ export default function LotsBatch() {
                                 <td className="py-1.5 pr-2 text-gray-600">{it.targetKeyword || '—'}</td>
                                 <td className="py-1.5 pr-2">{MAJ_TYPES.find(t => t.value === it.majType)?.label || it.majType || '—'}</td>
                                 <td className="py-1.5 pr-2 max-w-xs truncate text-gray-500" title={it.consigne || ''}>{it.consigne || '—'}</td>
+                                <td className="py-1.5 pr-2 text-gray-500 whitespace-nowrap">
+                                  {it.startedAt && it.completedAt ? fmtDuration(it.completedAt - it.startedAt) : '—'}
+                                </td>
+                                <td className="py-1.5 pr-2 text-gray-500 whitespace-nowrap">{fmtCost(it.costUsd)}</td>
                                 <td className="py-1.5">
                                   <Badge meta={ITEM_STATUS_META[it.status]} fallback={it.status} />
                                   {it.errorMessage && <span className="ml-2 text-xs text-red-500">{it.errorMessage}</span>}

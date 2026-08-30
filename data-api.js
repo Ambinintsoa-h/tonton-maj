@@ -943,6 +943,9 @@ module.exports = ({ requireAuth, requireRole }) => {
     errorMessage: r.error_message,
     startedAt: r.started_at,
     completedAt: r.completed_at,
+    ...(r.cost_usd != null ? { costUsd: r.cost_usd } : {}),
+    ...(r.input_tokens != null ? { inputTokens: r.input_tokens } : {}),
+    ...(r.output_tokens != null ? { outputTokens: r.output_tokens } : {}),
   });
 
   // GET /batches?limit=20 — liste des batches, plus récents d'abord (supervision).
@@ -1005,19 +1008,31 @@ module.exports = ({ requireAuth, requireRole }) => {
   const TERMINAL_STATUSES = ['fait', 'erreur', 'a_revoir'];
   router.put('/batches/:id/items/:itemId', requireAuth, wrap(async (req, res) => {
     const { id, itemId } = req.params;
-    const { status, articleId, errorMessage, startedAt, completedAt } = req.body || {};
+    const {
+      status, articleId, errorMessage, startedAt, completedAt,
+      costUsd, inputTokens, outputTokens,
+    } = req.body || {};
     const conn = await getPool().getConnection();
     try {
       await conn.beginTransaction();
-      const [existing] = await conn.query('SELECT id FROM batch_items WHERE id=? AND batch_id=?', [itemId, id]);
+      const [existing] = await conn.query('SELECT id, started_at FROM batch_items WHERE id=? AND batch_id=?', [itemId, id]);
       if (!existing.length) { await conn.rollback(); return res.status(404).json({ error: 'Item introuvable' }); }
       await conn.query(
         `UPDATE batch_items SET
            status=COALESCE(?, status), article_id=COALESCE(?, article_id),
            error_message=COALESCE(?, error_message), started_at=COALESCE(?, started_at),
-           completed_at=COALESCE(?, completed_at)
+           completed_at=COALESCE(?, completed_at), cost_usd=COALESCE(?, cost_usd),
+           input_tokens=COALESCE(?, input_tokens), output_tokens=COALESCE(?, output_tokens)
          WHERE id=?`,
-        [status ?? null, articleId ?? null, errorMessage ?? null, startedAt ?? null, completedAt ?? null, itemId]);
+        [status ?? null, articleId ?? null, errorMessage ?? null, startedAt ?? null, completedAt ?? null,
+         costUsd ?? null, inputTokens ?? null, outputTokens ?? null, itemId]);
+
+      // Cumul cout/duree sur le batch parent -- pour la supervision (Phase 8).
+      // La duree ne se deduit QUE si l'item avait bien un started_at (posé par
+      // l'orchestrateur au moment de la réclamation) : jamais négative, jamais
+      // fantaisiste si completedAt arrive seul.
+      const startedAtExisting = existing[0].started_at ?? startedAt ?? null;
+      const durationMs = (completedAt != null && startedAtExisting != null) ? (completedAt - startedAtExisting) : null;
       const [[counts]] = await conn.query(
         `SELECT COUNT(*) AS total,
            SUM(status='fait') AS done_ct,
@@ -1028,9 +1043,12 @@ module.exports = ({ requireAuth, requireRole }) => {
       const batchStatus = Number(counts.terminal_ct) >= Number(counts.total) ? 'done' : 'running';
       await conn.query(
         `UPDATE batches SET completed_count=?, error_count=?, status=?,
-           completed_at=CASE WHEN ?='done' THEN ? ELSE completed_at END
+           completed_at=CASE WHEN ?='done' THEN ? ELSE completed_at END,
+           total_cost_usd=COALESCE(total_cost_usd,0) + COALESCE(?,0),
+           total_duration_ms=COALESCE(total_duration_ms,0) + COALESCE(?,0)
          WHERE id=?`,
-        [counts.done_ct || 0, counts.error_ct || 0, batchStatus, batchStatus, Date.now(), id]);
+        [counts.done_ct || 0, counts.error_ct || 0, batchStatus, batchStatus, Date.now(),
+         costUsd ?? null, durationMs, id]);
 
       // Réclamation ATOMIQUE du droit d'envoyer l'email de fin de lot : deux
       // items peuvent terminer au même instant (concurrence de

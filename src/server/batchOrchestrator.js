@@ -179,6 +179,13 @@ function createBatchOrchestrator(deps) {
         status: 'fait',
         articleId: outcome.articleId,
         completedAt: Date.now(),
+        // Supervision (Phase 8) : coût/tokens réels de CET article, cumulés
+        // côté data-api.js sur le batch parent. Absents en cas d'échec -- le
+        // pipeline rejette sans renvoyer de tokenUsage partiel, donc le coût
+        // d'un run raté n'est pas tracé ici (limite connue, pas un oubli).
+        costUsd: outcome.tokenUsage?.costUsd ?? null,
+        inputTokens: outcome.tokenUsage?.input ?? null,
+        outputTokens: outcome.tokenUsage?.output ?? null,
       });
       onLog(`[batch] Item ${item.id} terminé -- article ${outcome.articleId}`);
     } catch (e) {
