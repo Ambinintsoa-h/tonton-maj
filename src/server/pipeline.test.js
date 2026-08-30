@@ -50,8 +50,8 @@ const AUDIT_SIMPLE = {
 
 const fakeHttp = () => ({
   get: jest.fn(async (url) => {
-    if (url === '/skills') return { data: [{ id: 's1', brainMode: true }] };
-    if (url === '/knowledge') return { data: [] };
+    if (url === '/data/skills') return { data: [{ id: 's1', brainMode: true }] };
+    if (url === '/data/knowledge') return { data: [] };
     if (url === '/data/stats') return { data: { totalArticles: 0, history: [], totalByPass: {} } };
     throw new Error(`GET inattendu: ${url}`);
   }),
@@ -172,11 +172,36 @@ describe('runArticlePipeline — chemin complet', () => {
 
   test('une panne du dispatch stats ne fait PAS échouer le run — le contenu payé est déjà produit', async () => {
     http.get.mockImplementation(async (url) => {
-      if (url === '/skills') return { data: [{ id: 's1', brainMode: true }] };
-      if (url === '/knowledge') return { data: [] };
+      if (url === '/data/skills') return { data: [{ id: 's1', brainMode: true }] };
+      if (url === '/data/knowledge') return { data: [] };
       if (url === '/data/stats') throw new Error('stats indisponibles');
       throw new Error(`GET inattendu: ${url}`);
     });
     await expect(runArticlePipeline(baseInput())).resolves.toMatchObject({ articleId: 'art-123' });
+  });
+
+  // Régression du 30 août 2026 : /skills et /knowledge appelés SANS le préfixe
+  // /data tombaient sur le catch-all SPA de proxy.js, qui renvoie du HTML
+  // (200 -- jamais rejeté par axios). `(skills || []).filter` explosait alors
+  // sur cette chaîne dans getBrainSkills(). Reproduit ici en simulant le même
+  // symptôme : la route renvoie quelque chose qui n'est PAS un tableau.
+  test('une route /data/skills qui ne renvoie pas un tableau échoue fort, jamais en silence', async () => {
+    http.get.mockImplementation(async (url) => {
+      if (url === '/data/skills') return { data: '<!doctype html><html>...</html>' };
+      if (url === '/data/knowledge') return { data: [] };
+      throw new Error(`GET inattendu: ${url}`);
+    });
+    await expect(runArticlePipeline(baseInput())).rejects.toThrow(/data\/skills.*tableau/);
+    expect(runQatAudit).not.toHaveBeenCalled();
+  });
+
+  test('une route /data/knowledge qui ne renvoie pas un tableau échoue fort', async () => {
+    http.get.mockImplementation(async (url) => {
+      if (url === '/data/skills') return { data: [] };
+      if (url === '/data/knowledge') return { data: { knowledge: [] } };
+      throw new Error(`GET inattendu: ${url}`);
+    });
+    await expect(runArticlePipeline(baseInput())).rejects.toThrow(/data\/knowledge.*tableau/);
+    expect(runQatAudit).not.toHaveBeenCalled();
   });
 });

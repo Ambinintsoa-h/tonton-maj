@@ -138,8 +138,26 @@ const runArticlePipeline = async (input) => {
   // Skills/knowledge sont chargés UNE FOIS par l'appelant du batch (identiques
   // pour tous les articles du lot) ; en Phase 1 (vérification manuelle), on
   // les charge ici directement — même endpoint que le bootstrap Redux de l'UI.
-  const skills = skillsInput ?? (await http.get('/skills')).data ?? [];
-  const knowledge = knowledgeInput ?? (await http.get('/knowledge')).data ?? [];
+  //
+  // /skills et /knowledge n'existent QUE sous /data (data-api.js) -- jamais à
+  // la racine /api. Sans le préfixe, la requête tombait sur le catch-all SPA
+  // de proxy.js qui renvoie du HTML (200, donc jamais rejeté), et ce HTML
+  // (une chaîne, tronquée par `?? []` seulement si null/undefined -- pas si
+  // "juste truthy") finissait tel quel dans getBrainSkills() :
+  // `(skills || []).filter is not a function`. Constaté sur 3/3 articles
+  // réels le 30 août 2026, jamais vu avant faute d'avoir déjà atteint ce
+  // point du pipeline en prod (les deux pannes précédentes bloquaient plus
+  // tôt). La vérification `Array.isArray` fait échouer fort toute nouvelle
+  // dérive de ces routes, plutôt que de continuer sans skills en silence.
+  const fetchDataArray = async (path) => {
+    const { data } = await http.get(path);
+    if (!Array.isArray(data)) {
+      throw new Error(`GET ${path} n'a pas renvoyé un tableau (reçu ${typeof data}) -- route API cassée ou déplacée`);
+    }
+    return data;
+  };
+  const skills = skillsInput ?? (await fetchDataArray('/data/skills'));
+  const knowledge = knowledgeInput ?? (await fetchDataArray('/data/knowledge'));
 
   // ── Étape 0 — récupération du contenu, MÊME endpoint que l'UI (Articles.jsx)
   onStep('Récupération du contenu de l\'article...');
