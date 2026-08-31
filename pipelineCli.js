@@ -98,6 +98,7 @@ const emit = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
   axios.defaults.headers.common.Authorization = `Bearer ${input.authToken}`;
 
   const { runArticlePipeline } = require('./src/server/pipeline');
+  const { describeHttpError } = require('./src/server/httpErrorDetail');
 
   try {
     const result = await runArticlePipeline({
@@ -106,7 +107,14 @@ const emit = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
     });
     emit({ type: 'result', ok: true, ...result });
   } catch (e) {
-    emit({ type: 'result', ok: false, error: e.message });
+    // agent.js/search.js (ESM, partagés avec le navigateur) ne catchent
+    // jamais leurs propres appels axios internes (/api/claude-job,
+    // /api/brave, /api/tavily, /api/data/...) -- sans ce déplioir, TOUTE
+    // erreur HTTP interne remonte ici comme "Request failed with status
+    // code 500", illisible pour diagnostiquer laquelle a échoué et pourquoi.
+    // Voir httpErrorDetail.js pour le détail et le lien avec la régression
+    // /api/api du 31 août 2026 (même symptôme, cause différente).
+    emit({ type: 'result', ok: false, error: describeHttpError(e) });
     process.exitCode = 1;
   }
 })();

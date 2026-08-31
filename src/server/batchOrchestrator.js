@@ -25,6 +25,7 @@
 const crypto = require('crypto');
 const axios = require('axios');
 const { spawnPipeline: defaultSpawnPipeline } = require('./spawnPipeline');
+const { describeHttpError } = require('./httpErrorDetail');
 
 const DEFAULT_CONCURRENCY = 2;
 const DEFAULT_TOKEN_TTL = '20m';
@@ -189,11 +190,26 @@ function createBatchOrchestrator(deps) {
       });
       onLog(`[batch] Item ${item.id} terminé -- article ${outcome.articleId}`);
     } catch (e) {
-      onLog(`[batch] Item ${item.id} en échec : ${e.message}`);
+      // `e` vient soit de spawnPipelineFn (déjà enrichi côté pipelineCli.js,
+      // voir httpErrorDetail.js -- describeHttpError() n'y touche alors pas,
+      // pas de .response dessus), soit d'un échec du PUT de reportOutcome
+      // lui-même (erreur axios brute de CE process, elle) -- un seul appel
+      // couvre les deux cas. La dernière étape atteinte et un extrait du
+      // stderr du runner (crash non capturé en Error propre) complètent le
+      // message : sans eux, "Audit illisible" ou un timeout HTTP ne dit rien
+      // de OÙ dans les 4 passes IA le lot s'est arrêté.
+      const lastStep = Array.isArray(e.steps) && e.steps.length ? e.steps[e.steps.length - 1] : null;
+      const stderrTail = e.stderr ? String(e.stderr).trim().slice(-500) : null;
+      const errorMessage = [
+        describeHttpError(e) || 'Erreur inconnue',
+        lastStep ? `(dernière étape : ${lastStep})` : null,
+        stderrTail ? `\nstderr: ${stderrTail}` : null,
+      ].filter(Boolean).join(' ').slice(0, 2000);
+      onLog(`[batch] Item ${item.id} en échec : ${errorMessage}`);
       try {
         await reportOutcome(item, {
           status: 'erreur',
-          errorMessage: (e.message || 'Erreur inconnue').slice(0, 2000),
+          errorMessage,
           completedAt: Date.now(),
         });
       } catch (e2) {
@@ -202,7 +218,7 @@ function createBatchOrchestrator(deps) {
         // batch parent -- il sera visible comme bloqué dans l'historique et
         // devra être relancé, comme n'importe quel crash serveur en cours de
         // traitement.
-        onLog(`[batch] Item ${item.id} -- impossible de reporter l'échec : ${e2.message}`);
+        onLog(`[batch] Item ${item.id} -- impossible de reporter l'échec : ${describeHttpError(e2)}`);
       }
     } finally {
       active -= 1;
