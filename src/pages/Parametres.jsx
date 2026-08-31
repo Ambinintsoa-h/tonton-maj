@@ -3,12 +3,13 @@ import { STORAGE_KEYS } from '../constants/storage';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink, Flame, Shield, Zap, AlertTriangle, Cpu, RotateCcw } from 'lucide-react';
+import { Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink, Flame, Shield, Zap, AlertTriangle, Cpu, RotateCcw, FileSpreadsheet, RefreshCw } from 'lucide-react';
 import axios from 'axios';
 import { setSettings, setFirebaseReady } from '../store/slices/settingsSlice';
 import { initFirebase, saveSettings } from '../services/firebase';
 import { MODEL_PASSES } from '../services/agent';
 import { recentAvgForPass, N_RECENTS } from '../utils/modelCosts';
+import { syncGoogleSheetNow } from '../services/gsheetStaging';
 
 // Groupes d'affichage — présentation uniquement, aucun impact sur le registre
 // (MODEL_PASSES, agent.js) : juste pour rendre 12 lignes plates plus lisibles.
@@ -46,6 +47,36 @@ function SecretInput({ label, value, onChange, placeholder, hint }) {
   );
 }
 
+// Variante textarea de SecretInput -- pour la clé de compte de service Google
+// (JSON multi-lignes, plusieurs Ko), même principe de masquage par défaut.
+function SecretTextarea({ label, value, onChange, placeholder, hint }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="space-y-1.5">
+      <label className="text-sm font-medium text-gray-700">{label}</label>
+      <div className="relative">
+        <textarea
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder}
+          rows={4}
+          spellCheck={false}
+          className="input-glass pr-10 font-mono text-xs leading-relaxed"
+          style={show ? undefined : { WebkitTextSecurity: 'disc', textSecurity: 'disc' }}
+        />
+        <button
+          type="button"
+          onClick={() => setShow(!show)}
+          className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
+        >
+          {show ? <EyeOff size={15} /> : <Eye size={15} />}
+        </button>
+      </div>
+      {hint && <p className="text-xs text-gray-400">{hint}</p>}
+    </div>
+  );
+}
+
 export default function Parametres() {
   const dispatch = useDispatch();
   const stored = useSelector(s => s.settings);
@@ -54,6 +85,9 @@ export default function Parametres() {
   const [testing, setTesting] = useState(false);
   const [testingHaloscan, setTestingHaloscan] = useState(false);
   const [haloscanStatus, setHaloscanStatus] = useState(null);
+  const [testingGsheet, setTestingGsheet] = useState(false);
+  const [gsheetStatus, setGsheetStatus] = useState(null); // null | 'ok' | 'error'
+  const [gsheetStatusDetail, setGsheetStatusDetail] = useState('');
   const [proxyStatus, setProxyStatus] = useState(null);
   const [checkingProxy, setCheckingProxy] = useState(false);
   // Catalogue de modèles (GET /api/models) — curated = testé par l'équipe
@@ -93,6 +127,8 @@ export default function Parametres() {
     smtpFrom:    stored.smtpFrom    || '',
     defaultTicketAssigneeEmail: stored.defaultTicketAssigneeEmail || '',
     haloscanKey: stored.haloscanKey || '',
+    googleSheetsServiceAccountJson: stored.googleSheetsServiceAccountJson || '',
+    googleSheetsId: stored.googleSheetsId || '',
     modelSelections: stored.modelSelections || {},
   });
 
@@ -163,6 +199,34 @@ export default function Parametres() {
     setRunnerBusy(false);
   };
 
+  // Test Google Sheets -- contrairement à Haloscan, il n'y a pas de route de
+  // test "à blanc" : le compte de service doit d'abord être enregistré côté
+  // serveur (data/settings.json) pour que la lecture Sheets s'authentifie.
+  // On sauvegarde donc le formulaire AVANT de lancer une synchronisation
+  // réelle -- qui, comme le bouton "Synchroniser maintenant" de /lots, ne
+  // fait que DÉTECTER des lignes neuves, jamais les lancer.
+  const handleTestGsheet = async () => {
+    if (!form.googleSheetsServiceAccountJson || !form.googleSheetsId) {
+      toast.error('Renseigne la clé de compte de service et l\'identifiant du Sheet d\'abord');
+      return;
+    }
+    setTestingGsheet(true);
+    setGsheetStatus(null);
+    try {
+      await handleSave();
+      const result = await syncGoogleSheetNow();
+      setGsheetStatus('ok');
+      setGsheetStatusDetail(`${result.scanned} ligne(s) lue(s), ${result.inserted} nouvelle(s)`);
+      toast.success('Google Sheet connecté !');
+    } catch (e) {
+      setGsheetStatus('error');
+      const detail = e.message || '';
+      setGsheetStatusDetail(detail);
+      toast.error(`Google Sheet inaccessible — ${detail || 'vérifie la clé et l\'identifiant'}`);
+    }
+    setTestingGsheet(false);
+  };
+
   // Prix d'un modèle : exact (LiteLLM, modelPricing) s'il est curated, sinon
   // indicatif (déjà porté par l'entrée `discovered`), sinon rien à afficher.
   const priceForModel = (modelId) => {
@@ -229,6 +293,8 @@ export default function Parametres() {
       smtpFrom:    form.smtpFrom,
       defaultTicketAssigneeEmail: form.defaultTicketAssigneeEmail,
       haloscanKey: form.haloscanKey,
+      googleSheetsServiceAccountJson: form.googleSheetsServiceAccountJson,
+      googleSheetsId: form.googleSheetsId,
       modelSelections: form.modelSelections,
     };
 
@@ -298,6 +364,8 @@ export default function Parametres() {
       smtpFrom:    stored.smtpFrom    || '',
       defaultTicketAssigneeEmail: stored.defaultTicketAssigneeEmail || '',
       haloscanKey: stored.haloscanKey || '',
+      googleSheetsServiceAccountJson: stored.googleSheetsServiceAccountJson || '',
+      googleSheetsId: stored.googleSheetsId || '',
       modelSelections: stored.modelSelections || {},
     }));
   }, [stored]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -827,6 +895,61 @@ export default function Parametres() {
             {' '}<a href="https://tool.haloscan.com/user/api" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline inline-flex items-center gap-0.5">tool.haloscan.com/user/api <ExternalLink size={10} /></a>
             {' '}et mettre à jour <code className="bg-white px-1 py-0.5 rounded border border-gray-200">HALOSCAN_BASE</code> dans <code className="bg-white px-1 py-0.5 rounded border border-gray-200">proxy.js</code>.
           </p>
+        </div>
+      </motion.div>
+
+      {/* Google Sheets — synchronisation MAJ en lot */}
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="glass-card p-6 space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #0d9488, #0f766e)' }}>
+            <FileSpreadsheet size={16} className="text-white" />
+          </div>
+          <div className="flex-1">
+            <h2 className="font-semibold text-gray-900">Google Sheets — MAJ en lot</h2>
+            <p className="text-xs text-gray-400">Détection automatique des lignes neuves du Sheet de suivi (écran MAJ en lot)</p>
+          </div>
+          {stored.googleSheetsConfigured && <CheckCircle2 size={16} className="text-sage-400 ml-auto" />}
+        </div>
+
+        <SecretTextarea
+          label="Clé de compte de service Google (JSON)"
+          value={form.googleSheetsServiceAccountJson}
+          onChange={v => { set('googleSheetsServiceAccountJson', v); setGsheetStatus(null); }}
+          placeholder='{"type": "service_account", "client_email": "...", "private_key": "...", ...}'
+          hint="Console Google Cloud → IAM & Admin → Comptes de service → Clés → JSON. Le Sheet doit être partagé avec l'adresse client_email de ce fichier."
+        />
+
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium text-gray-700">Google Sheet à surveiller</label>
+          <input
+            type="text"
+            value={form.googleSheetsId}
+            onChange={e => { set('googleSheetsId', e.target.value); setGsheetStatus(null); }}
+            placeholder="https://docs.google.com/spreadsheets/d/.../edit ou l'identifiant seul"
+            className="input-glass"
+          />
+          <p className="text-xs text-gray-400">Colle l'URL complète ou juste l'identifiant -- les deux marchent.</p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleTestGsheet}
+            disabled={testingGsheet}
+            className="btn-secondary text-xs"
+          >
+            {testingGsheet ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+            Enregistrer et synchroniser maintenant
+          </button>
+          {gsheetStatus === 'ok'    && <span className="text-xs text-emerald-600 font-medium flex items-center gap-1"><CheckCircle2 size={13} /> Connecté{gsheetStatusDetail ? ` — ${gsheetStatusDetail}` : ''}</span>}
+          {gsheetStatus === 'error' && <span className="text-xs text-red-500 font-medium flex items-center gap-1"><AlertCircle size={13} /> {gsheetStatusDetail || 'Échec'}</span>}
+        </div>
+
+        <div className="bg-teal-50 border border-teal-100 rounded-xl px-4 py-3 text-xs text-teal-700 space-y-1.5">
+          <p className="font-semibold">Ce que ça active</p>
+          <p>• Un cron serveur lit le Sheet toutes les 5 minutes et détecte les lignes neuves (colonne « N° »)</p>
+          <p>• Les lignes détectées apparaissent dans un bloc à part sur l'écran « MAJ en lot », à relire</p>
+          <p>• Le lancement reste toujours un geste humain -- rien n'est jamais lancé automatiquement</p>
         </div>
       </motion.div>
 

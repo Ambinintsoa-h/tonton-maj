@@ -5,10 +5,11 @@ import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import {
   Layers, Plus, Trash2, ExternalLink, ChevronDown, ChevronUp,
-  Loader, RefreshCw, AlertTriangle, Rocket, Upload,
+  Loader, RefreshCw, AlertTriangle, Rocket, Upload, X,
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { listBatches, getBatch, createBatch } from '../services/batches';
+import { listStagedItems, launchStagedItems, ignoreStagedItem, syncGoogleSheetNow } from '../services/gsheetStaging';
 import { parseBatchSheetRows } from '../utils/batchSheetImport';
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -121,6 +122,15 @@ export default function LotsBatch() {
   const [loadingItemsId, setLoadingItemsId] = useState(null);
   const fileInputRef = useRef(null);
 
+  // Lignes détectées automatiquement sur le Google Sheet (cron 5 min côté
+  // serveur, voir src/server/googleSheetSync.js) -- jamais lancées seules,
+  // juste mises en attente ici jusqu'à un clic humain sur "Lancer".
+  const [stagedItems, setStagedItems] = useState([]);
+  const [loadingStaged, setLoadingStaged] = useState(true);
+  const [syncingSheet, setSyncingSheet] = useState(false);
+  const [selectedStagedIds, setSelectedStagedIds] = useState(() => new Set());
+  const [launchingStaged, setLaunchingStaged] = useState(false);
+
   const refreshBatches = useCallback(async () => {
     setLoadingBatches(true);
     try {
@@ -133,7 +143,74 @@ export default function LotsBatch() {
     }
   }, []);
 
+  const refreshStaged = useCallback(async () => {
+    setLoadingStaged(true);
+    try {
+      const list = await listStagedItems();
+      setStagedItems(list);
+      setSelectedStagedIds((prev) => new Set([...prev].filter((id) => list.some((it) => it.id === id))));
+    } catch (e) {
+      toast.error(`Impossible de charger les lignes détectées : ${e.message}`);
+    } finally {
+      setLoadingStaged(false);
+    }
+  }, []);
+
   useEffect(() => { refreshBatches(); }, [refreshBatches]);
+  useEffect(() => { refreshStaged(); }, [refreshStaged]);
+
+  const toggleStagedSelect = (id) => setSelectedStagedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const toggleSelectAllStaged = () => setSelectedStagedIds((prev) => (
+    prev.size === stagedItems.length ? new Set() : new Set(stagedItems.map((it) => it.id))
+  ));
+
+  const handleSync = async () => {
+    setSyncingSheet(true);
+    try {
+      const result = await syncGoogleSheetNow();
+      toast.success(result.inserted > 0
+        ? `${result.inserted} nouvelle(s) ligne(s) détectée(s).`
+        : 'Synchronisé -- aucune ligne neuve.');
+      await refreshStaged();
+    } catch (e) {
+      toast.error(`Synchronisation impossible : ${e.message}`);
+    } finally {
+      setSyncingSheet(false);
+    }
+  };
+
+  const handleIgnoreStaged = async (id) => {
+    try {
+      await ignoreStagedItem(id);
+      setStagedItems((items) => items.filter((it) => it.id !== id));
+      setSelectedStagedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    } catch (e) {
+      toast.error(`Impossible d'ignorer cette ligne : ${e.message}`);
+    }
+  };
+
+  const handleLaunchStaged = async () => {
+    setLaunchingStaged(true);
+    try {
+      const ids = [...selectedStagedIds];
+      const { launchedCount, batchId } = await launchStagedItems(ids);
+      toast.success(`Lot lancé -- ${launchedCount} article(s) enregistré(s).`);
+      setSelectedStagedIds(new Set());
+      await refreshStaged();
+      await refreshBatches();
+      setExpandedId(batchId);
+      loadItems(batchId);
+    } catch (e) {
+      toast.error(`Échec du lancement : ${e.message}`);
+    } finally {
+      setLaunchingStaged(false);
+    }
+  };
 
   const updateRow = (id, patch) => setRows(rs => rs.map(r => (r.id === id ? { ...r, ...patch } : r)));
   const removeRow = (id) => setRows(rs => (rs.length > 1 ? rs.filter(r => r.id !== id) : rs));
@@ -367,6 +444,90 @@ export default function LotsBatch() {
             Lancer le lot ({validRows.length} article{validRows.length > 1 ? 's' : ''})
           </button>
         </div>
+      </section>
+
+      {/* ── Lignes détectées automatiquement depuis le Google Sheet ────────── */}
+      <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h2 className="font-medium text-gray-900">Lignes détectées depuis le Google Sheet</h2>
+            {stagedItems.length > 0 && (
+              <span className="text-xs font-semibold text-white bg-teal-600 rounded-full px-2 py-0.5">{stagedItems.length}</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={handleSync}
+            disabled={syncingSheet}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50 text-sm font-medium text-gray-700 px-3 py-1.5"
+          >
+            <RefreshCw className={`w-4 h-4 ${syncingSheet ? 'animate-spin' : ''}`} /> Synchroniser maintenant
+          </button>
+        </div>
+        <p className="text-xs text-gray-500 -mt-2">
+          Détection automatique toutes les 5 minutes -- une ligne neuve du Sheet apparaît ici, à relire avant de la lancer.
+          Rien n'est jamais lancé automatiquement.
+        </p>
+
+        {loadingStaged && !stagedItems.length && (
+          <p className="text-sm text-gray-400 py-6 text-center">Chargement...</p>
+        )}
+        {!loadingStaged && !stagedItems.length && (
+          <p className="text-sm text-gray-400 py-6 text-center">Aucune ligne neuve détectée pour l'instant.</p>
+        )}
+
+        {stagedItems.length > 0 && (
+          <>
+            <div className="space-y-2">
+              {stagedItems.map((it) => (
+                <div key={it.id} className="flex flex-col md:flex-row gap-2 items-start md:items-center border border-gray-100 rounded-lg p-2">
+                  <input
+                    type="checkbox"
+                    checked={selectedStagedIds.has(it.id)}
+                    onChange={() => toggleStagedSelect(it.id)}
+                    className="w-4 h-4 flex-shrink-0 mt-1 md:mt-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <a
+                      href={it.articleUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-gray-900 font-medium hover:underline inline-flex items-center gap-1 max-w-full truncate"
+                    >
+                      <span className="truncate">{it.articleUrl}</span>
+                      <ExternalLink className="w-3 h-3 flex-shrink-0 text-gray-400" />
+                    </a>
+                    <div className="text-xs text-gray-500">
+                      {it.targetKeyword || '—'} · {MAJ_TYPES.find((t) => t.value === it.majType)?.label || it.majType || '—'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleIgnoreStaged(it.id)}
+                    className="text-gray-400 hover:text-red-500 p-1.5"
+                    title="Ignorer cette ligne"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center justify-between pt-2">
+              <button type="button" onClick={toggleSelectAllStaged} className="text-sm font-medium text-gray-600 hover:text-gray-900">
+                {selectedStagedIds.size === stagedItems.length ? 'Tout désélectionner' : 'Tout sélectionner'}
+              </button>
+              <button
+                type="button"
+                onClick={handleLaunchStaged}
+                disabled={!selectedStagedIds.size || launchingStaged}
+                className="inline-flex items-center gap-2 rounded-lg bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 text-white text-sm font-medium px-4 py-2"
+              >
+                {launchingStaged ? <Loader className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                Lancer la sélection ({selectedStagedIds.size})
+              </button>
+            </div>
+          </>
+        )}
       </section>
 
       {/* ── Historique ──────────────────────────────────────────────────── */}
