@@ -1,4 +1,4 @@
-name: [TEMPORAIRE] Diagnostic serveur n0c
+name: "[TEMPORAIRE] Diagnostic serveur n0c"
 
 # Workflow de diagnostic UNIQUEMENT -- lecture seule sur n0c (grep/stat/md5sum),
 # aucune ecriture, aucun redemarrage. Sert a verifier si le code deploye sur
