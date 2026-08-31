@@ -56,6 +56,19 @@ if (typeof global.sessionStorage === 'undefined') {
 const axios = require('axios');
 const { originFromApiBase } = require('./src/server/originFromApiBase');
 
+// Dans le navigateur, un intercepteur global (src/App.js) pose l'en-tête
+// Authorization sur CHAQUE requête /api/* en lisant le JWT dans
+// sessionStorage -- App.js n'est jamais chargé ici (ce n'est même pas un
+// module ESM du domaine métier, juste le bootstrap React), donc aucun
+// intercepteur n'existe et les appels axios bruts d'agent.js/search.js
+// (JOB_PROXY '/api/claude-job', '/api/brave', ...) partaient SANS jeton.
+// Résultat observé en prod le 31 août 2026, une fois le double-préfixe /api
+// corrigé et la requête enfin adressée à la bonne route : "Non authentifié —
+// connectez-vous sur /login" sur l'audit ET la génération, systématiquement.
+// pipeline.js pose déjà ce même en-tête sur SA PROPRE instance axios dédiée
+// (axios.create({headers:{Authorization...}})) -- ce défaut global comble le
+// même trou pour tout le reste, qui utilise le module axios brut.
+
 const readStdin = () => new Promise((resolve, reject) => {
   let data = '';
   process.stdin.setEncoding('utf8');
@@ -82,6 +95,7 @@ const emit = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
   // l'ordre exact d'affectation vs require importe peu ICI, mais on le fait
   // tôt par clarté. Voir originFromApiBase.js pour le pourquoi du strip /api.
   axios.defaults.baseURL = originFromApiBase(input.apiBaseUrl);
+  axios.defaults.headers.common.Authorization = `Bearer ${input.authToken}`;
 
   const { runArticlePipeline } = require('./src/server/pipeline');
 
