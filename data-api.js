@@ -1073,6 +1073,85 @@ module.exports = ({ requireAuth, requireRole }) => {
     }
   }));
 
+  // ── gsheet_staged_items (synchronisation automatique du Google Sheet) ────────
+  // Une ligne détectée par le cron (src/server/googleSheetSync.js) atterrit ici
+  // en status 'nouveau' -- JAMAIS transformée en batch toute seule (décision
+  // Andrianina, août 2026). "Lancer" (écran /lots) crée un batch normal (même
+  // schéma que POST /batches ci-dessus) et marque les lignes reprises 'lance'
+  // avec leur batch_id ; "Ignorer" les écarte sans jamais les supprimer --
+  // trace de ce qui a été vu et volontairement écarté.
+  const stagedItemToObj = (r) => ({
+    id: r.id,
+    spreadsheetId: r.spreadsheet_id,
+    rowRef: r.row_ref,
+    site: r.site,
+    articleUrl: r.article_url,
+    targetKeyword: r.target_keyword,
+    majType: r.maj_type,
+    consigne: r.consigne,
+    status: r.status,
+    batchId: r.batch_id,
+    detectedAt: r.detected_at,
+  });
+
+  // GET /gsheet-staged?status=nouveau — lignes détectées non encore traitées.
+  router.get('/gsheet-staged', requireAuth, wrap(async (req, res) => {
+    const status = req.query.status || 'nouveau';
+    const [rows] = await q('SELECT * FROM gsheet_staged_items WHERE status=? ORDER BY detected_at DESC', [status]);
+    res.json(rows.map(stagedItemToObj));
+  }));
+
+  // POST /gsheet-staged/launch { ids: [...] } — crée un batch à partir des
+  // lignes choisies et les marque 'lance' avec le batch_id, en une seule
+  // transaction (soit tout, soit rien -- même règle que POST /batches).
+  router.post('/gsheet-staged/launch', requireAuth, wrap(async (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ error: 'ids (array non vide) requis' });
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      const [staged] = await conn.query(
+        `SELECT * FROM gsheet_staged_items WHERE id IN (${ids.map(() => '?').join(',')}) AND status='nouveau' FOR UPDATE`,
+        ids);
+      if (!staged.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Aucune ligne en attente correspondante -- déjà lancée ou ignorée ?' });
+      }
+
+      const batchId = genId();
+      const now = Date.now();
+      await conn.query(
+        `INSERT INTO batches (id, source, status, launched_by, launched_by_name, launched_at, row_count, data)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [batchId, 'gsheet', 'pending', req.user.uid || null, req.user.username || null, now, staged.length, asJson({})]);
+      for (const item of staged) {
+        await conn.query(
+          `INSERT INTO batch_items (id, batch_id, row_ref, site, article_url, target_keyword, maj_type, consigne, status)
+           VALUES (?,?,?,?,?,?,?,?, 'en_attente')`,
+          [genId(), batchId, item.row_ref, item.site, item.article_url, item.target_keyword, item.maj_type, item.consigne]);
+      }
+      await conn.query(
+        `UPDATE gsheet_staged_items SET status='lance', batch_id=?, updated_at=? WHERE id IN (${staged.map(() => '?').join(',')})`,
+        [batchId, now, ...staged.map((s) => s.id)]);
+      await conn.commit();
+      res.json({ batchId, launchedCount: staged.length });
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }));
+
+  // POST /gsheet-staged/:id/ignore — écarte une ligne sans jamais la supprimer.
+  router.post('/gsheet-staged/:id/ignore', requireAuth, wrap(async (req, res) => {
+    const [result] = await q(
+      `UPDATE gsheet_staged_items SET status='ignore', updated_at=? WHERE id=? AND status='nouveau'`,
+      [Date.now(), req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ error: 'Ligne introuvable ou déjà traitée' });
+    res.json({ ok: true });
+  }));
+
   // GET /articles/:id/lock — état courant du verrou (ou null) pour watchEditLock
   // (polling ~5 s). Renvoie le verrou BRUT ; la péremption est jugée côté client
   // (isLockActive), comme sous Firestore. ETag/304 auto.

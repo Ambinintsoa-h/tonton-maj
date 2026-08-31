@@ -135,6 +135,7 @@ const SETTINGS_WHITELIST = [
   'anthropicKey', 'groqKey', 'braveKey', 'tavilyKey', 'haloscanKey',
   'smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'smtpFrom',
   'firebaseConfig', 'useLocalProxy', 'modelSelections',
+  'googleSheetsServiceAccountJson', 'googleSheetsId',
 ];
 
 app.use(cors({
@@ -1412,11 +1413,12 @@ app.get('/api/settings', requireAuth, (req, res) => {
   const settings = readServerSettings();
   if (req.user.role !== 'super_admin') {
     // Clés API non exposées aux rôles inférieurs — le serveur les lit directement depuis settings.json
-    const { anthropicKey, groqKey, braveKey, tavilyKey, haloscanKey, smtpPass, smtpUser, smtpHost, smtpFrom, smtpPort, ...safeSettings } = settings;
+    const { anthropicKey, groqKey, braveKey, tavilyKey, haloscanKey, smtpPass, smtpUser, smtpHost, smtpFrom, smtpPort, googleSheetsServiceAccountJson, ...safeSettings } = settings;
     return res.json({
       ...safeSettings,
-      aiConfigured:       !!(settings.anthropicKey || settings.useLocalProxy),
-      haloscanConfigured: !!settings.haloscanKey,
+      aiConfigured:          !!(settings.anthropicKey || settings.useLocalProxy),
+      haloscanConfigured:    !!settings.haloscanKey,
+      googleSheetsConfigured: !!(settings.googleSheetsServiceAccountJson && settings.googleSheetsId),
     });
   }
   res.json(settings);
@@ -1444,6 +1446,19 @@ app.post('/api/settings', requireAuth, requireRole('super_admin'), async (req, r
         if (typeof model !== 'string' || !knownModels.has(model)) {
           return res.status(400).json({ error: `modelSelections.${pass} : modèle « ${model} » introuvable (ni testé par l'équipe, ni connu d'Anthropic)` });
         }
+      }
+    }
+    // Collée à la main dans le formulaire -- une clé JSON invalide ne doit
+    // jamais s'enregistrer en silence : la panne n'apparaîtrait qu'au premier
+    // tick du cron Google Sheets, illisible pour qui l'a saisie.
+    if (incoming.googleSheetsServiceAccountJson) {
+      try {
+        const sa = JSON.parse(incoming.googleSheetsServiceAccountJson);
+        if (!sa.client_email || !sa.private_key) {
+          return res.status(400).json({ error: 'Clé de compte de service Google invalide -- champs client_email/private_key manquants' });
+        }
+      } catch {
+        return res.status(400).json({ error: 'Clé de compte de service Google invalide -- JSON illisible' });
       }
     }
     const filtered = {};
@@ -2001,6 +2016,10 @@ const sendBatchCompletionEmail = async (batchId) => {
   await sendTicketEmail(recipients, subject, textBody, htmlBody);
 };
 
+// Instance partagée entre le cron ci-dessous et POST /api/internal/gsheet-sync
+// (bouton "Synchroniser maintenant") -- null tant que DATA_BACKEND=firestore.
+let googleSheetSyncInstance = null;
+
 if (DATA_BACKEND === 'mysql') {
   const { createBatchOrchestrator } = require('./src/server/batchOrchestrator');
   const { getPool: getBatchPool } = require('./db');
@@ -2021,6 +2040,41 @@ if (DATA_BACKEND === 'mysql') {
     batchOrchestrator.tick();
     setInterval(() => batchOrchestrator.tick(), 15000);
   }, 10000);
+
+  // ─── Synchronisation Google Sheet (détection seule -- JAMAIS de lancement) ──
+  // Décision Andrianina, août 2026 : un cron toutes les 5 min DÉTECTE les
+  // lignes neuves et les met en attente (gsheet_staged_items) ; le lancement
+  // reste un clic humain sur /lots, voir src/server/googleSheetSync.js.
+  const { createGoogleSheetSync } = require('./src/server/googleSheetSync');
+  const { getPool: getGsheetPool } = require('./db');
+  googleSheetSyncInstance = createGoogleSheetSync({
+    getPool: getGsheetPool,
+    onLog: (msg) => console.log(msg),
+  });
+
+  const runGsheetSyncTick = async () => {
+    const settings = readServerSettings();
+    if (!settings.googleSheetsServiceAccountJson || !settings.googleSheetsId) return; // pas configuré
+    let serviceAccount;
+    try {
+      serviceAccount = JSON.parse(settings.googleSheetsServiceAccountJson);
+    } catch (e) {
+      console.error('[gsheet-sync] Clé de compte de service illisible :', e.message);
+      return;
+    }
+    try {
+      await googleSheetSyncInstance.runSync(serviceAccount, settings.googleSheetsId);
+    } catch (e) {
+      console.error('[gsheet-sync] Synchronisation échouée :', e.message);
+    }
+  };
+  // Démarrage 20s après le boot, puis un tick toutes les 5 min -- assez
+  // réactif pour qu'une ligne ajoutée par la rédac apparaisse vite dans le
+  // bloc de mise en attente (/lots), sans marteler l'API Google Sheets.
+  setTimeout(() => {
+    runGsheetSyncTick();
+    setInterval(runGsheetSyncTick, 5 * 60 * 1000);
+  }, 20000);
 }
 
 // ─── Sécurité globale : empêche le proxy de crasher sur exceptions non gérées ─
@@ -2620,6 +2674,36 @@ app.post('/api/internal/run-article-pipeline', requireAuth, requireRole('super_a
     res.json(outcome);
   } catch (e) {
     res.status(500).json({ error: e.message, steps: e.steps || [], stderr: e.stderr });
+  }
+});
+
+/**
+ * POST /api/internal/gsheet-sync — synchronisation immédiate du Google Sheet
+ * de suivi (bouton "Synchroniser maintenant", écrans /lots et Paramètres).
+ * Fait exactement ce que fait le cron 5 min (src/server/googleSheetSync.js),
+ * une fois, tout de suite -- détecte les lignes neuves et les met en
+ * attente, ne lance JAMAIS de lot toute seule.
+ */
+app.post('/api/internal/gsheet-sync', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
+  if (DATA_BACKEND !== 'mysql' || !googleSheetSyncInstance) {
+    return res.status(400).json({ error: 'Indisponible dans ce mode' });
+  }
+  const settings = readServerSettings();
+  if (!settings.googleSheetsServiceAccountJson || !settings.googleSheetsId) {
+    return res.status(400).json({ error: 'Google Sheets non configuré -- renseigne la clé et l\'identifiant du Sheet dans Paramètres.' });
+  }
+  let serviceAccount;
+  try {
+    serviceAccount = JSON.parse(settings.googleSheetsServiceAccountJson);
+  } catch {
+    return res.status(500).json({ error: 'Clé de compte de service Google illisible (JSON invalide) -- vérifie Paramètres.' });
+  }
+  try {
+    const result = await googleSheetSyncInstance.runSync(serviceAccount, settings.googleSheetsId);
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[proxy] /api/internal/gsheet-sync erreur:', e.message);
+    res.status(500).json({ error: safeError(e, 'Synchronisation Google Sheet échouée') });
   }
 });
 

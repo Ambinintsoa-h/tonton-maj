@@ -51,6 +51,9 @@ const settingsSlice = createSlice({
     groqKey:            '',
     haloscanKey:        '',
     haloscanConfigured: false,
+    googleSheetsServiceAccountJson: '',
+    googleSheetsId:                 '',
+    googleSheetsConfigured:         false,
     firebaseConfig:     DEFAULT_FIREBASE_CONFIG,
     modelPricing:       DEFAULT_MODEL_PRICING,
     // { [passe]: modele } — choix du superadmin, persisté côté serveur
