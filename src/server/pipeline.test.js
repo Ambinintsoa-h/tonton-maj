@@ -136,6 +136,37 @@ describe('runArticlePipeline — chemin complet', () => {
     }));
   });
 
+  // Régression du 31 août 2026 : un article batch réellement généré rouvrait
+  // sur "Audit terminé, Génération à faire" -- derivePhaseStatus() (voir
+  // src/constants/majPhases.js) ne marque la phase 2 terminée que sur
+  // qatArticle ou des diffs, jamais sur updatedContent seul. Le champ n'était
+  // simplement jamais envoyé.
+  test('persiste qatArticle (sans son .html, déjà porté par updatedContent) -- signal de phase 2 pour derivePhaseStatus', async () => {
+    await runArticlePipeline(baseInput());
+    const [, payload] = http.post.mock.calls.find(([url]) => url === '/data/articles');
+    expect(payload.qatArticle).toEqual({ titreSeo: 'Titre SEO' });
+    expect(payload.qatArticle).not.toHaveProperty('html');
+  });
+
+  // Même régression, phase 3 : les suggestions d'obsolescence étaient
+  // calculées (coût réel payé) mais jamais enregistrées -- invisibles au
+  // relecteur, et aUneVerif (derivePhaseStatus) ne voyait jamais la phase
+  // terminée. POST /data/articles avec un id existant fait un MERGE (voir
+  // data-api.js) : le second appel ne doit rien écraser du premier.
+  test('enregistre obsolescenceReport après la passe 3, dans un second appel qui fusionne (id fourni)', async () => {
+    runReviewAgent.mockResolvedValue({
+      updates: [{ type: 'update', original: 'ancien', update: 'neuf' }],
+      tokenUsage: usage(500, 200, 'obsolescence'),
+    });
+    await runArticlePipeline(baseInput());
+    const articleCalls = http.post.mock.calls.filter(([url]) => url === '/data/articles');
+    expect(articleCalls).toHaveLength(2);
+    const [, mergePayload] = articleCalls[1];
+    expect(mergePayload.id).toBe('art-123');
+    expect(mergePayload.obsolescenceReport.suggestions).toEqual([{ type: 'update', original: 'ancien', update: 'neuf' }]);
+    expect(typeof mergePayload.obsolescenceReport.at).toBe('number');
+  });
+
   test('dispatche les 4 passes vers /data/stats via le VRAI reducer — jamais de double comptage sur audit_qat', async () => {
     // 18 mots, aucun motif détecté par detectStylePatterns → pas de findings → pas de passe de style.
     await runArticlePipeline(baseInput());
