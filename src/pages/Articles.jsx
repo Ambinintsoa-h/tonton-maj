@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { Link2, FileText, Sparkles, ChevronRight, AlertCircle, TrendingUp, Plus, X as XIcon, Tag, CheckCircle2 } from 'lucide-react';
-import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setPhase, setPhaseStatus, restorePhaseStatus, setMajScope, setAuditJson, setQatArticle, setObsolescenceReport, setLiveText, clearLiveText } from '../store/slices/agentSlice';
+import { resetAgent, setStatus, addStep, replaceLastStep, setProgress, setOriginalContent, setUpdatedContent, setDiff, setSources, setAnalysis, setError, setCurrentArticleId, setTokenUsage, setParseFailed, setWpData, setInternalLinks, setInternalLinksInfo, setTargetKeyword as setAgentTargetKeyword, setMajDepth as setAgentMajDepth, setAudit, setInstruction as setAgentInstruction, setEditorMeta, setPhase, setPhaseStatus, restorePhaseStatus, setMajScope, setAuditJson, setQatArticle, setObsolescenceReport, setLiveText, clearLiveText, markArchiveOpened } from '../store/slices/agentSlice';
 import { DEFAULT_DEPTH } from '../constants/majDepth';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
@@ -22,7 +23,7 @@ import { stripNonEditorialLinks, stripNonEditorialUrlsFromText } from '../utils/
 import { runQatAudit } from '../services/agentQat';
 import { aggregateCallsByPass } from '../services/agent';
 import QatBriefFields from '../components/agent/QatBriefFields';
-import { saveArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
+import { saveArticle, getArticle, initArticleSeoTracking, saveSeoSnapshot, saveSiteFonts } from '../services/firebase';
 import { loadDraftLocal, loadDraftRemote, clearDraft } from '../services/articleDraft';
 import tracker from '../services/activityTracker';
 import articleTimeTracker from '../services/articleTimeTracker';
@@ -34,6 +35,8 @@ const TAB_TEXT = 'text';
 
 export default function Articles() {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const agent = useSelector(s => s.agent);
   const settings = useSelector(s => s.settings);
   const skills = useSelector(s => s.skills.list);
@@ -190,6 +193,65 @@ export default function Articles() {
       }
     });
   }, [authUid, authUsername]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Lien direct vers la relecture d'un article (?articleId=...) ─────────────
+  // Utilisé par l'email de fin de lot et le détail d'un lot sur /lots -- sans
+  // ça, un article "Fait" n'avait AUCUN moyen d'être rouvert depuis ces deux
+  // endroits (demande explicite : les rédacteurs ne savaient pas où cliquer).
+  // Déclaré APRÈS l'effet de restauration d'autosave ci-dessus : les deux
+  // s'exécutent à l'ouverture de la page, et celui-ci doit avoir le DERNIER
+  // mot -- une ouverture explicite via lien ne doit jamais être écrasée par un
+  // brouillon d'autosave plus ancien (même arbitrage que `markArchiveOpened`
+  // dans Historique.jsx/MajEnAttente.jsx).
+  const deepLinkRef = useRef(false);
+  useEffect(() => {
+    const articleId = searchParams.get('articleId');
+    if (!articleId || deepLinkRef.current) return;
+    deepLinkRef.current = true;
+    (async () => {
+      let article;
+      try {
+        article = await getArticle(articleId);
+      } catch (e) {
+        toast.error(`Impossible d'ouvrir cet article : ${e.message}`);
+        navigate('/', { replace: true });
+        return;
+      }
+      // Même reconstruction que Historique.jsx (handleView) : un article batch
+      // porte exactement les mêmes champs (MÊME appel saveArticle, voir
+      // pipeline.js, "Persistance"), donc la même façon de le rouvrir marche.
+      dispatch(setOriginalContent(article.originalContent || ''));
+      dispatch(setUpdatedContent(article.updatedContent || ''));
+      dispatch(setDiff(article.updates || []));
+      dispatch(setSources(article.sources || []));
+      dispatch(setAnalysis(article.analysis || ''));
+      dispatch(setWpData(article.wpData || null));
+      dispatch(setAudit(article.audit || ''));
+      dispatch(setAuditJson(article.auditJson || null));
+      dispatch(setQatArticle(article.qatArticle || null));
+      const statuts = derivePhaseStatus(article);
+      dispatch(restorePhaseStatus(statuts));
+      dispatch(setPhase(maxReachablePhase(statuts)));
+      dispatch(setMajScope(article.majScope || null));
+      dispatch(setObsolescenceReport(article.obsolescenceReport || null));
+      dispatch(setCurrentArticleId(article.id));
+      dispatch(setEditorMeta({
+        articleId:      article.id,
+        editedTitle:    article.editedTitle || '',
+        titleDirty:     !!article.editedTitle,
+        seoTitle:       article.seoMeta?.seoTitle       || '',
+        seoDescription: article.seoMeta?.seoDescription || '',
+        publishDate:    article.publishDate || '',
+      }));
+      dispatch(setAgentTargetKeyword((article.targetKeyword || article.keyword || '').trim()));
+      dispatch(markArchiveOpened(Date.now()));
+      dispatch(setStatus('done'));
+      // Retire ?articleId= de l'URL une fois l'article chargé -- il vit dans
+      // Redux, pas dans l'URL ; le laisser inviterait à le rouvrir en boucle
+      // (rechargement, retour arrière du navigateur).
+      navigate('/', { replace: true });
+    })();
+  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Un skill cerveau (SKILL.md actif) est requis par le mode QAT : il porte la
   // méthode d'audit et les gabarits de rédaction.
