@@ -1946,9 +1946,19 @@ const sendBatchCompletionEmail = async (batchId) => {
   const doneCount = items.filter((i) => i.status === 'fait').length;
   const errorCount = items.filter((i) => i.status === 'erreur').length;
 
+  // Lien direct vers la relecture (?articleId=..., voir Articles.jsx) --
+  // sans lui, un article "Fait" n'a aucun moyen d'être rouvert depuis l'email
+  // (demande explicite : les rédacteurs ne savaient pas où cliquer). Seuls
+  // les items "fait" en portent un -- un item "erreur"/"en_cours" n'a jamais
+  // d'article_id (voir pipeline.js, la persistance n'a lieu qu'en fin de run).
+  const reviewUrl = (it) => (it.status === 'fait' && it.article_id
+    ? `${appUrl}/?articleId=${encodeURIComponent(it.article_id)}`
+    : null);
+
   const rowsHtml = items.map((it) => {
     const meta = BATCH_ITEM_STATUS_META[it.status] || { label: it.status, color: '#6b7280', bg: '#f9fafb' };
     const url = it.article_url || '';
+    const review = reviewUrl(it);
     return `<tr>
         <td style="padding:12px 16px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#111">
           <a href="${escapeHtml(url)}" style="color:#111;text-decoration:none;font-weight:600" target="_blank" rel="noopener noreferrer">${escapeHtml(url.replace(/^https?:\/\//, ''))}</a>
@@ -1957,6 +1967,7 @@ const sendBatchCompletionEmail = async (batchId) => {
         <td style="padding:12px 16px;border-bottom:1px solid #f0f0f0;text-align:right;white-space:nowrap">
           <span style="display:inline-block;background:${meta.bg};color:${meta.color};font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;text-transform:uppercase;letter-spacing:0.04em">${escapeHtml(meta.label)}</span>
           ${it.error_message ? `<div style="color:#dc2626;font-size:11px;margin-top:4px;max-width:220px">${escapeHtml(it.error_message)}</div>` : ''}
+          ${review ? `<div style="margin-top:6px"><a href="${escapeHtml(review)}" style="color:#0d9488;text-decoration:none;font-size:12px;font-weight:700">Relire →</a></div>` : ''}
         </td>
       </tr>`;
   }).join('');
@@ -1966,7 +1977,10 @@ const sendBatchCompletionEmail = async (batchId) => {
     `Le lot lancé le ${new Date(batch.launched_at).toLocaleString('fr-FR')} est terminé.`,
     `${doneCount} fait(s), ${errorCount} erreur(s) sur ${items.length} article(s).`,
     '',
-    ...items.map((it) => `- [${(BATCH_ITEM_STATUS_META[it.status] || { label: it.status }).label}] ${it.article_url}`),
+    ...items.map((it) => {
+      const review = reviewUrl(it);
+      return `- [${(BATCH_ITEM_STATUS_META[it.status] || { label: it.status }).label}] ${it.article_url}${review ? ` -- relire : ${review}` : ''}`;
+    }),
     '',
     `Voir : ${appUrl}/lots`,
     '',

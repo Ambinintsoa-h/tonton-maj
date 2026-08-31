@@ -57,7 +57,7 @@ const fakeHttp = () => ({
   }),
   post: jest.fn(async (url) => {
     if (url === '/scrape') return { data: { content: '<p>Article original.</p>', title: 'Titre original' } };
-    if (url === '/articles') return { data: { id: 'art-123' } };
+    if (url === '/data/articles') return { data: { id: 'art-123' } };
     throw new Error(`POST inattendu: ${url}`);
   }),
   put: jest.fn(async () => ({ data: { ok: true } })),
@@ -129,7 +129,7 @@ describe('runArticlePipeline — chemin complet', () => {
 
   test('persiste l\'article avec assigneeId/lastModifiedBy = auteur du batch, jamais un champ Redux inexistant en headless', async () => {
     await runArticlePipeline(baseInput());
-    expect(http.post).toHaveBeenCalledWith('/articles', expect.objectContaining({
+    expect(http.post).toHaveBeenCalledWith('/data/articles', expect.objectContaining({
       assigneeId: 'uid-1',
       lastModifiedBy: 'Andrianina',
       majMode: 'qat',
@@ -203,5 +203,25 @@ describe('runArticlePipeline — chemin complet', () => {
     });
     await expect(runArticlePipeline(baseInput())).rejects.toThrow(/data\/knowledge.*tableau/);
     expect(runQatAudit).not.toHaveBeenCalled();
+  });
+
+  // Régression du 31 août 2026 : POST /articles (sans /data) tombait sur le
+  // même catch-all SPA que /skills et /knowledge ci-dessus -- 200 + HTML,
+  // jamais rejeté par axios. `saved.id` valait `undefined` en silence, et
+  // AUCUNE validation n'existait pour le dire : chaque article batch finissait
+  // "Fait" sans jamais avoir été enregistré, donc rien à relire ensuite.
+  test('persiste bien sous /data/articles -- jamais à la racine /articles (catch-all SPA)', async () => {
+    await runArticlePipeline(baseInput());
+    expect(http.post).toHaveBeenCalledWith('/data/articles', expect.anything());
+    expect(http.post).not.toHaveBeenCalledWith('/articles', expect.anything());
+  });
+
+  test('un enregistrement sans id renvoyé échoue fort, jamais un "Fait" fantôme', async () => {
+    http.post.mockImplementation(async (url) => {
+      if (url === '/scrape') return { data: { content: '<p>Article original.</p>', title: 'Titre original' } };
+      if (url === '/data/articles') return { data: '<!doctype html><html>...</html>' }; // symptôme du catch-all SPA
+      throw new Error(`POST inattendu: ${url}`);
+    });
+    await expect(runArticlePipeline(baseInput())).rejects.toThrow(/data\/articles.*id/);
   });
 });

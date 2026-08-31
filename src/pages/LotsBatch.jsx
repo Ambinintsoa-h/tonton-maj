@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import { AnimatePresence, motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import {
   Layers, Plus, Trash2, ExternalLink, ChevronDown, ChevronUp,
-  Loader, RefreshCw, AlertTriangle, Rocket, Upload, X,
+  Loader, RefreshCw, AlertTriangle, Rocket, Upload, X, Eye,
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { listBatches, getBatch, createBatch } from '../services/batches';
@@ -611,8 +612,19 @@ export default function LotsBatch() {
                                 </td>
                                 <td className="py-1.5 pr-2 text-gray-500 whitespace-nowrap">{fmtCost(it.costUsd)}</td>
                                 <td className="py-1.5">
-                                  <Badge meta={ITEM_STATUS_META[it.status]} fallback={it.status} />
-                                  {it.errorMessage && <span className="ml-2 text-xs text-red-500">{it.errorMessage}</span>}
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <Badge meta={ITEM_STATUS_META[it.status]} fallback={it.status} />
+                                    {it.status === 'fait' && it.articleId && (
+                                      <Link
+                                        to={`/?articleId=${encodeURIComponent(it.articleId)}`}
+                                        className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800 hover:underline"
+                                        title="Ouvrir cet article en relecture"
+                                      >
+                                        <Eye className="w-3.5 h-3.5" /> Relire
+                                      </Link>
+                                    )}
+                                    {it.errorMessage && <span className="text-xs text-red-500">{it.errorMessage}</span>}
+                                  </div>
                                 </td>
                               </tr>
                             ))}

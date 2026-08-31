@@ -210,8 +210,16 @@ const runArticlePipeline = async (input) => {
   tokenUsage = mergeTokenUsage(tokenUsage, genRes.tokenUsage);
 
   // ── Persistance — MÊME appel que ArticleResult.jsx (saveArticle) ────────
+  // /articles n'existe QUE sous /data (data-api.js) -- jamais à la racine
+  // /api, exactement comme /skills et /knowledge plus haut (même bug, même
+  // symptôme : la requête tombait sur le catch-all SPA de proxy.js, qui
+  // répond 200 avec du HTML, donc jamais rejetée par axios -- `saved.id`
+  // valait `undefined` en silence. Conséquence réelle : AUCUN article batch
+  // n'était jamais enregistré, malgré un statut "Fait" -- rien à relire.
+  // Repéré le 31 août 2026 en cherchant pourquoi aucun lien de relecture
+  // n'était possible depuis /lots ni depuis l'email de fin de lot.
   onStep('Enregistrement de l\'article...');
-  const saved = (await http.post('/articles', {
+  const saved = (await http.post('/data/articles', {
     title: title || genRes.article.titreSeo || targetKeyword,
     url: articleUrl,
     updatedContent: rawHtml,
@@ -223,6 +231,12 @@ const runArticlePipeline = async (input) => {
     majDepth: depth,
   })).data;
   articleId = saved?.id;
+  // Même garde-fou que fetchDataArray() ci-dessus (forme de réponse) : sans
+  // lui, un id manquant continuait la pipeline en silence jusqu'à "Fait" --
+  // un article payé, généré, jamais réellement enregistré ni relisable.
+  if (!articleId) {
+    throw new Error(`POST /data/articles n'a pas renvoyé d'id (reçu ${JSON.stringify(saved).slice(0, 200)}) -- article non enregistré`);
+  }
 
   await dispatchPhaseStat(http, {
     articleId, title,
@@ -269,7 +283,7 @@ const runArticlePipeline = async (input) => {
 
   // ── Mise à jour finale du HTML (verrou identique à updateArticleHtml) ───
   if (currentHtml !== rawHtml) {
-    await http.put(`/articles/${encodeURIComponent(articleId)}/html`, {
+    await http.put(`/data/articles/${encodeURIComponent(articleId)}/html`, {
       updatedContent: currentHtml,
       editorMeta: launchedByName,
     });
