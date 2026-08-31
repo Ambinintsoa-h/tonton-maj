@@ -10,6 +10,9 @@
  *      pour tout le process — nécessaire pour charger tel quel le code ESM de
  *      `src/services/*.js` (écrit pour l'UI, jamais pour Node), mais une
  *      pollution qu'on ne veut PAS infliger au process proxy.js lui-même.
+ *      Incompatible avec le realm sandboxé de Jest pour la même raison (voir
+ *      src/server/originFromApiBase.js, extrait de ce fichier pour rester
+ *      testable).
  *   2. Les modules requis (`agent.js`, `search.js`, ...) appellent `axios`
  *      SANS baseURL (ils tapent des chemins relatifs comme le fait le
  *      navigateur, ex. `/api/claude-job`) — on doit fixer `axios.defaults.
@@ -51,6 +54,7 @@ if (typeof global.sessionStorage === 'undefined') {
 }
 
 const axios = require('axios');
+const { originFromApiBase } = require('./src/server/originFromApiBase');
 
 const readStdin = () => new Promise((resolve, reject) => {
   let data = '';
@@ -76,8 +80,8 @@ const emit = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
   // require() à son tour agent.js/search.js — leurs appels axios à chemin
   // relatif ne prennent le baseURL courant qu'au moment de l'appel, donc
   // l'ordre exact d'affectation vs require importe peu ICI, mais on le fait
-  // tôt par clarté.
-  axios.defaults.baseURL = input.apiBaseUrl;
+  // tôt par clarté. Voir originFromApiBase.js pour le pourquoi du strip /api.
+  axios.defaults.baseURL = originFromApiBase(input.apiBaseUrl);
 
   const { runArticlePipeline } = require('./src/server/pipeline');
 
