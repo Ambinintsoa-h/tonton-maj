@@ -1,0 +1,49 @@
+name: [TEMPORAIRE] Diagnostic serveur n0c
+
+# Workflow de diagnostic UNIQUEMENT -- lecture seule sur n0c (grep/stat/md5sum),
+# aucune ecriture, aucun redemarrage. Sert a verifier si le code deploye sur
+# n0c correspond bien au dernier commit pousse (voir l'echec persistant du
+# runner headless malgre un correctif merge et un deploiement "reussi").
+# A supprimer une fois le diagnostic fait.
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.N0C_DEPLOY_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          cat >> ~/.ssh/config << EOF
+          Host n0c
+            HostName ${{ secrets.N0C_HOST }}
+            Port ${{ secrets.N0C_PORT }}
+            User ${{ secrets.N0C_USERNAME }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking no
+            ConnectTimeout 60
+          EOF
+
+      - name: Lecture seule -- etat de src/server/pipeline.js et dates de deploiement
+        run: |
+          REMOTE_CMD='
+          echo "=== pipeline.js -- extrait autour de fetchDataArray ==="
+          grep -n -A3 "fetchDataArray" ~/maj.stomos.net/src/server/pipeline.js || echo "INTROUVABLE -- fetchDataArray absent du fichier deploye"
+          echo
+          echo "=== md5sum + date de derniere modif de pipeline.js ==="
+          md5sum ~/maj.stomos.net/src/server/pipeline.js
+          stat ~/maj.stomos.net/src/server/pipeline.js | grep Modify
+          echo
+          echo "=== date du dernier redemarrage Passenger (tmp/restart.txt) ==="
+          stat ~/maj.stomos.net/tmp/restart.txt 2>/dev/null | grep Modify || echo "tmp/restart.txt introuvable"
+          echo
+          echo "=== date/heure serveur actuelle (reference) ==="
+          date -u
+          echo
+          echo "=== process node en cours (parent proxy.js) ==="
+          ps aux | grep -i "proxy.js\|node" | grep -v grep
+          '
+          ssh -F ~/.ssh/config n0c bash -s <<< "$REMOTE_CMD"
