@@ -227,6 +227,15 @@ const runArticlePipeline = async (input) => {
     lastModifiedBy: launchedByName,
     majMode: 'qat',
     auditJson,
+    // Même transformation que ArticleResult.jsx (`qatArticle.html` est retiré :
+    // c'est déjà `updatedContent`) -- SANS ce champ, derivePhaseStatus()
+    // (src/constants/majPhases.js) ne peut pas savoir que la génération a eu
+    // lieu : elle ne marque la phase 2 "terminée" que sur qatArticle ou des
+    // diffs, jamais sur updatedContent seul (qui porte aussi l'article
+    // D'ORIGINE juste après l'audit). Constaté le 31 août 2026 : un article
+    // batch réellement généré rouvrait sur "Audit terminé, Génération à
+    // faire", alors que le contenu réécrit était bien là.
+    qatArticle: (({ html: _html, ...rest }) => rest)(genRes.article),
     qatBrief: { targetKeyword, internalLinks, auditSelection },
     majDepth: depth,
   })).data;
@@ -261,6 +270,21 @@ const runArticlePipeline = async (input) => {
     onStep,
   });
   tokenUsage = mergeTokenUsage(tokenUsage, obsoRes.tokenUsage);
+  // Même forme que le dispatch normal (ArticleResult.jsx, ligne ~2068) --
+  // sans elle, derivePhaseStatus() ne marque jamais la phase 3 "terminée"
+  // (aUneVerif ne regarde que rec.obsolescenceReport), et les suggestions
+  // payées par cette passe étaient jusqu'ici invisibles au relecteur : nulle
+  // part enregistrées, malgré le coût réel engagé pour les produire.
+  // POST /data/articles avec un id existant fait un MERGE (voir data-api.js),
+  // jamais un écrasement des autres champs déjà posés au premier appel.
+  await http.post('/data/articles', {
+    id: articleId,
+    obsolescenceReport: {
+      suggestions: Array.isArray(obsoRes.updates) ? obsoRes.updates : [],
+      texteVerifie: currentHtml,
+      at: Date.now(),
+    },
+  });
   await dispatchPhaseStat(http, {
     articleId, title,
     tokenUsage: obsoRes.tokenUsage, pass: 3, modelPricing,
