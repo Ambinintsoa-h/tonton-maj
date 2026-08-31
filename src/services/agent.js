@@ -1283,9 +1283,9 @@ export const runAgent = async ({
   modelPricing   = null,  // tarifs depuis settings.json — null = fallback hardcodé
   depth          = DEFAULT_DEPTH,  // profondeur de MAJ choisie par l'utilisateur (legere|standard|refonte)
   instruction    = '',    // consigne libre de l'équipe — injectée en priorité haute dans les prompts
-  onStep,
-  onReplace,
-  onProgress,
+  onStep = () => {},
+  onReplace = () => {},
+  onProgress = () => {},
 }) => {
   const { iso, fr, year, prevYear, cutoffIso } = getDateContext();
 
@@ -1957,8 +1957,8 @@ export const runReviewAgent = async ({
   modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
   depth         = DEFAULT_DEPTH, // profondeur de MAJ (héritée de la passe 1)
   instruction   = '',   // consigne libre de l'équipe — injectée en priorité haute
-  onStep,
-  onProgress,
+  onStep = () => {},
+  onProgress = () => {},
 }) => {
   const { fr, year, prevYear } = getDateContext();
 
