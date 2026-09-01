@@ -2655,7 +2655,7 @@ app.post('/api/internal/run-article-pipeline', requireAuth, requireRole('super_a
  * une fois, tout de suite -- détecte les lignes neuves et les met en
  * attente, ne lance JAMAIS de lot toute seule.
  */
-app.post('/api/internal/gsheet-sync', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
+app.post('/api/internal/gsheet-sync', requireAuth, requireRole('super_admin', 'manager', 'cq_ia'), async (req, res) => {
   if (DATA_BACKEND !== 'mysql' || !googleSheetSyncInstance) {
     return res.status(400).json({ error: 'Indisponible dans ce mode' });
   }
