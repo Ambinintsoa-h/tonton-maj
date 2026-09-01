@@ -1073,6 +1073,52 @@ module.exports = ({ requireAuth, requireRole }) => {
     }
   }));
 
+  // GET /batch-items?from=&to=&scope=mine|all — "Mes MAJ" (tableau de bord
+  // personnel) : les articles déjà traités via MAJ en lot, tous batches
+  // confondus, avec coût/durée/statut de publication. Distinct de
+  // GET /batches/:id, qui ne détaille qu'UN seul lot à la fois.
+  //
+  // Un cq_ia est TOUJOURS forcé sur ses propres lots (launched_by), quel que
+  // soit ce qui est envoyé en paramètre -- jamais une restriction de
+  // sécurité laissée à la confiance du client. Les autres rôles voient tout
+  // par défaut (même file partagée qu'avant sur l'ancien écran MAJ en
+  // attente), et peuvent eux-mêmes demander "mine" s'ils le souhaitent.
+  //
+  // published_at vient d'une sous-requête, pas d'un LEFT JOIN direct :
+  // article_time est une table (article_id, user_id) -- un JOIN direct
+  // dupliquerait la ligne si plusieurs utilisateurs ont un enregistrement
+  // pour le même article.
+  router.get('/batch-items', requireAuth, wrap(async (req, res) => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const to = parseInt(req.query.to, 10) || Date.now();
+    const from = parseInt(req.query.from, 10) || (to - 30 * DAY_MS);
+
+    const wantsMine = req.user.role === 'cq_ia' || req.query.scope === 'mine';
+    const params = [from, to];
+    let scopeSql = '';
+    if (wantsMine) {
+      scopeSql = 'AND b.launched_by = ?';
+      params.push(req.user.uid);
+    }
+
+    const [rows] = await q(
+      `SELECT bi.*, b.launched_by, b.launched_by_name, b.launched_at,
+              (SELECT MAX(at.published_at) FROM article_time at WHERE at.article_id = bi.article_id) AS published_at
+         FROM batch_items bi
+         JOIN batches b ON b.id = bi.batch_id
+        WHERE b.launched_at >= ? AND b.launched_at <= ? ${scopeSql}
+        ORDER BY COALESCE(bi.completed_at, bi.started_at, b.launched_at) DESC`,
+      params,
+    );
+    res.json(rows.map((r) => ({
+      ...batchItemToObj(r),
+      launchedBy: r.launched_by,
+      launchedByName: r.launched_by_name,
+      launchedAt: r.launched_at,
+      publishedAt: r.published_at,
+    })));
+  }));
+
   // ── gsheet_staged_items (synchronisation automatique du Google Sheet) ────────
   // Une ligne détectée par le cron (src/server/googleSheetSync.js) atterrit ici
   // en status 'nouveau' -- JAMAIS transformée en batch toute seule (décision
@@ -1089,6 +1135,7 @@ module.exports = ({ requireAuth, requireRole }) => {
     targetKeyword: r.target_keyword,
     majType: r.maj_type,
     consigne: r.consigne,
+    assignedTo: r.assigned_to,
     status: r.status,
     batchId: r.batch_id,
     detectedAt: r.detected_at,

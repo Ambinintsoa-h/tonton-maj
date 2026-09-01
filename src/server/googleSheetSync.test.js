@@ -1,7 +1,7 @@
 const { createGoogleSheetSync } = require('./googleSheetSync');
 
-const HEADER = ['Site', 'N°', 'Keyword', 'Titre', 'GDocs', 'WP', 'URL article mise en ligne', 'Date', 'Mots cible', 'Capture', 'Mots livrés', 'Validation', 'Typologie', 'Malus', 'Sanction'];
-const sheetRow = (rowRef, keyword, url) => ['site.com', rowRef, keyword, '', '', '', url, '', '', '', '', '', '', '', ''];
+const HEADER = ['Site', 'N°', 'Keyword', 'Titre', 'GDocs', 'WP', 'URL article mise en ligne', 'Date', 'Mots cible', 'Capture', 'Mots livrés', 'Validation', 'Typologie', 'Malus', 'Sanction', 'Attribué à'];
+const sheetRow = (rowRef, keyword, url, assignedTo = '') => ['site.com', rowRef, keyword, '', '', '', url, '', '', '', '', '', '', '', '', assignedTo];
 
 // 1er appel : SELECT des row_ref déjà connus pour ce spreadsheet_id.
 // 2e appel (s'il a lieu) : INSERT IGNORE des lignes fraîches.
@@ -44,6 +44,19 @@ describe('createGoogleSheetSync', () => {
     expect(insertSql).toMatch(/INSERT IGNORE INTO gsheet_staged_items/);
     expect(insertParams).toEqual(expect.arrayContaining(['m1', 'm2', 'https://a.test/1', 'https://a.test/2', 'mot un', 'mot deux', 'maj', 'refonte', 'SHEET_ID']));
     expect(result).toEqual({ scanned: 2, inserted: 2, duplicateRowRef: 0, skippedNoRowRef: 0, skippedNoUrl: 0, skippedNoKeyword: 0 });
+  });
+
+  it('inclut "Attribué à" dans l\'INSERT -- widget "MAJ en attente" du tableau de bord "Mes MAJ"', async () => {
+    const { deps, queryMock } = makeDeps({
+      sheetRows: [HEADER, sheetRow('m1', '[MAJ] mot un', 'https://a.test/1', 'andrianina')],
+      existingRows: [],
+      affectedRows: 1,
+    });
+    const sync = createGoogleSheetSync(deps);
+    await sync.runSync({ client_email: 'x', private_key: 'y' }, 'SHEET_ID');
+    const [insertSql, insertParams] = queryMock.mock.calls[1];
+    expect(insertSql).toMatch(/assigned_to/);
+    expect(insertParams).toEqual(expect.arrayContaining(['andrianina']));
   });
 
   it('une ligne déjà connue avec la MÊME URL n\'est ni réinsérée ni comptée comme doublon suspect', async () => {
