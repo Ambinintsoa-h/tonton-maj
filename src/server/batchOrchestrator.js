@@ -27,7 +27,15 @@ const axios = require('axios');
 const { spawnPipeline: defaultSpawnPipeline } = require('./spawnPipeline');
 const { describeHttpError } = require('./httpErrorDetail');
 
-const DEFAULT_CONCURRENCY = 2;
+// Passé de 2 à 4 le 1er septembre 2026 (décision Andrianina), après vérification
+// des freins réels : le limiteur interne 60 req/min (proxy.js, partagé avec le
+// reste de l'équipe) est le premier goulot, la RAM du serveur mutualisé (n0c)
+// le second -- ni l'un ni l'autre n'a de plafond documenté permettant de
+// justifier un chiffre plus haut sans le mesurer en conditions réelles.
+// Une hausse ultérieure doit être suivie d'une surveillance des erreurs
+// "trop de requêtes" et d'un redémarrage inattendu de l'application avant
+// d'aller plus loin.
+const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_TOKEN_TTL = '20m';
 
 /**

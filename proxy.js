@@ -1992,7 +1992,7 @@ const sendBatchCompletionEmail = async (batchId) => {
 let googleSheetSyncInstance = null;
 
 if (DATA_BACKEND === 'mysql') {
-  const { createBatchOrchestrator } = require('./src/server/batchOrchestrator');
+  const { createBatchOrchestrator, DEFAULT_CONCURRENCY: BATCH_DEFAULT_CONCURRENCY } = require('./src/server/batchOrchestrator');
   const { getPool: getBatchPool } = require('./db');
   const batchOrchestrator = createBatchOrchestrator({
     getPool: getBatchPool,
@@ -2000,7 +2000,12 @@ if (DATA_BACKEND === 'mysql') {
     jwtSecret: JWT_SECRET,
     fetchModelPricing,
     apiBaseUrl: `${IS_PROD ? 'https://maj.stomos.net' : `http://127.0.0.1:${PORT}`}/api`,
-    concurrency: parseInt(process.env.BATCH_ORCHESTRATOR_CONCURRENCY, 10) || 2,
+    // Le process n'a pas d'accès au .env du serveur en pratique (hébergement
+    // mutualisé, personne côté équipe n'a la main dessus) -- la valeur qui
+    // compte réellement est donc DEFAULT_CONCURRENCY ci-dessus, pas la
+    // variable d'environnement, qui reste un simple point d'ajustement pour
+    // qui aurait un jour cet accès.
+    concurrency: parseInt(process.env.BATCH_ORCHESTRATOR_CONCURRENCY, 10) || BATCH_DEFAULT_CONCURRENCY,
     onLog: (msg) => console.log(msg),
     onBatchDone: sendBatchCompletionEmail,
   });
