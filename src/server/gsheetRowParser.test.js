@@ -5,7 +5,7 @@ const HEADER = [
   'Site', 'N°', 'Keyword', 'Titre / sujet', 'URL Google docs', 'URL WP',
   'URL article mise en ligne', 'Date de la réalisation \nde la tâche',
   'Nbre de \nmots cible', 'Capture avant', 'Nb de mots livrés (EXACT)',
-  'Validation', 'Typologie', 'Malus/Bonus', 'Sanction/Prime',
+  'Validation', 'Typologie', 'Malus/Bonus', 'Sanction/Prime', 'Attribué à',
 ];
 
 const row = (overrides = {}) => {
@@ -13,10 +13,10 @@ const row = (overrides = {}) => {
     site: 'guide-prix.com MAJ', rowRef: 'm10644', keyword: '[MAJ] tarif lessivage mur et plafond',
     titre: 'Prix du lessivage', gdocs: 'https://docs.google.com/x', wp: 'https://guide-prix.com/wp-admin/x',
     url: 'https://guide-prix.com/prix-lessivage-mur-ou-plafond/', date: '', motsCible: '',
-    capture: '', motsLivres: '', validation: '', typologie: '', malus: '', sanction: '',
+    capture: '', motsLivres: '', validation: '', typologie: '', malus: '', sanction: '', assignedTo: '',
   };
   const r = { ...base, ...overrides };
-  return [r.site, r.rowRef, r.keyword, r.titre, r.gdocs, r.wp, r.url, r.date, r.motsCible, r.capture, r.motsLivres, r.validation, r.typologie, r.malus, r.sanction];
+  return [r.site, r.rowRef, r.keyword, r.titre, r.gdocs, r.wp, r.url, r.date, r.motsCible, r.capture, r.motsLivres, r.validation, r.typologie, r.malus, r.sanction, r.assignedTo];
 };
 
 describe('parseKeywordCell', () => {
@@ -63,6 +63,7 @@ describe('parseSheetRows -- synchronisation automatique (pas de filtre Validatio
       targetKeyword: 'tarif lessivage mur et plafond',
       majType: 'maj',
       consigne: '',
+      assignedTo: null,
     }]);
     expect(skipped).toEqual({ noUrl: 0, noKeyword: 0 });
   });
@@ -71,7 +72,22 @@ describe('parseSheetRows -- synchronisation automatique (pas de filtre Validatio
     const sheet = [HEADER, row({ typologie: 'X', malus: 'Y', sanction: 'Z', capture: 'https://drive.google.com/whatever' })];
     const { rows } = parseSheetRows(sheet);
     expect(rows[0]).not.toHaveProperty('typologie');
-    expect(Object.keys(rows[0])).toEqual(['rowRef', 'site', 'articleUrl', 'targetKeyword', 'majType', 'consigne']);
+    expect(Object.keys(rows[0])).toEqual(['rowRef', 'site', 'articleUrl', 'targetKeyword', 'majType', 'consigne', 'assignedTo']);
+  });
+
+  it('extrait "Attribué à" -- widget "MAJ en attente" du tableau de bord "Mes MAJ"', () => {
+    const sheet = [HEADER, row({ assignedTo: 'andrianina' })];
+    const { rows } = parseSheetRows(sheet);
+    expect(rows[0].assignedTo).toBe('andrianina');
+  });
+
+  it('"Attribué à" vide ou absente -> null, jamais une chaîne vide', () => {
+    const sheet = [HEADER, row({ assignedTo: '' })];
+    expect(parseSheetRows(sheet).rows[0].assignedTo).toBeNull();
+
+    const headerSansColonne = HEADER.slice(0, -1);
+    const rowSansColonne = row().slice(0, -1);
+    expect(parseSheetRows([headerSansColonne, rowSansColonne]).rows[0].assignedTo).toBeNull();
   });
 
   it('ignore une ligne sans URL', () => {

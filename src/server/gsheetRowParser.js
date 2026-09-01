@@ -20,6 +20,9 @@ const HEADER_PATTERNS = {
   keyword: ['keyword'],
   articleUrl: ['url article mise en ligne'],
   validation: ['validation'],
+  // "Attribué à" / "Assigné à" -- normalizeHeader retire les accents avant
+  // comparaison, d'où "attribue"/"assigne" sans accent ici.
+  assignedTo: ['attribue', 'assigne'],
 };
 
 const findColumnIndex = (headers, patterns) => {
@@ -57,7 +60,7 @@ const guessSite = (url) => {
  * seule ; c'est le clic sur "Lancer" qui vaut validation.
  *
  * @param {Array<Array<any>>} sheetRows — sortie brute de l'API Sheets (values.get)
- * @returns {{ rows: Array<{rowRef,site,articleUrl,targetKeyword,majType,consigne}>, skipped: {noUrl:number, noKeyword:number} }}
+ * @returns {{ rows: Array<{rowRef,site,articleUrl,targetKeyword,majType,consigne,assignedTo}>, skipped: {noUrl:number, noKeyword:number} }}
  */
 const parseSheetRows = (sheetRows) => {
   const [headerRow, ...dataRows] = sheetRows || [];
@@ -67,6 +70,7 @@ const parseSheetRows = (sheetRows) => {
   const idxRowRef = findColumnIndex(headerRow, HEADER_PATTERNS.rowRef);
   const idxKeyword = findColumnIndex(headerRow, HEADER_PATTERNS.keyword);
   const idxUrl = findColumnIndex(headerRow, HEADER_PATTERNS.articleUrl);
+  const idxAssignedTo = findColumnIndex(headerRow, HEADER_PATTERNS.assignedTo);
 
   const rows = [];
   dataRows.forEach((r) => {
@@ -85,6 +89,7 @@ const parseSheetRows = (sheetRows) => {
       targetKeyword,
       majType,
       consigne: '',
+      assignedTo: idxAssignedTo >= 0 ? (String(r[idxAssignedTo] ?? '').trim() || null) : null,
     });
   });
 

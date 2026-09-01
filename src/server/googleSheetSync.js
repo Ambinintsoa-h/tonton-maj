@@ -85,14 +85,17 @@ function createGoogleSheetSync(deps) {
     }
 
     const detectedAt = now();
+    // assigned_to n'est capturé qu'à cette première insertion -- si le Sheet
+    // change l'attribution d'une ligne déjà en attente, ce n'est PAS répercuté
+    // automatiquement (limite assumée : la ligne était déjà "vue").
     const values = freshRows.map((r) => [
       crypto.randomUUID(), spreadsheetId, r.rowRef, r.site, r.articleUrl,
-      r.targetKeyword, r.majType, r.consigne || null, 'nouveau', detectedAt,
+      r.targetKeyword, r.majType, r.consigne || null, r.assignedTo || null, 'nouveau', detectedAt,
     ]);
-    const placeholders = values.map(() => '(?,?,?,?,?,?,?,?,?,?)').join(',');
+    const placeholders = values.map(() => '(?,?,?,?,?,?,?,?,?,?,?)').join(',');
     const [result] = await pool.query(
       `INSERT IGNORE INTO gsheet_staged_items
-         (id, spreadsheet_id, row_ref, site, article_url, target_keyword, maj_type, consigne, status, detected_at)
+         (id, spreadsheet_id, row_ref, site, article_url, target_keyword, maj_type, consigne, assigned_to, status, detected_at)
        VALUES ${placeholders}`,
       values.flat(),
     );
