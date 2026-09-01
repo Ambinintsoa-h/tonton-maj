@@ -40,7 +40,7 @@ function createGoogleSheetSync(deps) {
   /**
    * @param {object} serviceAccount  JSON.parse() de la clé de compte de service
    * @param {string} spreadsheetId
-   * @returns {Promise<{ scanned:number, inserted:number, skippedNoRowRef:number, skippedNoUrl:number, skippedNoKeyword:number }>}
+   * @returns {Promise<{ scanned:number, inserted:number, duplicateRowRef:number, skippedNoRowRef:number, skippedNoUrl:number, skippedNoKeyword:number }>}
    */
   const runSync = async (serviceAccount, spreadsheetId) => {
     const sheetRows = await fetchSheetValuesFn(serviceAccount, spreadsheetId);
@@ -52,12 +52,40 @@ function createGoogleSheetSync(deps) {
       onLog(`[gsheet-sync] ${skippedNoRowRef} ligne(s) sans "N°" -- ignorée(s), dédoublonnage impossible`);
     }
     if (!withRowRef.length) {
-      return { scanned: rows.length, inserted: 0, skippedNoRowRef, skippedNoUrl: skipped.noUrl, skippedNoKeyword: skipped.noKeyword };
+      return { scanned: rows.length, inserted: 0, duplicateRowRef: 0, skippedNoRowRef, skippedNoUrl: skipped.noUrl, skippedNoKeyword: skipped.noKeyword };
     }
 
     const pool = getPool();
+
+    // Une ligne dont le "N°" est DÉJÀ connu mais dont l'URL diffère n'est pas un
+    // doublon normal (relecture du même contenu) : c'est très probablement une
+    // ligne dupliquée dans le Sheet (modèle copié-collé) où le "N°" n'a pas été
+    // changé -- INSERT IGNORE l'aurait silencieusement avalée pour toujours,
+    // sans qu'aucun compteur ne le distingue d'une ligne déjà traitée à
+    // l'identique. Constaté le 1er septembre 2026 : le Sheet passait de 12 à 14
+    // lignes valides, "inserted" restait à 0 sans dire pourquoi.
+    const [existingRows] = await pool.query(
+      'SELECT row_ref, article_url FROM gsheet_staged_items WHERE spreadsheet_id=?',
+      [spreadsheetId],
+    );
+    const existingByRef = new Map(existingRows.map((r) => [r.row_ref, r.article_url]));
+
+    const freshRows = [];
+    let duplicateRowRef = 0;
+    withRowRef.forEach((r) => {
+      if (!existingByRef.has(r.rowRef)) { freshRows.push(r); return; }
+      if (existingByRef.get(r.rowRef) !== r.articleUrl) duplicateRowRef += 1;
+    });
+    if (duplicateRowRef > 0) {
+      onLog(`[gsheet-sync] ${duplicateRowRef} ligne(s) ignorée(s) -- "N°" déjà utilisé par une autre ligne du Sheet (URL différente)`);
+    }
+
+    if (!freshRows.length) {
+      return { scanned: rows.length, inserted: 0, duplicateRowRef, skippedNoRowRef, skippedNoUrl: skipped.noUrl, skippedNoKeyword: skipped.noKeyword };
+    }
+
     const detectedAt = now();
-    const values = withRowRef.map((r) => [
+    const values = freshRows.map((r) => [
       crypto.randomUUID(), spreadsheetId, r.rowRef, r.site, r.articleUrl,
       r.targetKeyword, r.majType, r.consigne || null, 'nouveau', detectedAt,
     ]);
@@ -74,6 +102,7 @@ function createGoogleSheetSync(deps) {
     return {
       scanned: rows.length,
       inserted,
+      duplicateRowRef,
       skippedNoRowRef,
       skippedNoUrl: skipped.noUrl,
       skippedNoKeyword: skipped.noKeyword,

@@ -15,6 +15,36 @@ import { parseBatchSheetRows } from '../utils/batchSheetImport';
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+// Deux listes non bornées (lignes détectées, historique des lots) rendues
+// entièrement à plat -- pagine juste l'AFFICHAGE, sans changer ce que
+// "Tout sélectionner" ou le rafraîchissement chargent.
+const PAGE_SIZE = 8;
+
+function Pager({ page, totalPages, onChange }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-center gap-3 pt-1 text-sm">
+      <button
+        type="button"
+        onClick={() => onChange(page - 1)}
+        disabled={page === 0}
+        className="px-2 py-1 rounded-md border border-gray-200 text-gray-600 disabled:opacity-30 hover:bg-gray-50"
+      >
+        ‹ Précédent
+      </button>
+      <span className="text-gray-400">Page {page + 1} / {totalPages}</span>
+      <button
+        type="button"
+        onClick={() => onChange(page + 1)}
+        disabled={page >= totalPages - 1}
+        className="px-2 py-1 rounded-md border border-gray-200 text-gray-600 disabled:opacity-30 hover:bg-gray-50"
+      >
+        Suivant ›
+      </button>
+    </div>
+  );
+}
+
 const MAJ_TYPES = [
   { value: 'maj',     label: 'MAJ ciblée' },
   { value: 'refonte', label: 'Refonte' },
@@ -131,6 +161,8 @@ export default function LotsBatch() {
   const [syncingSheet, setSyncingSheet] = useState(false);
   const [selectedStagedIds, setSelectedStagedIds] = useState(() => new Set());
   const [launchingStaged, setLaunchingStaged] = useState(false);
+  const [stagedPage, setStagedPage] = useState(0);
+  const [batchPage, setBatchPage] = useState(0);
 
   const refreshBatches = useCallback(async () => {
     setLoadingBatches(true);
@@ -182,11 +214,17 @@ export default function LotsBatch() {
       if (result.skippedNoRowRef) skipMsgs.push(`${result.skippedNoRowRef} sans "N°"`);
       if (result.skippedNoUrl) skipMsgs.push(`${result.skippedNoUrl} sans URL`);
       if (result.skippedNoKeyword) skipMsgs.push(`${result.skippedNoKeyword} sans mot-clé`);
+      // "N°" déjà connu mais URL différente -- très probablement une ligne
+      // dupliquée en modèle dans le Sheet dont le "N°" n'a pas été changé :
+      // sans ce message, une ligne dans ce cas restait invisible pour toujours,
+      // et "aucune ligne neuve" ne distinguait pas ce cas d'un Sheet vraiment
+      // à jour.
+      if (result.duplicateRowRef) skipMsgs.push(`${result.duplicateRowRef} avec un "N°" déjà utilisé par une autre ligne`);
       const base = result.inserted > 0
         ? `${result.inserted} nouvelle(s) ligne(s) détectée(s)`
         : 'Synchronisé -- aucune ligne neuve';
       const detail = ` (${result.scanned} ligne(s) valide(s) lue(s) sur le Sheet${skipMsgs.length ? `, ${skipMsgs.join(', ')} ignorée(s)` : ''})`;
-      toast.success(base + detail + '.');
+      toast.success(base + detail + '.', { duration: skipMsgs.length ? 8000 : 4000 });
       await refreshStaged();
     } catch (e) {
       toast.error(`Synchronisation impossible : ${e.message}`);
@@ -328,6 +366,17 @@ export default function LotsBatch() {
     setExpandedId(batchId);
     if (!itemsByBatch[batchId]) loadItems(batchId);
   };
+
+  // Pagination d'affichage -- recalculée à chaque rendu (jamais stockée),
+  // pour ne jamais rester bloqué sur une page vidée par un rafraîchissement,
+  // un "Ignorer" ou un lancement.
+  const stagedTotalPages = Math.max(1, Math.ceil(stagedItems.length / PAGE_SIZE));
+  const stagedPageClamped = Math.min(stagedPage, stagedTotalPages - 1);
+  const pagedStagedItems = stagedItems.slice(stagedPageClamped * PAGE_SIZE, (stagedPageClamped + 1) * PAGE_SIZE);
+
+  const batchTotalPages = Math.max(1, Math.ceil(batches.length / PAGE_SIZE));
+  const batchPageClamped = Math.min(batchPage, batchTotalPages - 1);
+  const pagedBatches = batches.slice(batchPageClamped * PAGE_SIZE, (batchPageClamped + 1) * PAGE_SIZE);
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-8">
@@ -490,7 +539,7 @@ export default function LotsBatch() {
         {stagedItems.length > 0 && (
           <>
             <div className="space-y-2">
-              {stagedItems.map((it) => (
+              {pagedStagedItems.map((it) => (
                 <div key={it.id} className="flex flex-col md:flex-row gap-2 items-start md:items-center border border-gray-100 rounded-lg p-2">
                   <input
                     type="checkbox"
@@ -523,6 +572,7 @@ export default function LotsBatch() {
                 </div>
               ))}
             </div>
+            <Pager page={stagedPageClamped} totalPages={stagedTotalPages} onChange={setStagedPage} />
             <div className="flex items-center justify-between pt-2">
               <button type="button" onClick={toggleSelectAllStaged} className="text-sm font-medium text-gray-600 hover:text-gray-900">
                 {selectedStagedIds.size === stagedItems.length ? 'Tout désélectionner' : 'Tout sélectionner'}
@@ -558,7 +608,7 @@ export default function LotsBatch() {
         )}
 
         <div className="divide-y divide-gray-100">
-          {batches.map((b) => (
+          {pagedBatches.map((b) => (
             <div key={b.id}>
               <button
                 type="button"
@@ -648,6 +698,7 @@ export default function LotsBatch() {
             </div>
           ))}
         </div>
+        <Pager page={batchPageClamped} totalPages={batchTotalPages} onChange={setBatchPage} />
       </section>
 
       {confirmLaunch && (
