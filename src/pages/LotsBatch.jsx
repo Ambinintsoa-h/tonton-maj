@@ -174,9 +174,19 @@ export default function LotsBatch() {
     setSyncingSheet(true);
     try {
       const result = await syncGoogleSheetNow();
-      toast.success(result.inserted > 0
-        ? `${result.inserted} nouvelle(s) ligne(s) détectée(s).`
-        : 'Synchronisé -- aucune ligne neuve.');
+      // Détail complet plutôt que le seul "inserted" -- sans lui, une ligne
+      // ignorée (sans "N°"/URL/mot-clé, ou déjà connue) était indiscernable
+      // d'un vrai souci de lecture du Sheet : le compte affiché ne bougeait
+      // pas dans les deux cas, sans jamais dire pourquoi.
+      const skipMsgs = [];
+      if (result.skippedNoRowRef) skipMsgs.push(`${result.skippedNoRowRef} sans "N°"`);
+      if (result.skippedNoUrl) skipMsgs.push(`${result.skippedNoUrl} sans URL`);
+      if (result.skippedNoKeyword) skipMsgs.push(`${result.skippedNoKeyword} sans mot-clé`);
+      const base = result.inserted > 0
+        ? `${result.inserted} nouvelle(s) ligne(s) détectée(s)`
+        : 'Synchronisé -- aucune ligne neuve';
+      const detail = ` (${result.scanned} ligne(s) valide(s) lue(s) sur le Sheet${skipMsgs.length ? `, ${skipMsgs.join(', ')} ignorée(s)` : ''})`;
+      toast.success(base + detail + '.');
       await refreshStaged();
     } catch (e) {
       toast.error(`Synchronisation impossible : ${e.message}`);
