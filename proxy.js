@@ -9,7 +9,6 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const helmet = require('helmet');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
-const net = require('net');
 const { spawn, execSync } = require('child_process');
 const { createDecipheriv } = require('crypto');
 const https = require('https');
@@ -39,7 +38,6 @@ const { JSDOM } = require('jsdom');
 const speakeasy = require('speakeasy');
 const QRCode    = require('qrcode');
 const nodemailer = require('nodemailer');
-const dns = require('dns').promises;
 
 const app = express();
 app.set('trust proxy', 1); // Nginx devant en prod — req.ip = vraie IP client
@@ -206,50 +204,9 @@ app.use('/api/data', require('./data-api')({ requireAuth, requireRole }));
 // ─── Protection SSRF : bloque les IPs internes / loopback / link-local ────────
 // Sans cette validation, /api/scrape et /api/wordpress permettent de faire fetcher
 // au proxy n'importe quelle URL interne (127.x, 192.168.x, 169.254.x, AWS metadata…).
-const isPrivateHost = (hostname) => {
-  // Résolution IPv4 directe
-  if (net.isIPv4(hostname)) {
-    const [a, b] = hostname.split('.').map(Number);
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 169 && b === 254)  // link-local / AWS IMDS
-    );
-  }
-  // IPv6 loopback / ULA / link-local
-  if (net.isIPv6(hostname)) {
-    const h = hostname.toLowerCase();
-    return h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80');
-  }
-  // Noms d'hôtes locaux
-  const h = hostname.toLowerCase();
-  return h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || h.endsWith('.localhost');
-};
-
-const assertSafeUrl = async (raw, label = 'URL') => {
-  let parsed;
-  try { parsed = new URL(raw); } catch { throw new Error(`${label} invalide`); }
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error(`Protocole non autorisé : ${parsed.protocol}`);
-  }
-  if (isPrivateHost(parsed.hostname)) {
-    throw new Error(`Accès réseau interne interdit (${parsed.hostname})`);
-  }
-  // Résolution DNS : bloque le DNS rebinding (domaine public → IP privée)
-  try {
-    const { address } = await dns.lookup(parsed.hostname);
-    if (isPrivateHost(address)) {
-      throw new Error(`Accès réseau interne interdit via DNS (${address})`);
-    }
-  } catch (e) {
-    if (e.message.startsWith('Accès')) throw e;
-    throw new Error(`${label} : hostname non résolvable (${parsed.hostname})`);
-  }
-  return parsed;
-};
+// Voir src/server/safeFetch.js (extrait pour être testable -- logique sécurité
+// jamais couverte par un test tant qu'elle vivait ici en inline).
+const { assertSafeUrl, fetchFollowingSafeRedirects } = require('./src/server/safeFetch');
 
 // ─── Helper erreur (M4) ───────────────────────────────────────────────────────
 // En production, ne jamais exposer e.message dans les 500 — cache la structure interne.
@@ -3198,15 +3155,15 @@ app.post('/api/scrape', requireAuth, async (req, res) => {
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   try {
-    // 1. Fetch du HTML brut
-    const response = await axios.get(url, {
+    // 1. Fetch du HTML brut -- redirections suivies (revalidées SSRF à chaque
+    // saut), voir fetchFollowingSafeRedirects().
+    const response = await fetchFollowingSafeRedirects(url, {
       timeout: 20000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
       },
-      maxRedirects: 0,
     });
 
     // 2. Extraire l'image à la une AVANT que Readability modifie le DOM
