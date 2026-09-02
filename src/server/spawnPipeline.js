@@ -16,7 +16,14 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const DEFAULT_CLI_PATH = path.join(__dirname, '..', '..', 'pipelineCli.js');
-const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000; // un run complet (4 passes IA) peut prendre plusieurs minutes
+// Relevé de 15 à 25 min le 2 septembre 2026 : ce plafond datait du 28/08 avec un
+// commentaire disant "4 passes IA", alors que la passe de gras (agentBold.js,
+// ajoutée le 19/08, donc déjà là) en fait une 5e obligatoire à chaque génération.
+// Constaté en production : un item tué pile à 15 min pendant "Mise en gras",
+// sur un article lourd où le cumul des 5 passes (avec leurs essais IA en
+// cascade) a dépassé le plafond -- pas un vrai blocage, juste un budget trop
+// juste pour le nombre réel de passes.
+const DEFAULT_TIMEOUT_MS = 25 * 60 * 1000; // un run complet (5 passes IA) peut prendre plusieurs minutes
 
 /**
  * @param {object} input — transmis tel quel en JSON sur stdin de pipelineCli.js
