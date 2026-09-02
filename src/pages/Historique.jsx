@@ -6,13 +6,12 @@ import toast from 'react-hot-toast';
 import {
   Clock, Trash2, Eye, Search, X, ExternalLink,
   Calendar, CheckCircle2, Sparkles, AlertTriangle, ChevronDown, ChevronUp,
-  UserCircle2, RotateCcw, Loader, TrendingUp, TrendingDown, Minus,
+  UserCircle2, Loader, TrendingUp, TrendingDown, Minus,
   ArrowUp, ArrowDown, Timer, Activity, RefreshCw, Pencil, Lock, Archive,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import axios from 'axios';
 import { removeFromHistory, updateInHistory } from '../store/slices/articlesSlice';
-import { addPendingItem } from '../store/slices/pendingSlice';
 import {
   setOriginalContent, setUpdatedContent, setDiff,
   setSources, setAnalysis, setStatus, setCurrentArticleId, setAudit, setWpData,
@@ -354,7 +353,7 @@ function SeoPanel({ seoTracking, majDate }) {
 }
 
 // ── Ligne historique (read-only, même design que MAJ en attente) ──────────────
-function HistoryRow({ article, users, onView, onRequeue, onDelete, onArchive, selectable, selected, onToggleSelect }) {
+function HistoryRow({ article, users, onView, onDelete, onArchive, selectable, selected, onToggleSelect }) {
   const [expanded, setExpanded] = useState(false);
 
   const domain   = extractDomain(article.url);
@@ -563,13 +562,6 @@ function HistoryRow({ article, users, onView, onRequeue, onDelete, onArchive, se
             title="Voir avant / après"
           >
             <Eye size={13} />
-          </button>
-          <button
-            onClick={() => onRequeue(article)}
-            className="btn-ghost !p-1.5 text-gray-300 hover:text-amber-500 hover:bg-amber-50"
-            title="Remettre en attente de MAJ"
-          >
-            <RotateCcw size={13} />
           </button>
           {onArchive && (
             <button
@@ -787,7 +779,7 @@ export default function Historique() {
     dispatch(removeFromHistory(id));
     toast.success('Supprimé de l\'historique');
     if (preview?.id === id) setPreview(null);
-    // Nettoyage Firestore en arrière-plan (non bloquant — comme handleRequeue)
+    // Nettoyage Firestore en arrière-plan (non bloquant)
     if (firebaseReady) deleteArticle(id).catch(() => {});
   };
 
@@ -812,29 +804,6 @@ export default function Historique() {
       `${bulkTargets.length} article${bulkTargets.length > 1 ? 's' : ''} archivé${bulkTargets.length > 1 ? 's' : ''} — page Archives`,
       { icon: <Archive size={16} /> }
     );
-  };
-
-  const handleRequeue = (article) => {
-    // 1. Mise à jour UI immédiate — pas d'await pour ne jamais bloquer sur Firebase
-    dispatch(removeFromHistory(article.id));
-    if (preview?.id === article.id) setPreview(null);
-
-    dispatch(addPendingItem({
-      id:         `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      url:        article.url        || '',
-      title:      article.title      || article.url || '',
-      keyword:    article.keyword    || '',
-      priority:   article.priority   || 'normale',
-      assigneeId: article.assigneeId || null,
-      status:     'pending',
-      source:     'requeue',
-      addedAt:    Date.now(),
-    }));
-
-    toast.success('Article remis en attente de MAJ', { icon: <RefreshCw size={18} /> });
-
-    // 2. Nettoyage Firestore en arrière-plan (best-effort, non bloquant)
-    if (firebaseReady) deleteArticle(article.id).catch(() => {});
   };
 
   // Ouvre la modale de prévisualisation et charge le HTML depuis Storage si nécessaire
@@ -1010,7 +979,6 @@ export default function Historique() {
                 article={article}
                 users={users}
                 onView={() => openPreview(article)}
-                onRequeue={handleRequeue}
                 onDelete={handleDelete}
                 onArchive={authRole === 'super_admin' ? handleArchive : null}
                 selectable={canBulkArchive}
