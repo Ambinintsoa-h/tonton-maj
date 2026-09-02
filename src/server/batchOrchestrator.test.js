@@ -221,3 +221,53 @@ describe('createBatchOrchestrator', () => {
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining('Notification de fin échouée'));
   });
 });
+
+describe('repairZombies', () => {
+  function makeRepairDeps(queryResult) {
+    const query = jest.fn().mockResolvedValue([queryResult]);
+    const getPool = jest.fn(() => ({ query, getConnection: jest.fn() }));
+    const onLog = jest.fn();
+    const deps = {
+      getPool, jwt: { sign: jest.fn() }, jwtSecret: 'secret',
+      fetchModelPricing: jest.fn().mockResolvedValue(null),
+      apiBaseUrl: 'https://maj.stomos.net/api',
+      httpClientFactory: jest.fn(() => ({ put: jest.fn() })),
+      onLog,
+    };
+    return { deps, query, onLog };
+  }
+
+  it('remet en_attente les items en_cours bloqués depuis plus de 30 min et journalise', async () => {
+    const { deps, query, onLog } = makeRepairDeps({ affectedRows: 8 });
+    const orch = createBatchOrchestrator(deps);
+    const repaired = await orch.repairZombies();
+    expect(repaired).toBe(8);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/UPDATE batch_items SET status='en_attente', started_at=NULL/);
+    expect(sql).toMatch(/WHERE status='en_cours' AND started_at IS NOT NULL AND started_at < \?/);
+    expect(params).toHaveLength(1);
+    expect(typeof params[0]).toBe('number');
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('8 article(s)'));
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('redémarrage serveur'));
+  });
+
+  it('ne journalise rien quand aucun item n\'est réparé', async () => {
+    const { deps, onLog } = makeRepairDeps({ affectedRows: 0 });
+    const orch = createBatchOrchestrator(deps);
+    const repaired = await orch.repairZombies();
+    expect(repaired).toBe(0);
+    expect(onLog).not.toHaveBeenCalled();
+  });
+
+  it('calcule le cutoff sur un seuil de 30 minutes', async () => {
+    const { deps, query } = makeRepairDeps({ affectedRows: 0 });
+    const before = Date.now();
+    const orch = createBatchOrchestrator(deps);
+    await orch.repairZombies();
+    const after = Date.now();
+    const [, params] = query.mock.calls[0];
+    const cutoff = params[0];
+    expect(cutoff).toBeGreaterThanOrEqual(before - 30 * 60 * 1000);
+    expect(cutoff).toBeLessThanOrEqual(after - 30 * 60 * 1000);
+  });
+});
