@@ -125,6 +125,7 @@ export default function LotsBatch() {
   const [stagedPage, setStagedPage] = useState(0);
   const [batchPage, setBatchPage] = useState(0);
   const [relaunchingId, setRelaunchingId] = useState(null);
+  const [expandedErrorIds, setExpandedErrorIds] = useState(() => new Set());
 
   const refreshBatches = useCallback(async () => {
     setLoadingBatches(true);
@@ -338,6 +339,12 @@ export default function LotsBatch() {
       setRelaunchingId(null);
     }
   };
+
+  const toggleErrorExpand = (itemId) => setExpandedErrorIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(itemId)) next.delete(itemId); else next.add(itemId);
+    return next;
+  });
 
   const loadItems = async (batchId) => {
     setLoadingItemsId(batchId);
@@ -687,8 +694,21 @@ export default function LotsBatch() {
                                         Relancer
                                       </button>
                                     )}
-                                    {it.errorMessage && <span className="text-xs text-red-500">{it.errorMessage}</span>}
+                                    {it.errorMessage && (
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleErrorExpand(it.id)}
+                                        className="text-xs font-medium text-red-500 hover:text-red-600 underline decoration-dotted"
+                                      >
+                                        {expandedErrorIds.has(it.id) ? 'Masquer l\'erreur' : 'Voir l\'erreur'}
+                                      </button>
+                                    )}
                                   </div>
+                                  {it.errorMessage && expandedErrorIds.has(it.id) && (
+                                    <pre className="mt-1.5 text-xs text-red-600 bg-red-50 border border-red-100 rounded-md p-2 whitespace-pre-wrap break-words max-w-md">
+                                      {it.errorMessage}
+                                    </pre>
+                                  )}
                                 </td>
                               </tr>
                             ))}
