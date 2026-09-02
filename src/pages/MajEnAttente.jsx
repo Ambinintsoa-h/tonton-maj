@@ -31,6 +31,11 @@ const DATE_PRESETS = [
   { label: '30 jours', days: 29 },
 ];
 
+// Volontairement plus petit que le défaut partagé de Pagination.jsx (50,
+// toujours utilisé tel quel par Historique/Archives) : "Mes MAJ" affiche
+// beaucoup de colonnes par ligne, 20 tient mieux sur un écran sans scroll.
+const PAGE_SIZE = 20;
+
 // Rapproche le "Attribué à" du Sheet de l'utilisateur connecté -- comparaison
 // texte insensible à la casse/accents/@ initial, jamais une égalité stricte
 // (même esprit que buildMemberMatcher, ListFilters.jsx) : "andrianina",
@@ -114,7 +119,7 @@ export default function MajEnAttente() {
 
   const totalCost = useMemo(() => filtered.reduce((sum, it) => sum + (it.costUsd || 0), 0), [filtered]);
   const costByDay = useMemo(() => groupCostByDay(filtered), [filtered]);
-  const paged = pageSlice(filtered, page);
+  const paged = pageSlice(filtered, page, PAGE_SIZE);
 
   const applyDatePreset = (days) => {
     setDateTo(localIso(new Date()));
@@ -131,7 +136,7 @@ export default function MajEnAttente() {
   }, [staged, isPersonalScope, me]);
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
+    <div className="max-w-7xl mx-auto p-6 space-y-6">
       <div className="flex items-center gap-3">
         <ListChecks className="w-6 h-6 text-teal-600" />
         <div className="flex-1">
@@ -283,7 +288,7 @@ export default function MajEnAttente() {
             </table>
           </div>
         )}
-        <Pagination total={filtered.length} page={page} onPageChange={setPage} />
+        <Pagination total={filtered.length} page={page} onPageChange={setPage} perPage={PAGE_SIZE} />
       </div>
 
       {/* Widget "MAJ en attente" -- lignes du Google Sheet pas encore lancées.
