@@ -12,6 +12,8 @@ import { createPortal } from 'react-dom';
 import { listBatches, getBatch, createBatch } from '../services/batches';
 import { listStagedItems, launchStagedItems, ignoreStagedItem, syncGoogleSheetNow } from '../services/gsheetStaging';
 import { parseBatchSheetRows } from '../utils/batchSheetImport';
+import { fmtDate, fmtDuration, fmtCost, BATCH_STATUS_META, ITEM_STATUS_META } from '../utils/batchDisplay';
+import Badge from '../components/common/Badge';
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -59,47 +61,6 @@ const guessSite = (url) => {
 };
 
 const isLikelyUrl = (v) => /^https?:\/\/.+/i.test((v || '').trim());
-
-const fmtDate = (ts) => {
-  if (!ts) return '—';
-  try {
-    return new Date(ts).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-  } catch { return '—'; }
-};
-
-const fmtDuration = (ms) => {
-  if (ms == null || ms < 0) return '—';
-  const totalSec = Math.round(ms / 1000);
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  return min > 0 ? `${min} min ${sec}s` : `${sec}s`;
-};
-
-const fmtCost = (usd) => (usd == null ? '—' : `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`);
-
-const BATCH_STATUS_META = {
-  pending: { label: 'En attente', color: 'text-amber-600  bg-amber-50  border-amber-200' },
-  running: { label: 'En cours',   color: 'text-blue-600   bg-blue-50   border-blue-200' },
-  done:    { label: 'Terminé',    color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-  error:   { label: 'Erreur',     color: 'text-red-600    bg-red-50    border-red-200' },
-};
-
-const ITEM_STATUS_META = {
-  en_attente: { label: 'En attente', color: 'text-amber-600  bg-amber-50  border-amber-200' },
-  en_cours:   { label: 'En cours',   color: 'text-blue-600   bg-blue-50   border-blue-200' },
-  fait:       { label: 'Fait',       color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-  erreur:     { label: 'Erreur',     color: 'text-red-600    bg-red-50    border-red-200' },
-  a_revoir:   { label: 'À revoir',   color: 'text-purple-600 bg-purple-50 border-purple-200' },
-};
-
-function Badge({ meta, fallback }) {
-  const m = meta || { label: fallback || '—', color: 'text-gray-500 bg-gray-50 border-gray-200' };
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${m.color}`}>
-      {m.label}
-    </span>
-  );
-}
 
 // Confirmation dédiée au lancement -- ConfirmDialog (src/components/common) est
 // câblé pour la suppression (icône corbeille, thème rouge) : le réutiliser ici
