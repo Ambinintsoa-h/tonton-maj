@@ -124,6 +124,7 @@ export default function LotsBatch() {
   const [launchingStaged, setLaunchingStaged] = useState(false);
   const [stagedPage, setStagedPage] = useState(0);
   const [batchPage, setBatchPage] = useState(0);
+  const [relaunchingId, setRelaunchingId] = useState(null);
 
   const refreshBatches = useCallback(async () => {
     setLoadingBatches(true);
@@ -307,6 +308,34 @@ export default function LotsBatch() {
       toast.error(`Échec du lancement : ${e.message}`);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // Relance UN item comme un nouveau lot d'un seul article -- ne touche jamais
+  // la ligne d'origine (voir data-api.js, route PUT .../items/:itemId : "un
+  // item ne se relance qu'en créant un nouveau batch"), pour ne jamais risquer
+  // de heurter un ancien traitement encore en cours.
+  const handleRelaunch = async (item) => {
+    setRelaunchingId(item.id);
+    try {
+      const { id } = await createBatch({
+        source: 'manual',
+        items: [{
+          site: item.site || undefined,
+          articleUrl: item.articleUrl,
+          targetKeyword: item.targetKeyword,
+          majType: item.majType,
+          consigne: item.consigne || undefined,
+        }],
+      });
+      toast.success('Article relancé dans un nouveau lot.');
+      await refreshBatches();
+      setExpandedId(id);
+      loadItems(id);
+    } catch (e) {
+      toast.error(`Échec de la relance : ${e.message}`);
+    } finally {
+      setRelaunchingId(null);
     }
   };
 
@@ -643,6 +672,20 @@ export default function LotsBatch() {
                                       >
                                         <Eye className="w-3.5 h-3.5" /> Relire
                                       </Link>
+                                    )}
+                                    {(it.status === 'erreur' || it.status === 'a_revoir') && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRelaunch(it)}
+                                        disabled={relaunchingId === it.id}
+                                        className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800 hover:underline disabled:opacity-50"
+                                        title="Relance cet article dans un nouveau lot d'un seul article -- sans toucher à celui-ci"
+                                      >
+                                        {relaunchingId === it.id
+                                          ? <Loader className="w-3.5 h-3.5 animate-spin" />
+                                          : <RefreshCw className="w-3.5 h-3.5" />}
+                                        Relancer
+                                      </button>
                                     )}
                                     {it.errorMessage && <span className="text-xs text-red-500">{it.errorMessage}</span>}
                                   </div>

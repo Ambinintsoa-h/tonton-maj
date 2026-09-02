@@ -2012,9 +2012,22 @@ if (DATA_BACKEND === 'mysql') {
   // Démarrage 10s après le boot (laisse le pool DB se stabiliser), puis un
   // tick toutes les 15s -- assez réactif pour qu'un lot lancé depuis /lots ne
   // traîne pas en "en attente", sans marteler la base entre deux lots.
+  //
+  // repairZombies() D'ABORD, avant le premier tick : un redémarrage du
+  // serveur (déploiement, crash, recyclage Passenger) laisse en base des
+  // items 'en_cours' que plus rien ne reprend jamais (le compteur `active`
+  // qui borne la concurrence repart de 0 en mémoire, mais `claimNext` ne
+  // réclame que 'en_attente'). Repassage périodique (30 min) en plus du
+  // passage au démarrage : filet de sécurité si un item se bloque pour une
+  // autre raison qu'un redémarrage (ex. connexion DB perdue en plein run).
   setTimeout(() => {
-    batchOrchestrator.tick();
+    batchOrchestrator.repairZombies()
+      .then(() => batchOrchestrator.tick())
+      .catch((e) => console.error('[batch] Réparation au démarrage échouée :', e.message));
     setInterval(() => batchOrchestrator.tick(), 15000);
+    setInterval(() => {
+      batchOrchestrator.repairZombies().catch((e) => console.error('[batch] Réparation périodique échouée :', e.message));
+    }, 30 * 60 * 1000);
   }, 10000);
 
   // ─── Synchronisation Google Sheet (détection seule -- JAMAIS de lancement) ──

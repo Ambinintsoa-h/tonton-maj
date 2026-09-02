@@ -249,7 +249,37 @@ function createBatchOrchestrator(deps) {
     claimed.forEach((item) => { processItem(item); });
   };
 
-  return { tick, getActiveCount: () => active };
+  // ── Réparation des « en_cours » zombies ─────────────────────────────────
+  // `active` (le compteur de créneaux occupés) vit UNIQUEMENT en mémoire du
+  // process -- un redémarrage serveur (déploiement, crash, recyclage
+  // Passenger) le remet à 0, mais les lignes `batch_items` déjà réclamées par
+  // l'ancien process restent 'en_cours' en base pour toujours : `claimNext`
+  // ne réclame que 'en_attente', jamais 'en_cours'. Constaté en production le
+  // 2 septembre 2026 : un lot à 1/9 terminé, 8 items bloqués 'en_cours' sans
+  // qu'aucun ne progresse, après un redémarrage du serveur.
+  //
+  // Seuil identique à STALE_RUN_MS de l'ancien MajEnAttente.jsx (30 min) --
+  // largement au-delà de la durée d'une passe la plus longue (~9 min, voir
+  // agent-pipeline.md) même en tenant compte d'une attente derrière d'autres
+  // items. Ne touche QUE les items dont started_at date d'avant ce seuil :
+  // un item réellement en train de tourner (redémarrage pendant qu'un item
+  // tournait déjà, ou tick concurrent) n'est jamais repris en route.
+  const STALE_RUN_MS = 30 * 60 * 1000;
+  const repairZombies = async () => {
+    const cutoff = Date.now() - STALE_RUN_MS;
+    const [result] = await getPool().query(
+      `UPDATE batch_items SET status='en_attente', started_at=NULL
+         WHERE status='en_cours' AND started_at IS NOT NULL AND started_at < ?`,
+      [cutoff],
+    );
+    const repaired = result.affectedRows || 0;
+    if (repaired > 0) {
+      onLog(`[batch] ${repaired} article(s) "en cours" bloqué(s) depuis plus de 30 min remis en attente (probable redémarrage serveur)`);
+    }
+    return repaired;
+  };
+
+  return { tick, repairZombies, getActiveCount: () => active };
 }
 
 module.exports = { createBatchOrchestrator, DEFAULT_CONCURRENCY };
