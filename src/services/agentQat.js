@@ -1082,8 +1082,20 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
     try {
       const { text } = await callWithLiveText({
         // Voir le commentaire de l'audit : raisonnement désactivé pour la bascule,
-        // sinon il mangerait le budget de 32 000 tokens destiné à l'article.
-        params: { system, max_tokens: 32000, model: selectModel('refonte', modelSelections), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
+        // sinon il mangerait le budget destiné à l'article.
+        //
+        // Relevé de 32 000 à 48 000 le 2 septembre 2026, même défaut que la
+        // règle 11 (audit 20 000 -> 32 000) : Sonnet 5 compte ~30 % de tokens
+        // en plus que Sonnet 4.5 pour un même texte, et ce plafond datait du
+        // 5 août -- avant Sonnet 5, avant toutes les contraintes rédactionnelles
+        // ajoutées depuis (règle des 20 mots, maillage à 100 %, reprise des
+        // liens perdus...) qui rallongent mécaniquement le JSON attendu.
+        // Constaté en production : "réponse illisible ou article vide" après
+        // 3 essais -- ici, contrairement à l'audit, aucun `salvage` ne peut
+        // récupérer un article_html coupé en plein milieu, donc une réponse
+        // tronquée est un échec total, pas partiel. La marge doit être plus
+        // large qu'ailleurs, pas ajustée au plus juste.
+        params: { system, max_tokens: 48000, model: selectModel('refonte', modelSelections), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
         label: attempt === 1 ? 'Rédaction de l\'article' : `Rédaction — essai ${attempt}/3`,
         pass: 'refonte',
         onStep, onReplace, onProgress, onDelta, trackCall,
