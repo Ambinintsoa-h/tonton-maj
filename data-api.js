@@ -375,6 +375,68 @@ module.exports = ({ requireAuth, requireRole }) => {
     }));
   }));
 
+  // GET /articles-page?limit=&offset= — variante PAGINÉE de GET /articles, pour
+  // Historique.jsx : ne charge que `limit` lignes (même forme complète que
+  // GET /articles -- previews/réouverture en éditeur continuent de marcher sans
+  // rien changer côté client) au lieu de la table entière à chaque ouverture de
+  // la page. Un cq_ia est TOUJOURS forcé sur ses propres articles (assignee_id),
+  // même règle de visibilité que le filtre client existant -- jamais laissée à
+  // la confiance du client, et ça garantit que "limit" chargés = "limit"
+  // pertinents pour ce rôle. Les archivés sont exclus directement ici (ils ne
+  // vivent que dans Archives) pour que `total` corresponde exactement à ce que
+  // Historique affiche.
+  router.get('/articles-page', requireAuth, wrap(async (req, res) => {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const canSeeAll = ['super_admin', 'manager', 'support'].includes(req.user.role);
+    const conditions = ['archived = 0'];
+    const scopeParams = [];
+    if (!canSeeAll) {
+      conditions.push('assignee_id IN (?, ?)');
+      scopeParams.push(req.user.uid || '', req.user.username || '');
+    }
+    const whereSql = `WHERE ${conditions.join(' AND ')}`;
+
+    const [countRows] = await q(`SELECT COUNT(*) AS total FROM articles ${whereSql}`, scopeParams);
+    const total = countRows[0].total;
+
+    const [arts] = await q(
+      `SELECT * FROM articles ${whereSql} ORDER BY sort_at DESC LIMIT ? OFFSET ?`,
+      [...scopeParams, limit, offset],
+    );
+    if (!arts.length) return res.json({ items: [], total });
+
+    const ids = arts.map((a) => a.id);
+    const placeholders = ids.map(() => '?').join(',');
+    const [locks] = await q(`SELECT * FROM article_editing_locks WHERE article_id IN (${placeholders})`, ids);
+    const [tracks] = await q(`SELECT * FROM seo_tracking WHERE article_id IN (${placeholders})`, ids);
+    const trackIds = tracks.map((t) => t.article_id);
+    let snaps = [];
+    if (trackIds.length) {
+      const [snapRows] = await q(
+        `SELECT * FROM seo_snapshots WHERE article_id IN (${trackIds.map(() => '?').join(',')}) ORDER BY captured_at ASC`,
+        trackIds,
+      );
+      snaps = snapRows;
+    }
+    const lockBy = new Map(locks.map((l) => [l.article_id, l]));
+    const trackBy = new Map(tracks.map((t) => [t.article_id, t]));
+    const snapsBy = new Map();
+    for (const s of snaps) {
+      if (!snapsBy.has(s.article_id)) snapsBy.set(s.article_id, []);
+      snapsBy.get(s.article_id).push(s);
+    }
+    const items = arts.map((r) => {
+      const o = articleToObj(r);
+      const l = lockBy.get(r.id);
+      if (l) o.editingLock = lockToObj(l);
+      const t = trackBy.get(r.id);
+      if (t) o.seoTracking = seoTrackingToObj(t, snapsBy.get(r.id));
+      return o;
+    });
+    res.json({ items, total });
+  }));
+
   // GET /articles/:id — UN SEUL article, avec son verrou et son suivi SEO.
   //
   // Pourquoi cette route existe : la review d'un article de la file lit son

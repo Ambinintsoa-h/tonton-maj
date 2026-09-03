@@ -19,7 +19,8 @@ import {
   markArchiveOpened, setEditorMeta, setTargetKeyword,
 } from '../store/slices/agentSlice';
 import { derivePhaseStatus, maxReachablePhase } from '../constants/majPhases';
-import { deleteArticle, fetchArticleHtml, getArticles, isLockActive, archiveArticle } from '../services/firebase';
+import { deleteArticle, fetchArticleHtml, isLockActive, archiveArticle } from '../services/firebase';
+import { listArticlesPage } from '../services/articlesPage';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Pagination, { pageSlice } from '../components/common/Pagination';
 import ListFilters, { EMPTY_FILTERS, hasActiveFilters, buildMemberMatcher, buildDateMatcher } from '../components/common/ListFilters';
@@ -28,6 +29,11 @@ import { renderMarkdown } from '../utils/markdown';
 import { ROLE_COLORS, PRIORITY_META, domainColor } from '../constants/theme';
 
 // ── Constantes visuelles (importées depuis constants/theme) ───────────────────
+
+// Chargement allégé (voir le useEffect de chargement dans Historique()) :
+// 30 articles au départ (3 pages de 10), 10 de plus par appel serveur ensuite.
+const INITIAL_LOAD          = 30;
+const PAGE_SIZE_HISTORIQUE  = 10;
 
 function AssigneeAvatar({ member }) {
   if (!member) return null;
@@ -670,7 +676,6 @@ function HistoryRow({ article, users, onView, onDelete, onArchive, selectable, s
 export default function Historique() {
   const dispatch      = useDispatch();
   const navigate      = useNavigate();
-  const history       = useSelector(s => s.articles.history);
   const firebaseReady = useSelector(s => s.settings.firebaseReady);
   const users         = useSelector(s => s.users.list);
   const authRole      = useSelector(s => s.auth.role);
@@ -688,31 +693,36 @@ export default function Historique() {
   const [previewHtml,   setPreviewHtml]   = useState({ original: '', updated: '' });
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  // Rafraîchit depuis Firestore les infos « vivantes » des entrées déjà connues :
-  // verrou d'édition (qui modifie quoi EN CE MOMENT) + trace de dernière
-  // modification. La BASE est la source de vérité pour « modifié le … par … » :
-  // le partage entre membres passe par elle, et cela purge aussi les marquages
-  // locaux parasites (consultations comptées à tort comme modifications).
-  useEffect(() => {
-    if (!firebaseReady) return;
-    let cancelled = false;
-    getArticles()
-      .then(list => {
-        if (cancelled) return;
-        list.forEach(a => dispatch(updateInHistory({
-          id: a.id,
-          editingLock: a.editingLock || null,
-          lastModifiedAt: a.lastModifiedAt || null,
-          lastModifiedBy: a.lastModifiedAt ? (a.lastModifiedBy || '') : '',
-          ...(a.updatedAt ? { updatedAt: a.updatedAt } : {}),
-        })));
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [firebaseReady, dispatch]);
+  // ── Chargement allégé : 30 articles au départ, 10 de plus par page suivante ──
+  // Demande d'Andrianina, 2 septembre 2026 : Historique chargeait TOUT
+  // l'historique en mémoire (getArticles(), tout le HTML inline) à chaque
+  // ouverture, juste pour rafraîchir quelques champs "vivants" (verrou,
+  // dernière modif). État LOCAL à cette page, jamais dans le Redux partagé
+  // (s.articles.history, alimenté une fois au bootstrap pour Dashboard/
+  // Archives/Tickets/ArticleResult -- eux ont besoin de la liste complète,
+  // donc ce chargement local ne les remplace pas, il s'y ajoute).
+  // Recherche et filtres ne portent QUE sur ce qui est déjà chargé (décision
+  // Andrianina) : au-delà de la page 3, avancer déclenche un appel serveur,
+  // mais une recherche active ne va jamais chercher plus loin toute seule.
+  const [loadedArticles, setLoadedArticles] = useState([]);
+  const [totalArticles,  setTotalArticles]  = useState(0);
+  const [loadingMore,    setLoadingMore]    = useState(false);
 
-  // Les articles ARCHIVÉS quittent l'Historique (page Archives — super_admin)
-  const notArchived = history.filter(a => !a.archived);
+  useEffect(() => {
+    let cancelled = false;
+    listArticlesPage({ limit: INITIAL_LOAD, offset: 0 })
+      .then(({ items, total }) => {
+        if (cancelled) return;
+        setLoadedArticles(items);
+        setTotalArticles(total);
+      })
+      .catch(() => toast.error('Impossible de charger l\'historique.'));
+    return () => { cancelled = true; };
+  }, []);
+
+  // Les archivés sont déjà exclus côté serveur (voir GET /articles-page) --
+  // filtre client conservé par cohérence/défense en profondeur, jamais coûteux.
+  const notArchived = loadedArticles.filter(a => !a.archived);
 
   // Visibilité : LISTE BLANCHE — seuls super_admin / manager / support voient
   // tout. Tout autre rôle (cq_ia, ou rôle pas encore hydraté au chargement) ne
@@ -746,11 +756,35 @@ export default function Historique() {
     .filter(a => !dateMatch || dateMatch(a))
     .sort((a, b) => sortKey(b) - sortKey(a));
 
-  // Pagination (50 max par page) — retour page 1 (et sélection purgée) à chaque
+  // Pagination (10 par page) — retour page 1 (et sélection purgée) à chaque
   // nouvelle recherche / nouveau filtre
   const [page, setPage] = useState(1);
   useEffect(() => { setPage(1); setSelectedIds(new Set()); }, [q, filters]);
-  const pageItems = pageSlice(filtered, page);
+  const pageItems = pageSlice(filtered, page, PAGE_SIZE_HISTORIQUE);
+
+  // Recherche/filtres ne portent que sur le chargé (décision Andrianina) : on
+  // avance donc au-delà de ce qui est déjà en mémoire UNIQUEMENT quand
+  // aucune recherche/filtre n'est active -- sinon "aucun résultat" resterait
+  // "aucun résultat" après un appel serveur inutile.
+  const searchActive = !!q || hasActiveFilters(filters);
+  useEffect(() => {
+    if (searchActive) return;
+    const needed = page * PAGE_SIZE_HISTORIQUE;
+    if (needed <= loadedArticles.length || loadedArticles.length >= totalArticles) return;
+    let cancelled = false;
+    setLoadingMore(true);
+    listArticlesPage({ limit: PAGE_SIZE_HISTORIQUE, offset: loadedArticles.length })
+      .then(({ items, total }) => {
+        if (cancelled) return;
+        setLoadedArticles(prev => [...prev, ...items]);
+        setTotalArticles(total);
+      })
+      .catch(() => toast.error('Impossible de charger la suite de l\'historique.'))
+      .finally(() => { if (!cancelled) setLoadingMore(false); });
+    return () => { cancelled = true; };
+  }, [page, searchActive, loadedArticles.length, totalArticles]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const paginationTotal = searchActive ? filtered.length : totalArticles;
 
   // ── Sélection multiple → archivage groupé (super_admin) ────────────────────
   const canBulkArchive = authRole === 'super_admin';
@@ -776,7 +810,12 @@ export default function Historique() {
   const confirmDeletion = () => {
     const id = confirmDeleteId;
     if (!id) return;
+    // Redux partagé (Dashboard/Archives/Tickets/ArticleResult, alimenté au
+    // bootstrap) + état local de CETTE page (chargé à part, voir plus haut) --
+    // les deux doivent rester synchronisés, aucun des deux ne remplace l'autre.
     dispatch(removeFromHistory(id));
+    setLoadedArticles(prev => prev.filter(a => a.id !== id));
+    setTotalArticles(prev => Math.max(0, prev - 1));
     toast.success('Supprimé de l\'historique');
     if (preview?.id === id) setPreview(null);
     // Nettoyage Firestore en arrière-plan (non bloquant)
@@ -786,6 +825,8 @@ export default function Historique() {
   // Archiver (super_admin) : l'article quitte l'Historique, récupérable dans Archives
   const handleArchive = (article) => {
     dispatch(updateInHistory({ id: article.id, archived: true, archivedAt: Date.now(), archivedBy: authUsername || '' }));
+    setLoadedArticles(prev => prev.filter(a => a.id !== article.id));
+    setTotalArticles(prev => Math.max(0, prev - 1));
     toast.success('Article archivé — retrouvez-le dans la page Archives', { icon: <Archive size={16} /> });
     if (preview?.id === article.id) setPreview(null);
     if (firebaseReady) archiveArticle(article.id, authUsername || '').catch(() => {});
@@ -794,10 +835,13 @@ export default function Historique() {
   // Archivage groupé de la sélection (après confirmation)
   const confirmBulkArchival = () => {
     const now = Date.now();
+    const ids = new Set(bulkTargets.map(a => a.id));
     bulkTargets.forEach(a => {
       dispatch(updateInHistory({ id: a.id, archived: true, archivedAt: now, archivedBy: authUsername || '' }));
       if (firebaseReady) archiveArticle(a.id, authUsername || '').catch(() => {});
     });
+    setLoadedArticles(prev => prev.filter(a => !ids.has(a.id)));
+    setTotalArticles(prev => Math.max(0, prev - ids.size));
     if (bulkTargets.some(a => a.id === preview?.id)) setPreview(null);
     setSelectedIds(new Set());
     toast.success(
@@ -987,7 +1031,10 @@ export default function Historique() {
               />
             ))}
           </AnimatePresence>
-          <Pagination total={filtered.length} page={page} onPageChange={setPage} />
+          {loadingMore && (
+            <p className="text-xs text-gray-400 text-center py-3">Chargement de la suite...</p>
+          )}
+          <Pagination total={paginationTotal} page={page} perPage={PAGE_SIZE_HISTORIQUE} onPageChange={setPage} />
         </div>
       )}
 
@@ -1008,7 +1055,7 @@ export default function Historique() {
         onConfirm={confirmDeletion}
         title="Supprimer cet article de l'historique ?"
         message={(() => {
-          const a = history.find(x => x.id === confirmDeleteId);
+          const a = loadedArticles.find(x => x.id === confirmDeleteId);
           return `« ${a?.title || a?.url || 'Article'} » — l'avant/après, les modifications et le suivi SEO seront supprimés (base comprise).`;
         })()}
         confirmLabel="Supprimer"
