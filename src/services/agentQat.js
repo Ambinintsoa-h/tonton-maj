@@ -916,6 +916,12 @@ backticks avant ou après, au schéma défini par la ressource de refonte
 ampleur_appliquee, mot_cle_retenu, elements_supprimes, mots_cles_secondaires,
 ancres_placees, notes_redaction).
 
+RAPPEL JSON : chapo_html et article_html contiennent du HTML riche en attributs
+entre guillemets doubles (href="...", class="...", alt="..."). Chaque guillemet
+double À L'INTÉRIEUR de ces chaînes DOIT être échappé (\\") pour rester un JSON
+valide -- un seul guillemet non échappé casse tout l'objet et fait perdre
+l'article entier.
+
 ${depthBlock}${overrideNote}
 
 ## ═══ VERROU ABSOLU — LIENS (prioritaire sur toute autre consigne) ═══
@@ -1045,6 +1051,13 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
   // Message utilisateur de l'essai courant : enrichi à chaque rejet du détail de
   // ce qui a manqué. Relancer un prompt IDENTIQUE reproduirait la même erreur.
   let currentUser = user;
+  // Diagnostic du DERNIER essai en échec, remonté dans l'erreur finale si les 3
+  // essais échouent tous. Sans lui, "réponse non conforme au format JSON" ne dit
+  // RIEN de ce que le modèle a réellement renvoyé -- même angle mort que la passe
+  // de gras avant le 19/08 (règle 10), ici plus grave : contrairement au gras
+  // cette erreur est BLOQUANTE, et jusqu'ici indiagnosticable après coup (le
+  // process headless d'un lot ne laisse voir que la console, jamais persistée).
+  let lastParseFailureDetail = '';
 
   // ── CE QUI PART RÉELLEMENT AU MODÈLE, DANS LA CONSOLE ─────────────────────
   // Demande d'Andrianina, 19 août 2026 : « l'ensemble des règles envoyées à l'IA
@@ -1105,6 +1118,14 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
       article = parseJsonLoose(raw);
       if (!article?.article_html) {
         onStep(`⚠️ Réponse illisible ou article vide — nouvel essai (${attempt}/3)...`);
+        // La FIN du texte est ce qui compte : une troncature par max_tokens se
+        // voit à ce qu'elle s'arrête en plein milieu d'un objet JSON ; un
+        // guillemet non échappé dans le HTML se voit à ce que la fin ne
+        // ressemble à rien de JSON du tout. Écrasé à chaque essai : seul le
+        // DERNIER compte si les 3 échouent.
+        lastParseFailureDetail = raw
+          ? `réponse de ${raw.length} car., non conforme au JSON attendu. Fin reçue : « …${raw.slice(-200)} »`
+          : 'réponse vide.';
         currentUser = `${user}
 
 ## ═══ REPRISE — L'ESSAI PRÉCÉDENT A ÉCHOUÉ ═══
@@ -1395,7 +1416,12 @@ N'ajoute aucun AUTRE lien externe.`;
   // de boucle laissait `sanitized` à null et l'accès à `sanitized.html` levait
   // une TypeError opaque, illisible pour le rédacteur.
   if (!sanitized) {
-    throw new Error("L'IA n'a pas produit d'article exploitable après 3 essais (réponse non conforme au format JSON attendu). Relancez la MAJ, ou vérifiez le skill actif dans le menu SKILLS IA.");
+    // Diagnostic du dernier essai ajouté EN CLAIR dans le message -- il traverse
+    // ensuite errorMessage (batchOrchestrator.js) et s'affiche derrière le
+    // bouton "Voir l'erreur" (fix/lots-erreur-repliee-timeout) : c'est le seul
+    // endroit où il reste consultable après coup pour un lot.
+    const detail = lastParseFailureDetail ? ` Dernier essai — ${lastParseFailureDetail}` : '';
+    throw new Error(`L'IA n'a pas produit d'article exploitable après 3 essais (réponse non conforme au format JSON attendu). Relancez la MAJ, ou vérifiez le skill actif dans le menu SKILLS IA.${detail}`);
   }
 
   onProgress(90);
