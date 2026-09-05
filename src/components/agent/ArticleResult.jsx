@@ -172,6 +172,45 @@ const sanitizePastedHtml = (html) => {
   return root.innerHTML;
 };
 
+// Popup d'avertissement à la publication — remplace les `window.confirm()` natifs
+// de `handlePublish` (facteul écarté en phase 2, maillage rédigé par le code).
+// Thème ambre volontairement NON destructif (ConfirmDialog, réservé aux
+// suppressions, est en rouge) — même gabarit portail/overlay que
+// `LaunchConfirmDialog` (src/pages/LotsBatch.jsx).
+function PublishNoticeDialog({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel }) {
+  return createPortal(
+    <div
+      style={{ position: 'fixed', inset: 0, zIndex: 700 }}
+      className="bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-6"
+      onMouseDown={onCancel}
+    >
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        className="bg-white rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,0.35)] w-full max-w-md p-6 border-t-4 border-amber-500"
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0 bg-amber-50">
+            <AlertTriangle size={19} className="text-amber-600" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-[15px] font-bold text-gray-900">{title}</h3>
+            <p className="text-[13px] text-gray-600 mt-2 leading-relaxed whitespace-pre-line">{message}</p>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-3 mt-5">
+          <button type="button" onClick={onCancel} className="px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
+            {cancelLabel}
+          </button>
+          <button type="button" onClick={onConfirm} className="px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm">
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export default function ArticleResult() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -339,6 +378,12 @@ export default function ArticleResult() {
   const [showExport, setShowExport] = useState(false);
   const [showWP, setShowWP] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  // Popup d'avertissement à la publication (PublishNoticeDialog) — remplace les
+  // window.confirm() natifs de handlePublish. `resolve` est la fonction de la
+  // Promise en attente : askConfirm() bloque le flux async de handlePublish
+  // exactement comme le faisait confirm(), sans figer l'onglet du navigateur.
+  const [publishNotice, setPublishNotice] = useState(null);
+  const askConfirm = (opts) => new Promise((resolve) => setPublishNotice({ ...opts, resolve }));
   const [wpFoundPost, setWpFoundPost] = useState(null);         // post WP trouvé par URL
   const [wpSearching, setWpSearching] = useState(false);
   const [wpNotFoundReason, setWpNotFoundReason] = useState(''); // raison si non trouvé
@@ -3946,13 +3991,14 @@ export default function ArticleResult() {
       const liste = factuelEcarte
         .map((f) => `• ${LIB[f]} (${(auditJson?.[f] || []).length})`)
         .join('\n');
-      const ok = window.confirm(
-        `L'audit a signale du FACTUEL qui a ete ecarte en phase 2 :\n\n${liste}\n\n`
-        + 'Ces points n\'ont pas ete transmis a la generation : l\'article part sans '
-        + 'qu\'ils aient ete traites.\n\n'
-        + 'OK = publier quand meme.\n'
-        + 'Annuler = arreter ici et les recocher en phase 2.',
-      );
+      const ok = await askConfirm({
+        title: 'Factuel écarté en phase 2',
+        message: `L'audit a signalé du FACTUEL qui a été écarté en phase 2 :\n\n${liste}\n\n`
+          + 'Ces points n\'ont pas été transmis à la génération : l\'article part sans '
+          + 'qu\'ils aient été traités.',
+        confirmLabel: 'Publier quand même',
+        cancelLabel: 'Annuler',
+      });
       if (!ok) {
         toast('Publication annulee — recochez le bloc « Factuel » en phase 2, puis relancez la generation.', { icon: '⚠', duration: 9000 });
         return;
@@ -3961,13 +4007,14 @@ export default function ArticleResult() {
 
     if (filetR2Redigees.length) {
       const liste = filetR2Redigees.map((l) => `• ${l.anchor} → ${l.url}`).join('\n');
-      const ok = window.confirm(
-        `${filetR2Redigees.length} lien(s) du brief manquaient dans le texte : le code vient d'ÉCRIRE `
-        + `${filetR2Redigees.length} phrase(s) « À lire aussi : … » pour les placer.\n\n${liste}\n\n`
-        + 'Ce texte n\'a jamais été relu et il partira tel quel sur le site.\n\n'
-        + 'OK = publier quand même.\n'
-        + 'Annuler = arrêter ici et relire dans l\'éditeur (les phrases y seront surlignées en jaune).',
-      );
+      const ok = await askConfirm({
+        title: 'Maillage rédigé par le code',
+        message: `${filetR2Redigees.length} lien(s) du brief manquaient dans le texte : le code vient d'ÉCRIRE `
+          + `${filetR2Redigees.length} phrase(s) « À lire aussi : … » pour les placer.\n\n${liste}\n\n`
+          + 'Ce texte n\'a jamais été relu et il partira tel quel sur le site.',
+        confirmLabel: 'Publier quand même',
+        cancelLabel: 'Annuler',
+      });
       if (!ok) {
         // Réinjection AVEC les marques : c'est tout l'intérêt de s'arrêter.
         const el = articleRef.current;
@@ -6670,6 +6717,16 @@ export default function ArticleResult() {
           </div>
           )}
         </motion.div>
+      )}
+      {publishNotice && (
+        <PublishNoticeDialog
+          title={publishNotice.title}
+          message={publishNotice.message}
+          confirmLabel={publishNotice.confirmLabel}
+          cancelLabel={publishNotice.cancelLabel}
+          onConfirm={() => { publishNotice.resolve(true); setPublishNotice(null); }}
+          onCancel={() => { publishNotice.resolve(false); setPublishNotice(null); }}
+        />
       )}
     </div>
   );
