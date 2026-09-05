@@ -432,6 +432,47 @@ export const unwrapForbiddenInternalLinks = (html = '', articleUrl = '') => {
 };
 
 /**
+ * Délie les liens INTERNES dont l'URL est dans `deadHrefs` (confirmés morts
+ * par une vérification 200/404 en amont — "liens à enlever", chantier
+ * "fiabilité des liens injectés", septembre 2026) : texte de l'ancre
+ * conservé, seule la balise <a> est retirée. Même geste non destructif que
+ * `unwrapForbiddenInternalLinks` juste au-dessus.
+ *
+ * Le code ne choisit JAMAIS un remplacement ici : juger qu'une autre page du
+ * site correspond au même sens que l'ancre est un jugement sémantique, pas
+ * une vérification de statut — même leçon que le gras posé par le code
+ * (règle 10, `keywordBold.js` supprimé pour cette raison précise). On délie,
+ * sans plus ; un remplacement éventuel se décide en amont, à l'audit, où
+ * c'est l'IA qui choisit (voir runQatAudit).
+ *
+ * `deadHrefs` doit contenir des URLs ABSOLUES (voir `extractInternalLinks`,
+ * src/services/agent.js) : chaque href rencontré est résolu par rapport à
+ * `articleUrl` avant comparaison, pour matcher un href relatif comme absolu.
+ */
+export const unwrapDeadInternalLinks = (html = '', deadHrefs = [], articleUrl = '') => {
+  if (!html || typeof document === 'undefined' || !deadHrefs.length) return { html, unwrapped: [] };
+  const dead = new Set(deadHrefs);
+  const root = document.createElement('div');
+  root.innerHTML = html;
+  const unwrapped = [];
+
+  Array.from(root.querySelectorAll('a[href]')).forEach((a) => {
+    const raw = a.getAttribute('href') || '';
+    if (!raw) return;
+    let absolute;
+    try { absolute = new URL(raw, articleUrl).href; } catch { return; }
+    if (!dead.has(absolute)) return;
+    unwrapped.push({ anchor: (a.textContent || '').trim(), url: absolute });
+    const parent = a.parentNode;
+    if (!parent) return;
+    while (a.firstChild) parent.insertBefore(a.firstChild, a);
+    parent.removeChild(a);
+  });
+
+  return { html: unwrapped.length ? root.innerHTML : html, unwrapped };
+};
+
+/**
  * TISSE tous les liens du brief dans `html`, et FORCE ceux dont l'ancre est
  * introuvable (`force: true`, le défaut — décision d'Andrianina).
  *

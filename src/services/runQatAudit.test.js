@@ -28,6 +28,11 @@ jest.mock('./agent', () => {
     callClaude: jest.fn(),
     scrapeSource: jest.fn(),
     callWpTool: jest.fn(),
+    // PR2 (chantier "fiabilité des liens injectés") : fait un VRAI appel
+    // réseau (axios) en dehors de ce mock. Repli par défaut = "aucun
+    // sitemap disponible", même valeur que le cas réel d'un site sans
+    // sitemap : aucun comportement existant n'est modifié par ce mock.
+    fetchSiteUrls: jest.fn(),
   };
 });
 jest.mock('./search', () => ({ searchWeb: jest.fn() }));
@@ -35,7 +40,7 @@ jest.mock('./search', () => ({ searchWeb: jest.fn() }));
 // eslint-disable-next-line import/first
 import { runQatAudit } from './agentQat';
 // eslint-disable-next-line import/first
-import { callClaudeWithProgress, callClaudeStream, callClaude } from './agent';
+import { callClaudeWithProgress, callClaudeStream, callClaude, fetchSiteUrls } from './agent';
 // eslint-disable-next-line import/first
 import { searchWeb } from './search';
 
@@ -71,6 +76,7 @@ beforeEach(() => {
   // Extraction des requêtes de fraîcheur (Haiku) — hors sujet ici.
   callClaude.mockResolvedValue({ text: '[]', usage: {} });
   searchWeb.mockResolvedValue([]);
+  fetchSiteUrls.mockResolvedValue([]);
 });
 
 describe('runQatAudit — enveloppe de sortie', () => {

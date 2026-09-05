@@ -14,7 +14,7 @@ import { searchWeb } from './search';
 import { sanitizeFullArticle, listExternalLinks, listInternalLinks, carryOverInternalLinks } from '../utils/diff';
 import {
   weaveBriefLinks, countPlacedBriefLinks, briefLinkReportLine, promoteInlineRenvois,
-  unwrapForbiddenInternalLinks,
+  unwrapForbiddenInternalLinks, unwrapDeadInternalLinks,
 } from '../utils/internalWeave';
 import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 // R5 — le gras de l'article d'origine ne disparaît pas (module AUTONOME).
@@ -44,6 +44,7 @@ import {
   callWpTool, selectModel, getDateContext, calcCost, callClaudeWithProgress, callClaudeStream,
   callClaude, dedupeByUrl, makeTokenTracker, buildSkillsBlock, analyzeLinks,
   getBrainSkills, buildKnowledgeBlock, stripHtml, scrapeSource,
+  extractInternalLinks, fetchSiteUrls, checkLinksLive,
 } from './agent';
 
 // Le skill impose 2 recherches web au maximum, pour maîtriser les coûts.
@@ -654,6 +655,15 @@ export const runQatAudit = async ({
   const wordCount = rawText ? rawText.split(/\s+/).length : 0;
 
   // `redaction: false` — l'audit ne produit aucun article_html (voir buildBriefBlock).
+  // ── Sitemap réel du site (maillage interne ancré, pas deviné) ──────────────
+  // Décision Andrianina, chantier "fiabilité des liens injectés" (sept. 2026) :
+  // `internal_linking.liens_entrants` était deviné par l'IA à partir du seul
+  // article en cours, sans jamais savoir quelles pages existent réellement --
+  // un vrai risque de 404. Échec silencieux (sitemap absent/illisible) →
+  // liste vide, l'IA propose sans grounding, exactement comme avant ce
+  // chantier -- jamais bloquant (voir src/server/sitemapFetch.js).
+  const siteUrls = articleUrl ? await fetchSiteUrls(articleUrl) : [];
+
   const brief = buildBriefBlock({ targetKeyword, articleType, seoPlugin, targetWords, internalLinks, articleUrl, redaction: false });
   const system = buildAuditSystem(brainSkills, skills, knowledge, brief);
   const user = `## ARTICLE À AUDITER (HTML)
@@ -667,7 +677,15 @@ ${sourceHtml}
 ## SOURCES WEB (vérification de fraîcheur — ${queries.length} recherche(s))
 ${formatSourcesForPrompt(sources)}
 
-## ENVELOPPE DE TAILLE — internal_linking.liens_entrants
+${siteUrls.length ? `## PAGES RÉELLES DU SITE (sitemap)
+Pour internal_linking.liens_entrants, choisis les URLs EXCLUSIVEMENT parmi
+cette liste de pages qui existent VRAIMENT sur le site -- n'invente JAMAIS un
+slug plausible, même si aucune page de la liste ne te semble idéale. Une
+suggestion pertinente mais réelle vaut mieux qu'une suggestion parfaite mais
+morte.
+${siteUrls.join('\n')}
+
+` : ''}## ENVELOPPE DE TAILLE — internal_linking.liens_entrants
 Donne **au moins ${MIN_LIENS_ENTRANTS}** paires ancre + URL, et **au maximum ${MAX_LIENS_ENTRANTS}**.
 Ce plafond prime sur toute autre limite indiquée ailleurs : le JSON d'audit doit
 tenir en une seule réponse, et une liste sans borne le faisait tronquer — audit
@@ -1206,7 +1224,72 @@ N'ajoute aucun AUTRE lien externe.`;
       if (deloc.unwrapped.length) {
         onStep(`🔗 ${deloc.unwrapped.length} lien(s) interne(s) posé(s) par l'IA dans une zone interdite (FAQ, titre, tableau, TL;DR) — délié(s), puis replacé(s) dans le corps.`);
       }
-      const woven = weaveBriefLinks(deloc.html, internalLinks, articleUrl);
+
+      // ── PR2 — AUCUN lien interne 404 injecté + "liens à enlever" ────────────
+      // Décision Andrianina (chantier "fiabilité des liens injectés", sept.
+      // 2026) : processus 100 % automatique, jamais une vérification demandée
+      // au rédacteur. Une SEULE vérification 200/404 couvre à la fois les
+      // liens SUGGÉRÉS (internalLinks, qui inclut les suggestions de l'audit
+      // — déjà ancrées dans le sitemap, voir runQatAudit) et les liens
+      // internes DÉJÀ présents dans l'article ("liens à enlever"). JAMAIS les
+      // liens externes : ce mécanisme entier ne les touche pas (règle 8).
+      let groundedInternalLinks = internalLinks;
+      let dedupedHtml = deloc.html;
+      {
+        const existingInternal = extractInternalLinks(sourceHtml, articleUrl);
+        const candidateUrls = [
+          ...internalLinks.map((l) => l.url).filter(Boolean),
+          ...existingInternal.map((l) => l.href),
+        ];
+        if (candidateUrls.length) {
+          const uniqueUrls = [...new Set(candidateUrls)];
+          const statuses = await checkLinksLive(uniqueUrls);
+          const deadSuggested = internalLinks.filter((l) => statuses[l.url] === 'dead');
+          const deadExisting = existingInternal.filter((l) => statuses[l.href] === 'dead');
+
+          if (deadSuggested.length || deadExisting.length) {
+            // Pool de remplacement pour les suggestions mortes : le même
+            // sitemap que l'audit (cache serveur ~1h, pas de vrai
+            // re-téléchargement). Jamais utilisé pour remplacer un lien
+            // EXISTANT mort -- choisir une page de remplacement au sens
+            // équivalent est un jugement sémantique, pas une vérification de
+            // statut (même leçon que le gras posé par le code, règle 10) :
+            // pour l'existant, on délie, sans plus (unwrapDeadInternalLinks).
+            const pool = deadSuggested.length ? await fetchSiteUrls(articleUrl) : [];
+            const used = new Set(uniqueUrls);
+            const pickReplacement = () => {
+              while (pool.length) {
+                const candidate = pool.shift();
+                if (!used.has(candidate)) { used.add(candidate); return candidate; }
+              }
+              return null;
+            };
+
+            if (deadSuggested.length) {
+              groundedInternalLinks = internalLinks
+                .map((l) => {
+                  if (statuses[l.url] !== 'dead') return l;
+                  const replacement = pickReplacement();
+                  if (replacement) {
+                    onStep(`🔗 Lien interne suggéré mort (${l.url}) — remplacé par ${replacement}.`);
+                    return { ...l, url: replacement };
+                  }
+                  onStep(`⚠️ Lien interne suggéré mort (${l.url}) — aucun remplacement trouvé, retiré.`);
+                  return null;
+                })
+                .filter(Boolean);
+            }
+
+            if (deadExisting.length) {
+              const unwrapped = unwrapDeadInternalLinks(dedupedHtml, deadExisting.map((l) => l.href), articleUrl);
+              dedupedHtml = unwrapped.html;
+              onStep(`🔗 "Liens à enlever" — ${deadExisting.length} lien(s) interne(s) déjà présent(s) dans l'article pointent vers une page morte (404) — délié(s), texte conservé.`);
+            }
+          }
+        }
+      }
+
+      const woven = weaveBriefLinks(dedupedHtml, groundedInternalLinks, articleUrl);
 
       // ── R6 — les renvois écrits PAR LE MODÈLE deviennent des encarts ─────────
       // APRÈS R2, jamais avant : le tissage doit voir la prose du modèle telle

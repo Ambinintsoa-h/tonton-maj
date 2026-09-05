@@ -14,7 +14,7 @@
 import {
   weaveBriefLinks, countPlacedBriefLinks, briefLinkReportLine,
   classifyBriefLinks, placeableBriefLinks, WRITTEN_MARK_ATTR,
-  unwrapForbiddenInternalLinks,
+  unwrapForbiddenInternalLinks, unwrapDeadInternalLinks,
 } from './internalWeave';
 import { exportAsHtml } from './export';
 
@@ -79,6 +79,38 @@ describe('R2a — délier les liens internes posés en zone interdite', () => {
     const constat = countPlacedBriefLinks(woven.html, rows, URL_ART);
     expect(constat[0].placed).toBe(true);
     expect(constat[0].misplaced).toBe(false);     // plus dans la FAQ
+  });
+});
+
+// ── "Liens à enlever" — un lien interne confirmé mort (404) est délié ─────────
+// Chantier "fiabilité des liens injectés" (septembre 2026). Même geste que
+// R2a (texte conservé, seule la balise part) mais déclenché par un statut
+// HTTP vérifié en amont, pas par un emplacement interdit.
+describe('unwrapDeadInternalLinks — "liens à enlever"', () => {
+  test('délie un lien interne dont l\'URL absolue est dans deadHrefs, texte conservé', () => {
+    const html = P('Voir notre <a href="/vieux-guide">ancien guide</a> à ce sujet.');
+    const r = unwrapDeadInternalLinks(html, ['https://monsite.fr/vieux-guide'], URL_ART);
+    expect(r.unwrapped).toEqual([{ anchor: 'ancien guide', url: 'https://monsite.fr/vieux-guide' }]);
+    expect(r.html).not.toContain('<a href="/vieux-guide"');
+    expect(r.html).toContain('ancien guide');
+  });
+
+  test('résout un href relatif par rapport à articleUrl avant de comparer', () => {
+    const html = P('<a href="vieux-guide">guide</a>');
+    const r = unwrapDeadInternalLinks(html, ['https://monsite.fr/vieux-guide'], URL_ART);
+    expect(r.unwrapped).toHaveLength(1);
+  });
+
+  test('un lien absent de deadHrefs n\'est jamais touché', () => {
+    const html = P('<a href="/guide-vivant">guide</a>');
+    const r = unwrapDeadInternalLinks(html, ['https://monsite.fr/autre-page'], URL_ART);
+    expect(r.unwrapped).toEqual([]);
+    expect(r.html).toContain('href="/guide-vivant"');
+  });
+
+  test('deadHrefs vide → no-op, jamais d\'exception', () => {
+    const html = P('<a href="/guide">guide</a>');
+    expect(unwrapDeadInternalLinks(html, [], URL_ART)).toEqual({ html, unwrapped: [] });
   });
 });
 
