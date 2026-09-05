@@ -116,6 +116,35 @@ describe('runArticlePipeline — chemin complet', () => {
     expect(args.auditSelection).toMatchObject({ recent_context: true, a_supprimer: false, sources_check: false });
   });
 
+  // Régression confirmée en production le 4 septembre 2026 sur un article
+  // réel : le filtre anti-widget Google Discover (stripNonEditorialLinks,
+  // src/utils/scrapeClean.js) tourne dans le flux interactif (Articles.jsx)
+  // depuis le 10-11 août, mais n'avait jamais été branché ici -- tout article
+  // de LOT scrapé sur une page portant ce widget partait avec le lien intact
+  // dans sourceHtml, forçant le verrou liens externes (règle 8) à le
+  // reproduire dans la prose ou à rejeter la génération.
+  test('retire le widget de suivi Google Discover du contenu scrapé avant l\'audit et la génération', async () => {
+    http.post.mockImplementation(async (url) => {
+      if (url === '/scrape') {
+        return {
+          data: {
+            content: '<p>Article original.</p><p><a href="https://profile.google.com/cp/abc123">Discover</a></p>',
+            title: 'Titre original',
+          },
+        };
+      }
+      if (url === '/data/articles') return { data: { id: 'art-123' } };
+      throw new Error(`POST inattendu: ${url}`);
+    });
+
+    await runArticlePipeline(baseInput());
+
+    const auditArgs = runQatAudit.mock.calls[0][0];
+    expect(auditArgs.contentHtml).not.toContain('profile.google.com');
+    const rewriteArgs = runQatRewrite.mock.calls[0][0];
+    expect(rewriteArgs.contentHtml).not.toContain('profile.google.com');
+  });
+
   test('déduit scope=refonte / depth=refonte depuis un audit sans ampleur mais score global bas', async () => {
     runQatAudit.mockResolvedValue({
       audit: { scores: { global: 3 }, internal_linking: {} },
