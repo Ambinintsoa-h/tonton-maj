@@ -23,13 +23,23 @@ jest.mock('./agent', () => {
     callClaudeWithProgress: jest.fn(),
     callClaude: jest.fn(),
     scrapeSource: jest.fn(),
+    // PR2 (chantier "fiabilité des liens injectés") : ces deux helpers font
+    // de VRAIS appels réseau (axios) en dehors de ce mock -- sans lui, chaque
+    // test déclenchait une requête réelle (échouée, silencieusement
+    // absorbée par leur propre try/catch, mais bruyante et lente). Repli par
+    // défaut = "aucun grounding disponible" (mêmes valeurs que le cas réel
+    // d'un site sans sitemap), donc AUCUN comportement existant n'est modifié
+    // par ce mock : les tests qui suivent portent sur ce qui se passait déjà
+    // avant ce chantier.
+    checkLinksLive: jest.fn(),
+    fetchSiteUrls: jest.fn(),
   };
 });
 
 // eslint-disable-next-line import/first
 import { runQatRewrite } from './agentQat';
 // eslint-disable-next-line import/first
-import { callClaudeWithProgress, callClaudeStream, callClaude, scrapeSource } from './agent';
+import { callClaudeWithProgress, callClaudeStream, callClaude, scrapeSource, checkLinksLive, fetchSiteUrls } from './agent';
 
 /**
  * Nombre d'appels de GÉNÉRATION, la passe de gras exclue.
@@ -78,6 +88,8 @@ beforeEach(() => {
   callClaudeStream.mockRejectedValue(new Error('STREAM_UNAVAILABLE'));
   callClaude.mockResolvedValue({ text: '[]', usage: {} });
   scrapeSource.mockResolvedValue(null);
+  checkLinksLive.mockResolvedValue({});
+  fetchSiteUrls.mockResolvedValue([]);
 });
 
 // ── Contraintes rédactionnelles tenues EN DUR (demande d'Andrianina) ──────────

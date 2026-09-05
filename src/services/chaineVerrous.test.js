@@ -51,6 +51,12 @@ jest.mock('./agent', () => {
     callClaudeWithProgress: jest.fn(),
     callClaude: jest.fn(),
     scrapeSource: jest.fn(),
+    // PR2 (chantier "fiabilité des liens injectés") : ces deux helpers font de
+    // VRAIS appels réseau (axios) en dehors de ce mock. Repli par défaut =
+    // "aucun grounding disponible" (mêmes valeurs que le cas réel d'un site
+    // sans sitemap) : aucun comportement de la chaîne existante n'est modifié.
+    checkLinksLive: jest.fn(),
+    fetchSiteUrls: jest.fn(),
   };
 });
 
@@ -96,7 +102,7 @@ jest.mock('../utils/boldCarry', () => {
 // eslint-disable-next-line import/first
 import { runQatRewrite } from './agentQat';
 // eslint-disable-next-line import/first
-import { callClaudeWithProgress, callClaudeStream, callClaude, scrapeSource } from './agent';
+import { callClaudeWithProgress, callClaudeStream, callClaude, scrapeSource, checkLinksLive, fetchSiteUrls } from './agent';
 
 const SITE = 'https://isolation-phonique.com';
 const ARTICLE_URL = `${SITE}/isoler-un-plafond`;
@@ -206,6 +212,8 @@ beforeEach(() => {
   callClaudeStream.mockRejectedValue(new Error('STREAM_UNAVAILABLE'));
   callClaude.mockResolvedValue({ text: '[]', usage: {} });
   scrapeSource.mockResolvedValue(null);
+  checkLinksLive.mockResolvedValue({});
+  fetchSiteUrls.mockResolvedValue([]);
 });
 
 describe('les six pièges, en une seule chaîne', () => {

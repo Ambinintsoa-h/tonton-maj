@@ -971,6 +971,69 @@ export const analyzeLinks = (html = '', articleUrl = '') => {
 };
 
 /**
+ * Liste RÉELLE des liens INTERNES déjà présents dans l'article (href absolu
+ * + texte d'ancre) — contrairement à `analyzeLinks` qui ne fait QUE compter.
+ * Sert à vérifier leur statut (200 vs 404) au tissage ("liens à enlever").
+ * JAMAIS les liens externes : ce mécanisme ne les touche pas (règle 8, jamais
+ * affaiblie). Sans `articleUrl` exploitable, renvoie [] : impossible de
+ * distinguer interne/externe sans référence de domaine, et se tromper dans
+ * ce sens risquerait de traiter un lien externe comme interne.
+ */
+export const extractInternalLinks = (html = '', articleUrl = '') => {
+  const src = String(html || '');
+  if (!src || typeof document === 'undefined') return [];
+  let host = '';
+  try { host = articleUrl ? new URL(articleUrl).hostname.replace(/^www\./, '') : ''; } catch { /* url invalide */ }
+  if (!host) return [];
+  const box = document.createElement('div');
+  box.innerHTML = src;
+  const out = [];
+  Array.from(box.querySelectorAll('a[href]')).forEach((a) => {
+    const href = (a.getAttribute('href') || '').trim();
+    if (!href || /^(#|mailto:|tel:|javascript:)/i.test(href)) return;
+    let absolute;
+    try { absolute = new URL(href, articleUrl).href; } catch { return; }
+    let lh = '';
+    try { lh = new URL(absolute).hostname.replace(/^www\./, ''); } catch { return; }
+    if (lh !== host) return; // externe -- hors périmètre de ce mécanisme
+    out.push({ href: absolute, anchor: (a.textContent || '').trim() });
+  });
+  return out;
+};
+
+/**
+ * URLs réelles "post" du site (sitemap public), pour ancrer les suggestions
+ * de maillage interne (audit) dans des pages qui existent VRAIMENT plutôt
+ * que des slugs devinés. Échec silencieux (réseau, sitemap absent) → liste
+ * vide, jamais bloquant — voir src/server/sitemapFetch.js côté serveur.
+ */
+export const fetchSiteUrls = async (articleUrl) => {
+  try {
+    const { data } = await axios.post('/api/site-urls', { articleUrl }, { timeout: 10000 });
+    return Array.isArray(data?.urls) ? data.urls : [];
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * Statut ('live'/'dead'/'unknown') d'une liste d'URLs, vérifié en direct côté
+ * serveur. `unknown` (jamais `dead`) sur tout échec de VÉRIFICATION (timeout,
+ * DNS, site qui bloque les robots) — un lien n'est jamais pénalisé pour un
+ * problème qui n'est pas le sien. Un échec de l'appel lui-même renvoie {} :
+ * l'appelant doit alors traiter chaque URL comme 'unknown'.
+ */
+export const checkLinksLive = async (urls) => {
+  if (!urls?.length) return {};
+  try {
+    const { data } = await axios.post('/api/check-links', { urls }, { timeout: 15000 });
+    return data?.results || {};
+  } catch {
+    return {};
+  }
+};
+
+/**
  * Skills au format Claude (SKILL.md) actifs → pilotent l'agent en « mode cerveau ».
  * Ils portent { description, body, resources[] } (pas de `content`).
  */

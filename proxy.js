@@ -207,6 +207,7 @@ app.use('/api/data', require('./data-api')({ requireAuth, requireRole }));
 // Voir src/server/safeFetch.js (extrait pour être testable -- logique sécurité
 // jamais couverte par un test tant qu'elle vivait ici en inline).
 const { assertSafeUrl, fetchFollowingSafeRedirects } = require('./src/server/safeFetch');
+const { fetchSitePostUrls } = require('./src/server/sitemapFetch');
 
 // ─── Helper erreur (M4) ───────────────────────────────────────────────────────
 // En production, ne jamais exposer e.message dans les 500 — cache la structure interne.
@@ -3378,6 +3379,63 @@ app.post('/api/scrape', requireAuth, async (req, res) => {
     }
     return res.status(500).json({ error: `Erreur de récupération : ${err.message}` });
   }
+});
+
+// ─── Sitemap du site : liste réelle des URLs "post" ─────────────────────────
+// Ancre le maillage interne (audit + tissage, agentQat.js) dans des pages qui
+// existent VRAIMENT plutôt que des slugs devinés par l'IA. Voir
+// src/server/sitemapFetch.js pour le détail (cascade sitemap.xml →
+// sitemap_index.xml → sous-sitemap "post", échec silencieux).
+// Cache mémoire par origine : un lot traite souvent plusieurs articles du
+// MÊME site à la suite, inutile de re-télécharger le même sitemap à chaque
+// article. Volontairement en mémoire (pas en base) -- une entrée périmée de
+// quelques heures n'a aucune conséquence, ce n'est qu'un GROUNDING de
+// suggestions, jamais la vérité finale (revérifiée au tissage, voir
+// /api/check-links juste en dessous).
+const SITE_URLS_CACHE_TTL_MS = 60 * 60 * 1000;
+const siteUrlsCache = new Map(); // origin -> { urls, at }
+app.post('/api/site-urls', requireAuth, async (req, res) => {
+  const { articleUrl } = req.body || {};
+  if (!articleUrl) return res.status(400).json({ error: 'articleUrl manquant' });
+  let origin;
+  try { origin = new URL(articleUrl).origin; }
+  catch { return res.status(400).json({ error: 'articleUrl invalide' }); }
+
+  const cached = siteUrlsCache.get(origin);
+  if (cached && (Date.now() - cached.at) < SITE_URLS_CACHE_TTL_MS) {
+    return res.json({ urls: cached.urls });
+  }
+  // Non bloquant : un sitemap indisponible ne doit jamais faire échouer
+  // l'audit ou la génération -- liste vide, dégradation propre en amont
+  // (fetchSitePostUrls dégrade déjà silencieusement, ce .catch est un filet).
+  const urls = await fetchSitePostUrls(articleUrl).catch(() => []);
+  siteUrlsCache.set(origin, { urls, at: Date.now() });
+  res.json({ urls });
+});
+
+// ─── Vérification de statut d'une liste de liens (200 vs 404) ───────────────
+// Utilisé au tissage (agentQat.js) pour les NOUVELLES suggestions de maillage
+// ET les liens internes déjà présents dans l'article -- jamais pour un lien
+// externe (règle 8, jamais touché par ce mécanisme).
+// `dead` seulement sur une vraie réponse 4xx du serveur cible ; toute autre
+// panne (timeout, DNS, site qui bloque les robots, 5xx) renvoie `unknown` --
+// on ne pénalise JAMAIS un lien pour un problème de VÉRIFICATION plutôt que
+// de destination, même principe que le reste du projet (non bloquant).
+const CHECK_LINKS_MAX = 30;
+app.post('/api/check-links', requireAuth, async (req, res) => {
+  const urls = Array.isArray(req.body?.urls) ? req.body.urls.slice(0, CHECK_LINKS_MAX) : [];
+  const results = {};
+  await Promise.all(urls.map(async (url) => {
+    try {
+      await assertSafeUrl(url, 'URL à vérifier');
+      await fetchFollowingSafeRedirects(url, { timeout: 8000 });
+      results[url] = 'live'; // n'a pu résoudre que vers un 2xx final (voir safeFetch.js)
+    } catch (e) {
+      const status = e.response?.status;
+      results[url] = (status >= 400 && status < 500) ? 'dead' : 'unknown';
+    }
+  }));
+  res.json({ results });
 });
 
 // ─── Proxy Jina AI (scraping & search) ───────────────────────────────────────
