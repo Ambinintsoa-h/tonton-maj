@@ -38,6 +38,7 @@ const { detectStylePatterns } = require('../utils/stylePatterns');
 const { defaultAuditSelection } = require('../utils/auditSelection');
 const { auditSuggestedLinkRows } = require('../utils/auditSuggestions');
 const { cleanLinkRows } = require('../constants/majMode');
+const { stripNonEditorialLinks } = require('../utils/scrapeClean');
 const { buildGenerationPrompt, DEFAULT_VERIFICATION_TEMPLATE } = require('../utils/generationPrompt');
 const { SCOPE_SIMPLE, scopeProposedByAudit } = require('../constants/majPhases');
 const statsReducer = require('../store/slices/statsSlice').default;
@@ -162,9 +163,23 @@ const runArticlePipeline = async (input) => {
   // ── Étape 0 — récupération du contenu, MÊME endpoint que l'UI (Articles.jsx)
   onStep('Récupération du contenu de l\'article...');
   const scraped = (await http.post('/scrape', { url: articleUrl })).data;
-  const contentHtml = scraped?.content || scraped?.html || '';
-  if (!contentHtml.trim()) throw new Error('Contenu de l\'article vide après scraping');
+  const scrapedHtml = scraped?.content || scraped?.html || '';
+  if (!scrapedHtml.trim()) throw new Error('Contenu de l\'article vide après scraping');
   const title = scraped?.title || '';
+
+  // Même point de nettoyage que le flux interactif (Articles.jsx, "point de
+  // passage unique" des trois sources) -- jamais appliqué ici jusqu'à
+  // présent : les boutons de suivi Google captés par le scraping (Discover,
+  // "Ajouter comme source préférée") passaient tels quels dans sourceHtml
+  // pour tout article de LOT, le verrou liens externes forçant alors l'IA à
+  // les reproduire dans la prose ou à rejeter la génération. `document` est
+  // simulé par pipelineCli.js avant ce require -- la fonction fonctionne
+  // hors navigateur exactement comme sous Jest.
+  const ingestion = stripNonEditorialLinks(scrapedHtml);
+  if (ingestion.removed.length) {
+    onStep(`${ingestion.removed.length} bouton(s) de suivi Google retiré(s) du contenu scrapé`);
+  }
+  const contentHtml = ingestion.html;
 
   let tokenUsage = { input: 0, output: 0, costUsd: 0, calls: [] };
   let articleId = null;
