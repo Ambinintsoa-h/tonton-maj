@@ -1,4 +1,4 @@
-import { fmtDuration, fmtCost, deriveDisplayStatus, groupCostByDay } from './batchDisplay';
+import { fmtDuration, fmtCost, deriveDisplayStatus, groupCostByDay, aggregateByLauncher } from './batchDisplay';
 
 describe('fmtDuration', () => {
   it('formate en minutes + secondes au-delà de 60s', () => {
@@ -61,5 +61,47 @@ describe('groupCostByDay', () => {
   it('retombe sur startedAt si completedAt est absent', () => {
     const ts = new Date('2026-08-30T09:00:00').getTime();
     expect(groupCostByDay([{ startedAt: ts, costUsd: 0.2 }])).toEqual([{ day: '2026-08-30', count: 1, costUsd: 0.2 }]);
+  });
+});
+
+describe('aggregateByLauncher', () => {
+  it('compte, calcule le taux d\'erreur et les moyennes par lanceur', () => {
+    const items = [
+      { launchedByName: 'Andrianina', status: 'fait', startedAt: 1000, completedAt: 101000, costUsd: 0.4 },
+      { launchedByName: 'Andrianina', status: 'erreur', startedAt: 1000, completedAt: 201000, costUsd: 0.6 },
+      { launchedByName: 'Sahara', status: 'fait', startedAt: 1000, completedAt: 301000, costUsd: 1 },
+    ];
+    const result = aggregateByLauncher(items);
+    expect(result).toEqual([
+      { launcher: 'Andrianina', count: 2, errorRate: 0.5, avgDurationMs: 150000, avgCostUsd: 0.5, totalCostUsd: 1 },
+      { launcher: 'Sahara', count: 1, errorRate: 0, avgDurationMs: 300000, avgCostUsd: 1, totalCostUsd: 1 },
+    ]);
+  });
+
+  it('trié par nombre d\'articles décroissant', () => {
+    const items = [
+      { launchedByName: 'A', status: 'fait' },
+      { launchedByName: 'B', status: 'fait' },
+      { launchedByName: 'B', status: 'fait' },
+    ];
+    expect(aggregateByLauncher(items).map((r) => r.launcher)).toEqual(['B', 'A']);
+  });
+
+  it('un item sans durée/coût connu n\'écrase pas la moyenne des autres (null, pas 0)', () => {
+    const items = [
+      { launchedByName: 'A', status: 'erreur' }, // pas de startedAt/completedAt/costUsd
+    ];
+    expect(aggregateByLauncher(items)).toEqual([
+      { launcher: 'A', count: 1, errorRate: 1, avgDurationMs: null, avgCostUsd: null, totalCostUsd: 0 },
+    ]);
+  });
+
+  it('launchedByName absent -> replie sur launchedBy, puis "Inconnu"', () => {
+    expect(aggregateByLauncher([{ launchedBy: 'uid-1', status: 'fait' }])[0].launcher).toBe('uid-1');
+    expect(aggregateByLauncher([{ status: 'fait' }])[0].launcher).toBe('Inconnu');
+  });
+
+  it('liste vide -> []', () => {
+    expect(aggregateByLauncher([])).toEqual([]);
   });
 });
