@@ -2426,7 +2426,14 @@ const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, rejec
         console.log('[cache-debug]', JSON.stringify(usage.__debug), '→ usage',
           JSON.stringify({ i: usage.input_tokens, w: usage.cache_creation_input_tokens, r: usage.cache_read_input_tokens }));
         resolve({ text, modelUsed: json.model || bodyObj.model, usage });
-      } catch (e) { reject(new Error('Réponse API invalide')); }
+      } catch (e) {
+        // Constaté en production (4 sept. 2026) : une passe de style échouée
+        // avec le seul message "Réponse API invalide", sans aucun indice sur
+        // CE QUI n'a pas pu être parsé -- ni la vraie erreur JSON.parse, ni un
+        // extrait du corps reçu. `callAnthropicDirect` juste en dessous portait
+        // déjà ce diagnostic (`data.substring(0, 100)`) ; il manquait ici.
+        reject(new Error(`Réponse API invalide (${e.message}) : ${data.slice(0, 200)}`));
+      }
     });
   });
   const timer = setTimeout(() => { req.destroy(); reject(new Error('Timeout (>10min)')); }, 600000);
@@ -3376,6 +3383,14 @@ app.post('/api/scrape', requireAuth, async (req, res) => {
     const status = err.response?.status;
     if (status === 403 || status === 401) {
       return res.status(403).json({ error: 'Ce site bloque le scraping (403). Copiez-collez le contenu manuellement.' });
+    }
+    // Constaté en production (4 sept. 2026) : plusieurs lots en échec avec
+    // seulement "HTTP 500 sur POST /scrape — Erreur de récupération : Request
+    // failed with status code 404" -- message technique qui ne dit pas la
+    // VRAIE cause (l'URL de l'article n'existe plus sur le site) et laisse
+    // croire à un souci côté Tonton plutôt qu'à une URL à corriger.
+    if (status === 404) {
+      return res.status(404).json({ error: "Cette page n'existe pas (404) sur le site -- vérifiez l'URL de l'article." });
     }
     return res.status(500).json({ error: `Erreur de récupération : ${err.message}` });
   }
