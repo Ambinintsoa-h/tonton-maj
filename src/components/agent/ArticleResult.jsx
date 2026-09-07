@@ -1087,7 +1087,7 @@ export default function ArticleResult() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = ''; // reset input pour permettre re-sélection du même fichier
-    if (!validateImageFile(file)) return;   // images > 1 Mo refusées
+    if (!validateImageFile(file)) return;   // images > 5 Mo refusées
 
     const matchingSite = resolvedSite;
     if (!matchingSite) {
@@ -1577,7 +1577,7 @@ export default function ArticleResult() {
   // même circuit que l'insertion via la barre d'outils.
   const insertImageFileAt = useCallback(async (file, range) => {
     if (!resolvedSite) { toast.error('Connectez un site WordPress à l\'article pour téléverser des images.'); return; }
-    if (!validateImageFile(file)) return;   // > 1 Mo refusé (même règle que la barre)
+    if (!validateImageFile(file)) return;   // > 5 Mo refusé (même règle que la barre)
     const tId = toast.loading('Téléversement de l\'image…');
     const url = await uploadMediaToWp(file);
     toast.dismiss(tId);

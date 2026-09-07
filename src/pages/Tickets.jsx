@@ -641,7 +641,7 @@ function CommentThread({ ticket, currentUser, onCommentAdded }) {
       toast.error("Impossible de lire l'image collée — réessayez ou utilisez le bouton de pièce jointe");
       return;
     }
-    const kept = filterValidImageFiles(pasted); // images > 1 Mo refusées (toast dédié)
+    const kept = filterValidImageFiles(pasted); // images > 5 Mo refusées (toast dédié)
     if (kept.length > 0) {
       setFiles(prev => [...prev, ...kept]);
       toast.success(`${kept.length} capture${kept.length > 1 ? 's' : ''} ajoutée${kept.length > 1 ? 's' : ''} aux pièces jointes`);
@@ -1314,7 +1314,7 @@ function NewTicketModal({ onClose, onCreated, currentUser, users, history }) {
       toast.error("Impossible de lire l'image collée — réessayez ou utilisez le bouton de pièce jointe");
       return;
     }
-    const kept = filterValidImageFiles(pasted); // images > 1 Mo refusées (toast dédié)
+    const kept = filterValidImageFiles(pasted); // images > 5 Mo refusées (toast dédié)
     if (kept.length > 0) {
       setFiles(prev => [...prev, ...kept]);
       toast.success(`${kept.length} capture${kept.length > 1 ? 's' : ''} ajoutée${kept.length > 1 ? 's' : ''} aux pièces jointes`);
