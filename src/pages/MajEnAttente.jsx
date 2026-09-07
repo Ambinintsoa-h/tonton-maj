@@ -2,12 +2,15 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ListChecks, RefreshCw, ExternalLink, Eye } from 'lucide-react';
+import { ListChecks, RefreshCw, ExternalLink, Eye, Download } from 'lucide-react';
 import Pagination, { pageSlice } from '../components/common/Pagination';
 import Badge from '../components/common/Badge';
 import { listMyBatchItems } from '../services/batchItems';
 import { listStagedItems } from '../services/gsheetStaging';
-import { fmtCost, fmtDuration, fmtDate, DISPLAY_STATUS, deriveDisplayStatus, groupCostByDay } from '../utils/batchDisplay';
+import {
+  fmtCost, fmtDuration, fmtDate, DISPLAY_STATUS, deriveDisplayStatus, groupCostByDay, aggregateByLauncher,
+} from '../utils/batchDisplay';
+import { exportStatsToExcel } from '../utils/exportStatsXlsx';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // "Mes MAJ" — remplace l'ancien écran "MAJ en attente" (import fichier, ajout
@@ -119,7 +122,16 @@ export default function MajEnAttente() {
 
   const totalCost = useMemo(() => filtered.reduce((sum, it) => sum + (it.costUsd || 0), 0), [filtered]);
   const costByDay = useMemo(() => groupCostByDay(filtered), [filtered]);
+  const byLauncher = useMemo(() => aggregateByLauncher(filtered), [filtered]);
   const paged = pageSlice(filtered, page, PAGE_SIZE);
+
+  // Export .xlsx (demande Andrianina, sept. 2026) : reflète EXACTEMENT ce qui
+  // est filtré à l'écran (période, site, statut) -- pas un second chargement
+  // séparé, la même donnée que ce que le rédacteur voit.
+  const handleExport = () => {
+    if (!filtered.length) { toast.error('Rien à exporter sur cette période/ces filtres.'); return; }
+    exportStatsToExcel({ items: filtered, byLauncher, from: dateFrom, to: dateTo });
+  };
 
   const applyDatePreset = (days) => {
     setDateTo(localIso(new Date()));
@@ -147,6 +159,15 @@ export default function MajEnAttente() {
               : "Le suivi des mises à jour de toute l'équipe, traitées via MAJ en lot."}
           </p>
         </div>
+        <button
+          type="button"
+          onClick={handleExport}
+          disabled={!filtered.length}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50"
+          title="Exporter en Excel la période et les filtres affichés"
+        >
+          <Download className="w-3.5 h-3.5" /> Exporter en Excel
+        </button>
         <button type="button" onClick={refresh} className="text-gray-400 hover:text-gray-700 p-1.5" title="Rafraîchir">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
@@ -184,6 +205,42 @@ export default function MajEnAttente() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Par utilisateur -- même donnée que "Coût par jour", regroupée par
+          lanceur au lieu du jour. N'a de sens que pour une vue partagée : un
+          cq_ia ne voit que ses propres lignes (isPersonalScope), un tableau
+          "par utilisateur" à une seule ligne n'apporterait rien. */}
+      {!isPersonalScope && byLauncher.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl p-4 overflow-x-auto">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Par utilisateur</p>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs text-gray-400 border-b border-gray-100">
+                <th className="text-left font-medium py-1.5 pr-4">Lanceur</th>
+                <th className="text-right font-medium py-1.5 pr-4">Articles</th>
+                <th className="text-right font-medium py-1.5 pr-4">Taux d'erreur</th>
+                <th className="text-right font-medium py-1.5 pr-4">Durée moy.</th>
+                <th className="text-right font-medium py-1.5 pr-4">Coût moy.</th>
+                <th className="text-right font-medium py-1.5">Coût total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {byLauncher.map((l) => (
+                <tr key={l.launcher}>
+                  <td className="py-1.5 pr-4 text-gray-900 font-medium">{l.launcher}</td>
+                  <td className="py-1.5 pr-4 text-right text-gray-600">{l.count}</td>
+                  <td className={`py-1.5 pr-4 text-right ${l.errorRate > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                    {(l.errorRate * 100).toFixed(1)}%
+                  </td>
+                  <td className="py-1.5 pr-4 text-right text-gray-600">{fmtDuration(l.avgDurationMs)}</td>
+                  <td className="py-1.5 pr-4 text-right text-gray-600">{fmtCost(l.avgCostUsd)}</td>
+                  <td className="py-1.5 text-right font-medium text-gray-900">{fmtCost(l.totalCostUsd)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -261,7 +318,14 @@ export default function MajEnAttente() {
                       <td className="py-2 px-4 text-gray-500">{it.site || '—'}</td>
                       <td className="py-2 px-4 text-gray-600">{it.targetKeyword || '—'}</td>
                       {!isPersonalScope && <td className="py-2 px-4 text-gray-500">{it.launchedByName || '—'}</td>}
-                      <td className="py-2 px-4 text-gray-500 whitespace-nowrap">
+                      <td
+                        className="py-2 px-4 text-gray-500 whitespace-nowrap"
+                        title={[
+                          it.launchedAt ? `Lancé le ${fmtDate(it.launchedAt)}` : null,
+                          it.startedAt ? `Démarré le ${fmtDate(it.startedAt)}` : null,
+                          it.completedAt ? `Terminé le ${fmtDate(it.completedAt)}` : null,
+                        ].filter(Boolean).join(' — ') || undefined}
+                      >
                         {it.startedAt && it.completedAt ? fmtDuration(it.completedAt - it.startedAt) : '—'}
                       </td>
                       <td className="py-2 px-4 text-gray-500 whitespace-nowrap">{fmtCost(it.costUsd)}</td>

@@ -78,3 +78,45 @@ export const groupCostByDay = (items) => {
   });
   return [...byDay.values()].sort((a, b) => (a.day < b.day ? 1 : -1));
 };
+
+/**
+ * Regroupe une liste de batch_items par lanceur (launchedByName), pour la
+ * vue "Par utilisateur" de Mes MAJ et son export Excel. N, taux d'erreur,
+ * durée moyenne (seulement sur les items qui ont un début ET une fin -- une
+ * erreur précoce n'a pas de durée exploitable), coût moyen et total
+ * (seulement sur les items dont le coût est connu). Trié par N décroissant.
+ * @returns {Array<{launcher:string, count:number, errorRate:number,
+ *   avgDurationMs:number|null, avgCostUsd:number|null, totalCostUsd:number}>}
+ */
+export const aggregateByLauncher = (items) => {
+  const byLauncher = new Map();
+  items.forEach((it) => {
+    const key = it.launchedByName || it.launchedBy || 'Inconnu';
+    const entry = byLauncher.get(key) || {
+      launcher: key, count: 0, errorCount: 0,
+      durationSum: 0, durationCount: 0,
+      costSum: 0, costCount: 0,
+    };
+    entry.count += 1;
+    if (it.status === 'erreur' || it.status === 'a_revoir') entry.errorCount += 1;
+    if (it.startedAt && it.completedAt) {
+      entry.durationSum += (it.completedAt - it.startedAt);
+      entry.durationCount += 1;
+    }
+    if (it.costUsd != null) {
+      entry.costSum += it.costUsd;
+      entry.costCount += 1;
+    }
+    byLauncher.set(key, entry);
+  });
+  return [...byLauncher.values()]
+    .map((e) => ({
+      launcher: e.launcher,
+      count: e.count,
+      errorRate: e.count ? e.errorCount / e.count : 0,
+      avgDurationMs: e.durationCount ? e.durationSum / e.durationCount : null,
+      avgCostUsd: e.costCount ? e.costSum / e.costCount : null,
+      totalCostUsd: e.costSum,
+    }))
+    .sort((a, b) => b.count - a.count);
+};
