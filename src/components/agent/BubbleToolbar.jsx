@@ -194,7 +194,7 @@ const restyleSelection = (sel, container, transform) => {
   } catch { /* sélection non manipulable — ignorée */ }
 };
 
-const InputPanel = ({ placeholder, value, onChange, onConfirm, onClose, onUpload, uploading, accept }) => (
+const InputPanel = ({ placeholder, value, onChange, onConfirm, onClose, onUpload, uploadUnavailableReason, uploading, accept }) => (
   <div className="flex items-center gap-1.5 bg-gray-900 border border-white/10 rounded-xl px-3 py-1.5 shadow-2xl">
     <input
       autoFocus
@@ -208,20 +208,29 @@ const InputPanel = ({ placeholder, value, onChange, onConfirm, onClose, onUpload
       placeholder={placeholder}
       className="flex-1 bg-transparent text-white text-xs outline-none placeholder-white/30 w-56"
     />
-    {/* Téléversement local → médiathèque WordPress (en plus du lien) */}
-    {onUpload && (
+    {/* Téléversement local → médiathèque WordPress (en plus du lien). Le bouton
+        reste TOUJOURS visible pour image/vidéo (onUpload !== undefined) même
+        sans site WP reconnu -- il se contente d'être désactivé, avec le motif
+        en infobulle. Avant ce correctif il disparaissait purement et
+        simplement (onUpload && ...) : constaté en production (sept. 2026),
+        indiscernable d'une fonctionnalité absente pour le rédacteur, qui ne
+        pouvait pas savoir QUOI corriger. */}
+    {onUpload !== undefined && (
       <label
-        title="Téléverser un fichier depuis l'ordinateur vers la médiathèque WordPress"
-        className={`flex items-center gap-1 text-[11px] font-medium flex-shrink-0 px-1 border-l border-white/10 pl-2 ${uploading ? 'text-sky-400/60 cursor-wait' : 'text-sky-300 hover:text-sky-200 cursor-pointer'}`}
+        title={onUpload ? "Téléverser un fichier depuis l'ordinateur vers la médiathèque WordPress" : uploadUnavailableReason}
+        className={`flex items-center gap-1 text-[11px] font-medium flex-shrink-0 px-1 border-l border-white/10 pl-2 ${
+          !onUpload ? 'text-white/20 cursor-not-allowed'
+            : uploading ? 'text-sky-400/60 cursor-wait' : 'text-sky-300 hover:text-sky-200 cursor-pointer'
+        }`}
       >
         {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
         {uploading ? '…' : 'Téléverser'}
         <input
           type="file"
           accept={accept}
-          disabled={uploading}
+          disabled={uploading || !onUpload}
           className="hidden"
-          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onUpload(f); }}
+          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f && onUpload) onUpload(f); }}
         />
       </label>
     )}
@@ -1270,7 +1279,8 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
             onChange={setInputVal}
             onConfirm={panelConfirm[panel]}
             onClose={closePanel}
-            onUpload={onUploadMedia && (panel === 'image' || panel === 'video') ? handleUpload : undefined}
+            onUpload={(panel === 'image' || panel === 'video') ? (onUploadMedia ? handleUpload : null) : undefined}
+            uploadUnavailableReason="Aucun site WordPress reconnu pour cet article -- utilisez un lien direct, ou connectez le site correspondant dans WordPress."
             uploading={uploading}
             accept={panel === 'video' ? 'video/*' : 'image/*'}
           />
