@@ -850,7 +850,7 @@ export default function BubbleToolbar({ articleEl, contentRef, onImageInserted, 
   // Téléversement d'un fichier local vers la médiathèque WP (via le parent) → insertion.
   const handleUpload = useCallback(async (file) => {
     if (!onUploadMedia || !file) return;
-    if (!validateImageFile(file)) return;   // images > 1 Mo refusées (vidéos non concernées)
+    if (!validateImageFile(file)) return;   // images > 5 Mo refusées (vidéos non concernées)
     setUploading(true);
     try {
       const url = await onUploadMedia(file, panel);   // panel = 'image' | 'video'

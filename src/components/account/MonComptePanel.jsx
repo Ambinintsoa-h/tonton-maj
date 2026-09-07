@@ -108,7 +108,7 @@ export default function MonComptePanel({ onClose }) {
   // Upload photo
   const handleAvatarUpload = async (file) => {
     if (!file) return;
-    if (!validateImageFile(file)) return;   // images > 1 Mo refusées
+    if (!validateImageFile(file)) return;   // images > 5 Mo refusées
     const formData = new FormData();
     formData.append('avatar', file);
     try {
