@@ -196,6 +196,7 @@ export const saveSeoSnapshot = (articleId, snapshot) =>
   api('POST', '/articles/' + enc(articleId) + '/seo/snapshot', snapshot);
 export const getArticleSeoTracking = (articleId) =>
   api('GET', '/articles/' + enc(articleId) + '/seo');
+export const getSeoTrackingOverview = () => api('GET', '/seo-tracking-overview');
 
 // ── tickets + ticket_comments ─────────────────────────────────────────────────
 // getTickets : le serveur filtre par rôle (JWT) — les args userId/role sont
@@ -247,6 +248,15 @@ export const recordArticleTime = (articleId, userId, minutes = 1) =>
 export const markArticleTimePublished = (articleId, userId) =>
   api('POST', '/article-time/published', { articleId, userId });
 export const getArticleTimeAll = () => api('GET', '/article-time');
+
+// relecture_time (temps de RELECTURE — phases 3+4 uniquement, par jour, hors/avec Tonton)
+export const ensureRelectureTimeDoc = (articleId, userId, date, meta = {}) =>
+  api('POST', '/relecture-time/ensure', { articleId, userId, date, ...meta });
+export const recordRelectureTime = (articleId, userId, date, seconds = 1) =>
+  api('POST', '/relecture-time/record', { articleId, userId, date, seconds });
+export const recordRelectureAiTime = (articleId, userId, date, seconds = 1) =>
+  api('POST', '/relecture-time/record-ai', { articleId, userId, date, seconds });
+export const getRelectureTimeAll = () => api('GET', '/relecture-time');
 
 // ── auth (login bcrypt en mode MySQL) ─────────────────────────────────────────
 // Même contrat que l'impl. Firestore : renvoie { token, role, username, uid } OU

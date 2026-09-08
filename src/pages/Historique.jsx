@@ -173,7 +173,10 @@ function SearchBar({ value, onChange, suggestions }) {
 // ── Composant SEO Panel — données live via Haloscan pageEvolution ─────────────
 const COLORS = ['#16a34a', '#2563eb', '#d97706'];
 
-function SeoPanel({ seoTracking, majDate }) {
+// Exporté : réutilisé tel quel par la page dédiée SuiviPositions.jsx (détail
+// d'un tracking au clic sur une ligne), plutôt que de dupliquer cette logique
+// d'affichage (chips, tableau résumé, courbe, volume).
+export function SeoPanel({ seoTracking, majDate }) {
   const [evoData, setEvoData] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);

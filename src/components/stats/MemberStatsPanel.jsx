@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -8,7 +8,7 @@ import {
   FileText, MessageSquare, CheckCircle2, AlertCircle,
   Calendar, ChevronLeft, ChevronRight,
 } from 'lucide-react';
-import { getUserActivitySessions, getArticleTimeAll } from '../../services/firebase';
+import { getUserActivitySessions, getArticleTimeAll, getRelectureTimeAll } from '../../services/firebase';
 import { AccountAvatar } from '../account/MonComptePanel';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -26,6 +26,16 @@ const fmtDuration = (minutes) => {
   const m = minutes % 60;
   if (h === 0) return `${m} min`;
   return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, '0')}`;
+};
+
+// Comme fmtDuration, mais pour une valeur en SECONDES (temps de relecture) :
+// un appel IA de quelques secondes arrondirait à 0 minute avec fmtDuration
+// seul, ce qui se lirait « — » alors qu'il y a bien eu du temps consommé.
+const fmtDurationSeconds = (seconds) => {
+  const s = Number(seconds) || 0;
+  if (s <= 0) return '—';
+  if (s < 60) return `${s} s`;
+  return fmtDuration(Math.round(s / 60));
 };
 
 const localDate = () => {
@@ -229,7 +239,7 @@ export default function MemberStatsPanel({ user, onClose }) {
   }, [user.id]);
 
   // ── Onglets de la section détail : par jour | absences | MAJ faites ─────────
-  const [detailTab, setDetailTab] = useState('days'); // 'days' | 'absences' | 'majs'
+  const [detailTab, setDetailTab] = useState('days'); // 'days' | 'absences' | 'majs' | 'relecture'
 
   // Temps par article (du clic « Lancer la MAJ » jusqu'à la publication) —
   // docs article_time du membre. Le panel est réservé au super_admin, qui a le
@@ -246,6 +256,38 @@ export default function MemberStatsPanel({ user, onClose }) {
       })
       .catch(() => setArticleTimes([]));
   }, [user.id, user.uid, user.username]);
+
+  // Temps de RELECTURE (phases 3 Obsolescence + 4 Relecture UNIQUEMENT), par
+  // jour — hors Tonton / avec Tonton. Table/collection indépendante de
+  // article_time (ci-dessus), qui continue de mesurer tout le parcours.
+  const [relectureTimes, setRelectureTimes] = useState(null); // null = chargement
+  useEffect(() => {
+    getRelectureTimeAll()
+      .then(all => {
+        const ids = new Set([user.id, user.uid, user.username].filter(Boolean));
+        setRelectureTimes(all.filter(e => ids.has(e.userId)));
+      })
+      .catch(() => setRelectureTimes([]));
+  }, [user.id, user.uid, user.username]);
+
+  // Groupé par jour, jours les plus récents en premier ; articles d'un même
+  // jour triés par dernière activité.
+  const relectureByDay = useMemo(() => {
+    if (!relectureTimes) return null;
+    const map = new Map();
+    relectureTimes.forEach((e) => {
+      if (!map.has(e.date)) map.set(e.date, []);
+      map.get(e.date).push(e);
+    });
+    return [...map.entries()]
+      .sort(([a], [b]) => (a < b ? 1 : -1))
+      .map(([date, items]) => ({
+        date,
+        items: [...items].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
+        horsTotal: items.reduce((n, e) => n + (e.horsTontonSeconds || 0), 0),
+        avecTotal: items.reduce((n, e) => n + (e.avecTontonSeconds || 0), 0),
+      }));
+  }, [relectureTimes]);
 
   // Jours OUVRÉS (lun-ven) sans aucune session sur les 30 derniers jours.
   // Le jour courant n'est pas compté (journée en cours).
@@ -723,6 +765,7 @@ export default function MemberStatsPanel({ user, onClose }) {
                           { id: 'days',     label: 'Détail par jour' },
                           { id: 'absences', label: `Liste absence${absences.length ? ` (${absences.length})` : ''}` },
                           { id: 'majs',     label: `MAJ fait${articleTimes?.length ? ` (${articleTimes.length})` : ''}` },
+                          { id: 'relecture', label: `Relecture / jour${relectureByDay?.length ? ` (${relectureByDay.length})` : ''}` },
                         ].map(t => (
                           <button
                             key={t.id}
@@ -826,6 +869,63 @@ export default function MemberStatsPanel({ user, onClose }) {
                                 ))}
                               </tbody>
                             </table>
+                          </div>
+                        )
+                      )}
+
+                      {/* Relecture / jour : phases 3 (Obsolescence) + 4 (Relecture)
+                          UNIQUEMENT — jamais l'audit ni la génération. Deux chiffres
+                          par article : hors Tonton (temps actif humain) et avec
+                          Tonton (le même, plus la durée des appels IA déclenchés
+                          pendant cette fenêtre). Mesure indépendante de « MAJ fait »
+                          ci-dessus, qui couvre tout le parcours (lancement→publication). */}
+                      {detailTab === 'relecture' && (
+                        relectureByDay === null ? (
+                          <p className="text-xs text-gray-400 py-3">Chargement…</p>
+                        ) : relectureByDay.length === 0 ? (
+                          <p className="text-xs text-gray-400 py-3">
+                            Aucun temps de relecture tracké pour ce membre — le suivi ne démarre qu'en phase 3 (Obsolescence) et 4 (Relecture).
+                          </p>
+                        ) : (
+                          <div className="space-y-3">
+                            {relectureByDay.map(({ date, items, horsTotal, avecTotal }) => (
+                              <div key={date} className="rounded-xl border border-gray-100 overflow-hidden">
+                                <div className="flex items-center justify-between px-3 py-2 bg-gray-50/80">
+                                  <span className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+                                    <Calendar size={12} className="text-gray-400" /> {dateLabel(date)}
+                                  </span>
+                                  <span className="text-[10px] text-gray-500">
+                                    <span className="font-semibold text-emerald-600">{fmtDurationSeconds(horsTotal)}</span> hors Tonton
+                                    {' · '}
+                                    <span className="font-semibold" style={{ color: colors.bar }}>{fmtDurationSeconds(avecTotal)}</span> avec Tonton
+                                  </span>
+                                </div>
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="border-b border-gray-100">
+                                      {['Article', 'Hors Tonton', 'Avec Tonton'].map(h => (
+                                        <th key={h} className="py-1.5 px-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-left whitespace-nowrap">
+                                          {h}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-50">
+                                    {items.map((e) => (
+                                      <tr key={e.id} className="hover:bg-gray-50/60 transition-colors">
+                                        <td className="py-2 px-2 font-medium text-gray-700 max-w-[240px]">
+                                          {e.url
+                                            ? <a href={e.url} target="_blank" rel="noreferrer" className="hover:text-blue-600 hover:underline">{e.title || e.url}</a>
+                                            : (e.title || e.articleId)}
+                                        </td>
+                                        <td className="py-2 px-2 font-semibold text-emerald-600 whitespace-nowrap">{fmtDurationSeconds(e.horsTontonSeconds)}</td>
+                                        <td className="py-2 px-2 font-semibold whitespace-nowrap" style={{ color: colors.bar }}>{fmtDurationSeconds(e.avecTontonSeconds)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ))}
                           </div>
                         )
                       )}
