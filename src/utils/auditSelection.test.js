@@ -10,7 +10,7 @@
 import {
   AUDIT_BLOCKS, SELECTABLE_FIELDS, FACTUAL_FIELDS, ALWAYS_SENT_FIELDS,
   defaultAuditSelection, filterAuditBySelection, isSelectionEmpty,
-  unselectedFactualFields, selectedPriorities, auditItemLines, sourceHost,
+  unselectedFactualFields, unselectedNonEmptyFields, selectedPriorities, auditItemLines, sourceHost,
   defaultSelectionScope, isDefaultSelection, matchesScopeDefault,
 } from './auditSelection';
 import { buildGenerationPrompt, buildFreshnessSuggestion, MAX_INSTRUCTION_CHARS } from './generationPrompt';
@@ -161,6 +161,32 @@ describe('avertissement de publication', () => {
     expect(unselectedFactualFields(
       defaultAuditSelection(SCOPE_SIMPLE), { a_supprimer: [], sources_check: [] },
     )).toEqual([]);
+  });
+
+  // Compteur GLOBAL (pas seulement le factuel) : nourrit le seuil au-delà
+  // duquel les popups de confirmation de publication ne sont plus affichées
+  // (« le rédacteur a déjà pris le risque en décochant/ignorant autant »).
+  it('unselectedNonEmptyFields élargit à TOUTES les catégories décochées et remplies', () => {
+    // Pré-cochage MAJ simple : seule `recent_context` est cochée, tout le
+    // reste de l'AUDIT (rempli) doit remonter comme décoché.
+    const decochees = unselectedNonEmptyFields(defaultAuditSelection(SCOPE_SIMPLE), AUDIT);
+    expect(decochees).toEqual(expect.arrayContaining([
+      'a_supprimer', 'sources_check', 'seo_geo_gaps', 'eeat_recommendations',
+      'strategic_recommendation', 'tldr',
+    ]));
+    expect(decochees).not.toContain('recent_context');
+
+    // Refonte : factuel + P1 cochés, mais les améliorations restent décochées.
+    const refonte = unselectedNonEmptyFields(defaultAuditSelection(SCOPE_REFONTE), AUDIT);
+    expect(refonte).not.toContain('a_supprimer');
+    expect(refonte).toContain('seo_geo_gaps');
+
+    // Rien à signaler sur une catégorie que l'audit n'a de toute façon pas remplie.
+    expect(unselectedNonEmptyFields(defaultAuditSelection(SCOPE_SIMPLE), { a_supprimer: [] }))
+      .not.toContain('a_supprimer');
+
+    // Sans sélection, rien à compter (même convention que unselectedFactualFields).
+    expect(unselectedNonEmptyFields(null, AUDIT)).toEqual([]);
   });
 });
 

@@ -6,7 +6,7 @@
  * mot-clé cible d'un article de fosseseptique.fr, et ces métas étaient
  * PUBLIABLES (`postData.seoMeta`).
  */
-import { editorMetaForArticle } from './editorMeta';
+import { editorMetaForArticle, defaultPublishDate } from './editorMeta';
 
 const METAS_FOSSE = {
   articleId:      'art-fosse-septique',
@@ -60,5 +60,23 @@ describe('ce qui doit PASSER — refuser par defaut serait un second defaut', ()
   it('absence de brouillon : null, jamais undefined', () => {
     expect(editorMetaForArticle(null, 'x')).toBeNull();
     expect(editorMetaForArticle(undefined, 'x')).toBeNull();
+  });
+});
+
+describe('defaultPublishDate — Date MAJ pré-remplie à J-2 (SEO Meta)', () => {
+  it('recule de deux jours, au format datetime-local (YYYY-MM-DDTHH:mm)', () => {
+    expect(defaultPublishDate(new Date(2026, 8, 8, 14, 30))).toBe('2026-09-06T14:30');
+  });
+
+  it('traverse correctement un changement de mois', () => {
+    expect(defaultPublishDate(new Date(2026, 2, 1, 9, 5))).toBe('2026-02-27T09:05');
+  });
+
+  it('traverse correctement un changement d\'année', () => {
+    expect(defaultPublishDate(new Date(2027, 0, 1, 0, 0))).toBe('2026-12-30T00:00');
+  });
+
+  it('les heures et minutes à un seul chiffre sont bien paddées (format valide pour l\'input)', () => {
+    expect(defaultPublishDate(new Date(2026, 8, 10, 3, 5))).toBe('2026-09-08T03:05');
   });
 });
