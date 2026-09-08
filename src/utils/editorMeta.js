@@ -43,3 +43,22 @@ export const editorMetaForArticle = (editorMeta, currentArticleId) => {
   if (editorMeta.articleId && editorMeta.articleId !== currentArticleId) return null;
   return editorMeta;
 };
+
+/**
+ * Date MAJ par défaut du champ SEO Meta — J-2, décision Andrianina.
+ *
+ * Pré-remplissage seulement : le champ reste un input `datetime-local` normal,
+ * modifiable ou effaçable comme avant. `editorMetaForArticle` ci-dessus prend
+ * le dessus dès qu'une date a été enregistrée (ou saisie à la main) pour cet
+ * article — cette valeur ne sert que tant que rien n'a encore été décidé.
+ *
+ * Format natif de l'input : « YYYY-MM-DDTHH:mm », heure LOCALE (celle affichée
+ * dans le champ, cohérente avec `new Date(publishDate)` utilisé à la publication).
+ * `maintenant` est injectable pour les tests — sinon l'instant réel.
+ */
+export const defaultPublishDate = (maintenant = new Date()) => {
+  const d = new Date(maintenant.getTime());
+  d.setDate(d.getDate() - 2);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};

@@ -20,6 +20,7 @@ import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { stripNonEditorialLinks, stripNonEditorialUrlsFromText } from '../utils/scrapeClean';
+import { isArticleUrlDead, ARTICLE_INTROUVABLE_MESSAGE } from '../utils/articleLiveness';
 import { runQatAudit } from '../services/agentQat';
 import { aggregateCallsByPass } from '../services/agent';
 import QatBriefFields from '../components/agent/QatBriefFields';
@@ -289,6 +290,15 @@ export default function Articles() {
     // file) → un nouveau lancement écraserait sa progression ET son résultat.
     if (agent.status === 'running') {
       toast.error('Une analyse est déjà en cours — attendez la fin avant d\'en lancer une nouvelle');
+      return;
+    }
+
+    // ── L'ARTICLE EXISTE-T-IL ENCORE ? — AVANT toute analyse ──────────────────
+    // Vérifié AVANT `clearDraft`/`resetAgent` : sur un vrai 404, on ne doit
+    // rien avoir écrasé. Voir articleLiveness.js pour le détail du contrôle
+    // (dead = vrai 404 seulement, jamais bloquant sur une simple incertitude).
+    if (tab === TAB_URL && url.trim() && await isArticleUrlDead(url.trim())) {
+      toast.error(ARTICLE_INTROUVABLE_MESSAGE, { duration: 9000 });
       return;
     }
 

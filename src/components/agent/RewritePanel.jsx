@@ -14,10 +14,10 @@ import { motion } from 'framer-motion';
 import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import { Sparkles, X, Loader, RefreshCw, CheckCircle2, History } from 'lucide-react';
-import { rewriteSelection } from '../../services/agent';
+import { rewriteSelection, rewriteSelectionHtml } from '../../services/agent';
 import { REWRITE_PRESETS, getRecentPrompts, rememberPrompt } from '../../services/rewrite';
 
-export default function RewritePanel({ originalText, onValidate, onClose }) {
+export default function RewritePanel({ originalText, originalHtml, onValidate, onClose }) {
   const modelSelections = useSelector(s => s.settings.modelSelections) || null;
   const [presetId, setPresetId] = useState(REWRITE_PRESETS[0].id);
   const [recent, setRecent]     = useState(getRecentPrompts());
@@ -26,13 +26,21 @@ export default function RewritePanel({ originalText, onValidate, onClose }) {
   const [result, setResult]     = useState('');
   const [loading, setLoading]   = useState(false);
 
+  // Un lien dans la sélection change tout le circuit : texte brut → il
+  // disparaîtrait purement et simplement. Entrée ET sortie passent alors par
+  // le HTML (`rewriteSelectionHtml`), avec consigne de conservation stricte
+  // des liens ; sans lien, le circuit texte brut existant reste inchangé.
+  const hasLinks = /<a\b/i.test(originalHtml || '');
+
   const generate = useCallback(async () => {
     const preset = REWRITE_PRESETS.find(p => p.id === presetId) || REWRITE_PRESETS[0];
     const extra = custom.trim();
     const instruction = extra ? `${preset.prompt}\nConsigne supplémentaire : ${extra}` : preset.prompt;
     setLoading(true);
     try {
-      const text = await rewriteSelection({ text: originalText, instruction, modelSelections });
+      const text = hasLinks
+        ? await rewriteSelectionHtml({ html: originalHtml, instruction, modelSelections })
+        : await rewriteSelection({ text: originalText, instruction, modelSelections });
       setResult(text);
       if (extra) { rememberPrompt(extra); setRecent(getRecentPrompts()); }
     } catch (e) {
@@ -40,7 +48,7 @@ export default function RewritePanel({ originalText, onValidate, onClose }) {
     } finally {
       setLoading(false);
     }
-  }, [presetId, custom, originalText, modelSelections]);
+  }, [presetId, custom, originalText, originalHtml, hasLinks, modelSelections]);
 
   return createPortal(
     <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -61,8 +69,18 @@ export default function RewritePanel({ originalText, onValidate, onClose }) {
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {/* Texte original */}
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Texte sélectionné</p>
-            <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3 text-xs text-gray-600 leading-relaxed max-h-36 overflow-y-auto whitespace-pre-wrap">{originalText}</div>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
+              Texte sélectionné
+              {hasLinks && <span className="ml-1.5 normal-case font-normal text-violet-500">(lien conservé)</span>}
+            </p>
+            {hasLinks ? (
+              <div
+                className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3 text-xs text-gray-600 leading-relaxed max-h-36 overflow-y-auto [&_a]:text-violet-600 [&_a]:underline"
+                dangerouslySetInnerHTML={{ __html: originalHtml }}
+              />
+            ) : (
+              <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3 text-xs text-gray-600 leading-relaxed max-h-36 overflow-y-auto whitespace-pre-wrap">{originalText}</div>
+            )}
           </div>
 
           {/* Styles de réécriture */}
@@ -114,8 +132,12 @@ export default function RewritePanel({ originalText, onValidate, onClose }) {
           {(result || loading) && (
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-500 mb-1.5">Proposition</p>
-              <div className="rounded-xl bg-violet-50/60 border-2 border-violet-200 px-4 py-3 text-xs text-gray-800 leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap">
-                {loading ? <span className="flex items-center gap-2 text-violet-500"><Loader size={13} className="animate-spin" /> Réécriture en cours…</span> : result}
+              <div className="rounded-xl bg-violet-50/60 border-2 border-violet-200 px-4 py-3 text-xs text-gray-800 leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap [&_a]:text-violet-700 [&_a]:underline">
+                {loading ? (
+                  <span className="flex items-center gap-2 text-violet-500"><Loader size={13} className="animate-spin" /> Réécriture en cours…</span>
+                ) : hasLinks ? (
+                  <span dangerouslySetInnerHTML={{ __html: result }} />
+                ) : result}
               </div>
             </div>
           )}

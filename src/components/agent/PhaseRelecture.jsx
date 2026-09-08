@@ -75,7 +75,13 @@ const PLACEMENT = {
 // gauche à CHAQUE correction acceptée — soit 66 fois sur un article comme celui
 // qui a motivé ce panneau. Persisté pour la session, pas au-delà : ce n'est pas
 // un réglage à mémoriser d'un article à l'autre.
-const prefsAffichage = { cote: 'gauche', replie: false, decalage: { dx: 0, dy: 0 } };
+// `ouvert` (la règle actuellement dépliée, ex. « Verbes interdits ») rejoint
+// ces préférences pour la même raison : chaque « Accepter » remonte le
+// composant (`key={relectureTick}`), et un `ouvert` en état local pur
+// repartait à `null` à chaque clic — la règle qu'on vient de corriger se
+// refermait toute seule, alors que la demande est qu'elle ne se ferme QUE sur
+// un clic de l'utilisateur sur l'en-tête.
+const prefsAffichage = { cote: 'gauche', replie: false, decalage: { dx: 0, dy: 0 }, ouvert: null };
 
 // Ce qui doit rester à l'écran quand on relâche le panneau : on ne le laisse
 // jamais sortir entièrement, sinon il devient impossible de le rattraper.
@@ -107,8 +113,17 @@ export default function PhaseRelecture({
   // Mot-clé cible : sans lui, la mesure de suroptimisation ne veut rien dire —
   // elle n'est alors pas affichée plutôt que rendue à zéro (voir `mesures`).
   targetKeyword = '',
+  // Occurrences écartées : CONTRÔLÉES par le parent (ArticleResult), pas un
+  // état local — deux raisons. D'abord la persistance : un état local repartait
+  // à `[]` à chaque remount (`key={relectureTick}`), donc à chaque « Accepter »
+  // ailleurs dans la liste, ce qui faisait RÉAPPARAÎTRE les occurrences déjà
+  // ignorées. Ensuite la visibilité : le compteur global d'éléments ignorés (qui
+  // dispense de reconfirmer la publication au-delà d'un seuil) doit pouvoir les
+  // compter depuis `ArticleResult`, où elles étaient jusqu'ici invisibles.
+  ignores = [], onIgnore,
 }) {
-  const [ouvert, setOuvert] = useState(null);
+  const [ouvert, setOuvertState] = useState(prefsAffichage.ouvert);
+  const setOuvert = (v) => { prefsAffichage.ouvert = v; setOuvertState(v); };
   // Panneau replié en languette : l'article redevient entièrement lisible sans
   // perdre la liste (un clic la ramène).
   const [replie, setReplieState] = useState(prefsAffichage.replie);
@@ -160,9 +175,9 @@ export default function PhaseRelecture({
     window.addEventListener('pointerup', fin);
     window.addEventListener('pointercancel', fin);
   };
-  // Occurrences écartées par le rédacteur — locales à la session : « Ignorer »
-  // n'écrit rien dans l'article, il retire simplement la ligne de la liste.
-  const [ignores, setIgnores] = useState([]);
+  // Occurrences écartées par le rédacteur : « Ignorer » n'écrit rien dans
+  // l'article, il retire simplement la ligne de la liste (état porté par le
+  // parent, voir le commentaire sur la prop `ignores` ci-dessus).
   const rapport = useMemo(() => detectStylePatterns(html), [html]);
 
   // ── LES TROIS MESURES, RECOMPTÉES SUR LE TEXTE COURANT ─────────────────────
@@ -379,7 +394,7 @@ export default function PhaseRelecture({
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={() => setIgnores((l) => [...l, cle])}
+                                        onClick={() => onIgnore?.(cle)}
                                         className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white text-gray-500 border border-gray-200 text-[10px] font-semibold hover:text-gray-800 transition-colors"
                                       >
                                         <X size={10} /> Ignorer

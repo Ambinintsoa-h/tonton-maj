@@ -23,7 +23,7 @@ import { applyAllDiffs, applyDiff, applyAddition, applyReplacementFuzzy, insertN
 import { weaveBriefLinks } from '../../utils/internalWeave';
 import { carryOverImages } from '../../utils/imageCarry';
 import { analyzeSeo } from '../../utils/seoCheck';
-import { editorMetaForArticle } from '../../utils/editorMeta';
+import { editorMetaForArticle, defaultPublishDate } from '../../utils/editorMeta';
 import {
   findFaqBlock, isInsideFaq, getQAGroups, findQAIndex, moveQAGroup, deleteQAGroup,
   insertQAAfter, serializeFaqBlock, removeFaqBlock, moveFaqBlockBySection,
@@ -44,7 +44,9 @@ import {
 import { cleanLinkRows, emptyLinkRow } from '../../constants/majMode';
 import { auditSuggestedLinkRows, mergeLinkRows } from '../../utils/auditSuggestions';
 import { buildGenerationPrompt, DEFAULT_GENERATION_TEMPLATE, DEFAULT_VERIFICATION_TEMPLATE } from '../../utils/generationPrompt';
-import { defaultAuditSelection, unselectedFactualFields, isDefaultSelection } from '../../utils/auditSelection';
+import { defaultAuditSelection, unselectedFactualFields, unselectedNonEmptyFields, isDefaultSelection } from '../../utils/auditSelection';
+import { isArticleUrlDead, ARTICLE_INTROUVABLE_MESSAGE } from '../../utils/articleLiveness';
+import { liensManquants } from '../../utils/linkPreserved';
 import { decodeEntities } from '../../utils/htmlText';
 import { setProfile } from '../../store/slices/authSlice';
 import PhaseStepper from './PhaseStepper';
@@ -486,8 +488,10 @@ export default function ArticleResult() {
   }, [agent.editorMeta, agent.currentArticleId, currentArticle, cqItem]);
   const [seoGenerating,  setSeoGenerating]  = useState(false);
   // Date de publication de la MAJ (optionnelle) — format input datetime-local
-  // « YYYY-MM-DDTHH:mm ». Vide = WordPress garde la date existante du post.
-  const [publishDate,    setPublishDate]    = useState('');
+  // « YYYY-MM-DDTHH:mm ». Pré-rempli à J-2 (decision Andrianina) : reste un
+  // champ normal, modifiable ou effaçable — vide = WordPress garde la date
+  // existante du post, exactement comme avant.
+  const [publishDate,    setPublishDate]    = useState(() => defaultPublishDate());
   // Ref pour n'auto-générer qu'une seule fois par analyse (évite les re-runs)
   const seoGeneratedRef = useRef(false);
 
@@ -1729,6 +1733,12 @@ export default function ArticleResult() {
   const [verifATourne, setVerifATourne] = useState(false);
   const [savingVerifTemplate, setSavingVerifTemplate] = useState(false);
   const [relectureTick, setRelectureTick] = useState(0);
+  // Occurrences de style ignorées en phase 4 — remontées ici (et non locales à
+  // PhaseRelecture) pour deux raisons : elles survivent au remount forcé par
+  // `key={relectureTick}` (sinon un « Accepter » ailleurs faisait réapparaître
+  // les occurrences déjà ignorées), et elles nourrissent le compteur global
+  // d'éléments ignorés utilisé par `handlePublish` ci-dessous.
+  const [styleIgnores, setStyleIgnores] = useState([]);
 
   // Reprise de la phase 3 apres un rechargement : le rapport est restaure depuis
   // le brouillon dans Redux, mais les suggestions affichees sont un etat local.
@@ -2225,6 +2235,13 @@ export default function ArticleResult() {
     // Second rideau derriere le bouton desactive de PhaseAudit.
     if (champsManquantsAudit.length) {
       toast.error(`Audit impossible — ${champsManquantsAudit.join(' et ')} manquant${champsManquantsAudit.length > 1 ? 's' : ''}`);
+      return;
+    }
+    // L'ARTICLE EXISTE-T-IL ENCORE ? Même contrôle qu'au premier lancement
+    // (Articles.jsx) — un ré-audit peut être relancé longtemps après, sur un
+    // article entretemps supprimé ou déplacé côté site.
+    if (articleUrl && await isArticleUrlDead(articleUrl)) {
+      toast.error(ARTICLE_INTROUVABLE_MESSAGE, { duration: 9000 });
       return;
     }
     const brief = currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {};
@@ -2972,11 +2989,10 @@ export default function ArticleResult() {
       toast.error('Sélection trop courte — sélectionnez au moins une phrase complète.');
       return;
     }
-    if (tmp.querySelector('a')) {
-      // Règle 8 : ne jamais risquer la disparition d'un lien dans la réécriture
-      toast.error('La sélection contient un lien — réduisez-la pour ne pas toucher aux liens.');
-      return;
-    }
+    // Un lien dans la sélection est ACCEPTÉ (plus de blocage ici) : passé en
+    // HTML au moteur de réécriture (`rewriteSelectionHtml`) avec consigne de
+    // conservation stricte, puis VÉRIFIÉ à l'identique avant application
+    // (`liensManquants`, voir `applyRewrite`) — règle 8 : jamais perdu.
     if (tmp.querySelector('del, mark, ins')) {
       toast.error('La sélection contient une modification en attente — acceptez-la ou rejetez-la d\'abord.');
       return;
@@ -2997,6 +3013,18 @@ export default function ArticleResult() {
     setRewriteCtx(null);
     rewriteRangeRef.current = null;
     if (!newText || !range || !ctx || !articleRef.current) return;
+    // Sélection avec lien(s) : la proposition arrive en HTML (`rewriteSelectionHtml`)
+    // — vérification STRICTE avant d'appliquer quoi que ce soit (règle 8, jamais
+    // de best-effort ici, voir linkPreserved.js). Sans lien : chemin inchangé,
+    // texte brut inséré via `mark.textContent` (plus simple, plus sûr).
+    const hasLinks = /<a\b/i.test(ctx.originalHtml || '');
+    if (hasLinks) {
+      const manquants = liensManquants(ctx.originalHtml, newText);
+      if (manquants.length) {
+        toast.error('Réécriture refusée : un lien du passage serait perdu ou modifié. Réessayez ou ajustez la consigne.');
+        return;
+      }
+    }
     try {
       const del = document.createElement('del');
       del.className = 'deleted-content';
@@ -3004,7 +3032,8 @@ export default function ArticleResult() {
       const mark = document.createElement('mark');
       mark.className = 'updated-content';
       mark.setAttribute('title', 'Réécriture IA');
-      mark.textContent = newText;
+      if (hasLinks) mark.innerHTML = balanceFragment(newText);
+      else mark.textContent = newText;
       range.deleteContents();
       range.insertNode(mark);
       range.insertNode(del); // insertNode insère en tête du range → ordre final del, mark
@@ -3982,8 +4011,22 @@ export default function ArticleResult() {
     // une decision prise, pas un oubli. Meme dispositif que la confirmation du
     // maillage redige juste en dessous, et pour la meme raison : la phase 2 peut
     // etre loin derriere au moment de publier.
+    // ── RISQUE DÉJÀ ASSUMÉ — au-delà de 5 éléments ignorés, on ne redemande
+    // plus. Chaque case décochée en phase 2 et chaque « Ignorer » en phase 4
+    // est déjà un choix explicite, pris un par un ; au-delà d'un certain
+    // nombre, une popup de confirmation supplémentaire à la publication
+    // n'ajoute plus d'information, seulement de la friction. Compteur GLOBAL
+    // (checklist d'audit décochée + style ignoré), décision Andrianina.
+    const IGNORES_SEUIL_RISQUE_ASSUME = 5;
+    const totalIgnores = styleIgnores.length
+      + unselectedNonEmptyFields(auditSelection, auditJson).length;
+    const risqueDejaAssume = totalIgnores > IGNORES_SEUIL_RISQUE_ASSUME;
+    if (risqueDejaAssume) {
+      console.info(`[publication] ${totalIgnores} élément(s) ignoré(s) (> ${IGNORES_SEUIL_RISQUE_ASSUME}) — confirmations de publication sautées.`);
+    }
+
     const factuelEcarte = unselectedFactualFields(auditSelection, auditJson);
-    if (factuelEcarte.length) {
+    if (factuelEcarte.length && !risqueDejaAssume) {
       const LIB = {
         a_supprimer:   'passages a supprimer signales par l\'audit',
         sources_check: 'affirmations a sourcer ou a retirer',
@@ -4005,7 +4048,7 @@ export default function ArticleResult() {
       }
     }
 
-    if (filetR2Redigees.length) {
+    if (filetR2Redigees.length && !risqueDejaAssume) {
       const liste = filetR2Redigees.map((l) => `• ${l.anchor} → ${l.url}`).join('\n');
       const ok = await askConfirm({
         title: 'Maillage rédigé par le code',
@@ -4921,6 +4964,8 @@ export default function ArticleResult() {
             styleFixRunning={styleFixRunning}
             styleFixStep={styleFixStep}
             aiProposals={styleAiProposals}
+            ignores={styleIgnores}
+            onIgnore={(cle) => setStyleIgnores((l) => [...l, cle])}
           />
         )}
         <div className="px-6 pt-4 space-y-4">
@@ -5914,6 +5959,7 @@ export default function ArticleResult() {
         {rewriteCtx && (
           <RewritePanel
             originalText={rewriteCtx.originalText}
+            originalHtml={rewriteCtx.originalHtml}
             onValidate={applyRewrite}
             onClose={() => { setRewriteCtx(null); rewriteRangeRef.current = null; }}
           />

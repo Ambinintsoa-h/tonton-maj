@@ -218,6 +218,23 @@ export const unselectedFactualFields = (selection, audit = null) => {
 };
 
 /**
+ * Toutes les catégories décochées (pas seulement le factuel) que l'audit a
+ * effectivement remplies. Même logique que `unselectedFactualFields`, élargie
+ * à `SELECTABLE_FIELDS` — nourrit le compteur GLOBAL d'éléments ignorés
+ * (checklist décochée + occurrences de style ignorées en phase 4) qui dispense
+ * de reconfirmer la publication au-delà d'un seuil.
+ */
+export const unselectedNonEmptyFields = (selection, audit = null) => {
+  if (!selection) return [];
+  return SELECTABLE_FIELDS.filter((f) => {
+    if (isFieldSelected(selection, f)) return false;
+    if (!audit) return true;
+    const v = audit[f];
+    return Array.isArray(v) ? v.length > 0 : !!v;
+  });
+};
+
+/**
  * ── CE QUE L'AUDIT A TROUVÉ, EN CLAIR ────────────────────────────────────────
  *
  * Ajouté le 18 août 2026, demande d'Andrianina : « Données périmées et

@@ -2218,6 +2218,38 @@ export const rewriteSelection = async ({ text, instruction, modelSelections = nu
 };
 
 /**
+ * Réécriture d'un passage sélectionné QUI CONTIENT UN LIEN (bouton « Réécrire »).
+ * Variante HTML de `rewriteSelection` — un passage sans lien continue de passer
+ * par le texte brut (plus simple, plus sûr). Dès qu'un `<a href>` est présent,
+ * le texte brut le ferait disparaître purement et simplement : entrée ET sortie
+ * sont donc du HTML, avec la même consigne de conservation stricte des liens que
+ * `rewriteSection` (règle 8 : jamais perdu, jamais déplacé, jamais ajouté).
+ * L'appelant DOIT vérifier après coup que chaque lien de l'original survit à
+ * l'identique (voir `liensManquants`, utils/linkPreserved.js) — cette fonction
+ * ne fait que demander, elle ne garantit rien par elle-même.
+ * Retourne le HTML réécrit ; lève une Error à message lisible.
+ */
+export const rewriteSelectionHtml = async ({ html, instruction, modelSelections = null }) => {
+  const { text: out } = await callClaude(null, {
+    system: `Tu es un rédacteur web senior francophone. Tu réécris le passage HTML fourni (un extrait de paragraphe) selon la consigne, en respectant STRICTEMENT :
+- Même sens et mêmes informations (chiffres, noms, faits conservés), même langue
+- Voix active uniquement, phrases de 20 mots maximum, aucun participe présent, aucun tiret cadratin (—) ni demi-cadratin (–), aucune formule creuse (« il est important de noter »…)
+- TOUS les liens <a href="..."> présents DOIVENT être conservés À L'IDENTIQUE (même href, même texte d'ancre, même position relative) — ne les supprime jamais, ne les déplace pas, n'en ajoute aucun nouveau
+- Uniquement du texte en ligne : pas de titre, pas de liste, pas de tableau (le formatage <strong>/<em> déjà présent peut être conservé)
+Réponds UNIQUEMENT avec le HTML réécrit, sans commentaire, sans bloc de code markdown.`,
+    max_tokens: 2000,
+    model: selectModel('reecriture_passage', modelSelections),
+    messages: [{ role: 'user', content: `Consigne : ${instruction}\n\nPassage HTML à réécrire :\n\n${html}` }],
+  });
+  const cleaned = (out || '').trim()
+    .replace(/^```(?:html)?\s*\n?/i, '')
+    .replace(/\n?```\s*$/, '')
+    .trim();
+  if (!cleaned) throw new Error('Réponse vide — réessayez.');
+  return stripForbiddenDashes(cleaned);
+};
+
+/**
  * Réécriture d'une SECTION ENTIÈRE (un titre H2/H3/H4 cliqué + tout son contenu,
  * jusqu'au prochain titre de même niveau ou supérieur — bouton « Réécrire cette
  * section »). Contrairement à rewriteSelection (texte brut, un passage), ici
