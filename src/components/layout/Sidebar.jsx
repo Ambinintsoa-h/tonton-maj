@@ -3,7 +3,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import { motion } from 'framer-motion';
 import {
   Zap, Globe, Settings, Clock, ChevronRight, BarChart3, ListTodo, Users, LogOut, Bug, MessageSquare,
-  Archive, Layers,
+  Archive, Layers, TrendingUp,
 } from 'lucide-react';
 import { logout } from '../../store/slices/authSlice';
 
@@ -32,6 +32,7 @@ const NAV_ALL = [
   { to: '/commentaires',   label: 'Commentaires',     icon: MessageSquare, roles: ['super_admin', 'manager', 'support'], beta: true },
   { to: '/historique',     label: 'Historique',       icon: Clock },
   { to: '/archives',       label: 'Archives',          icon: Archive,  roles: ['super_admin'] },
+  { to: '/suivi-positions', label: 'Suivi positions',  icon: TrendingUp, roles: ['super_admin'] },
   { to: '/equipe',         label: 'Équipe',            icon: Users,   roles: ['super_admin', 'manager'] },
   { to: '/tickets',        label: 'Tickets',           icon: Bug,      badge: true },
 ];

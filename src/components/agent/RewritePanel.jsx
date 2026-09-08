@@ -16,6 +16,7 @@ import toast from 'react-hot-toast';
 import { Sparkles, X, Loader, RefreshCw, CheckCircle2, History } from 'lucide-react';
 import { rewriteSelection, rewriteSelectionHtml } from '../../services/agent';
 import { REWRITE_PRESETS, getRecentPrompts, rememberPrompt } from '../../services/rewrite';
+import relectureTimeTracker from '../../services/relectureTimeTracker';
 
 export default function RewritePanel({ originalText, originalHtml, onValidate, onClose }) {
   const modelSelections = useSelector(s => s.settings.modelSelections) || null;
@@ -37,6 +38,10 @@ export default function RewritePanel({ originalText, originalHtml, onValidate, o
     const extra = custom.trim();
     const instruction = extra ? `${preset.prompt}\nConsigne supplémentaire : ${extra}` : preset.prompt;
     setLoading(true);
+    // Instrumentation du temps de relecture (relectureTimeTracker.js) : ne
+    // compte que si l'article est en phase Obsolescence/Relecture au moment
+    // de l'appel (ce panneau n'est pas filtré par phase dans l'interface).
+    const _relectureAiToken = relectureTimeTracker.markAiCallStart();
     try {
       const text = hasLinks
         ? await rewriteSelectionHtml({ html: originalHtml, instruction, modelSelections })
@@ -46,6 +51,7 @@ export default function RewritePanel({ originalText, originalHtml, onValidate, o
     } catch (e) {
       toast.error(e.message || 'Réécriture impossible — réessayez.');
     } finally {
+      relectureTimeTracker.markAiCallEnd(_relectureAiToken);
       setLoading(false);
     }
   }, [presetId, custom, originalText, originalHtml, hasLinks, modelSelections]);

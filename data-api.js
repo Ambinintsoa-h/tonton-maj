@@ -705,6 +705,36 @@ module.exports = ({ requireAuth, requireRole }) => {
     res.json(seoTrackingToObj(rows[0], snaps));
   }));
 
+  // GET /seo-tracking-overview — TOUS les trackings actifs, pour la page dédiée
+  // (super_admin). Volontairement LÉGER : contrairement à GET /articles
+  // (SELECT * sur `articles`, HTML complet inclus — 30+ secondes documentées
+  // ailleurs), ici `articles` n'est interrogée que pour id/title/url. `seo_tracking`
+  // est la table PILOTE (WHERE enabled=1 d'abord), pas `articles`.
+  router.get('/seo-tracking-overview', requireAuth, requireRole('super_admin'), wrap(async (_req, res) => {
+    const [tracks] = await q('SELECT * FROM seo_tracking WHERE enabled = 1');
+    if (!tracks.length) return res.json([]);
+    const ids = tracks.map((t) => t.article_id);
+    const placeholders = ids.map(() => '?').join(',');
+    const [arts] = await q(`SELECT id, title, url FROM articles WHERE id IN (${placeholders})`, ids);
+    const artsBy = new Map(arts.map((a) => [a.id, a]));
+    const [snaps] = await q(
+      `SELECT * FROM seo_snapshots WHERE article_id IN (${placeholders}) ORDER BY captured_at ASC`, ids);
+    const snapsBy = new Map();
+    for (const s of snaps) {
+      if (!snapsBy.has(s.article_id)) snapsBy.set(s.article_id, []);
+      snapsBy.get(s.article_id).push(s);
+    }
+    res.json(tracks.map((t) => {
+      const a = artsBy.get(t.article_id) || {};
+      return {
+        articleId:   t.article_id,
+        title:       a.title || '',
+        url:         a.url || t.article_url || '',
+        seoTracking: seoTrackingToObj(t, snapsBy.get(t.article_id)),
+      };
+    }));
+  }));
+
   // ── article_drafts (privé : clé = uid du JWT, jamais un id fourni par le client) ─
   router.get('/article-drafts', requireAuth, wrap(async (req, res) => {
     const [rows] = await q('SELECT draft FROM article_drafts WHERE user_id=?', [req.user.uid]);
@@ -1489,6 +1519,81 @@ module.exports = ({ requireAuth, requireRole }) => {
   router.get('/article-time', requireAuth, ARTICLE_TIME_READ, wrap(async (_req, res) => {
     const [rows] = await q('SELECT * FROM article_time');
     res.json(rows.map(articleTimeToObj));
+  }));
+
+  // ── relecture_time (temps de RELECTURE — phases 3 Obsolescence + 4 Relecture
+  // UNIQUEMENT, jamais l'audit ni la génération — par jour, hors Tonton / avec
+  // Tonton) ──────────────────────────────────────────────────────────────────
+  // Table INDÉPENDANTE d'article_time (qui reste inchangée, durée globale
+  // lancement→publication). `date` = jour LOCAL du rédacteur, même convention
+  // qu'activity_sessions (voir commentaire plus haut). Lecture = super_admin,
+  // même restriction qu'article-time.
+  const relectureTimeToObj = (r) => ({
+    id: `${r.article_id}_${r.user_id}_${r.date}`,
+    articleId: r.article_id,
+    userId: r.user_id,
+    date: r.date,
+    ...(r.user_name != null ? { userName: r.user_name } : {}),
+    ...(r.user_role != null ? { userRole: r.user_role } : {}),
+    ...(r.title != null ? { title: r.title } : {}),
+    ...(r.url != null ? { url: r.url } : {}),
+    horsTontonSeconds: r.hors_tonton_seconds,
+    avecTontonSeconds: r.avec_tonton_seconds,
+    startedAt: r.started_at,
+    lastActivityAt: r.last_activity_at,
+    publishedAt: r.published_at,
+  });
+
+  // POST /relecture-time/ensure — crée la ligne (article,user,date) si absente ;
+  // n'écrase JAMAIS les compteurs déjà accumulés (même garde qu'article-time/ensure).
+  router.post('/relecture-time/ensure', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    if (!b.articleId || !b.userId || !b.date) return res.json({ ok: true });
+    const now = Date.now();
+    await q(
+      `INSERT INTO relecture_time (article_id, user_id, date, user_name, user_role, title, url,
+         hors_tonton_seconds, avec_tonton_seconds, started_at, last_activity_at, published_at)
+       VALUES (?,?,?,?,?,?,?,0,0,?,?,NULL)
+       ON DUPLICATE KEY UPDATE last_activity_at=VALUES(last_activity_at),
+         user_name=IF(VALUES(user_name)<>'', VALUES(user_name), user_name),
+         user_role=IF(VALUES(user_role)<>'', VALUES(user_role), user_role),
+         title=IF(VALUES(title)<>'', VALUES(title), title),
+         url=IF(VALUES(url)<>'', VALUES(url), url)`,
+      [b.articleId, b.userId, b.date, b.userName || '', b.userRole || '', b.title || '', b.url || '', now, now]);
+    res.json({ ok: true });
+  }));
+
+  // POST /relecture-time/record — crédite `seconds` sur LES DEUX compteurs
+  // (heartbeat de temps actif normal, hors appel IA).
+  router.post('/relecture-time/record', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    const s = Number(b.seconds);
+    if (!b.articleId || !b.userId || !b.date || !(s > 0)) return res.json({ ok: true });
+    await q(
+      `UPDATE relecture_time SET hors_tonton_seconds=hors_tonton_seconds+?,
+         avec_tonton_seconds=avec_tonton_seconds+?, last_activity_at=?
+       WHERE article_id=? AND user_id=? AND date=?`,
+      [s, s, Date.now(), b.articleId, b.userId, b.date]);
+    res.json({ ok: true });
+  }));
+
+  // POST /relecture-time/record-ai — crédite `seconds` sur avec_tonton_seconds
+  // SEUL (durée d'un appel IA déclenché pendant la fenêtre de relecture).
+  router.post('/relecture-time/record-ai', requireAuth, ownActivity, wrap(async (req, res) => {
+    const b = req.body || {};
+    const s = Number(b.seconds);
+    if (!b.articleId || !b.userId || !b.date || !(s > 0)) return res.json({ ok: true });
+    await q(
+      `UPDATE relecture_time SET avec_tonton_seconds=avec_tonton_seconds+?, last_activity_at=?
+       WHERE article_id=? AND user_id=? AND date=?`,
+      [s, Date.now(), b.articleId, b.userId, b.date]);
+    res.json({ ok: true });
+  }));
+
+  // GET /relecture-time — getRelectureTimeAll (super_admin).
+  router.get('/relecture-time', requireAuth, ARTICLE_TIME_READ, wrap(async (_req, res) => {
+    const [rows] = await q('SELECT * FROM relecture_time');
+    res.json(rows.map(relectureTimeToObj));
   }));
 
   // ── users (lecture — getUsers) ────────────────────────────────────────────────

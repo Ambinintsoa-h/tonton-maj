@@ -66,6 +66,7 @@ import {
 } from '../../services/firebase';
 import { saveDraft, flushDraftRemote, onDraftStatus, clearDraft } from '../../services/articleDraft';
 import articleTimeTracker from '../../services/articleTimeTracker';
+import relectureTimeTracker from '../../services/relectureTimeTracker';
 import { renderMarkdown, emojiToIcons, unwrapProseFences, trimAuditForDisplay } from '../../utils/markdown';
 import { validateImageFile } from '../../utils/uploadLimits';
 import { useNavigate } from 'react-router-dom';
@@ -309,6 +310,31 @@ export default function ArticleResult() {
     // title/url volontairement hors deps : leur chargement async ne doit pas
     // relancer begin/end (le doc temps est déjà créé avec les bonnes métas)
   }, [agent.currentArticleId, draftUserId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Tracking du temps de RELECTURE (phases 3 Obsolescence + 4 Relecture
+  // UNIQUEMENT) — indépendant du tracker ci-dessus, qui mesure tout le
+  // parcours et n'est pas modifié. Pas d'événement unique « génération
+  // terminée » : le stepper autorise à naviguer librement entre phases une
+  // fois atteintes, et rouvrir un article saute directement à sa phase la
+  // plus avancée. Le déclenchement est donc réactif, sur `phase`.
+  useEffect(() => {
+    const id = agent.currentArticleId;
+    if (!id || !draftUserId) { relectureTimeTracker.leaveWindow(); return undefined; }
+    if (phase !== PHASE_OBSOLESCENCE && phase !== PHASE_RELECTURE) {
+      relectureTimeTracker.leaveWindow();
+      return undefined;
+    }
+    relectureTimeTracker.enterWindow({
+      articleId: id,
+      title:     currentArticle?.title || cqItem?.title || '',
+      url:       articleUrl,
+      userId:    draftUserId,
+      userName:  [authUser?.prenom, authUser?.nom].filter(Boolean).join(' ') || authUser?.username || '',
+      userRole:  authUser?.role || '',
+    });
+    return () => relectureTimeTracker.leaveWindow();
+    // title/url volontairement hors deps, même raison que l'effet ci-dessus
+  }, [agent.currentArticleId, draftUserId, phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Polices proposées dans la barre d'outils :
   //  • analyse fraîche → wpMcpData.siteFonts (récupéré via MCP)
@@ -1967,12 +1993,21 @@ export default function ArticleResult() {
     setStyleFixRunning(true);
     setStyleFixStep('Préparation...');
     try {
-      const { proposals, occurrences, tokenUsage } = await runStyleFixAgent({
-        findings,
-        modelSelections: settings.modelSelections || null,
-        modelPricing: settings.modelPricing || null,
-        onStep: (t) => setStyleFixStep(t),
-      });
+      // Instrumentation du temps de relecture (voir relectureTimeTracker.js) :
+      // ne compte que si `agent.phase` est Obsolescence/Relecture au moment de
+      // l'appel ; ne bloque jamais et ne change rien au succès/échec ci-dessous.
+      const _relectureAiToken = relectureTimeTracker.markAiCallStart();
+      let proposals, occurrences, tokenUsage;
+      try {
+        ({ proposals, occurrences, tokenUsage } = await runStyleFixAgent({
+          findings,
+          modelSelections: settings.modelSelections || null,
+          modelPricing: settings.modelPricing || null,
+          onStep: (t) => setStyleFixStep(t),
+        }));
+      } finally {
+        relectureTimeTracker.markAiCallEnd(_relectureAiToken);
+      }
       const proposalsByN = new Map(proposals.map((p) => [p.n, p]));
       const map = {};
       occurrences.forEach((occ) => {
@@ -2091,19 +2126,26 @@ export default function ArticleResult() {
     setVerifStep('Verification des informations...');
     dispatch(setPhaseStatus({ phase: PHASE_OBSOLESCENCE, status: RUNNING }));
     try {
-      const res = await runReviewAgent({
-        content: texte,
-        firstPassUpdates: [],
-        firstPassAnalysis: agent.analysis || '',
-        skills,
-        knowledge,
-        modelPricing: settings.modelPricing || null,
-        modelSelections: settings.modelSelections || null,
-        depth: agent.majDepth,
-        instruction: verifPrompt,
-        onStep: (t) => setVerifStep(t),
-        onProgress: (p) => setVerifProgress(p),
-      });
+      // Instrumentation du temps de relecture — voir handleRunStyleFix ci-dessus.
+      const _relectureAiToken = relectureTimeTracker.markAiCallStart();
+      let res;
+      try {
+        res = await runReviewAgent({
+          content: texte,
+          firstPassUpdates: [],
+          firstPassAnalysis: agent.analysis || '',
+          skills,
+          knowledge,
+          modelPricing: settings.modelPricing || null,
+          modelSelections: settings.modelSelections || null,
+          depth: agent.majDepth,
+          instruction: verifPrompt,
+          onStep: (t) => setVerifStep(t),
+          onProgress: (p) => setVerifProgress(p),
+        });
+      } finally {
+        relectureTimeTracker.markAiCallEnd(_relectureAiToken);
+      }
       const propositions = Array.isArray(res?.updates) ? res.updates : [];
       setVerifSuggestions(propositions);
       setVerifATourne(true);
@@ -2413,22 +2455,31 @@ export default function ArticleResult() {
       // intégrés — sinon Claude re-proposerait les mêmes mises à jour en passe 2.
       const cleanContent = getFinalHtml({ pendingChanges: 'accept' });
 
-      const result = await runReviewAgent({
-        content: cleanContent,
-        firstPassUpdates: agent.diff || [],
-        firstPassAnalysis: agent.analysis || '',
-        depth: agent.majDepth || 'standard',  // même profondeur que la passe 1
-        instruction: agent.instruction || '', // consigne libre de l'équipe (champ « Instruction »)
-        skills,
-        knowledge,
-        anthropicKey: settings.anthropicKey,
-        braveKey: settings.braveKey,
-        tavilyKey: settings.tavilyKey,
-        modelSelections: settings.modelSelections || null,
-        manualSources,
-        onStep: (s) => setReviewStep(s),
-        onProgress: (p) => setReviewProgress(p),
-      });
+      // Instrumentation du temps de relecture — voir handleRunStyleFix plus
+      // haut. Ce chemin (legacy « Passe 2 ») n'est pas filtré par phase dans
+      // l'interface : c'est ce garde-fou qui décide si l'appel compte.
+      const _relectureAiToken = relectureTimeTracker.markAiCallStart();
+      let result;
+      try {
+        result = await runReviewAgent({
+          content: cleanContent,
+          firstPassUpdates: agent.diff || [],
+          firstPassAnalysis: agent.analysis || '',
+          depth: agent.majDepth || 'standard',  // même profondeur que la passe 1
+          instruction: agent.instruction || '', // consigne libre de l'équipe (champ « Instruction »)
+          skills,
+          knowledge,
+          anthropicKey: settings.anthropicKey,
+          braveKey: settings.braveKey,
+          tavilyKey: settings.tavilyKey,
+          modelSelections: settings.modelSelections || null,
+          manualSources,
+          onStep: (s) => setReviewStep(s),
+          onProgress: (p) => setReviewProgress(p),
+        });
+      } finally {
+        relectureTimeTracker.markAiCallEnd(_relectureAiToken);
+      }
 
       if (!result.updates?.length) {
         toast('Deuxième passe : article déjà complet, aucune nouvelle modification', { icon: <Info size={18} className="text-blue-500" /> });

@@ -944,6 +944,64 @@ export const getArticleTimeAll = async () => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// relecture_time — temps de RELECTURE (phases 3 Obsolescence + 4 Relecture
+// UNIQUEMENT, jamais l'audit ni la génération), par JOUR, séparé hors Tonton /
+// avec Tonton. Un doc par triplet article × éditeur × jour :
+// `{articleId}_{userId}_{date}`. Table/collection INDÉPENDANTE d'article_time
+// (qui reste inchangée). Alimenté par services/relectureTimeTracker.js.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Crée le doc du jour s'il n'existe pas — même piège/repli qu'ensureArticleTimeDoc. */
+export const ensureRelectureTimeDoc = async (articleId, userId, date, { userName = '', userRole = '', title = '', url = '' } = {}) => {
+  if (!db || !articleId || !userId || !date) return;
+  const ref = doc(db, 'relecture_time', `${articleId}_${userId}_${date}`);
+  const patch = { userId, lastActivityAt: Date.now() };
+  if (title)    patch.title = title;
+  if (url)      patch.url = url;
+  if (userName) patch.userName = userName;
+  if (userRole) patch.userRole = userRole;
+  try {
+    await updateDoc(ref, patch);
+  } catch (e) {
+    if (e?.code !== 'not-found' && e?.code !== 'permission-denied') throw e;
+    await setDoc(ref, {
+      articleId, userId, date, userName, userRole, title, url,
+      horsTontonSeconds: 0,
+      avecTontonSeconds: 0,
+      startedAt:         Date.now(),
+      lastActivityAt:    Date.now(),
+      publishedAt:       null,
+    });
+  }
+};
+
+/** Crédite `seconds` sur LES DEUX compteurs (temps actif normal, hors appel IA). */
+export const recordRelectureTime = async (articleId, userId, date, seconds = 1) => {
+  if (!db || !articleId || !userId || !date || seconds <= 0) return;
+  await updateDoc(doc(db, 'relecture_time', `${articleId}_${userId}_${date}`), {
+    horsTontonSeconds: increment(seconds),
+    avecTontonSeconds: increment(seconds),
+    lastActivityAt:    Date.now(),
+  });
+};
+
+/** Crédite `seconds` sur avecTontonSeconds SEUL (durée d'un appel IA en phase 3/4). */
+export const recordRelectureAiTime = async (articleId, userId, date, seconds = 1) => {
+  if (!db || !articleId || !userId || !date || seconds <= 0) return;
+  await updateDoc(doc(db, 'relecture_time', `${articleId}_${userId}_${date}`), {
+    avecTontonSeconds: increment(seconds),
+    lastActivityAt:    Date.now(),
+  });
+};
+
+/** Tous les docs de relecture (page « Équipe » — super_admin). Tri/groupage client-side. */
+export const getRelectureTimeAll = async () => {
+  if (!db) return [];
+  const snap = await getDocs(collection(db, 'relecture_time'));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Archivage des articles de l'Historique (flag sur le doc — l'article et ses
 // HTML Storage sont conservés ; seule la visibilité change).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1070,4 +1128,21 @@ export const getArticleSeoTracking = async (articleId) => {
   if (!db || !articleId) return null;
   const snap = await getDoc(doc(db, 'articles', articleId));
   return snap.exists() ? (snap.data().seoTracking || null) : null;
+};
+
+/**
+ * Tous les articles avec un suivi de position ACTIF (page dédiée, super_admin).
+ * Volontairement léger : les docs `articles` portent le HTML complet, mais on
+ * ne lit ici que `title`/`url`/`seoTracking` par champ projeté côté client
+ * (Firestore ne permet pas une projection serveur simple sur un where imbriqué,
+ * donc le filtrage `enabled` se fait via la requête, la légèreté vient de ne
+ * PAS relire `originalContent`/`updatedContent` explicitement côté appelant).
+ */
+export const getSeoTrackingOverview = async () => {
+  if (!db) return [];
+  const snap = await getDocs(query(collection(db, 'articles'), where('seoTracking.enabled', '==', true)));
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return { articleId: d.id, title: data.title || '', url: data.url || '', seoTracking: data.seoTracking };
+  });
 };

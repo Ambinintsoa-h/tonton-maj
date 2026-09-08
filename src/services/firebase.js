@@ -81,6 +81,10 @@ export const ensureArticleTimeDoc = (...a) => impl().ensureArticleTimeDoc(...a);
 export const recordArticleTime = (...a) => impl().recordArticleTime(...a);
 export const markArticleTimePublished = (...a) => impl().markArticleTimePublished(...a);
 export const getArticleTimeAll = (...a) => impl().getArticleTimeAll(...a);
+export const ensureRelectureTimeDoc = (...a) => impl().ensureRelectureTimeDoc(...a);
+export const recordRelectureTime = (...a) => impl().recordRelectureTime(...a);
+export const recordRelectureAiTime = (...a) => impl().recordRelectureAiTime(...a);
+export const getRelectureTimeAll = (...a) => impl().getRelectureTimeAll(...a);
 export const archiveArticle = (...a) => impl().archiveArticle(...a);
 export const restoreArticle = (...a) => impl().restoreArticle(...a);
 export const getTodayActivitySessions = (...a) => impl().getTodayActivitySessions(...a);
@@ -89,6 +93,7 @@ export const getUserActivitySessions = (...a) => impl().getUserActivitySessions(
 export const initArticleSeoTracking = (...a) => impl().initArticleSeoTracking(...a);
 export const saveSeoSnapshot = (...a) => impl().saveSeoSnapshot(...a);
 export const getArticleSeoTracking = (...a) => impl().getArticleSeoTracking(...a);
+export const getSeoTrackingOverview = (...a) => impl().getSeoTrackingOverview(...a);
 export const firebaseLogout = (...a) => impl().firebaseLogout(...a);
 export const watchEditLock = (...a) => impl().watchEditLock(...a);
 export const subscribeToPending = (...a) => impl().subscribeToPending(...a);
