@@ -4,6 +4,7 @@ import { scrapeUrl } from './scraper';
 import { MAJ_DEPTHS, DEFAULT_DEPTH } from '../constants/majDepth';
 import { filterSameSiteLinks } from '../utils/diff';
 import { applyStyleGuards, stripForbiddenDashes, stripForbiddenDashesText } from '../utils/textRules';
+import { encodeMediaUrl } from '../utils/mediaUrl';
 
 const LOCAL_PROXY    = '/api/claude';
 const WP_TOOL_PROXY  = '/api/wp-tool';
@@ -656,13 +657,20 @@ export const generateAltText = async (imageUrl, apiKey) => {
       messages: [{
         role: 'user',
         content: [
-          { type: 'image', source: { type: 'url', url: imageUrl } },
+          // URL ENCODÉE — sans ça, un nom de fichier accentué ou porteur d'un ®
+          // fait répondre « Unable to download the file » à l'API, et l'ALT ne se
+          // pose jamais. Voir utils/mediaUrl.js.
+          { type: 'image', source: { type: 'url', url: encodeMediaUrl(imageUrl) } },
           { type: 'text',  text: 'Génère un texte ALT SEO concis et descriptif pour cette image, en français.' },
         ],
       }],
     });
     return text.trim().replace(/^["']|["']$/g, '');
-  } catch {
+  } catch (e) {
+    // Plus jamais muet : l'échec était invisible (ALT qui ne se pose pas, sans
+    // un mot), et il a fallu intercepter l'appel réseau en production pour
+    // apprendre que le serveur répondait « Unable to download the file ».
+    console.warn('[generateAltText] échec sur', imageUrl, '—', e?.response?.data?.error || e?.message || e);
     return '';
   }
 };
@@ -686,7 +694,9 @@ export const generateImageMeta = async (imageUrl, apiKey) => {
       messages: [{
         role: 'user',
         content: [
-          { type: 'image', source: { type: 'url', url: imageUrl } },
+          // Même encodage que `generateAltText` — c'est ICI que la panne a été
+          // relevée en production (panneau « Alt / Légende », bouton Suggestion IA).
+          { type: 'image', source: { type: 'url', url: encodeMediaUrl(imageUrl) } },
           { type: 'text', text: 'Génère pour cette image, en français : un texte ALT SEO concis (max 125 caractères, descriptif, sans guillemets) et une légende éditoriale courte (max 140 caractères, une phrase qui pourrait être affichée sous la photo). Réponds UNIQUEMENT : {"alt":"...","caption":"..."}' },
         ],
       }],
@@ -696,7 +706,8 @@ export const generateImageMeta = async (imageUrl, apiKey) => {
       alt:     (parsed.alt || '').trim().replace(/^["']|["']$/g, ''),
       caption: (parsed.caption || '').trim().replace(/^["']|["']$/g, ''),
     };
-  } catch {
+  } catch (e) {
+    console.warn('[generateImageMeta] échec sur', imageUrl, '—', e?.response?.data?.error || e?.message || e);
     return empty;
   }
 };

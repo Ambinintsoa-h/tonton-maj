@@ -36,6 +36,10 @@ import { couperInstruction } from '../utils/generationPrompt';
 // partagé avec le textarea (utils/generationPrompt.js). Deux filtres, ce serait
 // deux sélections divergentes — donc une case décochée qui part quand même.
 import { filterAuditBySelection, isSelectionEmpty } from '../utils/auditSelection';
+// FAQ — la CONSIGNE tenue en dur ci-dessous et la MESURE d'après génération
+// lisent les mêmes bornes, depuis le module qui porte déjà TOUTES les
+// heuristiques FAQ du projet (éditeur, moveFaqToEnd, normalisation accordéon).
+import { constatFaq, FAQ_MIN_QUESTIONS, FAQ_MAX_QUESTIONS, FAQ_MOTS_MAX_REPONSE } from '../utils/faq';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
   ARTICLE_TYPES, SEO_PLUGINS, cleanLinkRows,
@@ -183,7 +187,27 @@ Chaque occurrence évitée ici est une correction manuelle en moins.
 - **Une seule parenthèse par paragraphe** au maximum.
 - **Clichés bannis** : ${CLICHES.map((c) => `« ${c} »`).join(', ')}
 - **Méta-commentaires** — n'annonce ni l'article ni son plan :
-  ${META.map((m) => `« ${m} »`).join(', ')}`;
+  ${META.map((m) => `« ${m} »`).join(', ')}
+
+### 6. UNE FAQ, TOUJOURS — ${FAQ_MIN_QUESTIONS} à ${FAQ_MAX_QUESTIONS} questions en fin d'article
+\`article_html\` se termine par une FAQ. Ce n'est pas une option, ce n'est pas
+réservé aux articles longs, et ça ne dépend d'aucune ligne de l'audit : même si
+rien au-dessus ne mentionne de FAQ, tu l'écris.
+
+- **${FAQ_MIN_QUESTIONS} à ${FAQ_MAX_QUESTIONS} questions**, formulées comme de vraies recherches Google (les
+  courtes ET les longues), certaines portant un mot-clé secondaire.
+- Une réponse **claire, humaine, ${FAQ_MOTS_MAX_REPONSE} mots au maximum**, qui ne recopie pas le
+  corps de l'article.
+- Format **accordéon** : \`<h2>\` de titre, puis un \`<details><summary>Question ?</summary><p>Réponse</p></details>\`
+  par question.
+- **Aucun lien** à l'intérieur de la FAQ (le contrôle technique délie ceux qui
+  s'y glissent, et la question perd son lien pour rien).
+
+Pourquoi en dur ici, alors que la règle est déjà écrite dans le skill d'équipe
+« TL;DR, FAQ & maillage interne » : quatre articles sont partis en ligne SANS
+FAQ en septembre 2026, sur des refontes complètes. La consigne existait, elle
+était noyée. Elle est désormais comptée après génération et le manque est
+affiché au rédacteur.`;
 
 /**
  * Extrait un objet JSON d'une réponse Claude, même entourée de texte ou de
@@ -1440,6 +1464,25 @@ N'ajoute aucun AUTRE lien externe.`;
         onStep(`⚠️ Gras mal placé : ${f.join(', ')} — à retirer en relecture.`);
       }
 
+      // ── CONSTAT — LA FAQ EST COMPTÉE, PAS SEULEMENT DEMANDÉE ────────────────
+      // Quatre articles publiés SANS FAQ en septembre 2026, sur des refontes
+      // complètes. La consigne existait (skill d'équipe « TL;DR, FAQ & maillage
+      // interne », « obligatoire sur chaque article ») ; rien ne vérifiait
+      // qu'elle avait été suivie, et personne ne pouvait le voir avant de lire
+      // l'article en ligne. Même angle mort que le gras et le plafond de 20 mots
+      // avant d'être mesurés.
+      // NON BLOQUANT, et rien n'est fabriqué : écrire une FAQ est un acte
+      // rédactionnel, pas une réparation déterministe (même arbitrage que le
+      // gras posé par le code, règle 10). On dit, le rédacteur tranche.
+      const faq = constatFaq(withBold.html);
+      if (!faq.presente) {
+        onStep(`⚠️ FAQ ABSENTE de l'article généré — ${FAQ_MIN_QUESTIONS} à ${FAQ_MAX_QUESTIONS} questions sont attendues en fin d'article. À rédiger en relecture.`);
+      } else if (faq.tropCourte) {
+        onStep(`⚠️ FAQ de ${faq.questions} question(s) seulement — ${FAQ_MIN_QUESTIONS} au minimum. À compléter en relecture.`);
+      } else if (faq.tropLongue) {
+        onStep(`ℹ️ FAQ de ${faq.questions} questions — ${FAQ_MAX_QUESTIONS} au maximum. À élaguer en relecture.`);
+      }
+
       sanitized = {
         ...check,
         html: withBold.html,
@@ -1463,6 +1506,10 @@ N'ajoute aucun AUTRE lien externe.`;
         suroptimisation: suropt || null,
         elisions:        elisions || [],
         constatGras: gras,
+        // Valeur TOUJOURS posée, jamais `undefined` : la couche de persistance
+        // refuse les champs indéfinis, et un article ne doit pas échouer à
+        // s'enregistrer pour une mesure absente (même raison que ci-dessus).
+        constatFaq: faq,
         // RAPPORT DE LA PASSE DE GRAS, PERSISTÉ. Les messages `onStep` disparaissent
         // dès que la génération se termine — les étapes se replient et rien n'est
         // conservé. Impossible alors de savoir ce que la passe a proposé ni ce
@@ -1554,6 +1601,11 @@ N'ajoute aucun AUTRE lien externe.`;
       // pourquoi la passe de gras n'avait rien posé — on pilotait à l'aveugle sur
       // la mesure censée nous éclairer.
       constatGras:     sanitized.constatGras || null,
+      // Même raison que `constatGras` : les messages `onStep` meurent avec
+      // l'écran de génération. Sans persistance, impossible de savoir, une heure
+      // ou trois semaines plus tard, si la FAQ manquait déjà à la génération ou
+      // si elle a été perdue en relecture.
+      constatFaq:      sanitized.constatFaq || null,
       grasPasse:       sanitized.boldPass || null,
       ancresDeclareesIa: Array.isArray(article.ancres_placees) ? article.ancres_placees : [],
       notesRedaction:  String(article.notes_redaction || '').trim(),

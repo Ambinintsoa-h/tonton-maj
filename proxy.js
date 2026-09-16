@@ -4197,6 +4197,57 @@ app.get('/api/ticket-attachments/:ticketId/:filename', requireAuth, (req, res) =
   res.sendFile(filePath);
 });
 
+// ─── Nom de fichier envoyé à la médiathèque WordPress ───────────────────────
+// Le nom d'origine partait TEL QUEL dans l'en-tête `Content-Disposition`, avec
+// deux conséquences mesurées en production le 15 septembre 2026 :
+//
+//   1. multer décode les noms en Latin-1 même quand le fichier est en UTF-8
+//      (déjà corrigé pour les PJ de tickets, jamais ici) → « été.jpg » arrivait
+//      « Ã©tÃ©.jpg » dans la médiathèque ;
+//   2. surtout, WordPress conservait les caractères non-ASCII dans le nom du
+//      fichier stocké. L'URL publique de l'image contenait alors un `®` ou un
+//      accent BRUT — parfaitement affichable dans un navigateur, mais
+//      intéléchargeable par l'API Vision : « Unable to download the file ».
+//      Résultat : plus aucune suggestion ALT/Légende sur ces images (relevé sur
+//      circuits-culture.com/…/Heliosol®-2-scaled.jpg).
+//
+// On translitère donc en ASCII AVANT l'envoi : les accents perdent leur signe
+// diacritique (« été » → « ete »), le reste devient un tiret. Le nom reste
+// lisible et le fichier reste retrouvable dans la médiathèque. Seuls les
+// NOUVEAUX téléversements sont concernés — aucun média existant n'est renommé.
+// `encodeMediaUrl` (côté client) reste le filet pour tout ce qui est déjà en
+// ligne : les deux se complètent, ils ne font pas double emploi.
+const EXT_PAR_MIME = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+  'image/avif': 'avif', 'image/svg+xml': 'svg', 'video/mp4': 'mp4', 'video/webm': 'webm',
+  'video/quicktime': 'mov',
+};
+const wpMediaFilename = (originalname, mimetype = '') => {
+  const decoded = originalname
+    ? Buffer.from(originalname, 'latin1').toString('utf8')
+    : '';
+  const base = path.basename(decoded).trim();
+  const ascii = (s) => s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')          // accents : é → e
+    .replace(/[^A-Za-z0-9._-]+/g, '-')         // tout le reste : un tiret
+    .replace(/-{2,}/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '');
+  // L'EXTENSION EST TRAITÉE À PART, et c'est le point délicat : sur un nom
+  // entièrement non-ASCII (grec, cyrillique), un nettoyage en un seul passage
+  // mange le point avec le reste et « Ελλάδα.jpg » sortait « jpg » — un fichier
+  // sans extension, que WordPress refuse. Nom et extension sont donc séparés
+  // AVANT nettoyage, et l'extension est reconstruite telle quelle.
+  const ext  = ascii(path.extname(base)).toLowerCase();          // « .jpg » → « .jpg »
+  const nom  = ascii(base.slice(0, base.length - path.extname(base).length));
+  const sain = /[A-Za-z0-9]/.test(nom) ? nom : `image-${Date.now()}`;
+  // Extension illisible ou absente : on la déduit du type MIME reçu plutôt que
+  // d'imposer « .jpg » — cette route accepte aussi les VIDÉOS, et renommer un
+  // .webm en .jpg le ferait refuser par WordPress.
+  const repli = EXT_PAR_MIME[String(mimetype).toLowerCase()] || 'jpg';
+  return /^\.?[a-z0-9]{1,5}$/.test(ext) ? `${sain}.${ext.replace(/^\./, '')}` : `${sain}.${repli}`;
+};
+
 // ─── POST /api/wp-upload-file — upload d'un fichier local vers la médiathèque WP ─
 // Accepte multipart/form-data : file (image), site (JSON site object).
 // Utilisé pour le téléversement direct depuis le PC (bouton "Parcourir") dans l'UI.
@@ -4212,7 +4263,7 @@ app.post('/api/wp-upload-file', requireAuth, wpMediaUpload, async (req, res) => 
   try {
     await assertSafeUrl(site.url, 'URL du site WP');
     const auth     = Buffer.from(`${site.username}:${site.password}`).toString('base64');
-    const fname    = req.file.originalname || `image-${Date.now()}.jpg`;
+    const fname    = wpMediaFilename(req.file.originalname, req.file.mimetype);
     const mime     = req.file.mimetype     || 'image/jpeg';
 
     // L'API REST WordPress exige du binaire brut + Content-Disposition (pas multipart)

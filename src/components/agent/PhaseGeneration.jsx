@@ -27,6 +27,7 @@ import { MAX_INSTRUCTION_CHARS } from '../../utils/generationPrompt';
 // Les MÊMES littéraux que la consigne de génération et que la détection de la
 // phase 4 : trois copies d'un seuil, ce serait trois occasions de divergence.
 import { MOTS_MAX_PHRASE, MAX_H2_AVEC_MOT_CLE } from '../../utils/stylePatterns';
+import { FAQ_MIN_QUESTIONS, FAQ_MAX_QUESTIONS } from '../../utils/faq';
 import InternalLinksField from './InternalLinksField';
 import AuditChecklist from './AuditChecklist';
 
@@ -120,6 +121,30 @@ export default function PhaseGeneration({
       texte: `${qatArticle.elisions.length} élision(s) orpheline(s) — `
         + `« ${qatArticle.elisions.slice(0, 2).join(' », « ')} ». À corriger à la main.`,
     });
+  }
+  // FAQ — le SEUL constat affiché même à zéro, et c'est voulu : « 0 FAQ » n'est
+  // pas une mesure à zéro qu'on peut taire, c'est l'absence d'un bloc obligatoire.
+  // Quatre articles sont partis en ligne sans FAQ en septembre 2026 précisément
+  // parce que rien ne la comptait. `constatFaq` absent = article généré AVANT
+  // cette mesure : on n'affiche rien plutôt que d'annoncer à tort une FAQ absente.
+  if (qatArticle?.constatFaq) {
+    const f = qatArticle.constatFaq;
+    if (!f.presente) {
+      constats.push({
+        cle: 'faq', icone: '❓',
+        texte: `FAQ ABSENTE — ${FAQ_MIN_QUESTIONS} à ${FAQ_MAX_QUESTIONS} questions sont attendues en fin d'article. À rédiger en relecture.`,
+      });
+    } else if (f.tropCourte) {
+      constats.push({
+        cle: 'faq', icone: '❓',
+        texte: `FAQ de ${f.questions} question(s) — ${FAQ_MIN_QUESTIONS} au minimum. À compléter en relecture.`,
+      });
+    } else if (f.tropLongue) {
+      constats.push({
+        cle: 'faq', icone: '❓',
+        texte: `FAQ de ${f.questions} questions — ${FAQ_MAX_QUESTIONS} au maximum. À élaguer en relecture.`,
+      });
+    }
   }
   // R5 — le gras d'origine non replacé. Un CONSTAT, jamais une réparation : un
   // lien perdu n'est jamais un choix, un gras retiré peut l'être.
