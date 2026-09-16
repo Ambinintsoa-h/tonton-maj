@@ -151,7 +151,7 @@ export const extraireBlocsProse = (html = '') => {
  * @param {string} html
  * @param {Array<{id:number, texte:string}>} reecritures
  * @returns {{html:string, appliques:number, rejetes:Array<{id:number, motif:string}>,
- *            ancresModifiees:Array<{avant:string, apres:string}>}}
+ *            ancresModifiees:Array<{avant:string, apres:string}>, marqueursInventes:number}}
  */
 export const appliquerReecritures = (html = '', reecritures = []) => {
   const extrait = extraireBlocsProse(html);
@@ -161,6 +161,7 @@ export const appliquerReecritures = (html = '', reecritures = []) => {
   const { racine, index } = extrait._index;
   const rejetes = [];
   const ancresModifiees = [];
+  let marqueursInventes = 0;
   let appliques = 0;
 
   for (const r of reecritures) {
@@ -202,9 +203,24 @@ export const appliquerReecritures = (html = '', reecritures = []) => {
         return `<${info.tag}${attrs}>${texteAncre}</${info.tag}>`;
       });
     }
+    // ── MARQUEURS INVENTÉS — RELEVÉ EN PRODUCTION LE 16/09/2026 ─────────────
+    // Le contrôle ci-dessus vérifie que les marqueurs ATTENDUS sont là ; il ne
+    // disait rien de ceux que le modèle ajoute de lui-même. Sur le premier essai
+    // réel, un paragraphe qui n'avait que deux liens est revenu avec ⟦3⟧, ⟦4⟧ et
+    // ⟦5⟧ autour de termes ordinaires — et ces caractères sont partis TELS QUELS
+    // dans l'article, visibles par le lecteur. La consigne « n'invente aucun
+    // nouveau marqueur » ne suffisait pas : une consigne qu'on ne vérifie pas est
+    // une consigne dont on ne sait rien (règle 10).
+    // On retire le marqueur et on GARDE les mots : aucun span d'origine ne lui
+    // correspond, il n'y a donc rien à recoller — mais le texte, lui, est bon.
+    const orphelins = out.match(/⟦\s*\/?\s*\d+\s*⟧/g);
+    if (orphelins) {
+      marqueursInventes += orphelins.length;
+      out = out.replace(/⟦\s*\/?\s*\d+\s*⟧/g, '');
+    }
     cible.el.innerHTML = out;
     appliques += 1;
   }
 
-  return { html: racine.innerHTML, appliques, rejetes, ancresModifiees };
+  return { html: racine.innerHTML, appliques, rejetes, ancresModifiees, marqueursInventes };
 };

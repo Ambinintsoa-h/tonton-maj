@@ -175,6 +175,9 @@ Renvoie maintenant le JSON des réécritures. Rien d'autre que le JSON.`;
   if (applique.rejetes.length) {
     onStep(`⚠️ ${applique.rejetes.length} bloc(s) NON appliqué(s) (texte d'origine conservé) — ${applique.rejetes.slice(0, 3).map((r) => r.motif).join(' · ')}${applique.rejetes.length > 3 ? '…' : ''}`);
   }
+  if (applique.marqueursInventes) {
+    onStep(`🧹 ${applique.marqueursInventes} repère(s) inventé(s) par l'IA retiré(s) du texte — les mots sont conservés.`);
+  }
   if (applique.ancresModifiees.length) {
     onStep(`🔗 ${applique.ancresModifiees.length} texte(s) de lien reformulé(s) — le lien reste bon, la formulation est à relire.`);
   }
@@ -187,6 +190,7 @@ Renvoie maintenant le JSON des réécritures. Rien d'autre que le JSON.`;
         appliques: applique.appliques,
         rejetes: applique.rejetes,
         ancresModifiees: applique.ancresModifiees,
+        marqueursInventes: applique.marqueursInventes,
         ecartes: extrait.ecartes,
       },
       // Champs attendus par l'éditeur et l'archivage : en mode affiliation, rien
