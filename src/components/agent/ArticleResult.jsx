@@ -13,7 +13,12 @@ import {
   Undo2, Redo2, Scissors, Trash2, Lock, CheckCheck, Crosshair, Gauge, XCircle, Save,
 } from 'lucide-react';
 import { exportAsText, exportAsHtml, exportAsMarkdown, copyToClipboard, stripParasiticFontSize } from '../../utils/export';
-import { publishToWordPress, updatePost, findPostByUrl } from '../../services/wordpress';
+// `publishToWordPress` (création d'un post neuf) N'EST PLUS IMPORTÉ ICI : le
+// « brouillon de secours » qui l'appelait a été retiré le 15/09/2026 — il
+// déposait un article sur le site sans jamais mettre à jour celui qu'on visait.
+// L'export reste en place dans le service (utilisé ailleurs / réutilisable) ;
+// c'est l'éditeur qui ne crée plus rien à l'aveugle.
+import { updatePost, findPostByUrl } from '../../services/wordpress';
 import BubbleToolbar from './BubbleToolbar';
 import TableToolbar from './TableToolbar';
 import DocNavigator from './DocNavigator';
@@ -61,7 +66,7 @@ import { updateInHistory, addToHistory } from '../../store/slices/articlesSlice'
 import { addArticleStat } from '../../store/slices/statsSlice';
 import { removePendingItem } from '../../store/slices/pendingSlice';
 import {
-  saveArticle, updateArticleHtml,
+  saveArticle, updateArticleHtml, getArticle,
   acquireEditLock, heartbeatEditLock, releaseEditLock, watchEditLock, isLockActive, LOCK_HEARTBEAT_MS,
 } from '../../services/firebase';
 import { saveDraft, flushDraftRemote, onDraftStatus, clearDraft } from '../../services/articleDraft';
@@ -289,6 +294,40 @@ export default function ArticleResult() {
   // URL de l'article courant (pour retrouver le post WP à mettre à jour)
   const currentArticle = articlesHistory.find(a => a.id === agent.currentArticleId);
   const articleUrl     = cqItem?.url || currentArticle?.url || '';
+
+  // ── L'ARTICLE OUVERT N'EST PAS TOUJOURS DANS LA LISTE EN MÉMOIRE ───────────
+  //
+  // `articleUrl` ne se résout QUE par `articlesHistory.find(...)`, et cette liste
+  // n'est pas la base : elle est hydratée du cache local (150 entrées au plus,
+  // divisé par deux à chaque dépassement de quota — il pèse déjà 2,9 Mo en prod)
+  // puis remplacée par un `GET /articles` qui rapatrie les 440 articles avec tout
+  // leur HTML. Mesuré le 15 septembre 2026 : PLUS DE 45 SECONDES sans réponse, et
+  // son échec est avalé par un `.catch(() => [])` suivi d'un `if (length > 0)`.
+  //
+  // Pendant cette fenêtre — ou définitivement, sur un article plus ancien que le
+  // cache — `currentArticle` est `undefined` et `articleUrl` vaut ''. Toute la
+  // suite s'effondre en silence : plus de site WordPress résolu (« Aucun site
+  // WordPress connecté pour cet article » au téléversement d'image), plus de cible
+  // de publication, et l'article repart en BROUILLON NEUF sur le site. Trois
+  // enregistrements réels en portent la trace, `publishedUrl` en « ?p=… » :
+  // la charentaise (lemondedesartisans.fr), une charpente, et un article
+  // « Égouts » dont le contenu parlait de détection d'intrusion, déposé sur
+  // cyber-securite.fr.
+  //
+  // On va donc CHERCHER l'article, un par un, plutôt que d'attendre la liste
+  // entière. `demandes` mémorise les id déjà demandés : sans lui, l'effet se
+  // rejouerait à chaque changement de `articlesHistory` après un échec réseau.
+  const articleFetchRef = useRef(new Set());
+  useEffect(() => {
+    const id = agent.currentArticleId;
+    if (!id || cqItem) return;                        // le cqItem porte déjà son URL
+    if (articlesHistory.some((a) => a.id === id)) return;
+    if (articleFetchRef.current.has(id)) return;
+    articleFetchRef.current.add(id);
+    getArticle(id)
+      .then((a) => { if (a && a.id) dispatch(addToHistory(a)); })
+      .catch(() => { /* non bloquant : la publication le dira, elle */ });
+  }, [agent.currentArticleId, articlesHistory, cqItem, dispatch]);
 
   // ── Tracking du temps de travail sur l'article ouvert dans l'éditeur ────────
   // Démarre quand un article est chargé (CQ depuis MajEnAttente, réouverture
@@ -2693,7 +2732,14 @@ export default function ArticleResult() {
         ...(agent.majScope    ? { majScope: agent.majScope }       : {}),
         ...(auditJson  ? { auditJson } : {}),
         ...(qatArticle ? { qatArticle: (({ html, ...rest }) => rest)(qatArticle) } : {}),
-        url:             cqItem.url        || '',
+        // ── UNE URL VIDE N'ÉCRASE JAMAIS UNE URL CONNUE ──────────────────────
+        // `url: cqItem.url || ''` réécrivait '' à chaque « Terminer ». Une fois
+        // l'URL perdue, elle l'était DÉFINITIVEMENT : l'article ne se publiait
+        // plus (brouillon neuf « ?p=… » à la place de la mise à jour) et ne
+        // pouvait plus recevoir d'image, et chaque passage suivant confirmait le
+        // vide. Trois enregistrements réels en portent la trace. Omis plutôt que
+        // vidé : la base garde ce qu'elle sait.
+        ...(cqItem.url ? { url: cqItem.url } : {}),
         keyword:         cqItem.keyword    || '',
         priority:        cqItem.priority   || 'normale',
         assigneeId:      cqItem.assigneeId || null,
@@ -4237,16 +4283,41 @@ export default function ArticleResult() {
         }
       }
     } else {
-      // Aucun article existant identifiable sur ce site (contenu collé sans URL, ou slug
-      // introuvable) → on ne publie/écrase RIEN au hasard : nouveau brouillon de secours.
-      const draftTitle = editedTitle || currentArticle?.title || 'Article';
-      result = await publishToWordPress(site, {
-        title: draftTitle, content: htmlContent, status: 'draft',
-        ...(publishDate ? { date: new Date(publishDate).toISOString() } : {}),
-      });
-      if (result.success) {
-        toast(`Article introuvable sur ${site.name} — nouveau brouillon créé à la place.`, { icon: <AlertTriangle size={16} className="text-amber-500" />, duration: 7000 });
+      // ── AUCUNE CIBLE IDENTIFIÉE → ON NE PUBLIE RIEN (décision Andrianina,
+      //    15 septembre 2026) ─────────────────────────────────────────────────
+      //
+      // Ce chemin créait jusqu'ici un « brouillon de secours » : un post NEUF sur
+      // le site, en draft. L'intention était bonne — ne rien écraser au hasard —
+      // mais le repli était SILENCIEUX pour qui ne lit pas le toast, et il a
+      // tiré trois fois en production. Les trois enregistrements portent leur
+      // `publishedUrl` en « ?p=… », signature d'un post neuf :
+      //   • lemondedesartisans.fr/?p=56658  (la charentaise)
+      //   • charpentebois.com/?p=9459
+      //   • cyber-securite.fr/?p=26674 — titre « Égouts », contenu sur la
+      //     détection d'intrusion IDS/IPS. Un article déposé sur un site qui
+      //     n'était pas le sien.
+      //
+      // Un doublon en brouillon coûte plus cher qu'une publication refusée :
+      // personne ne le cherche, il ne remplace pas l'article à mettre à jour, et
+      // le travail semble parti alors qu'il n'est nulle part. On s'arrête, et on
+      // DIT pourquoi — en distinguant les deux causes, qui n'appellent pas le
+      // même geste.
+      setPublishing(false);
+      if (!articleUrl) {
+        toast.error(
+          `Publication annulée : aucune URL n'est associée à cet article, impossible de savoir `
+          + `quel article de ${site.name} mettre à jour. Rouvrez l'article depuis l'Historique, `
+          + `ou relancez la MAJ depuis son URL.`,
+          { duration: 12000 },
+        );
+      } else {
+        toast.error(
+          `Publication annulée : aucun article de ${site.name} ne correspond à ${slugOfUrl(articleUrl) || articleUrl}. `
+          + `Vérifiez que l'article existe toujours et que son slug n'a pas changé.`,
+          { duration: 12000 },
+        );
       }
+      return;
     }
 
     if (!result.success) {
@@ -4293,7 +4364,9 @@ export default function ArticleResult() {
           ...(agent.majScope    ? { majScope: agent.majScope }       : {}),
           ...(auditJson  ? { auditJson } : {}),
           ...(qatArticle ? { qatArticle: (({ html, ...rest }) => rest)(qatArticle) } : {}),
-          url:             articleUrl || cqItem?.url || '',
+          // Jumeau du garde-fou de « Terminer » ci-dessus, et pour la même
+          // raison : publier ne doit jamais effacer l'URL de l'article.
+          ...((articleUrl || cqItem?.url) ? { url: articleUrl || cqItem?.url } : {}),
           keyword:         cqItem?.keyword || '',
           priority:        cqItem?.priority || 'normale',
           assigneeId:      cqItem?.assigneeId || authUid || authUsername || null,

@@ -639,3 +639,68 @@ export const rectOfNodes = (nodes) => {
   if (top === Infinity) return null;
   return { top, left, right, bottom, width: right - left, height: bottom - top };
 };
+
+// ── CONSTAT — LA FAQ EST COMPTÉE, PAS SEULEMENT DEMANDÉE ─────────────────────
+//
+// Ajouté le 15 septembre 2026, après quatre articles publiés SANS FAQ sur
+// lemondedesartisans.fr. Le skill d'équipe « TL;DR, FAQ & maillage interne » la
+// dit pourtant « obligatoire sur chaque article » et fixe 4 à 6 questions — mais
+// cette ligne vit au milieu d'un prompt de plusieurs dizaines de milliers de
+// caractères, et RIEN ne vérifiait ensuite qu'elle avait été suivie. Mesuré sur
+// les enregistrements réels : 0 <details>, 0 occurrence du mot FAQ dans le HTML
+// généré de « Trésorerie… » et « Démarches décès… ». Personne ne pouvait le voir
+// avant de lire l'article en ligne.
+//
+// Même dispositif que `constatGras` (boldCarry.js) et `phrasesLongues` : une
+// consigne qu'on ne mesure jamais est une consigne dont on ne sait rien.
+// NON BLOQUANT — on dit, le rédacteur tranche. Rien n'est fabriqué : écrire une
+// FAQ est un acte rédactionnel, pas une réparation déterministe (même arbitrage
+// que le gras posé par le code, règle 10).
+//
+// La DÉTECTION n'est pas réécrite : `findFaqBlock` + `getQAGroups` ci-dessus sont
+// la source unique des heuristiques FAQ de tout le projet (éditeur, moveFaqToEnd,
+// normalisation accordéon). Un second jeu de règles aurait fini par diverger, et
+// on aurait signalé « FAQ absente » sur une FAQ que l'éditeur affiche.
+
+/**
+ * Bornes du skill d'équipe « TL;DR, FAQ & maillage interne » — jamais inventées
+ * ici. Elles sont reprises TELLES QUELLES (« 4-6 questions », « 50 mots max »)
+ * pour que la CONSIGNE tenue en dur dans le prompt et la MESURE portent les
+ * mêmes nombres : deux littéraux séparés auraient fini par diverger, et on
+ * aurait signalé au rédacteur une FAQ qu'on n'avait jamais demandée. Même
+ * raison que `MOTS_MAX_PHRASE` et `GRAS_MIN_PAR_H2`.
+ */
+export const FAQ_MIN_QUESTIONS = 4;
+export const FAQ_MAX_QUESTIONS = 6;
+export const FAQ_MOTS_MAX_REPONSE = 50;
+
+/**
+ * Compte la FAQ d'un article rendu en HTML.
+ *
+ * @returns {{presente:boolean, questions:number, titre:string, format:string|null,
+ *            tropCourte:boolean, tropLongue:boolean}}
+ *   `tropCourte` / `tropLongue` ne se déclenchent QUE si une FAQ existe : une FAQ
+ *   absente est déjà dite par `presente:false`, l'annoncer deux fois brouille le
+ *   message.
+ */
+export const constatFaq = (html = '') => {
+  const vide = { presente: false, questions: 0, titre: '', format: null, tropCourte: false, tropLongue: false };
+  if (!html || typeof document === 'undefined') return vide;
+  const container = document.createElement('div');
+  container.innerHTML = html;
+  const block = findFaqBlock(container);
+  if (!block) return vide;
+  const { format, groups } = getQAGroups(block);
+  const questions = groups.length;
+  // Un bloc détecté SANS aucune paire Q/R n'est pas une FAQ : c'est un titre
+  // orphelin. Le dire « présente » enverrait le rédacteur chercher ce qui n'existe pas.
+  if (!questions) return vide;
+  return {
+    presente:   true,
+    questions,
+    titre:      (block.heading?.textContent || '').replace(/\s+/g, ' ').trim(),
+    format:     format || null,
+    tropCourte: questions < FAQ_MIN_QUESTIONS,
+    tropLongue: questions > FAQ_MAX_QUESTIONS,
+  };
+};
