@@ -569,7 +569,29 @@ const sendTicketEmail = async (toEmails, subject, textBody, htmlBody) => {
 
 // ─── Rate limiter intégré ─────────────────────────────────────────────────────
 // Enregistré ICI, avant les routes auth, pour couvrir /api/auth/login etc.
-// Limite générale : 60 req/min/IP. Limite auth : 10 req/min/IP (anti brute-force).
+// Limite générale : 300 req/min/IP. Limite auth : 10 req/min/IP (anti brute-force).
+//
+// ── POURQUOI 300 ET PLUS 60 — décision Andrianina, 16 septembre 2026 ─────────
+// Relevé après un lot de 20 articles terminé à 9/20, avec 11 erreurs, 5,19 $ et
+// 79 minutes dépensés. Les 11 erreurs tombaient TOUTES sur les deux PREMIÈRES
+// étapes du pipeline (récupération de l'article, enrichissement Skills/Knowledge)
+// — la signature d'une rafale de démarrage, pas d'une charge continue.
+//
+// Le calcul est arithmétique : les pipelines tournent dans des process séparés
+// qui rappellent http://127.0.0.1:3001/api, donc ils partagent UN SEUL seau —
+// la clé du limiteur est l'IP, et pour eux c'est toujours 127.0.0.1. Avec
+// `DEFAULT_CONCURRENCY = 4` (batchOrchestrator.js), ça faisait 15 requêtes par
+// minute et par article, alors que chaque pipeline tire d'un coup au démarrage
+// le scrape, les recherches web, les skills, la base de connaissances, les
+// réglages et le prix des modèles. Le seau se vidait en quelques secondes.
+//
+// Le commentaire qui a porté la concurrence de 2 à 4 le 1er septembre annonçait
+// exactement ce signal : « une hausse ultérieure doit être suivie d'une
+// surveillance des erreurs "trop de requêtes" ». Il s'est déclenché.
+//
+// CE QUI N'EST PAS TOUCHÉ : `authRateLimiter` reste à 10/min/IP. C'est lui qui
+// protège du bourrinage de mots de passe, et il n'a rien à voir avec le débit
+// d'un lot. Les relever ensemble aurait été le vrai risque.
 const _rl     = new Map();
 const _rlAuth = new Map();
 const _rlPoll = new Map();
@@ -585,11 +607,11 @@ const makeRateLimiter = (store, max) => (req, res, next) => {
   next();
 };
 
-const rateLimiter     = makeRateLimiter(_rl,     60);
+const rateLimiter     = makeRateLimiter(_rl,     300);
 const authRateLimiter = makeRateLimiter(_rlAuth, 10);
 // Polls des jobs Claude : 1 GET / 2 s PAR analyse, et toute l'équipe est derrière
-// la même IP bureau → la limite générale (60/min/IP) sature dès 2-3 analyses en
-// parallèle (429 en rafale). Limiteur dédié, large mais borné : 600/min/IP
+// la même IP bureau → la limite générale saturait dès 2-3 analyses en parallèle
+// (429 en rafale). Limiteur dédié, large mais borné : 600/min/IP
 // (≈ 20 analyses simultanées) — la route ne fait qu'une lecture de Map, coût nul.
 const pollRateLimiter = makeRateLimiter(_rlPoll, 600);
 
@@ -3184,7 +3206,15 @@ app.post('/api/scrape', requireAuth, async (req, res) => {
     // 1. Fetch du HTML brut -- redirections suivies (revalidées SSRF à chaque
     // saut), voir fetchFollowingSafeRedirects().
     const response = await fetchFollowingSafeRedirects(url, {
-      timeout: 20000,
+      // 45 s et plus 20 — décision Andrianina, 16/09/2026. Six articles d'un lot
+      // de 20 sont morts sur « timeout of 20000ms exceeded ». Le site distant
+      // n'est pas seul en cause : cette route fait un `new JSDOM(...)` DANS le
+      // process de proxy.js, et JSDOM est synchrone. Quatre scrapes concurrents
+      // sur des pages de 100 Ko bloquent la boucle d'événements, et le serveur
+      // ne répond plus assez vite à ses propres requêtes. Le plafond couvre
+      // désormais ce temps d'attente ; le réessai (services/scraper.js) couvre
+      // le reste.
+      timeout: 45000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
