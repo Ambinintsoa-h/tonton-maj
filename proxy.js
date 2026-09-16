@@ -4320,6 +4320,71 @@ app.post('/api/wp-update-media', requireAuth, async (req, res) => {
   }
 });
 
+// ─── POST /api/image-base64 — télécharge une image et la rend en base64 ───────
+//
+// POURQUOI CETTE ROUTE EXISTE — correctif du 16 septembre 2026.
+//
+// Les suggestions ALT/Légende envoyaient à l'API Vision une `source` de type
+// `url` : c'est ALORS ANTHROPIC qui allait chercher l'image sur le site du
+// client. Relevé en production sur circuits-culture.com, réponse serveur
+// capturée : « Unable to download the file. Please verify the URL and try
+// again. » — deux fois de suite, puis plus du tout le lendemain sur la MÊME
+// image et la MÊME URL. Donc ni l'URL ni son encodage : c'est le
+// TÉLÉCHARGEMENT par un tiers qui est fragile.
+//
+// Ce projet le savait déjà sans en tirer la conséquence : `wp_upload_media`
+// envoie un User-Agent de navigateur quand il télécharge une image, justement
+// parce que ces hébergeurs WordPress bloquent les robots inconnus. Un pare-feu
+// qui se réveille, une propagation de cache en retard, et la suggestion tombe —
+// sans qu'aucun réglage de notre côté n'y change quoi que ce soit.
+//
+// On reprend donc le téléchargement à notre charge, avec le User-Agent qui
+// marche déjà ailleurs, et on transmet les OCTETS. Plus de dépendance au fait
+// qu'un tiers joigne le site du client.
+//
+// NON BLOQUANT : en cas d'échec, le client repart sur la `source` de type `url`
+// (comportement historique) — on ne perd pas une suggestion pour un
+// téléchargement raté de notre côté.
+const IMAGE_B64_MAX_BYTES = Math.floor(5 * 1024 * 1024 * 3 / 4); // ≈ 3,75 Mo : 5 Mo une fois en base64, le plafond de l'API Vision
+app.post('/api/image-base64', requireAuth, async (req, res) => {
+  const { url } = req.body || {};
+  if (!url) return res.status(400).json({ success: false, error: 'url requise' });
+  try {
+    await assertSafeUrl(url, 'URL image');
+    const resp = await axios.get(url, {
+      responseType: 'arraybuffer', timeout: 30000, maxRedirects: 3,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'image/*,*/*;q=0.8',
+      },
+      maxContentLength: IMAGE_B64_MAX_BYTES,
+      validateStatus: (st) => st >= 200 && st < 300,
+    });
+    const buf = Buffer.from(resp.data);
+    // Signature BINAIRE, jamais le content-type annoncé : un hébergeur qui rend
+    // "octet-stream" sur une vraie image est courant, et une page d'erreur HTML
+    // servie en 200 passerait pour une image (même garde que wp_upload_media).
+    const detected = detectImageType(buf);
+    if (!detected) {
+      return res.status(415).json({ success: false, error: "L'URL ne renvoie pas une image valide (png, jpg, gif ou webp attendus)." });
+    }
+    if (buf.length > IMAGE_B64_MAX_BYTES) {
+      return res.status(413).json({ success: false, error: `Image trop lourde pour l'analyse (${(buf.length / 1048576).toFixed(1)} Mo, maximum ${(IMAGE_B64_MAX_BYTES / 1048576).toFixed(1)} Mo).` });
+    }
+    res.json({ success: true, media_type: detected.mime, data: buf.toString('base64') });
+  } catch (e) {
+    const st = e.response?.status;
+    console.error('[proxy] /api/image-base64 erreur:', st, e.message, '—', url);
+    // Le message REMONTE au client : c'est le silence de ce chemin qui a coûté
+    // une enquête entière (« Suggestion impossible — réessayez » à l'écran,
+    // pendant que le serveur savait exactement ce qui n'allait pas).
+    res.status(502).json({
+      success: false,
+      error: st ? `Téléchargement de l'image refusé par le site (HTTP ${st}).` : `Image inaccessible : ${safeError(e, 'téléchargement impossible')}.`,
+    });
+  }
+});
+
 // ─── POST /api/claude-tools — boucle agentique Claude + outils WordPress MCP ──
 // Gère la boucle tool_use → exécution → tool_result jusqu'à end_turn.
 // Accepte les mêmes paramètres que /api/claude + { tools, wpSites }.

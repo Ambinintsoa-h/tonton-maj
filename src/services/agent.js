@@ -647,9 +647,52 @@ export const callClaude = async (_apiKey, {
  * Utilise Claude vision (Haiku — rapide et économique).
  * Retourne "" en cas d'échec (pas d'interruption de l'UI).
  */
+/**
+ * ── LES OCTETS DE L'IMAGE, PAS SON ADRESSE ───────────────────────────────────
+ *
+ * Correctif du 16 septembre 2026. Les deux fonctions Vision ci-dessous
+ * envoyaient une `source` de type `url` : c'était ALORS ANTHROPIC qui allait
+ * chercher l'image sur le site du client. Relevé en production, réponse serveur
+ * capturée telle quelle :
+ *
+ *   « Unable to download the file. Please verify the URL and try again. »
+ *
+ * Deux fois de suite sur circuits-culture.com — puis plus du tout le lendemain,
+ * sur la MÊME image et la MÊME URL. Ce n'était donc ni l'URL ni son encodage :
+ * c'est le téléchargement PAR UN TIERS qui est fragile. Ces hébergeurs
+ * WordPress bloquent les robots inconnus — le projet le savait déjà sans en
+ * tirer la conséquence : `wp_upload_media` (proxy.js) envoie un User-Agent de
+ * navigateur pour cette raison précise.
+ *
+ * On reprend donc le téléchargement à notre charge (`/api/image-base64`) et on
+ * transmet les octets.
+ *
+ * REPLI ASSUMÉ sur la `source` de type `url` : si NOTRE téléchargement échoue
+ * (image trop lourde, site injoignable depuis le serveur), on retente par
+ * l'ancien chemin plutôt que de perdre la suggestion. `raison` porte le
+ * pourquoi, pour que l'écran puisse le DIRE — c'est le silence de ce chemin qui
+ * a coûté une enquête entière.
+ *
+ * @returns {Promise<{source:object, raison:string}>}
+ */
+const imageSourcePourVision = async (imageUrl) => {
+  const encodee = encodeMediaUrl(imageUrl);
+  try {
+    const { data } = await axios.post('/api/image-base64', { url: encodee }, { timeout: 40000 });
+    if (data?.success && data.data) {
+      return { source: { type: 'base64', media_type: data.media_type, data: data.data }, raison: '' };
+    }
+    return { source: { type: 'url', url: encodee }, raison: data?.error || '' };
+  } catch (e) {
+    return { source: { type: 'url', url: encodee }, raison: e?.response?.data?.error || e?.message || '' };
+  }
+};
+
 export const generateAltText = async (imageUrl, apiKey) => {
   if (!imageUrl || !apiKey) return '';
   try {
+    const { source, raison } = await imageSourcePourVision(imageUrl);
+    if (raison) console.warn('[generateAltText] image transmise par URL (téléchargement direct impossible) —', raison);
     const { text } = await callClaude(apiKey, {
       system: 'Tu génères uniquement du texte ALT SEO pour des images web. Réponds avec SEULEMENT le texte ALT, sans guillemets, sans ponctuation finale, sans explication. Maximum 125 caractères.',
       model: MODELS.FAST,
@@ -657,10 +700,7 @@ export const generateAltText = async (imageUrl, apiKey) => {
       messages: [{
         role: 'user',
         content: [
-          // URL ENCODÉE — sans ça, un nom de fichier accentué ou porteur d'un ®
-          // fait répondre « Unable to download the file » à l'API, et l'ALT ne se
-          // pose jamais. Voir utils/mediaUrl.js.
-          { type: 'image', source: { type: 'url', url: encodeMediaUrl(imageUrl) } },
+          { type: 'image', source },
           { type: 'text',  text: 'Génère un texte ALT SEO concis et descriptif pour cette image, en français.' },
         ],
       }],
@@ -687,6 +727,8 @@ export const generateImageMeta = async (imageUrl, apiKey) => {
   const empty = { alt: '', caption: '' };
   if (!imageUrl || !apiKey) return empty;
   try {
+    const { source, raison } = await imageSourcePourVision(imageUrl);
+    if (raison) console.warn('[generateImageMeta] image transmise par URL (téléchargement direct impossible) —', raison);
     const { text } = await callClaude(apiKey, {
       system: 'Tu génères des métadonnées SEO pour une image web. Réponds UNIQUEMENT avec un JSON valide, sans commentaire ni balise markdown.',
       model: MODELS.FAST,
@@ -694,9 +736,7 @@ export const generateImageMeta = async (imageUrl, apiKey) => {
       messages: [{
         role: 'user',
         content: [
-          // Même encodage que `generateAltText` — c'est ICI que la panne a été
-          // relevée en production (panneau « Alt / Légende », bouton Suggestion IA).
-          { type: 'image', source: { type: 'url', url: encodeMediaUrl(imageUrl) } },
+          { type: 'image', source },
           { type: 'text', text: 'Génère pour cette image, en français : un texte ALT SEO concis (max 125 caractères, descriptif, sans guillemets) et une légende éditoriale courte (max 140 caractères, une phrase qui pourrait être affichée sous la photo). Réponds UNIQUEMENT : {"alt":"...","caption":"..."}' },
         ],
       }],
@@ -707,8 +747,14 @@ export const generateImageMeta = async (imageUrl, apiKey) => {
       caption: (parsed.caption || '').trim().replace(/^["']|["']$/g, ''),
     };
   } catch (e) {
-    console.warn('[generateImageMeta] échec sur', imageUrl, '—', e?.response?.data?.error || e?.message || e);
-    return empty;
+    // Le MOTIF remonte à l'appelant (champ ajouté, forme `{alt, caption}`
+    // inchangée pour les lecteurs existants) : « Suggestion impossible —
+    // réessayez » ne disait rien, alors que le serveur savait exactement ce qui
+    // n'allait pas. Il a fallu intercepter l'appel réseau en production pour
+    // l'apprendre ; ça ne doit plus jamais être nécessaire.
+    const motif = e?.response?.data?.error || e?.message || '';
+    console.warn('[generateImageMeta] échec sur', imageUrl, '—', motif || e);
+    return { ...empty, error: motif };
   }
 };
 
