@@ -8,9 +8,11 @@ import Badge from '../components/common/Badge';
 import { listMyBatchItems } from '../services/batchItems';
 import { listStagedItems } from '../services/gsheetStaging';
 import {
-  fmtCost, fmtDuration, fmtDate, DISPLAY_STATUS, deriveDisplayStatus, groupCostByDay, aggregateByLauncher,
+  fmtCost, fmtDuration, fmtDate, fmtMinutes, DISPLAY_STATUS, deriveDisplayStatus, groupCostByDay,
+  aggregateByLauncher, aggregateByDayAndUser, filterRelectureByPeriod,
 } from '../utils/batchDisplay';
 import { exportStatsToExcel } from '../utils/exportStatsXlsx';
+import { getRelectureTimeAll } from '../services/firebase';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // "Mes MAJ" — remplace l'ancien écran "MAJ en attente" (import fichier, ajout
@@ -28,10 +30,25 @@ const localIso = (d) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 
+// Périodes GLISSANTES (`days`) et périodes CALENDAIRES (`range`). Les deux sont
+// utiles et ne répondent pas à la même question : « 30 jours » sert à suivre une
+// tendance, « Ce mois » à produire un bilan mensuel — et c'est celui-là qui a été
+// demandé (« exportable via excel selon une date (par semaine, mois, année) »).
+// Semaine ISO : lundi → aujourd'hui, jamais dimanche → samedi.
+const debutSemaine = () => {
+  const d = new Date();
+  const lundi = (d.getDay() + 6) % 7;          // 0 = lundi
+  d.setDate(d.getDate() - lundi);
+  return d;
+};
+
 const DATE_PRESETS = [
   { label: "Aujourd'hui", days: 0 },
   { label: '7 jours', days: 6 },
   { label: '30 jours', days: 29 },
+  { label: 'Cette semaine', range: debutSemaine },
+  { label: 'Ce mois', range: () => new Date(new Date().getFullYear(), new Date().getMonth(), 1) },
+  { label: 'Cette année', range: () => new Date(new Date().getFullYear(), 0, 1) },
 ];
 
 // Volontairement plus petit que le défaut partagé de Pagination.jsx (50,
@@ -80,6 +97,26 @@ export default function MajEnAttente() {
   const [staged, setStaged] = useState([]);
   const [loadingStaged, setLoadingStaged] = useState(true);
 
+  // ── TEMPS DE RELECTURE (relecture_time) ───────────────────────────────────
+  // Table à part, et route à part : `GET /relecture-time` est réservée au
+  // super_admin (ARTICLE_TIME_READ) et renvoie TOUT, sans filtre de date — le
+  // bornage à la période se fait donc ici, pour que l'écran et le fichier Excel
+  // disent exactement la même chose.
+  //
+  // `relectureRefusee` distingue DEUX états qu'un tableau vide confondrait :
+  // « personne n'a relu sur cette période » et « je n'ai pas le droit de lire
+  // cette table ». Sans cette distinction, un manager lirait « 0 min de
+  // relecture » sur une semaine où l'équipe a relu tous les jours.
+  const [relectures, setRelectures] = useState([]);
+  const [relectureRefusee, setRelectureRefusee] = useState(false);
+  useEffect(() => {
+    let annule = false;
+    getRelectureTimeAll()
+      .then((list) => { if (!annule) { setRelectures(Array.isArray(list) ? list : []); setRelectureRefusee(false); } })
+      .catch(() => { if (!annule) { setRelectures([]); setRelectureRefusee(true); } });
+    return () => { annule = true; };
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -123,6 +160,31 @@ export default function MajEnAttente() {
   const totalCost = useMemo(() => filtered.reduce((sum, it) => sum + (it.costUsd || 0), 0), [filtered]);
   const costByDay = useMemo(() => groupCostByDay(filtered), [filtered]);
   const byLauncher = useMemo(() => aggregateByLauncher(filtered), [filtered]);
+  // Relecture bornée à la MÊME période que la liste affichée.
+  const relecturesPeriode = useMemo(
+    () => filterRelectureByPeriod(relectures, dateFrom, dateTo),
+    [relectures, dateFrom, dateTo],
+  );
+  const byDayUser = useMemo(
+    () => aggregateByDayAndUser(filtered, relecturesPeriode),
+    [filtered, relecturesPeriode],
+  );
+  // Totaux de relecture par personne, pour la colonne du tableau « Par
+  // utilisateur » — même source que l'export, jamais un second calcul.
+  const relectureParUser = useMemo(() => {
+    const m = new Map();
+    byDayUser.forEach((r) => {
+      const e = m.get(r.user) || { hors: 0, avec: 0 };
+      e.hors += r.relectureSeconds;
+      e.avec += r.relectureAvecTontonSeconds;
+      m.set(r.user, e);
+    });
+    return m;
+  }, [byDayUser]);
+  const totalRelectureSec = useMemo(
+    () => byDayUser.reduce((n, r) => n + r.relectureSeconds, 0),
+    [byDayUser],
+  );
   const paged = pageSlice(filtered, page, PAGE_SIZE);
 
   // Export .xlsx (demande Andrianina, sept. 2026) : reflète EXACTEMENT ce qui
@@ -130,12 +192,22 @@ export default function MajEnAttente() {
   // séparé, la même donnée que ce que le rédacteur voit.
   const handleExport = () => {
     if (!filtered.length) { toast.error('Rien à exporter sur cette période/ces filtres.'); return; }
-    exportStatsToExcel({ items: filtered, byLauncher, from: dateFrom, to: dateTo });
+    const n = exportStatsToExcel({
+      items: filtered, byLauncher, byDayUser, byDay: costByDay,
+      relectures: relecturesPeriode, from: dateFrom, to: dateTo,
+    });
+    // On DIT ce que le fichier contient : un .xlsx qui tombe dans les
+    // téléchargements sans un mot laisse le doute sur ce qu'on vient d'exporter.
+    toast.success(
+      `Export : ${n.detail} article(s), ${n.jourUtilisateur} ligne(s) jour × rédacteur.`
+      + (relectureRefusee ? ' Temps de relecture absent (réservé au super admin).' : ''),
+      { duration: 7000 },
+    );
   };
 
-  const applyDatePreset = (days) => {
+  const applyDatePreset = (p) => {
     setDateTo(localIso(new Date()));
-    setDateFrom(localIso(new Date(Date.now() - days * DAY_MS)));
+    setDateFrom(localIso(p.range ? p.range() : new Date(Date.now() - p.days * DAY_MS)));
   };
 
   // Widget "MAJ en attente" : lignes du Google Sheet détectées mais pas
@@ -174,7 +246,7 @@ export default function MajEnAttente() {
       </div>
 
       {/* Cartes de synthèse */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <div className="bg-white border border-gray-200 rounded-xl p-4">
           <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Articles traités</p>
           <p className="text-2xl font-semibold text-gray-900 mt-1">{filtered.length}</p>
@@ -186,6 +258,19 @@ export default function MajEnAttente() {
         <div className="bg-white border border-gray-200 rounded-xl p-4">
           <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Coût moyen / article</p>
           <p className="text-2xl font-semibold text-gray-900 mt-1">{fmtCost(filtered.length ? totalCost / filtered.length : null)}</p>
+        </div>
+        {/* TEMPS HUMAIN — la seule des quatre cartes qui ne parle pas de la
+            machine. Phases 3 et 4 seulement, pauses de plus de 5 min exclues :
+            c'est du temps de travail réel, pas du calendaire. */}
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Relecture (équipe)</p>
+          {relectureRefusee ? (
+            <p className="text-sm text-gray-400 mt-2 leading-snug">
+              Réservé au super admin
+            </p>
+          ) : (
+            <p className="text-2xl font-semibold text-gray-900 mt-1">{fmtMinutes(totalRelectureSec)}</p>
+          )}
         </div>
       </div>
 
@@ -215,13 +300,22 @@ export default function MajEnAttente() {
       {!isPersonalScope && byLauncher.length > 0 && (
         <div className="bg-white border border-gray-200 rounded-xl p-4 overflow-x-auto">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Par utilisateur</p>
+          {/* DEUX DURÉES, JAMAIS ADDITIONNÉES : « Tonton » est du temps machine,
+              « Relecture » du temps humain. Pendant que Tonton traite un article,
+              le rédacteur en relit un autre — un « temps total » ne voudrait rien
+              dire. Le détail jour par jour est dans l'export Excel. */}
+          <p className="text-[11px] text-gray-400 mb-2">
+            « Tonton » = temps de traitement machine · « Relecture » = temps humain actif (phases 3 et 4).
+            Le lanceur n'est pas toujours le relecteur : le détail jour × rédacteur est dans l'export Excel.
+          </p>
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs text-gray-400 border-b border-gray-100">
                 <th className="text-left font-medium py-1.5 pr-4">Lanceur</th>
                 <th className="text-right font-medium py-1.5 pr-4">Articles</th>
                 <th className="text-right font-medium py-1.5 pr-4">Taux d'erreur</th>
-                <th className="text-right font-medium py-1.5 pr-4">Durée moy.</th>
+                <th className="text-right font-medium py-1.5 pr-4" title="Temps de TRAITEMENT par Tonton AI (machine), en moyenne par article">Tonton moy.</th>
+                <th className="text-right font-medium py-1.5 pr-4" title="Temps de RELECTURE humaine (phases Obsolescence + Relecture), hors appels IA">Relecture</th>
                 <th className="text-right font-medium py-1.5 pr-4">Coût moy.</th>
                 <th className="text-right font-medium py-1.5">Coût total</th>
               </tr>
@@ -235,6 +329,9 @@ export default function MajEnAttente() {
                     {(l.errorRate * 100).toFixed(1)}%
                   </td>
                   <td className="py-1.5 pr-4 text-right text-gray-600">{fmtDuration(l.avgDurationMs)}</td>
+                  <td className="py-1.5 pr-4 text-right text-gray-600">
+                    {relectureRefusee ? '—' : fmtMinutes(relectureParUser.get(l.launcher)?.hors || 0)}
+                  </td>
                   <td className="py-1.5 pr-4 text-right text-gray-600">{fmtCost(l.avgCostUsd)}</td>
                   <td className="py-1.5 text-right font-medium text-gray-900">{fmtCost(l.totalCostUsd)}</td>
                 </tr>
@@ -263,7 +360,7 @@ export default function MajEnAttente() {
         </div>
         {DATE_PRESETS.map((p) => (
           <button
-            key={p.label} type="button" onClick={() => applyDatePreset(p.days)}
+            key={p.label} type="button" onClick={() => applyDatePreset(p)}
             className="px-2.5 py-1.5 rounded-full text-[12px] font-medium border bg-white text-gray-500 border-gray-200 hover:bg-gray-50 whitespace-nowrap"
           >
             {p.label}
