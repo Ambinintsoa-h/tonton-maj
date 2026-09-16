@@ -74,6 +74,8 @@ import articleTimeTracker from '../../services/articleTimeTracker';
 import relectureTimeTracker from '../../services/relectureTimeTracker';
 import { renderMarkdown, emojiToIcons, unwrapProseFences, trimAuditForDisplay } from '../../utils/markdown';
 import { validateImageFile } from '../../utils/uploadLimits';
+import { publicationPrecedente } from '../../utils/publishInfo';
+import { fmtDate } from '../../utils/batchDisplay';
 import { useNavigate } from 'react-router-dom';
 
 import QatAuditPanel from './QatAuditPanel';
@@ -3884,6 +3886,21 @@ export default function ArticleResult() {
   const articleSite  = articleSiteId ? wpSites.find(s => s.id === articleSiteId) : null;
   const publishSites = articleSite ? [articleSite] : wpSites;
 
+  // ── « Cet article a DÉJÀ été publié » ──────────────────────────────────────
+  // Les deux actions du menu sont irréversibles — l'une met en ligne, l'autre
+  // RETIRE l'article du site public — et rien ne disait qu'un collègue était
+  // peut-être déjà passé. Sur une file partagée, c'est l'information qui manque
+  // au moment exact où elle compte (demande Andrianina, 16/09/2026).
+  // useMemo : `publicationPrecedente` balaie `originalContent` à la recherche du
+  // tampon de publication, et ce champ pèse l'article entier.
+  const dejaPublie = useMemo(() => publicationPrecedente({
+    publishedAt:  currentArticle?.publishedAt  || cqItem?.majResult?.publishedAt  || '',
+    publishedBy:  currentArticle?.publishedBy  || cqItem?.majResult?.publishedBy  || '',
+    publishedUrl: currentArticle?.publishedUrl || cqItem?.majResult?.publishedUrl || '',
+    originalHtml: agent.originalContent || '',
+  }), [currentArticle?.publishedAt, currentArticle?.publishedBy, currentArticle?.publishedUrl,
+    cqItem?.majResult, agent.originalContent]);
+
   // Dernier segment de chemin d'une URL = slug WordPress (minuscules).
   // Sert à garantir que la cible d'une publication correspond bien à l'article affiché.
   const slugOfUrl = (u) => {
@@ -4329,7 +4346,17 @@ export default function ArticleResult() {
       // on peut vouloir continuer à éditer/republier (ex. ajouter une image). Le brouillon
       // est nettoyé au démarrage d'une NOUVELLE MAJ (Articles.jsx), pas à la publication.
       const finalHtml = getFinalHtml();
-      const pub = { publishedAt: new Date().toISOString(), publishedUrl: result.link || articleUrl || '' };
+      // `publishedBy` — QUI a publié, enregistré depuis le 16/09/2026. Jusque-là
+      // seule la DATE était gardée : le menu Publier ne pouvait pas dire à un
+      // rédacteur qu'un collègue avait déjà mis l'article en ligne, alors que les
+      // deux actions proposées sont irréversibles (dont « brouillons », qui RETIRE
+      // l'article du site). `majAuthor` est le même nom que celui tamponné dans le
+      // HTML envoyé à WordPress — une seule identité, deux traces cohérentes.
+      const pub = {
+        publishedAt: new Date().toISOString(),
+        publishedUrl: result.link || articleUrl || '',
+        ...(majAuthor ? { publishedBy: majAuthor } : {}),
+      };
       const alreadyArchived = agent.currentArticleId && historyList.some(a => a.id === agent.currentArticleId);
 
       if (alreadyArchived) {
@@ -4906,6 +4933,46 @@ export default function ArticleResult() {
                           {/* Options quand ce site est sélectionné */}
                           {showWP === site.id && (
                             <div className="ml-2 pl-3 border-l border-gray-100 space-y-1.5 mt-0.5">
+
+                              {/* ── ÉTIQUETTE : L'ARTICLE A DÉJÀ ÉTÉ PUBLIÉ ──────────────
+                                  Placée EN TÊTE, avant les deux boutons : une information
+                                  qui arrive après le clic n'a servi à rien. Ton neutre et
+                                  pas d'alerte — republier pour mettre à jour est le geste
+                                  NORMAL ; ce qu'on évite, c'est de le faire sans savoir
+                                  qu'un collègue est déjà passé. */}
+                              {dejaPublie.publie && (
+                                <div className="px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-100">
+                                  <p className="text-[11px] text-emerald-800 leading-snug">
+                                    <CheckCircle2 size={12} className="inline mr-1 -mt-0.5 text-emerald-600" />
+                                    Déjà publié
+                                    {/* Le tampon ne porte que le JOUR : on le lit à midi pour
+                                        que le fuseau ne le fasse pas reculer d'une journée. */}
+                                    {dejaPublie.approximatif
+                                      ? ` le ${new Date(`${dejaPublie.quand}T12:00:00`).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}`
+                                      : ` le ${fmtDate(new Date(dejaPublie.quand).getTime())}`}
+                                    {dejaPublie.qui ? ` par ${dejaPublie.qui}` : ''}
+                                  </p>
+                                  <p className="text-[10px] text-emerald-700/70 leading-snug mt-0.5">
+                                    {/* Deux phrases DIFFÉRENTES pour deux situations : « approximatif »
+                                        veut dire que la date vient du tampon laissé dans l'article en
+                                        ligne, pas de notre enregistrement — le jour est sûr, l'heure
+                                        inconnue, et l'auteur peut être celui d'une session perdue. */}
+                                    {dejaPublie.approximatif
+                                      ? "Date lue dans l'article en ligne — heure non enregistrée."
+                                      : "Publier à nouveau mettra l'article à jour."}
+                                  </p>
+                                  {dejaPublie.url && (
+                                    <a
+                                      href={withNoCache(dejaPublie.url)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-[10px] text-emerald-700 underline underline-offset-2 hover:text-emerald-900"
+                                    >
+                                      Voir la version en ligne
+                                    </a>
+                                  )}
+                                </div>
+                              )}
 
                               {/* ── Sélecteur catégories ───────────────────── */}
                               <div>
