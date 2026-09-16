@@ -41,11 +41,16 @@ export const ITEM_STATUS_META = {
 // ── "Mes MAJ" : distingue "à relire" de "publié", que batch_items seul ne
 // sait pas dire (son statut 'fait' veut juste dire "prêt pour la relecture
 // humaine" -- la publication est un fait distinct, tracé dans article_time).
+// `label` habille une PASTILLE à l'écran : quelques caractères, sinon elle casse
+// la ligne du tableau. `exportLabel` habille une CELLULE Excel, lue hors de tout
+// contexte, souvent des semaines plus tard et par quelqu'un qui n'a pas l'écran
+// sous les yeux — « fait » n'y veut rien dire (demande Andrianina, 16/09/2026).
+// Deux libellés, UN seul objet : c'est ce qui garantit qu'ils ne divergeront pas.
 export const DISPLAY_STATUS = {
-  a_traiter: { key: 'a_traiter', label: 'À traiter', color: 'text-amber-600  bg-amber-50  border-amber-200' },
-  a_relire:  { key: 'a_relire',  label: 'À relire',   color: 'text-blue-600   bg-blue-50   border-blue-200' },
-  publie:    { key: 'publie',    label: 'Publié',     color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-  erreur:    { key: 'erreur',    label: 'Erreur',     color: 'text-red-600    bg-red-50    border-red-200' },
+  a_traiter: { key: 'a_traiter', label: 'À traiter', exportLabel: 'En attente de traitement par Tonton', color: 'text-amber-600  bg-amber-50  border-amber-200' },
+  a_relire:  { key: 'a_relire',  label: 'À relire',  exportLabel: 'Traité par Tonton — en attente de relecture', color: 'text-blue-600   bg-blue-50   border-blue-200' },
+  publie:    { key: 'publie',    label: 'Publié',    exportLabel: 'Publié sur WordPress', color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+  erreur:    { key: 'erreur',    label: 'Erreur',    exportLabel: 'Erreur de traitement', color: 'text-red-600    bg-red-50    border-red-200' },
 };
 
 /**
