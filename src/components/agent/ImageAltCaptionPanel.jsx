@@ -21,8 +21,17 @@ export default function ImageAltCaptionPanel({ imageUrl, initialAlt, initialCapt
     if (!apiKey) { toast.error('Clé API Anthropic requise — vérifiez les Paramètres.'); return; }
     setLoading(true);
     try {
-      const { alt: sAlt, caption: sCaption } = await generateImageMeta(imageUrl, apiKey);
-      if (!sAlt && !sCaption) { toast.error('Suggestion impossible — réessayez.'); return; }
+      const { alt: sAlt, caption: sCaption, error } = await generateImageMeta(imageUrl, apiKey);
+      if (!sAlt && !sCaption) {
+        // ── DIRE POURQUOI, PAS « réessayez » ────────────────────────────────
+        // Le message générique a coûté une enquête entière : le rédacteur lisait
+        // « Suggestion impossible — réessayez » pendant que le serveur répondait
+        // « Unable to download the file ». Réessayer ne pouvait rien y changer,
+        // et rien à l'écran ne permettait de le deviner.
+        toast.error(error ? `Suggestion impossible : ${error}` : 'Suggestion impossible — réessayez.',
+          { duration: error ? 9000 : 4000 });
+        return;
+      }
       if (sAlt) setAlt(sAlt);
       if (sCaption) setCaption(sCaption);
     } finally {
