@@ -41,6 +41,7 @@ import { resetAgent, setUpdatedContent, setDiff, setSources, setTokenUsage, setW
   setQatArticle, setPhase, setPhaseStatus, setMajScope, setObsolescenceReport, appliquerSuggestionObsolescence,
   setAuditJson, setAnalysis, setTargetKeyword } from '../../store/slices/agentSlice';
 import { runQatRewrite, runQatAudit } from '../../services/agentQat';
+import { runAffiliateRewrite } from '../../services/agentAffiliate';
 import { runStyleFixAgent } from '../../services/agentStyle';
 import {
   PHASE_AUDIT, PHASE_GENERATION, PHASE_OBSOLESCENCE, PHASE_RELECTURE,
@@ -1837,6 +1838,16 @@ export default function ArticleResult() {
   // pour le filet de publication.
   const [briefLinkRows, setBriefLinkRows] = useState([emptyLinkRow()]);
 
+  // ── MODE AFFILIATION ───────────────────────────────────────────────────────
+  // DÉCOCHÉ par défaut, et ça n'est pas un détail : ce mode ne réécrit QUE les
+  // textes existants — aucune section ajoutée, aucune FAQ, aucun lien interne
+  // (règle 9 suspendue). L'activer par défaut transformerait chaque refonte en
+  // simple rafraîchissement sans que personne ne l'ait demandé.
+  // Même patron que `briefLinkRows` et `auditSelection` : réamorcé sur l'article
+  // depuis le qatBrief enregistré, pour qu'un F5 en phase 2 ne rende pas la main
+  // à un défaut SANS le dire (leçon `agent.targetKeyword`, règle 11).
+  const [affiliation, setAffiliation] = useState(false);
+
   // Suggestions de l'audit déjà versées dans le champ, par article : sans ce
   // repère, une simple relecture de l'audit réinjecterait des paires que le
   // rédacteur vient de supprimer volontairement.
@@ -1855,6 +1866,7 @@ export default function ArticleResult() {
     // SANS le dire — le scenario exact de `agent.targetKeyword`.
     const brief = currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {};
     setAuditSelection(brief.auditSelection || null);
+    setAffiliation(!!brief.affiliation);
     // « TOUCHÉE » VEUT DIRE ARBITRÉE, PAS RELUE. Ce drapeau passait à vrai sur la
     // simple présence d'une sélection enregistrée — or l'autosave tourne en
     // continu, donc dès le premier enregistrement l'effet « suivre l'ampleur »
@@ -2416,7 +2428,7 @@ export default function ArticleResult() {
         // publication et une reouverture apres F5 doivent voir la MEME selection
         // que la generation, sinon l'avertissement factuel porterait sur un audit
         // qui n'est pas celui qui est parti.
-        qatBrief: { ...brief, internalLinks: maillage, auditSelection },
+        qatBrief: { ...brief, internalLinks: maillage, auditSelection, affiliation },
       }));
     }
     const source = agent.originalContent || '';
@@ -2425,7 +2437,25 @@ export default function ArticleResult() {
     setGenStep('Preparation de la generation...');
     dispatch(setPhaseStatus({ phase: PHASE_GENERATION, status: RUNNING }));
     try {
-      const res = await runQatRewrite({
+      // ── MODE AFFILIATION : UN AUTRE CHEMIN, PAS UNE VARIANTE ────────────────
+      // `runQatRewrite` n'est PAS modifiée (règle 7 : on ne touche pas à ce qui
+      // marche). Le mode affiliation est une fonction à part, qui rend la même
+      // forme — l'aiguillage est ici, au seul endroit où le rédacteur a tranché.
+      const res = affiliation
+        ? await runAffiliateRewrite({
+          content:        source,
+          contentHtml:    source,
+          audit:          auditJson,
+          skills,
+          knowledge,
+          targetKeyword:  agent.targetKeyword || '',
+          instruction:    prompt || agent.instruction || '',
+          modelPricing:   settings.modelPricing || null,
+          modelSelections: settings.modelSelections || null,
+          onStep:     (t) => setGenStep(t),
+          onProgress: (p) => setGenProgress(p),
+        })
+        : await runQatRewrite({
         content:        source,
         contentHtml:    source,
         audit:          auditJson,
@@ -2459,7 +2489,14 @@ export default function ArticleResult() {
       // Meme repli que l'ecran de lancement : un article sans balise de bloc
       // deviendrait un mur de texte sans aucun recours.
       const base = /<(p|h[1-6]|table|ul|ol)\b[^>]*>/i.test(raw) ? raw : raw.replace(/\n/g, '<br>');
-      const html = makeTablesResponsive(normalizeFaqToAccordion(base));
+      // ── EN MODE AFFILIATION, AUCUN POST-TRAITEMENT DE STRUCTURE ─────────────
+      // `normalizeFaqToAccordion` convertit une FAQ en titres vers des <details>,
+      // et `makeTablesResponsive` enveloppe chaque <table> dans un conteneur. Les
+      // deux sont justes ailleurs — et les deux RESTRUCTURENT. Sur un article
+      // d'affiliation, la promesse faite au rédacteur est « mêmes URL, mêmes
+      // images, même structure » : elle tomberait ici, après coup, sans que rien
+      // ne le signale.
+      const html = affiliation ? base : makeTablesResponsive(normalizeFaqToAccordion(base));
 
       dispatch(setUpdatedContent(html));
       dispatch(setQatArticle(res.article || null));
@@ -5207,6 +5244,8 @@ export default function ArticleResult() {
               // vaut, et changer d'ampleur ne la reecrit plus.
               auditSelection={auditSelection}
               onAuditSelectionChange={(sel) => { setAuditSelection(sel); setSelectionTouchee(true); }}
+              affiliation={affiliation}
+              onAffiliationChange={setAffiliation}
             />
           )}
           {phase === PHASE_OBSOLESCENCE && (

@@ -69,6 +69,9 @@ export default function PhaseGeneration({
   // les DEUX canaux d'envoi ; sans elle, décocher n'aurait aucun effet réel.
   auditSelection = null,
   onAuditSelectionChange,
+  // Mode affiliation — décoché par défaut, jamais deviné.
+  affiliation = false,
+  onAffiliationChange,
 }) {
   const propose  = scopeProposedByAudit(audit);
   const source   = scopeRecommendationSource(audit);
@@ -143,6 +146,33 @@ export default function PhaseGeneration({
       constats.push({
         cle: 'faq', icone: '❓',
         texte: `FAQ de ${f.questions} questions — ${FAQ_MAX_QUESTIONS} au maximum. À élaguer en relecture.`,
+      });
+    }
+  }
+  // MODE AFFILIATION — le compte rendu de ce qui a été appliqué ET de ce qui ne
+  // l'a pas été. Un bloc non appliqué garde son texte d'origine : sans ce
+  // constat, le rédacteur croirait tout l'article à jour alors qu'une partie
+  // n'a pas bougé. Affiché MÊME quand tout s'est bien passé — ici le total est
+  // l'information, pas l'anomalie.
+  if (qatArticle?.affiliation) {
+    const a = qatArticle.affiliation;
+    constats.push({
+      cle: 'affil', icone: '🔒',
+      texte: `Mode affiliation : ${a.appliques} bloc(s) de texte mis à jour sur ${a.blocsTotal}. `
+        + 'URL, images et encarts inchangés.',
+    });
+    if (a.rejetes?.length) {
+      constats.push({
+        cle: 'affil-rejets', icone: '⚠️',
+        texte: `${a.rejetes.length} bloc(s) NON appliqué(s), texte d'origine conservé — `
+          + `${a.rejetes.slice(0, 2).map((r) => r.motif).join(' · ')}${a.rejetes.length > 2 ? '…' : ''}`,
+      });
+    }
+    if (a.ancresModifiees?.length) {
+      constats.push({
+        cle: 'affil-ancres', icone: '🔗',
+        texte: `${a.ancresModifiees.length} texte(s) de lien reformulé(s) — le lien reste bon, la formulation est à relire : `
+          + a.ancresModifiees.slice(0, 2).map((x) => `« ${x.avant} » → « ${x.apres} »`).join(', '),
       });
     }
   }
@@ -416,6 +446,42 @@ export default function PhaseGeneration({
           Même ton que le bilan de longueur : un CHIFFRE, pas un jugement. Rien
           n'est réparé ici — une élision orpheline demande le genre du mot suivant,
           et un code qui devine écrit « le toiture ». On dit, le rédacteur tranche. */}
+      {/* ── MODE AFFILIATION ────────────────────────────────────────────────
+          Placé juste avant le lancement : c'est la dernière décision que prend
+          le rédacteur, et elle change tout ce qui suit.
+
+          Pourquoi ce mode existe : un comparatif d'affiliation est fait
+          d'encarts, pas de prose — 1 714 mots de texte pour 113 Ko de HTML et 32
+          liens d'affiliation sur l'article qui a motivé ce chantier. La refonte
+          normale demande au modèle de RENVOYER l'article entier : elle échoue
+          par construction, le verrou liens externes rejetant la génération au
+          premier href manquant. Ici le modèle ne voit aucune balise. */}
+      <label className="flex items-start gap-2.5 p-3 rounded-xl border border-amber-200 bg-amber-50/60 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={!!affiliation}
+          onChange={(e) => onAffiliationChange?.(e.target.checked)}
+          className="mt-0.5 w-4 h-4 rounded accent-amber-600"
+        />
+        <span className="flex-1">
+          <span className="text-xs font-semibold text-gray-800">Article d'AFFILIATION</span>
+          <span className="block text-[11px] text-gray-600 leading-snug mt-0.5">
+            Met à jour <strong>uniquement les textes</strong>. Les URL, les images, les
+            encarts comparatifs et la structure restent identiques au caractère près —
+            le modèle ne reçoit aucune balise, c'est le code qui replace les liens.
+          </span>
+          {affiliation && (
+            <span className="block text-[11px] text-amber-800 leading-snug mt-1.5">
+              Dans ce mode : aucune section ajoutée, pas de FAQ, pas de TL;DR, et
+              <strong> aucun lien interne ajouté</strong> — le maillage à 100 % est suspendu.
+              Les paragraphes qui portent un lien sont réécrits, le lien est recollé à
+              l'identique ; si le modèle abîme un repère, le paragraphe reste tel quel et
+              c'est signalé.
+            </span>
+          )}
+        </span>
+      </label>
+
       {dejaGenere && !generating && (constats.length > 0) && (
         <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-3 space-y-1">
           <p className="text-xs font-semibold text-gray-700">Sur le texte produit</p>
