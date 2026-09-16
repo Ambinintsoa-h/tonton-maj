@@ -120,3 +120,134 @@ export const aggregateByLauncher = (items) => {
     }))
     .sort((a, b) => b.count - a.count);
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUIVI DES RÉDACTEURS — demande Andrianina, 15 septembre 2026 :
+// « quel volume par jour par quel user, combien en $, combien de temps tonton ai
+//   traite, et combien de temps l'utilisateur fasse la relecture ».
+//
+// Ces quatre chiffres vivaient dans DEUX tables qui ne se parlaient pas :
+//   • `batch_items` — volume, coût, et durée de TRAITEMENT (completedAt −
+//     startedAt : la machine, pas l'humain) ;
+//   • `relecture_time` — durée de RELECTURE humaine (phases 3 et 4 seulement),
+//     déjà découpée par JOUR et par personne, en deux compteurs « hors Tonton »
+//     (temps actif humain) et « avec Tonton » (le même, PLUS la durée des appels
+//     IA déclenchés pendant la fenêtre).
+//
+// Le rapprochement se fait sur l'IDENTIFIANT (uid), jamais sur le nom affiché :
+// « Sahara RAZAFINDRAKOTO » et « sahara_razafindrakoto » désignent la même
+// personne et deux clés différentes. Le nom ne sert qu'à l'affichage.
+//
+// LE LANCEUR N'EST PAS TOUJOURS LE RELECTEUR, et on ne le maquille pas : une
+// personne qui n'a que relu apparaît avec 0 article et son temps de relecture,
+// une personne qui n'a que lancé apparaît sans temps de relecture. Fondre les
+// deux dans une seule ligne « par article » ferait croire à un lien qui n'existe
+// pas dans la donnée.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Jour local YYYY-MM-DD — jamais toISOString (décalage UTC près de minuit). */
+const localDay = (ts) => {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+/**
+ * Secondes → « 30 min » / « 1 h 30 ». `null` seul vaut « — » : ZÉRO est une
+ * mesure (« personne n'a relu sur la période »), pas une absence de mesure.
+ * Les confondre ferait lire « pas de donnée » là où la donnée dit zéro.
+ */
+export const fmtMinutes = (seconds) => {
+  if (seconds == null) return '—';
+  const min = Math.round(seconds / 60);
+  if (min < 60) return `${min} min`;
+  return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')}`;
+};
+
+/**
+ * Temps de relecture cumulé PAR ARTICLE, tous jours et tous relecteurs confondus.
+ * Sert à la feuille « Détail » de l'export : une ligne = un article.
+ * @returns {Map<string, {horsTontonSeconds:number, avecTontonSeconds:number, relecteurs:string[]}>}
+ */
+export const relectureByArticle = (relectures = []) => {
+  const out = new Map();
+  (relectures || []).forEach((r) => {
+    if (!r?.articleId) return;
+    const e = out.get(r.articleId) || { horsTontonSeconds: 0, avecTontonSeconds: 0, relecteurs: [] };
+    e.horsTontonSeconds += r.horsTontonSeconds || 0;
+    e.avecTontonSeconds += r.avecTontonSeconds || 0;
+    const nom = r.userName || r.userId;
+    if (nom && !e.relecteurs.includes(nom)) e.relecteurs.push(nom);
+    out.set(r.articleId, e);
+  });
+  return out;
+};
+
+/**
+ * LE TABLEAU DEMANDÉ : une ligne par (jour × personne).
+ *
+ * `items` = batch_items déjà filtrés à l'écran ; `relectures` = lignes
+ * relecture_time (bornées à la même période par l'appelant — la route
+ * `/relecture-time` renvoie TOUT, elle n'a pas de filtre de date).
+ *
+ * @returns {Array<{day:string, userId:string, user:string, articles:number,
+ *   costUsd:number, tontonMs:number, tontonCount:number,
+ *   relectureSeconds:number, relectureAvecTontonSeconds:number}>}
+ *   Trié du jour le plus récent au plus ancien, puis par volume décroissant.
+ */
+export const aggregateByDayAndUser = (items = [], relectures = []) => {
+  const rows = new Map();
+  const cle = (day, userId) => `${day}|${userId}`;
+  const entree = (day, userId, user) => {
+    const k = cle(day, userId);
+    if (!rows.has(k)) {
+      rows.set(k, {
+        day, userId, user: user || userId || 'Inconnu',
+        articles: 0, costUsd: 0, tontonMs: 0, tontonCount: 0,
+        relectureSeconds: 0, relectureAvecTontonSeconds: 0,
+      });
+    }
+    const e = rows.get(k);
+    // Le nom le plus lisible gagne : `launched_by_name` porte « Prénom NOM »,
+    // alors qu'une ligne de relecture peut n'avoir que l'identifiant.
+    if (user && (!e.user || e.user === e.userId)) e.user = user;
+    return e;
+  };
+
+  (items || []).forEach((it) => {
+    const ts = it.completedAt || it.startedAt || it.launchedAt;
+    if (!ts) return;
+    const e = entree(localDay(ts), it.launchedBy || it.launchedByName || 'inconnu', it.launchedByName);
+    e.articles += 1;
+    e.costUsd += it.costUsd || 0;
+    if (it.startedAt && it.completedAt) {
+      e.tontonMs += (it.completedAt - it.startedAt);
+      e.tontonCount += 1;
+    }
+  });
+
+  (relectures || []).forEach((r) => {
+    if (!r?.date || !r?.userId) return;
+    const e = entree(r.date, r.userId, r.userName);
+    e.relectureSeconds += r.horsTontonSeconds || 0;
+    e.relectureAvecTontonSeconds += r.avecTontonSeconds || 0;
+  });
+
+  return [...rows.values()].sort((a, b) => (a.day === b.day
+    ? b.articles - a.articles || a.user.localeCompare(b.user)
+    : (a.day < b.day ? 1 : -1)));
+};
+
+/**
+ * Borne une liste relecture_time à une période [from, to] de jours INCLUS
+ * (YYYY-MM-DD). La route serveur renvoie toute la table : sans ce filtre,
+ * l'export contiendrait des jours hors de la période affichée à l'écran — et
+ * l'écran et le fichier ne diraient pas la même chose.
+ */
+export const filterRelectureByPeriod = (relectures = [], from = '', to = '') =>
+  (relectures || []).filter((r) => {
+    if (!r?.date) return false;
+    if (from && r.date < from) return false;
+    if (to && r.date > to) return false;
+    return true;
+  });
