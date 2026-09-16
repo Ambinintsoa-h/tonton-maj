@@ -125,6 +125,24 @@ describe('appliquerReecritures', () => {
     expect(res.html).toContain('&lt;a href=');
   });
 
+  // RELEVÉ EN PRODUCTION le 16/09/2026, au premier essai réel : un paragraphe
+  // qui n'avait que deux liens est revenu avec ⟦3⟧, ⟦4⟧ et ⟦5⟧ autour de termes
+  // ordinaires, et ces caractères sont partis tels quels dans l'article. La
+  // consigne « n'invente aucun marqueur » ne tenait pas ; le contrôle, si.
+  it('retire les marqueurs INVENTÉS par le modèle et garde les mots', () => {
+    const { blocs } = extraireBlocsProse(ARTICLE);
+    const cible = blocs.find((b) => b.liens === 2);
+    const res = appliquerReecritures(ARTICLE, [{
+      id: cible.id,
+      texte: `En 2026, ${O(1)}Bitdefender${F(1)} devance ${O(2)}Norton 360${F(2)} et ${O(5)}Kaspersky${F(5)} sur la protection.`,
+    }]);
+    expect(res.appliques).toBe(1);
+    expect(res.marqueursInventes).toBe(2);          // ⟦5⟧ et ⟦/5⟧
+    expect(res.html).not.toMatch(/[⟦⟧]/); // plus aucun caractère de marqueur
+    expect(res.html).toContain('Kaspersky');        // le mot, lui, est conservé
+    expect(res.html).toContain('href="https://bitdefender.f9tmep.net/c/3120273/827481/4466"');
+  });
+
   it('un id inconnu est rejeté, pas ignoré en silence', () => {
     const res = appliquerReecritures(ARTICLE, [{ id: 999, texte: 'Texte quelconque assez long pour passer les bornes de proportion.' }]);
     expect(res.rejetes[0].motif).toBe('bloc inconnu');

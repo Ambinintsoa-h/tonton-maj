@@ -168,6 +168,13 @@ export default function PhaseGeneration({
           + `${a.rejetes.slice(0, 2).map((r) => r.motif).join(' · ')}${a.rejetes.length > 2 ? '…' : ''}`,
       });
     }
+    if (a.marqueursInventes) {
+      constats.push({
+        cle: 'affil-reperes', icone: '🧹',
+        texte: `${a.marqueursInventes} repère(s) inventé(s) par l'IA retiré(s) du texte — les mots sont conservés, `
+          + "aucun lien n'était concerné.",
+      });
+    }
     if (a.ancresModifiees?.length) {
       constats.push({
         cle: 'affil-ancres', icone: '🔗',
