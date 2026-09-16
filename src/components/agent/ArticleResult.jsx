@@ -1335,6 +1335,10 @@ export default function ArticleResult() {
     ...(publishDate ? { publishDate } : {}),
     ...(agent.instruction ? { instruction: agent.instruction } : {}),
     ...(titleDirty && editedTitle ? { editedTitle } : {}),
+    // MODE AFFILIATION — un booléen, donc compatible avec l'exigence de ce bloc :
+    // il part à CHAQUE autosave, il doit rester minuscule. Écrit même à `false`,
+    // sinon décocher la case ne se propagerait jamais.
+    affiliation,
     // AVANCEMENT DU PARCOURS — écrit à CHAQUE enregistrement, plus seulement au
     // « Terminer ». C'était la cause du grisage : entre la génération (phase 2)
     // et le clic sur « Terminer », `phaseStatus` ne vivait QUE dans Redux et le
@@ -1866,7 +1870,14 @@ export default function ArticleResult() {
     // SANS le dire — le scenario exact de `agent.targetKeyword`.
     const brief = currentArticle?.qatBrief || cqItem?.majResult?.qatBrief || {};
     setAuditSelection(brief.auditSelection || null);
-    setAffiliation(!!brief.affiliation);
+    // UNE SEULE SOURCE : le champ `affiliation` de l'ARTICLE, écrit à chaque
+    // autosave (`articleMetaRef`). Il était d'abord rangé dans le `qatBrief`,
+    // qui n'est persisté qu'au « Terminer » : rouvrir l'article après une
+    // génération rendait la case DÉCOCHÉE sans le dire, et la relance repartait
+    // en refonte totale — celle qui échoue sur ces articles. Relevé au test réel
+    // du 16/09. C'est le scénario de `agent.targetKeyword` (règle 11), à la
+    // lettre.
+    setAffiliation(!!(currentArticle?.affiliation ?? cqItem?.majResult?.affiliation));
     // « TOUCHÉE » VEUT DIRE ARBITRÉE, PAS RELUE. Ce drapeau passait à vrai sur la
     // simple présence d'une sélection enregistrée — or l'autosave tourne en
     // continu, donc dès le premier enregistrement l'effet « suivre l'ampleur »
@@ -2428,7 +2439,10 @@ export default function ArticleResult() {
         // publication et une reouverture apres F5 doivent voir la MEME selection
         // que la generation, sinon l'avertissement factuel porterait sur un audit
         // qui n'est pas celui qui est parti.
-        qatBrief: { ...brief, internalLinks: maillage, auditSelection, affiliation },
+        qatBrief: { ...brief, internalLinks: maillage, auditSelection },
+        // Rangé sur l'ARTICLE, pas dans le brief : le brief n'est persisté qu'au
+        // « Terminer », l'autosave passe toutes les quelques secondes.
+        affiliation,
       }));
     }
     const source = agent.originalContent || '';
