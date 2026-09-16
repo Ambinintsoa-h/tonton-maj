@@ -58,6 +58,14 @@ Table `relecture_time`, alimentée par `relectureTimeTracker.js`. Deux compteurs
   cette fenêtre (passe de style, réécriture de passage ou de section, vérification
   d'obsolescence). Il est donc toujours **≥** « hors Tonton », rien n'est à soustraire.
 
+L'export n'affiche **pas** ces deux totaux côte à côte : il montre la durée humaine, puis
+l'**écart** entre les deux, sous le nom « dont attente IA (s) ». Mesuré le 16 septembre 2026
+sur la table entière : 4 lignes sur 110 diffèrent, pour **18 secondes** d'écart cumulé — les
+actions IA des phases 3 et 4 ne sont quasiment jamais déclenchées. Deux colonnes affichant le
+même nombre n'informaient pas, elles faisaient douter du fichier entier. Un zéro dans la
+colonne d'écart, lui, se lit tout de suite : aucune aide IA sur cette relecture.
+L'instrumentation, elle, est complète et vérifiée — les cinq appels concernés sont branchés.
+
 ⚠️ **Périmètre** : uniquement les **phases 3 (Obsolescence) et 4 (Relecture)**. Ni l'audit,
 ni la génération — c'est bien le temps de **relecture**, pas le temps passé sur l'article.
 
@@ -105,15 +113,23 @@ Nom du fichier : `tonton-suivi-redacteurs_2026-09-01_au_2026-09-30.xlsx`
 | Lancé le · Démarré le · Terminé le | horodatages réels |
 | Traitement Tonton (s) | temps machine |
 | Relecture humaine (min) | temps humain cumulé sur cet article, tous jours et tous relecteurs |
-| Relecture avec Tonton (min) | idem, appels IA inclus |
+| dont attente IA (s) | la part passée à attendre un appel IA |
 | Relu par | qui a relu |
 | Coût ($) | coût API réel |
-| Statut · Publié le | état et publication |
+| Statut | en clair : « Publié sur WordPress », « Traité par Tonton — en attente de relecture », « En attente de traitement par Tonton », « Erreur de traitement » |
+| Publié le | horodatage de publication |
+
+Le statut n'est pas la valeur brute de la base (`fait`, `erreur`) : « fait » veut dire
+« Tonton a fini », pas « publié ». La colonne écrit l'état réel, celui que l'écran affiche
+déjà — un fichier ouvert trois semaines plus tard doit se lire sans l'application à côté.
 
 ### Feuille « Par jour et par rédacteur » — **la réponse à la question posée**
 
 Une ligne par couple (jour × personne) : Articles traités · Coût ($) · Traitement Tonton
-(min et moyenne) · Relecture humaine (min) · Relecture avec Tonton (min).
+(min) · Relecture humaine (min) · dont attente IA (s).
+
+**Une seule colonne par durée** : une pour la machine, une pour l'humain. La moyenne par
+article vit dans la feuille « Par utilisateur », elle n'a pas à encombrer celle-ci.
 
 C'est la feuille à ouvrir pour « quel volume par jour par quel user, combien en $, combien
 de temps Tonton traite, combien de temps l'utilisateur relit ».

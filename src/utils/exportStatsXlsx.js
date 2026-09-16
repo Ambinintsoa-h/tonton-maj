@@ -13,17 +13,39 @@
  *   • Par utilisateur    — les mêmes agrégats, sans le découpage par jour ;
  *   • Par jour           — volume et coût de toute l'équipe, jour par jour.
  *
- * DEUX DURÉES QUI NE SE MÉLANGENT JAMAIS, et c'est le point à ne pas perdre :
- *   • « Tonton » = temps MACHINE (completedAt − startedAt d'un batch_item) ;
- *   • « Relecture » = temps HUMAIN actif, phases 3 et 4 seulement, pauses de
- *     plus de 5 minutes exclues.
+ * DEUX DURÉES, UNE COLONNE CHACUNE, et c'est le point à ne pas perdre :
+ *   • « Traitement Tonton » = temps MACHINE (completedAt − startedAt) ;
+ *   • « Relecture humaine » = temps HUMAIN actif, phases 3 et 4 seulement,
+ *     pauses de plus de 5 minutes exclues.
  * Les additionner donnerait un « temps total » qui ne veut rien dire : pendant
  * que Tonton traite un article, le rédacteur en relit un autre.
+ *
+ * ── UNE SEULE COLONNE PAR DURÉE, ET UN ÉCART (demande Andrianina, 16/09/2026) ─
+ * La première version en sortait quatre : « Tonton (min) » ET « Tonton moyen
+ * (s) », « Relecture humaine » ET « Relecture avec Tonton ». Les deux dernières
+ * affichaient le MÊME nombre sur toutes les lignes — mesuré sur la table
+ * entière : 4 lignes sur 110 diffèrent, pour 18 secondes d'écart cumulé, parce
+ * que les actions IA des phases 3 et 4 ne sont quasiment jamais déclenchées.
+ * Deux colonnes identiques côte à côte n'informent pas, elles font douter de
+ * tout le fichier.
+ *
+ * Reste donc UNE durée machine, UNE durée humaine, et — à la place du doublon —
+ * « dont attente IA (s) » : l'ÉCART entre les deux compteurs, c'est-à-dire le
+ * temps passé à attendre une passe de style, une réécriture ou une vérification
+ * d'obsolescence. Même donnée qu'avant, mais un zéro se lit immédiatement
+ * « aucune aide IA sur cette relecture », là où deux nombres identiques ne
+ * disaient rien. En secondes et pas en minutes : à cette échelle, des minutes
+ * arrondiraient tout à 0 et effaceraient le peu qu'il y a à voir.
  */
 import * as XLSX from 'xlsx';
-import { fmtDate, relectureByArticle } from './batchDisplay';
+import { fmtDate, relectureByArticle, DISPLAY_STATUS, deriveDisplayStatus } from './batchDisplay';
 
 const min = (s) => (s ? Math.round(s / 60) : 0);
+// Écart entre les deux compteurs de relecture = temps d'ATTENTE d'un appel IA.
+// Jamais négatif par construction (`avec` inclut `hors`), mais on borne quand
+// même : une ligne écrite par une version antérieure du tracker ne doit pas
+// sortir un nombre absurde dans un fichier qu'on transmet.
+const attenteIA = (hors, avec) => Math.max(0, Math.round((avec || 0) - (hors || 0)));
 const usd = (n) => (n != null ? Number(n.toFixed(4)) : '');
 
 /**
@@ -55,10 +77,14 @@ export const exportStatsToExcel = ({
       'Terminé le': fmtDate(it.completedAt),
       'Traitement Tonton (s)': it.startedAt && it.completedAt ? Math.round((it.completedAt - it.startedAt) / 1000) : '',
       'Relecture humaine (min)': r ? min(r.horsTontonSeconds) : '',
-      'Relecture avec Tonton (min)': r ? min(r.avecTontonSeconds) : '',
+      'dont attente IA (s)': r ? attenteIA(r.horsTontonSeconds, r.avecTontonSeconds) : '',
       'Relu par': r ? r.relecteurs.join(', ') : '',
       'Coût ($)': usd(it.costUsd),
-      Statut: it.status || '',
+      // `it.status` brut sortait « fait » / « erreur » — illisible hors contexte,
+      // et surtout FAUX par omission : « fait » veut dire « Tonton a fini », pas
+      // « publié ». On écrit le statut RÉEL, celui que l'écran affiche déjà
+      // (`deriveDisplayStatus` croise le statut du lot et la publication).
+      Statut: (DISPLAY_STATUS[deriveDisplayStatus(it)] || {}).exportLabel || it.status || '',
       'Publié le': fmtDate(it.publishedAt),
     };
   });
@@ -73,9 +99,8 @@ export const exportStatsToExcel = ({
     'Articles traités': r.articles,
     'Coût ($)': usd(r.costUsd),
     'Traitement Tonton (min)': r.tontonCount ? min(r.tontonMs / 1000) : '',
-    'Traitement Tonton moyen (s)': r.tontonCount ? Math.round(r.tontonMs / r.tontonCount / 1000) : '',
     'Relecture humaine (min)': min(r.relectureSeconds),
-    'Relecture avec Tonton (min)': min(r.relectureAvecTontonSeconds),
+    'dont attente IA (s)': attenteIA(r.relectureSeconds, r.relectureAvecTontonSeconds),
   }));
 
   // Totaux de relecture par personne, pour compléter la vue « Par utilisateur »
@@ -96,7 +121,7 @@ export const exportStatsToExcel = ({
       "Taux d'erreur (%)": Number((l.errorRate * 100).toFixed(1)),
       'Traitement Tonton moyen (s)': l.avgDurationMs != null ? Math.round(l.avgDurationMs / 1000) : '',
       'Relecture humaine (min)': min(r.hors),
-      'Relecture avec Tonton (min)': min(r.avec),
+      'dont attente IA (s)': attenteIA(r.hors, r.avec),
       'Coût moyen ($)': usd(l.avgCostUsd),
       'Coût total ($)': l.totalCostUsd != null ? Number(l.totalCostUsd.toFixed(2)) : '',
     };
