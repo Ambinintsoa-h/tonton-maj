@@ -26,6 +26,11 @@
 -- même règle que le "retrait de l'ancien avant ajout du nouveau" déjà en place
 -- pour stats.totalByPass (voir migration/alter-stats-by-pass.sql).
 --
+-- Collation utf8mb4_unicode_ci (comme `articles`.`id`) : un `article_id`
+-- ici doit comparer IDENTIQUEMENT à `articles`.`id` (verifie sur le dump
+-- phpMyAdmin du 22/09/2026) -- une collation differente casserait une
+-- future jointure avec « Illegal mix of collations ».
+--
 -- Sans risque : table neuve, n'affecte aucune donnée existante.
 -- ─────────────────────────────────────────────────────────────────────────────
 
@@ -43,7 +48,7 @@ CREATE TABLE IF NOT EXISTS model_call_log (
   PRIMARY KEY (article_id, pass, sub_pass),
   KEY idx_model_call_log_model_date (model, logged_at),
   KEY idx_model_call_log_date (logged_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Vérification (doit afficher la table, vide) :
 -- SELECT COUNT(*) FROM model_call_log;
