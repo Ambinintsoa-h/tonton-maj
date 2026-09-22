@@ -32,7 +32,15 @@ const api = async (method, path, body) => {
   return res.json();
 };
 
-export const listBatches = (limit = 20) => api('GET', `?limit=${encodeURIComponent(limit)}`);
+// `search` (titre d'article généré, mot-clé cible ou URL) : quand fourni, le
+// serveur ignore `limit` et cherche dans TOUT l'historique des lots (voir
+// GET /batches ci-dessus, data-api.js) -- l'appelant n'a donc rien à changer
+// à `limit` selon qu'une recherche est en cours ou non.
+export const listBatches = (limit = 20, { search } = {}) => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (search) params.set('search', search);
+  return api('GET', `?${params.toString()}`);
+};
 
 export const getBatch = (id) => api('GET', `/${encodeURIComponent(id)}`);
 

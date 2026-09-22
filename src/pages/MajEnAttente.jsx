@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ListChecks, RefreshCw, ExternalLink, Eye, Download } from 'lucide-react';
+import { ListChecks, RefreshCw, ExternalLink, Eye, Download, Search, X } from 'lucide-react';
 import Pagination, { pageSlice } from '../components/common/Pagination';
 import Badge from '../components/common/Badge';
 import { listMyBatchItems } from '../services/batchItems';
@@ -92,6 +92,18 @@ export default function MajEnAttente() {
   const [dateTo, setDateTo] = useState(() => localIso(new Date()));
   const [siteFilter, setSiteFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  // Recherche AJAX (titre d'article généré, mot-clé ou URL) -- `search` est ce
+  // que le champ affiche, `debouncedSearch` ce qui part réellement à l'API,
+  // décalé de 350 ms pour ne pas taper la base à chaque frappe. Tant qu'une
+  // recherche est active, le serveur ignore la période (voir refresh() et
+  // data-api.js) : chercher un titre précis n'a pas de raison de se limiter
+  // aux 30 derniers jours affichés par défaut.
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
   const [page, setPage] = useState(1);
 
   const [staged, setStaged] = useState([]);
@@ -122,19 +134,19 @@ export default function MajEnAttente() {
     try {
       const from = new Date(`${dateFrom}T00:00:00`).getTime();
       const to = new Date(`${dateTo}T23:59:59.999`).getTime();
-      const list = await listMyBatchItems({ from, to });
+      const list = await listMyBatchItems({ from, to, search: debouncedSearch });
       setItems(list);
     } catch (e) {
       toast.error(`Impossible de charger "Mes MAJ" : ${e.message}`);
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo]);
+  }, [dateFrom, dateTo, debouncedSearch]);
 
   useEffect(() => { refresh(); }, [refresh]);
   // Une nouvelle recherche repart toujours de la page 1 -- sinon un filtre qui
   // réduit la liste peut laisser l'affichage sur une page devenue vide.
-  useEffect(() => { setPage(1); }, [siteFilter, statusFilter, dateFrom, dateTo]);
+  useEffect(() => { setPage(1); }, [siteFilter, statusFilter, dateFrom, dateTo, debouncedSearch]);
 
   const refreshStaged = useCallback(async () => {
     setLoadingStaged(true);
@@ -341,14 +353,46 @@ export default function MajEnAttente() {
         </div>
       )}
 
+      {/* Recherche -- AJAX côté serveur (titre d'article généré, mot-clé ou
+          URL), sur TOUT l'historique dès qu'elle est active : la période
+          ci-dessous est alors ignorée côté serveur, on le dit explicitement
+          pour ne pas laisser croire qu'elle continue de s'appliquer. */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-1.5">
+        <div className="relative">
+          <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Rechercher par titre, mot-clé ou URL..."
+            className="w-full pl-9 pr-9 py-2 text-sm bg-white border border-gray-200 rounded-lg text-gray-700 focus:outline-none focus:ring-2 focus:ring-black/10"
+          />
+          {search && (
+            <button
+              type="button" onClick={() => setSearch('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-600"
+              title="Effacer la recherche"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+        {debouncedSearch && (
+          <p className="text-[11px] text-gray-400 pl-1">
+            Recherche sur tout l'historique -- la période ci-dessous est ignorée tant qu'elle est active.
+          </p>
+        )}
+      </div>
+
       {/* Filtres */}
       <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1.5">
+        <div className={`flex items-center gap-1.5 ${debouncedSearch ? 'opacity-40 pointer-events-none' : ''}`}>
           <input
             type="date" value={dateFrom} max={dateTo}
             onChange={(e) => setDateFrom(e.target.value)}
             className="px-2 py-1.5 text-[12px] bg-white border border-gray-200 rounded-lg text-gray-600 focus:outline-none focus:ring-2 focus:ring-black/10"
             title="Du (inclus)"
+            disabled={!!debouncedSearch}
           />
           <span className="text-gray-300 text-[11px] select-none">→</span>
           <input
@@ -356,12 +400,14 @@ export default function MajEnAttente() {
             onChange={(e) => setDateTo(e.target.value)}
             className="px-2 py-1.5 text-[12px] bg-white border border-gray-200 rounded-lg text-gray-600 focus:outline-none focus:ring-2 focus:ring-black/10"
             title="Au (inclus)"
+            disabled={!!debouncedSearch}
           />
         </div>
         {DATE_PRESETS.map((p) => (
           <button
             key={p.label} type="button" onClick={() => applyDatePreset(p)}
-            className="px-2.5 py-1.5 rounded-full text-[12px] font-medium border bg-white text-gray-500 border-gray-200 hover:bg-gray-50 whitespace-nowrap"
+            disabled={!!debouncedSearch}
+            className="px-2.5 py-1.5 rounded-full text-[12px] font-medium border bg-white text-gray-500 border-gray-200 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40 disabled:pointer-events-none"
           >
             {p.label}
           </button>
@@ -385,7 +431,11 @@ export default function MajEnAttente() {
       {/* Tableau */}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         {loading && !items.length && <p className="text-sm text-gray-400 py-10 text-center">Chargement...</p>}
-        {!loading && !filtered.length && <p className="text-sm text-gray-400 py-10 text-center">Aucun article sur cette période.</p>}
+        {!loading && !filtered.length && (
+          <p className="text-sm text-gray-400 py-10 text-center">
+            {debouncedSearch ? `Aucun résultat pour « ${debouncedSearch} ».` : 'Aucun article sur cette période.'}
+          </p>
+        )}
         {filtered.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

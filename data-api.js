@@ -1040,8 +1040,32 @@ module.exports = ({ requireAuth, requireRole }) => {
     ...(r.output_tokens != null ? { outputTokens: r.output_tokens } : {}),
   });
 
-  // GET /batches?limit=20 — liste des batches, plus récents d'abord (supervision).
+  // GET /batches?limit=20&search=... — liste des batches, plus récents
+  // d'abord (supervision). `search` (titre d'article généré, mot-clé cible ou
+  // URL, mêmes trois colonnes que /batch-items) sélectionne les LOTS qui
+  // contiennent AU MOINS UN item correspondant -- la recherche porte sur les
+  // items (un batch lui-même n'a ni titre ni URL), remontée au niveau du lot
+  // pour rester cohérente avec l'écran (Historique des lots), qui affiche des
+  // lots et charge leurs items au clic. `search` retire aussi le plafond
+  // `limit` par défaut (20, pensé pour "les derniers lots") au profit d'un
+  // plafond plus large : chercher un titre précis n'a pas de raison de se
+  // limiter aux 20 lots les plus récents.
   router.get('/batches', requireAuth, wrap(async (req, res) => {
+    const search = String(req.query.search || '').trim();
+    if (search) {
+      const like = `%${search}%`;
+      const [rows] = await q(
+        `SELECT DISTINCT b.*
+           FROM batches b
+           JOIN batch_items bi ON bi.batch_id = b.id
+           LEFT JOIN articles a ON a.id = bi.article_id
+          WHERE a.title LIKE ? OR bi.target_keyword LIKE ? OR bi.article_url LIKE ?
+          ORDER BY b.launched_at DESC
+          LIMIT 100`,
+        [like, like, like],
+      );
+      return res.json(rows.map(batchToObj));
+    }
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
     const [rows] = await q('SELECT * FROM batches ORDER BY launched_at DESC LIMIT ?', [limit]);
     res.json(rows.map(batchToObj));
@@ -1182,24 +1206,50 @@ module.exports = ({ requireAuth, requireRole }) => {
   // pour le même article.
   router.get('/batch-items', requireAuth, wrap(async (req, res) => {
     const DAY_MS = 24 * 60 * 60 * 1000;
+    // `search` (jamais `q` -- déjà pris par le helper de requête SQL ci-dessus)
+    // cherche par TITRE (celui de l'article une fois généré, `articles.title`,
+    // via LEFT JOIN sur article_id) ou par MOT-CLÉ/URL (bi.target_keyword,
+    // bi.article_url) -- ce sont les trois colonnes qui identifient une MAJ
+    // pour un humain sur cet écran. Une recherche ACTIVE ignore volontairement
+    // la période (from/to) : chercher un titre/une URL précis n'a pas de sens
+    // borné à 30 jours glissants -- c'est justement pour retrouver une MAJ
+    // qu'on ne sait plus situer dans le temps. Sans recherche, comportement
+    // inchangé (fenêtre de date comme avant).
+    const search = String(req.query.search || '').trim();
     const to = parseInt(req.query.to, 10) || Date.now();
     const from = parseInt(req.query.from, 10) || (to - 30 * DAY_MS);
 
     const wantsMine = req.user.role === 'cq_ia' || req.query.scope === 'mine';
-    const params = [from, to];
-    let scopeSql = '';
+    const conditions = [];
+    const params = [];
+    if (search) {
+      const like = `%${search}%`;
+      conditions.push('(a.title LIKE ? OR bi.target_keyword LIKE ? OR bi.article_url LIKE ?)');
+      params.push(like, like, like);
+    } else {
+      conditions.push('b.launched_at >= ? AND b.launched_at <= ?');
+      params.push(from, to);
+    }
     if (wantsMine) {
-      scopeSql = 'AND b.launched_by = ?';
+      conditions.push('b.launched_by = ?');
       params.push(req.user.uid);
     }
+    const whereSql = `WHERE ${conditions.join(' AND ')}`;
+    // Une recherche texte peut remonter des années de MAJ -- plafond de bon
+    // sens (l'écran affiche par pages de 20, personne ne fait défiler 300
+    // lignes) plutôt qu'un aller-retour DB potentiellement énorme et sans
+    // rapport avec ce que la période bornait déjà implicitement avant.
+    const limitSql = search ? 'LIMIT 300' : '';
 
     const [rows] = await q(
       `SELECT bi.*, b.launched_by, b.launched_by_name, b.launched_at,
               (SELECT MAX(at.published_at) FROM article_time at WHERE at.article_id = bi.article_id) AS published_at
          FROM batch_items bi
          JOIN batches b ON b.id = bi.batch_id
-        WHERE b.launched_at >= ? AND b.launched_at <= ? ${scopeSql}
-        ORDER BY COALESCE(bi.completed_at, bi.started_at, b.launched_at) DESC`,
+         LEFT JOIN articles a ON a.id = bi.article_id
+        ${whereSql}
+        ORDER BY COALESCE(bi.completed_at, bi.started_at, b.launched_at) DESC
+        ${limitSql}`,
       params,
     );
     res.json(rows.map((r) => ({
