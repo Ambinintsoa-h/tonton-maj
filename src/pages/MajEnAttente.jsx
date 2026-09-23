@@ -12,6 +12,7 @@ import {
   aggregateByLauncher, aggregateByDayAndUser, filterRelectureByPeriod,
 } from '../utils/batchDisplay';
 import { exportStatsToExcel } from '../utils/exportStatsXlsx';
+import { listModelCallLog } from '../services/modelCallLog';
 import { getRelectureTimeAll } from '../services/firebase';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -202,11 +203,29 @@ export default function MajEnAttente() {
   // Export .xlsx (demande Andrianina, sept. 2026) : reflète EXACTEMENT ce qui
   // est filtré à l'écran (période, site, statut) -- pas un second chargement
   // séparé, la même donnée que ce que le rédacteur voit.
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!filtered.length) { toast.error('Rien à exporter sur cette période/ces filtres.'); return; }
+    // Modèle(s) IA réellement utilisé(s) par article (model_call_log) --
+    // best-effort : un échec (base pas encore migrée, souci réseau) ne doit
+    // JAMAIS empêcher l'export, juste laisser la colonne « Modèle » vide.
+    // Une recherche AJAX ignore la période (tout l'historique, voir plus haut) --
+    // même logique ici pour ne pas rater le modèle des articles trouvés hors
+    // dateFrom/dateTo.
+    let modelCallLog = [];
+    try {
+      const res = debouncedSearch
+        ? await listModelCallLog()
+        : await listModelCallLog({
+          since: new Date(`${dateFrom}T00:00:00`).getTime(),
+          until: new Date(`${dateTo}T23:59:59.999`).getTime(),
+        });
+      modelCallLog = res.rows || [];
+    } catch (e) {
+      console.warn('[export] modèle par article indisponible :', e.message);
+    }
     const n = exportStatsToExcel({
       items: filtered, byLauncher, byDayUser, byDay: costByDay,
-      relectures: relecturesPeriode, from: dateFrom, to: dateTo,
+      relectures: relecturesPeriode, modelCallLog, from: dateFrom, to: dateTo,
     });
     // On DIT ce que le fichier contient : un .xlsx qui tombe dans les
     // téléchargements sans un mot laisse le doute sur ce qu'on vient d'exporter.
