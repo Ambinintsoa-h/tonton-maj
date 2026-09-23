@@ -2022,6 +2022,10 @@ if (DATA_BACKEND === 'mysql') {
     jwt,
     jwtSecret: JWT_SECRET,
     fetchModelPricing,
+    // Choix de modèle par passe (Paramètres -> Gestion des modèles IA), lus depuis
+    // data/settings.json -- même source que POST/GET /api/settings. Sans ça, "MAJ en
+    // lot" ignorait totalement ces réglages (voir JSDoc de createBatchOrchestrator).
+    getModelSelections: () => readServerSettings().modelSelections || null,
     apiBaseUrl: `${IS_PROD ? 'https://maj.stomos.net' : `http://127.0.0.1:${PORT}`}/api`,
     // Le process n'a pas d'accès au .env du serveur en pratique (hébergement
     // mutualisé, personne côté équipe n'a la main dessus) -- la valeur qui

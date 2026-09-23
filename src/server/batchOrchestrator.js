@@ -44,6 +44,14 @@ const DEFAULT_TOKEN_TTL = '20m';
  * @param {object} deps.jwt                module `jsonwebtoken` (injecté pour les tests)
  * @param {string} deps.jwtSecret
  * @param {function} deps.fetchModelPricing () => Promise<object|null>
+ * @param {function} [deps.getModelSelections] () => object|null — choix de modèle par
+ *   passe (settings.modelSelections, data/settings.json). SANS ÇA, chaque item batch
+ *   retombait silencieusement sur le modèle PAR DÉFAUT du registre (MODEL_PASSES,
+ *   agent.js -- Sonnet 5 pour audit_qat/refonte/gras/style/obsolescence/réécriture),
+ *   en ignorant totalement les modèles choisis dans Paramètres -- constaté le
+ *   23/09/2026 (394 $ de coût réel Sonnet 5 sur la période, alors que TOUTES les
+ *   passes étaient réglées sur Haiku 4.5 dans l'UI). Défaut `() => null` : même
+ *   comportement qu'avant si le déploiement ne fournit pas cette dépendance.
  * @param {string} deps.apiBaseUrl         ex. https://maj.stomos.net/api
  * @param {number} [deps.concurrency]
  * @param {function} [deps.spawnPipelineFn] injecté pour les tests
@@ -57,6 +65,7 @@ function createBatchOrchestrator(deps) {
     jwt,
     jwtSecret,
     fetchModelPricing,
+    getModelSelections = () => null,
     apiBaseUrl,
     concurrency = DEFAULT_CONCURRENCY,
     spawnPipelineFn = defaultSpawnPipeline,
@@ -172,12 +181,18 @@ function createBatchOrchestrator(deps) {
 
       onLog(`[batch] Démarrage item ${item.id} (${item.article_url})`);
       const modelPricing = await fetchModelPricing().catch(() => null);
+      // Même choix de modèle par passe que l'UI (Paramètres) -- sans ça, ce chemin
+      // (headless, séparé de Articles.jsx/ArticleResult.jsx) retombait sur les
+      // défauts du registre au lieu des modèles réellement configurés.
+      let modelSelections = null;
+      try { modelSelections = getModelSelections() || null; } catch { modelSelections = null; }
       const authToken = buildAuthToken(item);
       const outcome = await spawnPipelineFn({
         articleUrl: item.article_url,
         targetKeyword: item.target_keyword,
         instruction: item.consigne || '',
         modelPricing,
+        modelSelections,
         launchedByUid: item.launched_by,
         launchedByName: item.launched_by_name || 'Batch',
         apiBaseUrl,
