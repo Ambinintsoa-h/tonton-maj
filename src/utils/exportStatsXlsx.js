@@ -47,6 +47,12 @@ const min = (s) => (s ? Math.round(s / 60) : 0);
 // sortir un nombre absurde dans un fichier qu'on transmet.
 const attenteIA = (hors, avec) => Math.max(0, Math.round((avec || 0) - (hors || 0)));
 const usd = (n) => (n != null ? Number(n.toFixed(4)) : '');
+// Taux FIXE, pas un appel API de change à chaque export -- même logique que le
+// tableau ChatSEO fourni en référence (Andrianina, 23/09/2026), qui applique
+// lui aussi 0,92 partout plutôt qu'un taux du jour. À ajuster ici si le taux
+// dérive durablement (pas pour un export ponctuel).
+const USD_TO_EUR = 0.92;
+const eur = (n) => (n != null ? Number((n * USD_TO_EUR).toFixed(4)) : '');
 
 /**
  * @param {object} args
@@ -67,7 +73,12 @@ export const exportStatsToExcel = ({
 
   const detailRows = items.map((it) => {
     const r = relecture.get(it.articleId) || null;
+    // `articleTitle` ne vient que du LEFT JOIN articles côté serveur (GET
+    // /batch-items) -- absent pour un item jamais allé au bout (erreur avant
+    // création de l'article) : on retombe alors sur l'URL, jamais une cellule
+    // vide qui laisserait croire à un bug d'export.
     return {
+      Titre: it.articleTitle || it.articleUrl || '',
       Article: it.articleUrl || '',
       Site: it.site || '',
       'Mot-clé': it.targetKeyword || '',
@@ -79,7 +90,11 @@ export const exportStatsToExcel = ({
       'Relecture humaine (min)': r ? min(r.horsTontonSeconds) : '',
       'dont attente IA (s)': r ? attenteIA(r.horsTontonSeconds, r.avecTontonSeconds) : '',
       'Relu par': r ? r.relecteurs.join(', ') : '',
+      'Tokens entrée': it.inputTokens != null ? it.inputTokens : '',
+      'Tokens sortie': it.outputTokens != null ? it.outputTokens : '',
+      'Tokens total': (it.inputTokens != null && it.outputTokens != null) ? (it.inputTokens + it.outputTokens) : '',
       'Coût ($)': usd(it.costUsd),
+      'Coût (€)': eur(it.costUsd),
       // `it.status` brut sortait « fait » / « erreur » — illisible hors contexte,
       // et surtout FAUX par omission : « fait » veut dire « Tonton a fini », pas
       // « publié ». On écrit le statut RÉEL, celui que l'écran affiche déjà

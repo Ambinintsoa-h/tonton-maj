@@ -1038,6 +1038,13 @@ module.exports = ({ requireAuth, requireRole }) => {
     ...(r.cost_usd != null ? { costUsd: r.cost_usd } : {}),
     ...(r.input_tokens != null ? { inputTokens: r.input_tokens } : {}),
     ...(r.output_tokens != null ? { outputTokens: r.output_tokens } : {}),
+    // `article_title` ne vient QUE d'un LEFT JOIN articles (voir GET /batch-items
+    // ci-dessous) -- absent des appels qui ne le sélectionnent pas (GET
+    // /batches/:id, qui lit batch_items seule, sans ce JOIN). D'où le
+    // `!= null` : ne jamais écrire `articleTitle: undefined` qui casserait
+    // silencieusement un export qui s'attend à la clé absente plutôt qu'à
+    // une valeur vide.
+    ...(r.article_title != null ? { articleTitle: r.article_title } : {}),
   });
 
   // GET /batches?limit=20 — liste des batches, plus récents d'abord (supervision).
@@ -1194,10 +1201,11 @@ module.exports = ({ requireAuth, requireRole }) => {
     }
 
     const [rows] = await q(
-      `SELECT bi.*, b.launched_by, b.launched_by_name, b.launched_at,
+      `SELECT bi.*, b.launched_by, b.launched_by_name, b.launched_at, a.title AS article_title,
               (SELECT MAX(at.published_at) FROM article_time at WHERE at.article_id = bi.article_id) AS published_at
          FROM batch_items bi
          JOIN batches b ON b.id = bi.batch_id
+         LEFT JOIN articles a ON a.id = bi.article_id
         WHERE b.launched_at >= ? AND b.launched_at <= ? ${scopeSql}
         ORDER BY COALESCE(bi.completed_at, bi.started_at, b.launched_at) DESC`,
       params,
