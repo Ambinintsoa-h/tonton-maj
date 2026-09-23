@@ -22,13 +22,19 @@ const api = async (path) => {
   return res.json();
 };
 
-// { from?, to?: timestamps ms ; scope?: 'mine' | 'all' } -- un cq_ia est de
-// toute façon forcé sur "mine" côté serveur, quel que soit ce qui est envoyé.
-export const listMyBatchItems = ({ from, to, scope } = {}) => {
+// { from?, to?: timestamps ms ; scope?: 'mine' | 'all' ; search?: string } --
+// un cq_ia est de toute façon forcé sur "mine" côté serveur, quel que soit ce
+// qui est envoyé. `search` (titre d'article, mot-clé ou URL) est prioritaire
+// côté serveur : quand il est fourni, from/to sont ignorés là-bas (recherche
+// sur tout l'historique, pas seulement la période affichée) -- inutile donc de
+// les omettre ici, l'appelant garde le même objet qu'il ait ou non une
+// recherche en cours.
+export const listMyBatchItems = ({ from, to, scope, search } = {}) => {
   const params = new URLSearchParams();
   if (from) params.set('from', from);
   if (to) params.set('to', to);
   if (scope) params.set('scope', scope);
+  if (search) params.set('search', search);
   const qs = params.toString();
   return api(qs ? `?${qs}` : '');
 };

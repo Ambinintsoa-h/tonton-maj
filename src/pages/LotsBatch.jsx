@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import {
   Layers, Plus, Trash2, ExternalLink, ChevronDown, ChevronUp,
-  Loader, RefreshCw, AlertTriangle, Rocket, Upload, X, Eye,
+  Loader, RefreshCw, AlertTriangle, Rocket, Upload, X, Eye, Search,
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { listBatches, getBatch, createBatch } from '../services/batches';
@@ -127,17 +127,32 @@ export default function LotsBatch() {
   const [relaunchingId, setRelaunchingId] = useState(null);
   const [expandedErrorIds, setExpandedErrorIds] = useState(() => new Set());
 
+  // Recherche AJAX (titre d'article généré, mot-clé ou URL) sur l'historique
+  // des lots -- décalée de 350 ms (voir usage plus bas), et prioritaire côté
+  // serveur sur le plafond `limit=20` habituel (voir GET /batches,
+  // data-api.js) : chercher un lot précis n'a pas de raison de se limiter aux
+  // 20 plus récents.
+  const [batchSearch, setBatchSearch] = useState('');
+  const [debouncedBatchSearch, setDebouncedBatchSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedBatchSearch(batchSearch.trim()), 350);
+    return () => clearTimeout(t);
+  }, [batchSearch]);
+  // Une nouvelle recherche repart toujours de la page 1 -- sinon elle peut
+  // laisser l'affichage sur une page devenue vide ou hors-sujet.
+  useEffect(() => { setBatchPage(0); }, [debouncedBatchSearch]);
+
   const refreshBatches = useCallback(async () => {
     setLoadingBatches(true);
     try {
-      const list = await listBatches(20);
+      const list = await listBatches(20, { search: debouncedBatchSearch });
       setBatches(list);
     } catch (e) {
       toast.error(`Impossible de charger l'historique des lots : ${e.message}`);
     } finally {
       setLoadingBatches(false);
     }
-  }, []);
+  }, [debouncedBatchSearch]);
 
   const refreshStaged = useCallback(async () => {
     setLoadingStaged(true);
@@ -597,11 +612,36 @@ export default function LotsBatch() {
           </button>
         </div>
 
+        {/* Recherche AJAX -- titre d'article généré, mot-clé ou URL, sur TOUT
+            l'historique des lots (pas seulement les 20 plus récents affichés
+            par défaut). */}
+        <div className="relative">
+          <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={batchSearch}
+            onChange={(e) => setBatchSearch(e.target.value)}
+            placeholder="Rechercher un lot par titre, mot-clé ou URL..."
+            className="w-full pl-9 pr-9 py-2 text-sm bg-white border border-gray-200 rounded-lg text-gray-700 focus:outline-none focus:ring-2 focus:ring-black/10"
+          />
+          {batchSearch && (
+            <button
+              type="button" onClick={() => setBatchSearch('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-600"
+              title="Effacer la recherche"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
         {loadingBatches && !batches.length && (
           <p className="text-sm text-gray-400 py-6 text-center">Chargement...</p>
         )}
         {!loadingBatches && !batches.length && (
-          <p className="text-sm text-gray-400 py-6 text-center">Aucun lot lancé pour l'instant.</p>
+          <p className="text-sm text-gray-400 py-6 text-center">
+            {debouncedBatchSearch ? `Aucun lot pour « ${debouncedBatchSearch} ».` : "Aucun lot lancé pour l'instant."}
+          </p>
         )}
 
         <div className="divide-y divide-gray-100">
