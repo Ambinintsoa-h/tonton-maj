@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { wrapOrphanJsonLd } from '../utils/publishSanitize';
 
 const PROXY = '/api/wordpress';
 
@@ -76,8 +77,14 @@ export const findPostByUrl = async (site, articleUrl) => {
  */
 export const updatePost = async (site, postId, postData, postType = 'posts') => {
   const type = postType === 'pages' ? 'pages' : 'posts';
+  // Filet de sécurité : un JSON-LD schema.org laissé nu (sans <script>, avec des
+  // \uXXXX cassés) est réparé et enveloppé AVANT l'envoi -- voir publishSanitize.js
+  // pour le bug réel qui a motivé ce correctif (guiderenovation.fr, 17/09/2026).
+  const { html: safeContent, fixed, unresolved } = wrapOrphanJsonLd(postData.content);
+  if (fixed) console.warn(`[wordpress] JSON-LD orphelin réparé avant publication (${fixed} bloc(s))`);
+  if (unresolved) console.warn(`[wordpress] JSON-LD orphelin NON réparable laissé tel quel (${unresolved} bloc(s)) — à vérifier manuellement`);
   const body = {
-    content: postData.content,
+    content: safeContent,
     status:  postData.status || 'draft',
   };
   // Titre : uniquement si explicitement fourni (modifié par l'utilisateur)
@@ -127,9 +134,13 @@ export const updatePost = async (site, postId, postData, postType = 'posts') => 
  * Retourne { success, postId, link }
  */
 export const publishToWordPress = async (site, postData) => {
+  // Même filet de sécurité qu'updatePost -- voir publishSanitize.js.
+  const { html: safeContent, fixed, unresolved } = wrapOrphanJsonLd(postData.content);
+  if (fixed) console.warn(`[wordpress] JSON-LD orphelin réparé avant publication (${fixed} bloc(s))`);
+  if (unresolved) console.warn(`[wordpress] JSON-LD orphelin NON réparable laissé tel quel (${unresolved} bloc(s)) — à vérifier manuellement`);
   const result = await wpRequest(site, 'POST', '/wp-json/wp/v2/posts', {
     title:   postData.title,
-    content: postData.content,
+    content: safeContent,
     status:  postData.status || 'draft',
     ...(postData.date ? { date: postData.date } : {}),
   });

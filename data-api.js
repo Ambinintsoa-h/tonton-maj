@@ -153,6 +153,47 @@ module.exports = ({ requireAuth, requireRole }) => {
     const [rows] = await q("SELECT * FROM stats WHERE id='main'");
     res.json(rows.length ? statsToObj(rows[0]) : null);
   }));
+  // Journal PERMANENT des appels modèle — jamais purgé, jamais réinitialisé par
+  // resetStats (contrairement à `stats`, singleton écrasé à chaque PUT). Une
+  // ligne par (article, passe, sous-passe), voir migration/alter-add-model-call-log.sql
+  // pour le pourquoi. Best-effort : une base non encore migrée (table absente)
+  // ne doit JAMAIS faire échouer la sauvegarde des stats d'équipe — on avale
+  // l'erreur et on logge, exactement comme total_by_pass en son temps.
+  const logModelCalls = async (history) => {
+    if (!Array.isArray(history) || !history.length) return;
+    const loggedAt = Date.now();
+    const rows = [];
+    for (const entry of history) {
+      const byPass = entry && entry.byPass;
+      if (!entry || !entry.id || !byPass || typeof byPass !== 'object') continue;
+      for (const [subPass, call] of Object.entries(byPass)) {
+        if (!call || !call.model) continue;
+        rows.push([
+          entry.id, entry.pass || 0, subPass, entry.title || null, call.model,
+          call.input || 0, call.output || 0, call.costUsd || 0,
+          entry.createdAt ? Date.parse(entry.createdAt) || null : null,
+          loggedAt,
+        ]);
+      }
+    }
+    if (!rows.length) return;
+    try {
+      await q(
+        `INSERT INTO model_call_log
+           (article_id, pass, sub_pass, article_title, model, input_tokens, output_tokens, cost_usd, article_created_at, logged_at)
+         VALUES ?
+         ON DUPLICATE KEY UPDATE article_title=VALUES(article_title), model=VALUES(model),
+           input_tokens=VALUES(input_tokens), output_tokens=VALUES(output_tokens),
+           cost_usd=VALUES(cost_usd), article_created_at=VALUES(article_created_at), logged_at=VALUES(logged_at)`,
+        [rows]
+      );
+    } catch (e) {
+      // Table pas encore migrée, ou base non-MySQL en local : ne jamais bloquer
+      // la sauvegarde des stats pour ça.
+      console.warn('[model_call_log] écriture ignorée —', e.message);
+    }
+  };
+
   router.put('/stats', requireAuth, wrap(async (req, res) => {
     const s = req.body || {};
     await q(
@@ -163,7 +204,35 @@ module.exports = ({ requireAuth, requireRole }) => {
          history=VALUES(history), total_by_pass=VALUES(total_by_pass), updated_at=VALUES(updated_at)`,
       [s.totalArticles || 0, s.totalInputTokens || 0, s.totalOutputTokens || 0, s.totalCostUsd || 0, asJson(s.history || []), asJson(s.totalByPass || {}), Date.now()]
     );
+    await logModelCalls(s.history);
     res.json({ ok: true });
+  }));
+
+  // GET /model-call-log?since=ISO&model=claude-haiku-4-5 — journal permanent,
+  // jamais affecté par resetStats. `since`/`until` en ISO 8601, `model` filtre
+  // par préfixe (ex. "claude-haiku-4-5" attrape "claude-haiku-4-5-20251001").
+  router.get('/model-call-log', requireAuth, wrap(async (req, res) => {
+    const conditions = [];
+    const params = [];
+    if (req.query.since) { conditions.push('logged_at >= ?'); params.push(Date.parse(req.query.since) || 0); }
+    if (req.query.until) { conditions.push('logged_at <= ?'); params.push(Date.parse(req.query.until) || 0); }
+    if (req.query.model) { conditions.push('model LIKE ?'); params.push(`${req.query.model}%`); }
+    const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const [rows] = await q(
+      `SELECT article_id, pass, sub_pass, article_title, model, input_tokens, output_tokens, cost_usd, article_created_at, logged_at
+       FROM model_call_log ${whereSql} ORDER BY logged_at DESC LIMIT 5000`,
+      params
+    );
+    const distinctArticles = new Set(rows.map((r) => r.article_id)).size;
+    const totalCostUsd = rows.reduce((sum, r) => sum + Number(r.cost_usd || 0), 0);
+    res.json({
+      calls: rows.length,
+      articles: distinctArticles,
+      totalCostUsd,
+      avgCostPerCall: rows.length ? totalCostUsd / rows.length : 0,
+      avgCostPerArticle: distinctArticles ? totalCostUsd / distinctArticles : 0,
+      rows,
+    });
   }));
 
   // ── wordpress_sites ───────────────────────────────────────────────────────────
