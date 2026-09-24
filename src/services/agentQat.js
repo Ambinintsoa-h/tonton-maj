@@ -679,7 +679,7 @@ export const runQatAudit = async ({
   // balises <a> ont disparu) et le HTML dans `contentHtml`. Le verrou liens
   // externes travaille sur le HTML : si on envoyait `content` au modèle, il
   // devrait reproduire des liens qu'il ne voit nulle part → rejet systématique
-  // des 3 essais sur tout site non connecté en WordPress MCP.
+  // des MAX_ESSAIS_IA essais (2) sur tout site non connecté en WordPress MCP.
   const sourceHtml = contentHtml || content;
 
   // ── Chiffres comptés côté code (fiables) ───────────────────────────────────
@@ -773,7 +773,7 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
       audit = parseJsonLoose(rawAudit, { salvage: attempt === MAX_ESSAIS_IA });
       if (!audit) {
         onStep(`⚠️ Audit — réponse illisible, nouvel essai (${attempt}/${MAX_ESSAIS_IA})...`);
-        // Reprise INSTRUITE : sans ce retour, les 3 essais repartaient du même
+        // Reprise INSTRUITE : sans ce retour, les MAX_ESSAIS_IA essais (2) repartaient du même
         // prompt et échouaient de la même façon.
         currentUser = `${user}
 
@@ -1155,7 +1155,7 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
         // ajoutées depuis (règle des 20 mots, maillage à 100 %, reprise des
         // liens perdus...) qui rallongent mécaniquement le JSON attendu.
         // Constaté en production : "réponse illisible ou article vide" après
-        // 3 essais -- ici, contrairement à l'audit, aucun `salvage` ne peut
+        // MAX_ESSAIS_IA essais (2) -- ici, contrairement à l'audit, aucun `salvage` ne peut
         // récupérer un article_html coupé en plein milieu, donc une réponse
         // tronquée est un échec total, pas partiel. La marge doit être plus
         // large qu'ailleurs, pas ajustée au plus juste.
@@ -1550,7 +1550,7 @@ N'ajoute aucun AUTRE lien externe.`;
     }
   }
 
-  // Les 3 essais peuvent tous repartir en boucle SANS lever d'exception (JSON
+  // Les MAX_ESSAIS_IA essais (2) peuvent tous repartir en boucle SANS lever d'exception (JSON
   // illisible ou article_html vide à chaque fois) : sans cette garde, la sortie
   // de boucle laissait `sanitized` à null et l'accès à `sanitized.html` levait
   // une TypeError opaque, illisible pour le rédacteur.
