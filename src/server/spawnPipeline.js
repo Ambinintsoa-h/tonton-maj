@@ -16,14 +16,14 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const DEFAULT_CLI_PATH = path.join(__dirname, '..', '..', 'pipelineCli.js');
-// Relevé de 15 à 25 min le 2 septembre 2026 : ce plafond datait du 28/08 avec un
-// commentaire disant "4 passes IA", alors que la passe de gras (agentBold.js,
-// ajoutée le 19/08, donc déjà là) en fait une 5e obligatoire à chaque génération.
-// Constaté en production : un item tué pile à 15 min pendant "Mise en gras",
-// sur un article lourd où le cumul des 5 passes (avec leurs essais IA en
-// cascade) a dépassé le plafond -- pas un vrai blocage, juste un budget trop
-// juste pour le nombre réel de passes.
-const DEFAULT_TIMEOUT_MS = 25 * 60 * 1000; // un run complet (5 passes IA) peut prendre plusieurs minutes
+// Relevé de 15 à 25 min le 2 septembre 2026, puis REDESCENDU à 20 min le 24
+// septembre 2026 (décision Andrianina) -- en même temps que le nombre max
+// d'essais par appel IA passe de 3 à 2 (agentQat.js, MAX_ESSAIS_IA) : un
+// essai de moins par passe réduit le pire cas (5 passes x un essai en moins
+// chacune), ce qui rend un budget plus court à nouveau tenable. À surveiller
+// comme en septembre : si des items se font tuer en cours de route sur un
+// article lourd, c'est ce plafond qu'il faut remonter, pas le nombre d'essais.
+const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000; // un run complet (5 passes IA, 2 essais max chacune) peut prendre plusieurs minutes
 
 /**
  * @param {object} input — transmis tel quel en JSON sur stdin de pipelineCli.js
