@@ -1,43 +1,14 @@
 import axios from 'axios';
+import { SCRAPE_RETRY_DELAYS_MS, avecReessaiScrape } from '../utils/scrapeRetry';
 
 const PROXY_SCRAPE = '/api/scrape';
 const PROXY_JINA   = '/api/jina';   // Jina via proxy — évite l'appel direct depuis le browser
 
 // ── RÉESSAI DU SCRAPE — décision Andrianina, 16 septembre 2026 ───────────────
-//
-// Relevé sur un lot de 20 articles terminé à 9/20 : 9 des 11 erreurs tombaient
-// sur la récupération de l'article, et TOUTES les erreurs du lot sur les deux
-// premières étapes du pipeline. Deux motifs, une même origine — la rafale de
-// démarrage de quatre pipelines lancés ensemble :
-//   • « HTTP 429 — Trop de requêtes » : notre propre limiteur, qui répond AVANT
-//     d'entrer dans la route. Le serveur ne peut donc pas le rattraper
-//     lui-même : seul l'appelant peut réessayer.
-//   • « timeout of 20000ms exceeded » : la boucle d'événements de proxy.js
-//     bloquée par les `new JSDOM(...)` concurrents des autres scrapes.
-//
-// Dans les deux cas, l'échec est PASSAGER et l'article était parfaitement
-// récupérable trente secondes plus tard. Le faire mourir pour ça, c'est perdre
-// une place de lot et l'argent déjà dépensé sur l'audit.
-//
-// Même esprit que `isRetryableClaudeError` (services/agent.js), qui relance déjà
-// la chaîne IA sur une coupure : on ne réessaie QUE ce qui est transitoire. Un
-// 403 (site qui bloque le scraping) ou un 400 (URL invalide) ne se retente pas —
-// la deuxième tentative donnerait exactement la même réponse, une minute perdue
-// en plus.
-const SCRAPE_RETRY_DELAYS_MS = [4000, 12000];
-
-const scrapeRetryable = (err) => {
-  if (!err?.response) return false;              // proxy éteint → repli Jina, pas un réessai
-  const { status, data } = err.response;
-  if (status === 429) return true;               // notre limiteur, ou celui d'un tiers
-  if (status === 503 || status === 504) return true;
-  // 500 porteur d'un timeout : la route a répondu, mais la récupération distante
-  // n'a pas abouti dans le temps imparti.
-  if (status === 500 && /timeout/i.test(String(data?.error || ''))) return true;
-  return false;
-};
-
-const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
+// Politique (délais, statuts transitoires retentés) déplacée dans
+// utils/scrapeRetry.js le 24 septembre 2026 : le pipeline headless ("MAJ en
+// lot", server/pipeline.js) en a besoin aussi et ne doit jamais en dériver.
+// Voir ce fichier pour le détail de l'incident qui a motivé ces valeurs.
 
 /**
  * Scrape une URL et retourne le contenu de l'article.
@@ -55,17 +26,11 @@ const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
  * Relance la DERNIÈRE erreur si les essais sont épuisés : l'appelant doit voir
  * le vrai motif, pas une erreur générique de réessai.
  */
-const avecReessai = async (appel) => {
-  for (let i = 0; ; i++) {
-    try {
-      return await appel();
-    } catch (err) {
-      if (i >= SCRAPE_RETRY_DELAYS_MS.length || !scrapeRetryable(err)) throw err;
-      console.warn(`[scrape] échec transitoire (${err.response?.status}) — nouvel essai dans ${SCRAPE_RETRY_DELAYS_MS[i] / 1000} s`);
-      await attendre(SCRAPE_RETRY_DELAYS_MS[i]);
-    }
-  }
-};
+const avecReessai = (appel) => avecReessaiScrape(appel, {
+  onRetry: (err, delayMs) => {
+    console.warn(`[scrape] échec transitoire (${err.response?.status}) — nouvel essai dans ${delayMs / 1000} s`);
+  },
+});
 
 export const scrapeUrl = async (url, signal) => {
 
