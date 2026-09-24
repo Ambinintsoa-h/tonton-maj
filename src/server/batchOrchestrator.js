@@ -27,15 +27,20 @@ const axios = require('axios');
 const { spawnPipeline: defaultSpawnPipeline } = require('./spawnPipeline');
 const { describeHttpError } = require('./httpErrorDetail');
 
-// Passé de 2 à 4 le 1er septembre 2026 (décision Andrianina), après vérification
-// des freins réels : le limiteur interne 60 req/min (proxy.js, partagé avec le
-// reste de l'équipe) est le premier goulot, la RAM du serveur mutualisé (n0c)
-// le second -- ni l'un ni l'autre n'a de plafond documenté permettant de
-// justifier un chiffre plus haut sans le mesurer en conditions réelles.
+// Passé de 2 à 4 le 1er septembre 2026, puis de 4 à 8 le 24 septembre 2026
+// (décision Andrianina, les deux fois), après vérification des freins réels :
+// le limiteur interne 60 req/min (proxy.js, partagé avec le reste de l'équipe)
+// est le premier goulot, la RAM du serveur mutualisé (n0c) le second -- ni
+// l'un ni l'autre n'a de plafond documenté permettant de justifier un chiffre
+// plus haut sans le mesurer en conditions réelles. Le passage de 3 à 2 essais
+// max par appel IA (agentQat.js, MAX_ESSAIS_IA) le même jour réduit un peu la
+// charge par item, mais 8 items en parallèle reste 2x le trafic instantané
+// vers l'API Anthropic -- à surveiller en priorité côté erreurs 429 ("trop de
+// requêtes").
 // Une hausse ultérieure doit être suivie d'une surveillance des erreurs
 // "trop de requêtes" et d'un redémarrage inattendu de l'application avant
 // d'aller plus loin.
-const DEFAULT_CONCURRENCY = 4;
+const DEFAULT_CONCURRENCY = 8;
 const DEFAULT_TOKEN_TTL = '20m';
 
 /**
