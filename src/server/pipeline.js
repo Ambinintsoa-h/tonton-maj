@@ -39,6 +39,7 @@ const { defaultAuditSelection } = require('../utils/auditSelection');
 const { auditSuggestedLinkRows } = require('../utils/auditSuggestions');
 const { cleanLinkRows } = require('../constants/majMode');
 const { stripNonEditorialLinks } = require('../utils/scrapeClean');
+const { SCRAPE_RETRY_DELAYS_MS, avecReessaiScrape } = require('../utils/scrapeRetry');
 const { buildGenerationPrompt, DEFAULT_VERIFICATION_TEMPLATE } = require('../utils/generationPrompt');
 const { SCOPE_SIMPLE, scopeProposedByAudit } = require('../constants/majPhases');
 const statsReducer = require('../store/slices/statsSlice').default;
@@ -161,8 +162,24 @@ const runArticlePipeline = async (input) => {
   const knowledge = knowledgeInput ?? (await fetchDataArray('/data/knowledge'));
 
   // ── Étape 0 — récupération du contenu, MÊME endpoint que l'UI (Articles.jsx)
+  // et MÊME politique de réessai qu'elle (utils/scrapeRetry.js) -- avant le 24
+  // septembre 2026, ce chemin headless appelait /scrape en direct, sans
+  // repasser par ce réessai : constaté en prod sur un lot réel où 3 articles
+  // sont morts en ~2 s sur un simple 503 transitoire du site source, sans la
+  // moindre tentative de rattrapage. `timeout: 50000` aligné sur le budget
+  // serveur de la route (45 s, proxy.js) -- au-dessus, jamais en dessous, sans
+  // quoi le client abandonnerait avant que le serveur ait fini d'essayer.
   onStep('Récupération du contenu de l\'article...');
-  const scraped = (await http.post('/scrape', { url: articleUrl })).data;
+  let essaiScrape = 0;
+  const scraped = (await avecReessaiScrape(
+    () => http.post('/scrape', { url: articleUrl }, { timeout: 50000 }),
+    {
+      onRetry: (err, delayMs) => {
+        essaiScrape += 1;
+        onStep(`⚠️ Récupération de l'article — échec transitoire (${err.response?.status}), nouvel essai dans ${delayMs / 1000}s (${essaiScrape}/${SCRAPE_RETRY_DELAYS_MS.length})...`);
+      },
+    },
+  )).data;
   const scrapedHtml = scraped?.content || scraped?.html || '';
   if (!scrapedHtml.trim()) throw new Error('Contenu de l\'article vide après scraping');
   const title = scraped?.title || '';
