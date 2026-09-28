@@ -1,7 +1,7 @@
 const { createBatchOrchestrator, DEFAULT_CONCURRENCY } = require('./batchOrchestrator');
 
-const ITEM_A = { id: 'i1', batch_id: 'b1', article_url: 'https://x.test/a', target_keyword: 'kw a', consigne: null, launched_by: 'u1', launched_by_name: 'Alice' };
-const ITEM_B = { id: 'i2', batch_id: 'b1', article_url: 'https://x.test/b', target_keyword: 'kw b', consigne: 'Ajoute un H2', launched_by: 'u1', launched_by_name: 'Alice' };
+const ITEM_A = { id: 'i1', batch_id: 'b1', article_url: 'https://x.test/a', target_keyword: 'kw a', consigne: null, retry_count: 0, launched_by: 'u1', launched_by_name: 'Alice' };
+const ITEM_B = { id: 'i2', batch_id: 'b1', article_url: 'https://x.test/b', target_keyword: 'kw b', consigne: 'Ajoute un H2', retry_count: 0, launched_by: 'u1', launched_by_name: 'Alice' };
 
 function makeConn(claimRows = []) {
   return {
@@ -15,12 +15,16 @@ function makeConn(claimRows = []) {
   };
 }
 
-function makeDeps({ claimRows = [], spawnPipelineFn, httpPut, concurrency, onBatchDone } = {}) {
+function makeDeps({ claimRows = [], spawnPipelineFn, httpPut, httpPost, concurrency, onBatchDone } = {}) {
   const conn = makeConn(claimRows);
   const getPool = jest.fn(() => ({ getConnection: jest.fn().mockResolvedValue(conn) }));
   const jwt = { sign: jest.fn(() => 'fake-jwt') };
   const put = httpPut || jest.fn().mockResolvedValue({ data: { ok: true, batchStatus: 'running' } });
-  const httpClientFactory = jest.fn(() => ({ put }));
+  // Défaut : requeue toujours accepté (POST .../requeue, voir data-api.js) --
+  // un test qui veut simuler un 409 (déjà réessayé entre-temps) ou une panne
+  // passe son propre `httpPost`.
+  const post = httpPost || jest.fn().mockResolvedValue({ data: { ok: true } });
+  const httpClientFactory = jest.fn(() => ({ put, post }));
   const fetchModelPricing = jest.fn().mockResolvedValue(null);
   const onLog = jest.fn();
   const deps = {
@@ -31,7 +35,7 @@ function makeDeps({ claimRows = [], spawnPipelineFn, httpPut, concurrency, onBat
     ...(concurrency ? { concurrency } : {}),
     ...(onBatchDone ? { onBatchDone } : {}),
   };
-  return { deps, conn, put, httpClientFactory, getPool, onLog };
+  return { deps, conn, put, post, httpClientFactory, getPool, onLog };
 }
 
 describe('createBatchOrchestrator', () => {
@@ -54,6 +58,12 @@ describe('createBatchOrchestrator', () => {
     const [selectSql] = conn.query.mock.calls[0];
     expect(selectSql).toMatch(/FOR UPDATE SKIP LOCKED/);
     expect(selectSql).toMatch(/status = 'en_attente'/);
+    // retry_count sélectionné (décide requeue vs erreur définitive dans
+    // processItem) et tri qui fait passer tout item réessayé (requeued_at
+    // posé) après tout item jamais réessayé -- `bi.id` seul (UUID aléatoire)
+    // ne représente aucun ordre d'arrivée.
+    expect(selectSql).toMatch(/bi\.retry_count/);
+    expect(selectSql).toMatch(/ORDER BY \(bi\.requeued_at IS NOT NULL\), bi\.requeued_at, bi\.id/);
     const [updateItemsSql, updateItemsParams] = conn.query.mock.calls[1];
     expect(updateItemsSql).toMatch(/UPDATE batch_items SET status='en_cours'/);
     expect(updateItemsParams).toEqual(expect.arrayContaining(['i1']));
@@ -96,9 +106,11 @@ describe('createBatchOrchestrator', () => {
     }));
   });
 
-  it('ne reporte AUCUN coût sur un échec -- le pipeline ne renvoie pas de tokenUsage partiel', async () => {
+  it('ne reporte AUCUN coût sur un échec définitif -- le pipeline ne renvoie pas de tokenUsage partiel', async () => {
+    // retry_count: 1 -- déjà réessayé une fois, CET échec est définitif
+    // (sinon le premier échec part en requeue/POST, jamais en PUT).
     const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible'));
-    const { deps, put } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn });
+    const { deps, put } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 1 }], spawnPipelineFn });
     const orch = createBatchOrchestrator(deps);
     await orch.tick();
     while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
@@ -109,10 +121,13 @@ describe('createBatchOrchestrator', () => {
   });
 
   it('l\'échec d\'UN item ne bloque pas les autres -- chacun est reporté indépendamment', async () => {
+    // ITEM_B à retry_count: 1 -- son échec ici est le SECOND (définitif),
+    // pour tester le report PUT/erreur indépendamment du requeue (testé
+    // séparément ci-dessous).
     const spawnPipelineFn = jest.fn()
       .mockResolvedValueOnce({ articleId: 'art-a' })
       .mockRejectedValueOnce(new Error('Audit illisible'));
-    const { deps, put } = makeDeps({ claimRows: [ITEM_A, ITEM_B], spawnPipelineFn, concurrency: 2 });
+    const { deps, put } = makeDeps({ claimRows: [ITEM_A, { ...ITEM_B, retry_count: 1 }], spawnPipelineFn, concurrency: 2 });
     const orch = createBatchOrchestrator(deps);
     await orch.tick();
     while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
@@ -121,9 +136,9 @@ describe('createBatchOrchestrator', () => {
     expect(put).toHaveBeenCalledWith('/data/batches/b1/items/i2', expect.objectContaining({ status: 'erreur', errorMessage: 'Audit illisible' }));
   });
 
-  it('un item sans mot-clé cible est reporté en erreur SANS jamais lancer le pipeline', async () => {
+  it('un item sans mot-clé cible (déjà réessayé) est reporté en erreur SANS jamais lancer le pipeline', async () => {
     const spawnPipelineFn = jest.fn();
-    const noKeyword = { ...ITEM_A, target_keyword: null };
+    const noKeyword = { ...ITEM_A, target_keyword: null, retry_count: 1 };
     const { deps, put } = makeDeps({ claimRows: [noKeyword], spawnPipelineFn });
     const orch = createBatchOrchestrator(deps);
     await orch.tick();
@@ -134,6 +149,25 @@ describe('createBatchOrchestrator', () => {
       status: 'erreur',
       errorMessage: expect.stringMatching(/mot-clé cible manquant/i),
     }));
+  });
+
+  it('un item sans mot-clé cible (1er essai) est remis en file plutôt que reporté en erreur tout de suite', async () => {
+    // Décision Andrianina, 28 septembre 2026 : le réessai unique s'applique à
+    // TOUTE cause d'échec, y compris une ligne mal saisie -- pas de cas
+    // particulier qui court-circuiterait handleFailure.
+    const spawnPipelineFn = jest.fn();
+    const noKeyword = { ...ITEM_A, target_keyword: null, retry_count: 0 };
+    const { deps, put, post } = makeDeps({ claimRows: [noKeyword], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+    expect(spawnPipelineFn).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(
+      '/data/batches/b1/items/i1/requeue',
+      expect.objectContaining({ errorMessage: expect.stringMatching(/mot-clé cible manquant/i) }),
+    );
   });
 
   it('ne réclame rien de plus quand tous les créneaux de concurrence sont occupés', async () => {
@@ -179,9 +213,11 @@ describe('createBatchOrchestrator', () => {
   });
 
   it('si même le report d\'échec échoue, processItem ne lève pas (capturé jusqu\'au bout)', async () => {
+    // retry_count: 1 -- échec définitif, passe par reportOutcome/PUT (pas
+    // par le requeue, testé séparément plus bas).
     const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('boum'));
     const put = jest.fn().mockRejectedValue(new Error('HTTP 500'));
-    const { deps, onLog } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, httpPut: put });
+    const { deps, onLog } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 1 }], spawnPipelineFn, httpPut: put });
     const orch = createBatchOrchestrator(deps);
     await expect(orch.tick()).resolves.toBeUndefined();
     while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
@@ -219,6 +255,60 @@ describe('createBatchOrchestrator', () => {
     await expect(orch.tick()).resolves.toBeUndefined();
     while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining('Notification de fin échouée'));
+  });
+
+  // ── Réessai automatique après échec (décision Andrianina, 28 septembre 2026) ─
+  describe('réessai automatique après échec (retry_count)', () => {
+    it('un 1er échec (retry_count=0) est remis en file via POST .../requeue, jamais reporté en erreur', async () => {
+      const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible'));
+      const { deps, put, post } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 0 }], spawnPipelineFn });
+      const orch = createBatchOrchestrator(deps);
+      await orch.tick();
+      while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+      expect(post).toHaveBeenCalledWith(
+        '/data/batches/b1/items/i1/requeue',
+        expect.objectContaining({ errorMessage: expect.stringContaining('Audit illisible') }),
+      );
+      expect(put).not.toHaveBeenCalled();
+    });
+
+    it('un 2e échec (retry_count=1, déjà réessayé) est reporté en erreur DÉFINITIVE, sans nouveau requeue', async () => {
+      const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible, encore'));
+      const { deps, put, post } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 1 }], spawnPipelineFn });
+      const orch = createBatchOrchestrator(deps);
+      await orch.tick();
+      while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+      expect(post).not.toHaveBeenCalled();
+      expect(put).toHaveBeenCalledWith('/data/batches/b1/items/i1', expect.objectContaining({
+        status: 'erreur', errorMessage: 'Audit illisible, encore',
+      }));
+    });
+
+    it('un 409 au requeue (déjà réessayé entre-temps par un autre tick) bascule sur l\'erreur définitive', async () => {
+      const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible'));
+      const post = jest.fn().mockRejectedValue(Object.assign(new Error('Conflict'), { response: { status: 409 } }));
+      const { deps, put } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 0 }], spawnPipelineFn, httpPost: post });
+      const orch = createBatchOrchestrator(deps);
+      await orch.tick();
+      while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(put).toHaveBeenCalledWith('/data/batches/b1/items/i1', expect.objectContaining({ status: 'erreur' }));
+    });
+
+    it('un requeue qui échoue pour de bon (HTTP down, pas un 409) bascule aussi sur l\'erreur définitive', async () => {
+      const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible'));
+      const post = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+      const { deps, put, onLog } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 0 }], spawnPipelineFn, httpPost: post });
+      const orch = createBatchOrchestrator(deps);
+      await orch.tick();
+      while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+      expect(put).toHaveBeenCalledWith('/data/batches/b1/items/i1', expect.objectContaining({ status: 'erreur' }));
+      expect(onLog).toHaveBeenCalledWith(expect.stringContaining('échec de la remise en file'));
+    });
   });
 });
 
