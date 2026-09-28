@@ -201,6 +201,42 @@ describe('createBatchOrchestrator', () => {
     while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
   });
 
+  it("deux tick() qui se chevauchent (claimNext() du 1er encore en vol) : le 2e ne réclame RIEN -- garde anti-recouvrement (voir commentaire `claiming`, incident du 28/09/2026)", async () => {
+    let resolveGetConnection;
+    const conn = makeConn([ITEM_A]);
+    const getPool = jest.fn(() => ({
+      // getConnection() ne se résout jamais tant que le test ne le décide pas
+      // -- simule un SELECT ... FOR UPDATE qui traîne (base sous charge).
+      getConnection: jest.fn(() => new Promise((r) => { resolveGetConnection = r; })),
+    }));
+    const deps = {
+      getPool,
+      jwt: { sign: jest.fn(() => 'fake-jwt') },
+      jwtSecret: 'secret',
+      fetchModelPricing: jest.fn().mockResolvedValue(null),
+      apiBaseUrl: 'https://maj.stomos.net/api',
+      httpClientFactory: jest.fn(() => ({ put: jest.fn().mockResolvedValue({ data: { ok: true } }), post: jest.fn().mockResolvedValue({ data: { ok: true } }) })),
+      onLog: jest.fn(),
+      // Stub explicite -- sans lui, processItem() appellerait le VRAI
+      // spawnPipeline.js (spawn d'un vrai process enfant), inutile et
+      // dangereux dans un test unitaire qui ne teste que la garde `claiming`.
+      spawnPipelineFn: jest.fn().mockResolvedValue({ articleId: 'noop' }),
+    };
+    const orch = createBatchOrchestrator(deps);
+
+    const firstTick = orch.tick(); // reste bloqué sur getConnection()
+    await Promise.resolve(); // laisse le 1er tick atteindre claimNext() -> getPool()
+    await Promise.resolve();
+    expect(getPool).toHaveBeenCalledTimes(1);
+
+    await orch.tick(); // chevauche le 1er : doit être un no-op immédiat (return anticipé)
+    expect(getPool).toHaveBeenCalledTimes(1); // toujours 1 -- pas de 2e réclamation
+
+    resolveGetConnection(conn);
+    await firstTick;
+    expect(getPool).toHaveBeenCalledTimes(1); // le 1er tick n'a réclamé qu'une fois lui-même
+  });
+
   it('une erreur pendant la réclamation (transaction) fait un rollback et ne plante pas le tick', async () => {
     const conn = {
       beginTransaction: jest.fn().mockResolvedValue(),
