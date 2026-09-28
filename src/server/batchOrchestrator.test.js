@@ -15,7 +15,10 @@ function makeConn(claimRows = []) {
   };
 }
 
-function makeDeps({ claimRows = [], spawnPipelineFn, httpPut, httpPost, concurrency, onBatchDone } = {}) {
+function makeDeps({
+  claimRows = [], spawnPipelineFn, httpPut, httpPost, concurrency, onBatchDone,
+  getConcurrency, getMaxEssaisIA, getTimeoutMs, getRetryOnError,
+} = {}) {
   const conn = makeConn(claimRows);
   const getPool = jest.fn(() => ({ getConnection: jest.fn().mockResolvedValue(conn) }));
   const jwt = { sign: jest.fn(() => 'fake-jwt') };
@@ -34,6 +37,12 @@ function makeDeps({ claimRows = [], spawnPipelineFn, httpPut, httpPost, concurre
     ...(spawnPipelineFn ? { spawnPipelineFn } : {}),
     ...(concurrency ? { concurrency } : {}),
     ...(onBatchDone ? { onBatchDone } : {}),
+    // Réglages "Traitement en lot" (settings.json batchTuning) -- optionnels,
+    // seuls les tests qui les exercent explicitement les fournissent.
+    ...(getConcurrency ? { getConcurrency } : {}),
+    ...(getMaxEssaisIA ? { getMaxEssaisIA } : {}),
+    ...(getTimeoutMs ? { getTimeoutMs } : {}),
+    ...(getRetryOnError ? { getRetryOnError } : {}),
   };
   return { deps, conn, put, post, httpClientFactory, getPool, onLog };
 }
@@ -309,6 +318,101 @@ describe('createBatchOrchestrator', () => {
       expect(put).toHaveBeenCalledWith('/data/batches/b1/items/i1', expect.objectContaining({ status: 'erreur' }));
       expect(onLog).toHaveBeenCalledWith(expect.stringContaining('échec de la remise en file'));
     });
+  });
+});
+
+// ── Réglages "Traitement en lot" dynamiques (Paramètres -> settings.json
+// batchTuning) -- lus à chaque tick/item, jamais figés au démarrage du
+// process (voir JSDoc de createBatchOrchestrator). Chaque getter est
+// optionnel : sans lui, le comportement historique (déjà couvert par les
+// tests ci-dessus) ne change pas.
+describe('réglages "Traitement en lot" dynamiques (settings.json batchTuning)', () => {
+  it('getConcurrency() est consulté à CHAQUE tick, pas seulement à la création', async () => {
+    let current = 1;
+    const getConcurrency = jest.fn(() => current);
+    let resolveSpawn;
+    const spawnPipelineFn = jest.fn(() => new Promise((r) => { resolveSpawn = r; }));
+    const { deps, getPool } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, getConcurrency });
+    const orch = createBatchOrchestrator(deps);
+
+    await orch.tick();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(getConcurrency).toHaveBeenCalled();
+    expect(orch.getActiveCount()).toBe(1);
+
+    // Créneau unique (current=1) déjà occupé : un admin qui remonte la
+    // concurrence à 3 EN COURS DE ROUTE doit être vu au tick suivant, sans
+    // recréer l'orchestrateur ni redémarrer le process.
+    current = 3;
+    getPool.mockClear();
+    await orch.tick();
+    expect(getPool).toHaveBeenCalled(); // 2 créneaux de libres maintenant (3 - 1 actif)
+
+    resolveSpawn({ articleId: 'art-1' });
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+  });
+
+  it('une erreur dans getConcurrency() retombe sur la valeur figée `concurrency`, sans planter le tick', async () => {
+    const getConcurrency = jest.fn(() => { throw new Error('settings.json illisible'); });
+    const { deps, conn } = makeDeps({ claimRows: [ITEM_A], concurrency: 1, getConcurrency });
+    const orch = createBatchOrchestrator(deps);
+    await expect(orch.tick()).resolves.toBeUndefined();
+    expect(conn.commit).toHaveBeenCalled();
+  });
+
+  it('transmet getMaxEssaisIA() et getTimeoutMs() à spawnPipelineFn (entrée + options)', async () => {
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
+    const getMaxEssaisIA = jest.fn(() => 3);
+    const getTimeoutMs = jest.fn(() => 25 * 60 * 1000);
+    const { deps } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, getMaxEssaisIA, getTimeoutMs });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+    expect(spawnPipelineFn).toHaveBeenCalledWith(
+      expect.objectContaining({ maxEssaisIA: 3 }),
+      expect.objectContaining({ timeoutMs: 25 * 60 * 1000 }),
+    );
+  });
+
+  it('sans getMaxEssaisIA/getTimeoutMs, transmet `undefined` -- spawnPipeline.js/agentQat.js gardent leurs propres défauts', async () => {
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
+    const { deps } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+    expect(spawnPipelineFn).toHaveBeenCalledWith(
+      expect.objectContaining({ maxEssaisIA: undefined }),
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
+  });
+
+  it('getRetryOnError() === false désactive le réessai -- erreur définitive dès le 1er échec', async () => {
+    const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible'));
+    const getRetryOnError = jest.fn(() => false);
+    const { deps, put, post } = makeDeps({
+      claimRows: [{ ...ITEM_A, retry_count: 0 }], spawnPipelineFn, getRetryOnError,
+    });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+    expect(post).not.toHaveBeenCalled();
+    expect(put).toHaveBeenCalledWith('/data/batches/b1/items/i1', expect.objectContaining({
+      status: 'erreur', errorMessage: 'Audit illisible',
+    }));
+  });
+
+  it('getRetryOnError() absent (défaut) préserve le réessai unique existant', async () => {
+    const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible'));
+    const { deps, put, post } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 0 }], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+
+    expect(post).toHaveBeenCalledWith('/data/batches/b1/items/i1/requeue', expect.anything());
+    expect(put).not.toHaveBeenCalled();
   });
 });
 

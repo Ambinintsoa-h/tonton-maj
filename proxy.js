@@ -134,7 +134,49 @@ const SETTINGS_WHITELIST = [
   'smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'smtpFrom',
   'firebaseConfig', 'useLocalProxy', 'modelSelections',
   'googleSheetsServiceAccountJson', 'googleSheetsId',
+  'batchTuning',
 ];
+
+// ─── Réglages "Traitement en lot" (Paramètres -> settings.json batchTuning) ──
+// Concurrence/timeout/essais IA/réessai auto étaient jusqu'ici des CONSTANTES
+// en dur (batchOrchestrator.js, spawnPipeline.js, agentQat.js) -- ou, pour la
+// concurrence, un tour de vis par variable d'environnement (BATCH_ORCHESTRATOR_
+// CONCURRENCY) qu'en pratique personne côté équipe ne peut poser sur cet
+// hébergement mutualisé (voir le commentaire sur `concurrency` plus bas).
+// Rendus ici configurables depuis l'admin, avec des bornes défensives : un
+// admin qui remonterait la concurrence à 20 recréerait exactement la
+// contention constatée le 24 septembre 2026 (voir batchOrchestrator.js) --
+// les bornes ne sont pas une formalité, elles protègent contre CE risque précis.
+const BATCH_TUNING_BOUNDS = {
+  concurrency:     { min: 1, max: 10, default: 6 },
+  timeoutMinutes:  { min: 5, max: 40, default: 20 },
+  maxEssaisIA:     { min: 1, max: 4,  default: 2 },
+};
+const clampBatchTuningInt = (value, key) => {
+  const { min, max, default: def } = BATCH_TUNING_BOUNDS[key];
+  const n = parseInt(value, 10);
+  return (Number.isFinite(n) && n >= min && n <= max) ? n : def;
+};
+// Lu à CHAQUE tick (batchOrchestrator.js) / item (spawnPipeline.js, agentQat.js)
+// -- jamais mis en cache ici -- pour qu'un changement posé dans Paramètres
+// s'applique sans redémarrer le process (impossible à la demande sur cet
+// hébergement mutualisé, voir plus haut).
+const getBatchTuning = () => {
+  const bt = readServerSettings().batchTuning || {};
+  return {
+    concurrency:    clampBatchTuningInt(bt.concurrency, 'concurrency'),
+    timeoutMinutes: clampBatchTuningInt(bt.timeoutMinutes, 'timeoutMinutes'),
+    maxEssaisIA:    clampBatchTuningInt(bt.maxEssaisIA, 'maxEssaisIA'),
+    // Un SEUL réessai auto après échec, quelle que soit la cause -- décision
+    // Andrianina du 28/09/2026 (voir batchOrchestrator.js, handleFailure).
+    // Simple bascule ON/OFF, pas un compteur : la route .../requeue
+    // (data-api.js) n'autorise qu'UN passage 'en_attente' par item
+    // (retry_count=0 dans son WHERE) -- un nombre de réessais réglable
+    // demanderait de revoir aussi cette route et le schéma, hors du besoin
+    // exprimé ("si ça échoue encore, on laisse").
+    retryOnError:   bt.retryOnError !== false,
+  };
+};
 
 app.use(cors({
   origin: IS_PROD
@@ -1441,6 +1483,27 @@ app.post('/api/settings', requireAuth, requireRole('super_admin'), async (req, r
         return res.status(400).json({ error: 'Clé de compte de service Google invalide -- JSON illisible' });
       }
     }
+
+    // batchTuning : bornes défensives (voir BATCH_TUNING_BOUNDS) -- un refus
+    // net et lisible ici évite qu'une valeur aberrante (concurrence à 50,
+    // timeout à 1 min) ne se découvre qu'au prochain lot lancé, en silence.
+    if (incoming.batchTuning !== undefined) {
+      const bt = incoming.batchTuning;
+      if (typeof bt !== 'object' || bt === null || Array.isArray(bt)) {
+        return res.status(400).json({ error: 'batchTuning invalide — objet attendu' });
+      }
+      for (const key of ['concurrency', 'timeoutMinutes', 'maxEssaisIA']) {
+        if (bt[key] === undefined) continue;
+        const { min, max } = BATCH_TUNING_BOUNDS[key];
+        const n = parseInt(bt[key], 10);
+        if (!Number.isFinite(n) || n < min || n > max) {
+          return res.status(400).json({ error: `batchTuning.${key} doit être un entier entre ${min} et ${max}` });
+        }
+      }
+      if (bt.retryOnError !== undefined && typeof bt.retryOnError !== 'boolean') {
+        return res.status(400).json({ error: 'batchTuning.retryOnError doit être un booléen' });
+      }
+    }
     const filtered = {};
     for (const key of SETTINGS_WHITELIST) {
       if (key in incoming) filtered[key] = incoming[key];
@@ -2027,12 +2090,16 @@ if (DATA_BACKEND === 'mysql') {
     // lot" ignorait totalement ces réglages (voir JSDoc de createBatchOrchestrator).
     getModelSelections: () => readServerSettings().modelSelections || null,
     apiBaseUrl: `${IS_PROD ? 'https://maj.stomos.net' : `http://127.0.0.1:${PORT}`}/api`,
-    // Le process n'a pas d'accès au .env du serveur en pratique (hébergement
-    // mutualisé, personne côté équipe n'a la main dessus) -- la valeur qui
-    // compte réellement est donc DEFAULT_CONCURRENCY ci-dessus, pas la
-    // variable d'environnement, qui reste un simple point d'ajustement pour
-    // qui aurait un jour cet accès.
+    // Valeur figée de repli SEULEMENT -- la variable d'environnement reste un
+    // simple point d'ajustement pour qui aurait un jour la main sur le .env de
+    // cet hébergement mutualisé (personne aujourd'hui). Le VRAI réglage, posé
+    // depuis Paramètres -> Traitement en lot, vit dans getConcurrency
+    // ci-dessous -- lu à chaque tick, sans redémarrage.
     concurrency: parseInt(process.env.BATCH_ORCHESTRATOR_CONCURRENCY, 10) || BATCH_DEFAULT_CONCURRENCY,
+    getConcurrency: () => getBatchTuning().concurrency,
+    getMaxEssaisIA: () => getBatchTuning().maxEssaisIA,
+    getTimeoutMs: () => getBatchTuning().timeoutMinutes * 60 * 1000,
+    getRetryOnError: () => getBatchTuning().retryOnError,
     onLog: (msg) => console.log(msg),
     onBatchDone: sendBatchCompletionEmail,
   });

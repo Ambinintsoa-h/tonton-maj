@@ -629,6 +629,7 @@ export const runQatAudit = async ({
   existingWpData = null,
   modelPricing = null,
   modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
+  maxEssaisIA = MAX_ESSAIS_IA, // settings.json batchTuning.maxEssaisIA (lot) — sinon la constante par défaut
   onStep = () => {},
   onReplace = () => {},
   onProgress = () => {},
@@ -679,7 +680,7 @@ export const runQatAudit = async ({
   // balises <a> ont disparu) et le HTML dans `contentHtml`. Le verrou liens
   // externes travaille sur le HTML : si on envoyait `content` au modèle, il
   // devrait reproduire des liens qu'il ne voit nulle part → rejet systématique
-  // des MAX_ESSAIS_IA essais (2) sur tout site non connecté en WordPress MCP.
+  // des maxEssaisIA essais (2) sur tout site non connecté en WordPress MCP.
   const sourceHtml = contentHtml || content;
 
   // ── Chiffres comptés côté code (fiables) ───────────────────────────────────
@@ -739,7 +740,7 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
   let apiError = null;
   let currentUser = user;
 
-  for (let attempt = 1; attempt <= MAX_ESSAIS_IA && !audit; attempt++) {
+  for (let attempt = 1; attempt <= maxEssaisIA && !audit; attempt++) {
     try {
       const { text } = await callWithLiveText({
         // Le schéma d'audit est volumineux ; 12 000 tokens tronquaient la réponse
@@ -761,7 +762,7 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
         // `auditJson` null. On s'aligne sur la refonte (32 000), très en dessous
         // du maximum du modèle.
         params: { system, max_tokens: 32000, model: selectModel('audit_qat', modelSelections), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
-        label: attempt === 1 ? 'Audit QAT' : `Audit QAT — essai ${attempt}/${MAX_ESSAIS_IA}`,
+        label: attempt === 1 ? 'Audit QAT' : `Audit QAT — essai ${attempt}/${maxEssaisIA}`,
         pass: 'audit_qat',
         onStep, onReplace, onProgress, onDelta, trackCall,
         progressFrom: 25, progressTo: 40,
@@ -770,10 +771,10 @@ Produis maintenant le JSON d'audit complet, conforme au schéma du skill. Rien d
       rawAudit = (text || '').trim();
       // Dernier essai : on accepte un audit tronqué mais exploitable plutôt que
       // de tout jeter (l'ampleur et les actions prioritaires arrivent en tête).
-      audit = parseJsonLoose(rawAudit, { salvage: attempt === MAX_ESSAIS_IA });
+      audit = parseJsonLoose(rawAudit, { salvage: attempt === maxEssaisIA });
       if (!audit) {
-        onStep(`⚠️ Audit — réponse illisible, nouvel essai (${attempt}/${MAX_ESSAIS_IA})...`);
-        // Reprise INSTRUITE : sans ce retour, les MAX_ESSAIS_IA essais (2) repartaient du même
+        onStep(`⚠️ Audit — réponse illisible, nouvel essai (${attempt}/${maxEssaisIA})...`);
+        // Reprise INSTRUITE : sans ce retour, les maxEssaisIA essais (2) repartaient du même
         // prompt et échouaient de la même façon.
         currentUser = `${user}
 
@@ -787,12 +788,12 @@ limites de taille par champ. Priorise "ampleur", "scores", "priority_actions",
       }
     } catch (e) {
       apiError = e;
-      console.warn(`[qat audit] essai ${attempt}/${MAX_ESSAIS_IA}:`, e.message);
-      if (attempt < MAX_ESSAIS_IA) {
-        onStep(`⚠️ Appel à l'IA en échec (${e.message}) — nouvel essai (${attempt}/${MAX_ESSAIS_IA})...`);
+      console.warn(`[qat audit] essai ${attempt}/${maxEssaisIA}:`, e.message);
+      if (attempt < maxEssaisIA) {
+        onStep(`⚠️ Appel à l'IA en échec (${e.message}) — nouvel essai (${attempt}/${maxEssaisIA})...`);
         await new Promise(r => setTimeout(r, 1500 * attempt));
       } else {
-        onStep(`⚠️ Appel à l'IA en échec après ${MAX_ESSAIS_IA} essais : ${e.message}`);
+        onStep(`⚠️ Appel à l'IA en échec après ${maxEssaisIA} essais : ${e.message}`);
       }
     }
   }
@@ -891,6 +892,7 @@ export const runQatRewrite = async ({
   instruction = '',
   modelPricing = null,
   modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
+  maxEssaisIA = MAX_ESSAIS_IA, // settings.json batchTuning.maxEssaisIA (lot) — sinon la constante par défaut
   onStep = () => {},
   onReplace = () => {},
   onProgress = () => {},
@@ -1142,7 +1144,7 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
     /* eslint-enable no-console */
   } catch { /* la journalisation ne doit JAMAIS empêcher une génération */ }
 
-  for (let attempt = 1; attempt <= MAX_ESSAIS_IA && !sanitized; attempt++) {
+  for (let attempt = 1; attempt <= maxEssaisIA && !sanitized; attempt++) {
     try {
       const { text } = await callWithLiveText({
         // Voir le commentaire de l'audit : raisonnement désactivé pour la bascule,
@@ -1155,12 +1157,12 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
         // ajoutées depuis (règle des 20 mots, maillage à 100 %, reprise des
         // liens perdus...) qui rallongent mécaniquement le JSON attendu.
         // Constaté en production : "réponse illisible ou article vide" après
-        // MAX_ESSAIS_IA essais (2) -- ici, contrairement à l'audit, aucun `salvage` ne peut
+        // maxEssaisIA essais (2) -- ici, contrairement à l'audit, aucun `salvage` ne peut
         // récupérer un article_html coupé en plein milieu, donc une réponse
         // tronquée est un échec total, pas partiel. La marge doit être plus
         // large qu'ailleurs, pas ajustée au plus juste.
         params: { system, max_tokens: 48000, model: selectModel('refonte', modelSelections), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
-        label: attempt === 1 ? 'Rédaction de l\'article' : `Rédaction — essai ${attempt}/${MAX_ESSAIS_IA}`,
+        label: attempt === 1 ? 'Rédaction de l\'article' : `Rédaction — essai ${attempt}/${maxEssaisIA}`,
         pass: 'refonte',
         onStep, onReplace, onProgress, onDelta, trackCall,
         progressFrom: 55, progressTo: 88,
@@ -1168,7 +1170,7 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
       raw = (text || '').trim();
       article = parseJsonLoose(raw);
       if (!article?.article_html) {
-        onStep(`⚠️ Réponse illisible ou article vide — nouvel essai (${attempt}/${MAX_ESSAIS_IA})...`);
+        onStep(`⚠️ Réponse illisible ou article vide — nouvel essai (${attempt}/${maxEssaisIA})...`);
         // La FIN du texte est ce qui compte : une troncature par max_tokens se
         // voit à ce qu'elle s'arrête en plein milieu d'un objet JSON ; un
         // guillemet non échappé dans le HTML se voit à ce que la fin ne
@@ -1196,9 +1198,9 @@ complet.`;
       // ── Verrou liens externes + sécurité structure (règle 8, non négociable) ──
       const check = sanitizeFullArticle(sourceHtml, composed, articleUrl);
       if (check.missing.length) {
-        onStep(`⚠️ ${check.missing.length} lien(s) externe(s) d'origine perdu(s) — génération rejetée, nouvel essai (${attempt}/${MAX_ESSAIS_IA})...`);
-        if (attempt === MAX_ESSAIS_IA) {
-          throw new Error(`Verrou liens externes : ${check.missing.length} lien(s) externe(s) de l'article d'origine absent(s) de la réécriture après ${MAX_ESSAIS_IA} essais (${check.missing.join(', ')}).`);
+        onStep(`⚠️ ${check.missing.length} lien(s) externe(s) d'origine perdu(s) — génération rejetée, nouvel essai (${attempt}/${maxEssaisIA})...`);
+        if (attempt === maxEssaisIA) {
+          throw new Error(`Verrou liens externes : ${check.missing.length} lien(s) externe(s) de l'article d'origine absent(s) de la réécriture après ${maxEssaisIA} essais (${check.missing.join(', ')}).`);
         }
         // Reprise INSTRUITE : on nomme les liens perdus et leur ancre d'origine.
         // Sans ce retour, l'essai suivant repartait du même prompt et échouait
@@ -1544,13 +1546,13 @@ N'ajoute aucun AUTRE lien externe.`;
         briefReport: reportLine,
       };
     } catch (e) {
-      console.warn(`[qat rewrite] essai ${attempt}/${MAX_ESSAIS_IA}:`, e.message);
-      if (attempt >= MAX_ESSAIS_IA) throw e;
+      console.warn(`[qat rewrite] essai ${attempt}/${maxEssaisIA}:`, e.message);
+      if (attempt >= maxEssaisIA) throw e;
       await new Promise(r => setTimeout(r, 1500 * attempt));
     }
   }
 
-  // Les MAX_ESSAIS_IA essais (2) peuvent tous repartir en boucle SANS lever d'exception (JSON
+  // Les maxEssaisIA essais (2) peuvent tous repartir en boucle SANS lever d'exception (JSON
   // illisible ou article_html vide à chaque fois) : sans cette garde, la sortie
   // de boucle laissait `sanitized` à null et l'accès à `sanitized.html` levait
   // une TypeError opaque, illisible pour le rédacteur.
@@ -1560,7 +1562,7 @@ N'ajoute aucun AUTRE lien externe.`;
     // bouton "Voir l'erreur" (fix/lots-erreur-repliee-timeout) : c'est le seul
     // endroit où il reste consultable après coup pour un lot.
     const detail = lastParseFailureDetail ? ` Dernier essai — ${lastParseFailureDetail}` : '';
-    throw new Error(`L'IA n'a pas produit d'article exploitable après ${MAX_ESSAIS_IA} essais (réponse non conforme au format JSON attendu). Relancez la MAJ, ou vérifiez le skill actif dans le menu SKILLS IA.${detail}`);
+    throw new Error(`L'IA n'a pas produit d'article exploitable après ${maxEssaisIA} essais (réponse non conforme au format JSON attendu). Relancez la MAJ, ou vérifiez le skill actif dans le menu SKILLS IA.${detail}`);
   }
 
   onProgress(90);
@@ -1657,6 +1659,7 @@ N'ajoute aucun AUTRE lien externe.`;
  * propose, le rédacteur tranche).
  */
 export const runQatAgent = async (opts) => {
+  const effectiveMaxEssaisIA = opts?.maxEssaisIA || MAX_ESSAIS_IA;
   const auditRes = await runQatAudit(opts);
   if (!auditRes.audit) {
     // L'audit est la BASE de la refonte : sans lui, on ne réécrit pas à l'aveugle.
@@ -1664,9 +1667,9 @@ export const runQatAgent = async (opts) => {
     // désactivé, crédits épuisés, réseau) n'a rien à voir avec une réponse
     // illisible, et n'appelle pas du tout la même action.
     if (auditRes.apiError) {
-      throw new Error(`Audit impossible — l'appel à l'IA a échoué après ${MAX_ESSAIS_IA} essais : ${auditRes.apiError.message}`);
+      throw new Error(`Audit impossible — l'appel à l'IA a échoué après ${effectiveMaxEssaisIA} essais : ${auditRes.apiError.message}`);
     }
-    throw new Error(`Audit impossible — l'IA a répondu mais sa réponse n'était pas exploitable après ${MAX_ESSAIS_IA} essais. Refonte annulée pour ne pas réécrire sans diagnostic.`);
+    throw new Error(`Audit impossible — l'IA a répondu mais sa réponse n'était pas exploitable après ${effectiveMaxEssaisIA} essais. Refonte annulée pour ne pas réécrire sans diagnostic.`);
   }
   const rewriteRes = await runQatRewrite({
     ...opts,

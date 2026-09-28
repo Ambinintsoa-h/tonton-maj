@@ -3,7 +3,7 @@ import { STORAGE_KEYS } from '../constants/storage';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink, Flame, Shield, Zap, AlertTriangle, Cpu, RotateCcw, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import { Eye, EyeOff, Save, CheckCircle2, AlertCircle, Loader, Monitor, Mic, Mail, TrendingUp, ExternalLink, Flame, Shield, Zap, AlertTriangle, Cpu, RotateCcw, FileSpreadsheet, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import axios from 'axios';
 import { setSettings, setFirebaseReady } from '../store/slices/settingsSlice';
 import { initFirebase, saveSettings } from '../services/firebase';
@@ -130,6 +130,16 @@ export default function Parametres() {
     googleSheetsServiceAccountJson: stored.googleSheetsServiceAccountJson || '',
     googleSheetsId: stored.googleSheetsId || '',
     modelSelections: stored.modelSelections || {},
+    // Traitement en lot (Paramètres -> settings.json batchTuning) -- avant ce
+    // chantier, ces 4 valeurs vivaient en dur dans le code (batchOrchestrator.js,
+    // spawnPipeline.js, agentQat.js) ou dans une variable d'environnement
+    // injoignable sur cet hébergement mutualisé. Bornes appliquées ici pour
+    // le retour visuel immédiat ; la vraie garde-fou reste serveur (POST
+    // /api/settings, BATCH_TUNING_BOUNDS).
+    batchConcurrency:    stored.batchTuning?.concurrency ?? 6,
+    batchTimeoutMinutes: stored.batchTuning?.timeoutMinutes ?? 20,
+    batchMaxEssaisIA:    stored.batchTuning?.maxEssaisIA ?? 2,
+    batchRetryOnError:   stored.batchTuning?.retryOnError ?? true,
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -296,6 +306,12 @@ export default function Parametres() {
       googleSheetsServiceAccountJson: form.googleSheetsServiceAccountJson,
       googleSheetsId: form.googleSheetsId,
       modelSelections: form.modelSelections,
+      batchTuning: {
+        concurrency:     Number(form.batchConcurrency)    || 6,
+        timeoutMinutes:  Number(form.batchTimeoutMinutes) || 20,
+        maxEssaisIA:     Number(form.batchMaxEssaisIA)    || 2,
+        retryOnError:    !!form.batchRetryOnError,
+      },
     };
 
     // 1. Init Firebase si config fournie
@@ -552,6 +568,71 @@ export default function Parametres() {
 
         <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-xs text-amber-700">
           Un modèle « découvert » n'a pas été testé avec les prompts de cette appli (raisonnement, longueur de réponse…) — le prix affiché est indicatif, pas garanti pour ce modèle précis.
+        </div>
+      </motion.div>
+
+      {/* Traitement en lot (MAJ en masse, /lots) — concurrence/timeout/essais IA/
+          réessai auto vivaient jusqu'ici en dur dans le code (voire, pour la
+          concurrence, dans une variable d'environnement injoignable sur
+          l'hébergement mutualisé actuel). Bornes appliquées aussi côté serveur
+          (POST /api/settings) — ce formulaire ne fait qu'aider à rester dedans. */}
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.025 }} className="glass-card p-6 space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 bg-teal-600 rounded-xl flex items-center justify-center">
+            <SlidersHorizontal size={16} className="text-white" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">Traitement en lot</h2>
+            <p className="text-xs text-gray-400">Réglages du « MAJ en masse » (/lots) — s'appliquent au prochain article réclamé, sans redémarrage</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-gray-700">Articles simultanés</label>
+            <input
+              type="number" min={1} max={10} step={1}
+              value={form.batchConcurrency}
+              onChange={e => set('batchConcurrency', e.target.value)}
+              className="input-glass"
+            />
+            <p className="text-xs text-gray-400">Entre 1 et 10 — monter trop haut relance la contention sur le limiteur Anthropic partagé (constaté le 24/09 à 8)</p>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-gray-700">Timeout par article (min)</label>
+            <input
+              type="number" min={5} max={40} step={1}
+              value={form.batchTimeoutMinutes}
+              onChange={e => set('batchTimeoutMinutes', e.target.value)}
+              className="input-glass"
+            />
+            <p className="text-xs text-gray-400">Entre 5 et 40 — un article « refonte » complet prend souvent 15–20 min</p>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-gray-700">Essais IA max par appel</label>
+            <input
+              type="number" min={1} max={4} step={1}
+              value={form.batchMaxEssaisIA}
+              onChange={e => set('batchMaxEssaisIA', e.target.value)}
+              className="input-glass"
+            />
+            <p className="text-xs text-gray-400">Audit + rédaction uniquement — chaque essai supplémentaire rallonge un échec avant qu'il ne soit signalé</p>
+          </div>
+          <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3">
+            <div>
+              <p className="text-sm font-medium text-gray-800">Réessai automatique</p>
+              <p className="text-xs text-gray-400 mt-0.5">Remet l'article en fin de file pour un 2e essai avant erreur définitive</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => set('batchRetryOnError', !form.batchRetryOnError)}
+              role="switch"
+              aria-checked={form.batchRetryOnError}
+              className={`relative inline-flex w-11 h-6 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${form.batchRetryOnError ? 'bg-black' : 'bg-gray-200'}`}
+            >
+              <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform duration-200 ease-in-out ${form.batchRetryOnError ? 'translate-x-5' : 'translate-x-0'}`} />
+            </button>
+          </div>
         </div>
       </motion.div>
 

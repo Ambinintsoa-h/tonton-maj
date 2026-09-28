@@ -107,6 +107,8 @@ const dispatchPhaseStat = async (http, { articleId, title, tokenUsage, pass, mod
  *   si absente, reconstruite via `buildGenerationPrompt` comme le fait l'UI par défaut
  * @param {object} [input.modelSelections]
  * @param {object} [input.modelPricing]
+ * @param {number} [input.maxEssaisIA]  nb max d'essais par appel IA (audit + rédaction) --
+ *   undefined = défaut agentQat.js (MAX_ESSAIS_IA)
  * @param {Array}  [input.skills]           déjà chargés par l'appelant (GET /api/data/skills)
  * @param {Array}  [input.knowledge]        déjà chargés par l'appelant (GET /api/data/knowledge)
  * @param {Array}  [input.wpSites]
@@ -120,6 +122,11 @@ const runArticlePipeline = async (input) => {
   const {
     articleUrl, targetKeyword, instruction = '',
     modelSelections = null, modelPricing = null,
+    // Réglages "traitement en lot" (Paramètres -> settings.json batchTuning) --
+    // undefined quand l'appelant ne les fournit pas (flux manuel /run-article-pipeline,
+    // ou ancien appelant) : runQatAudit/runQatRewrite retombent alors sur leur
+    // propre défaut (MAX_ESSAIS_IA, agentQat.js), comportement inchangé.
+    maxEssaisIA,
     skills: skillsInput = null, knowledge: knowledgeInput = null,
     wpSites = [], existingWpData = null,
     launchedByUid = null, launchedByName = 'Batch',
@@ -208,7 +215,7 @@ const runArticlePipeline = async (input) => {
     contentHtml,
     skills, knowledge, articleUrl, targetKeyword,
     wpSites, existingWpData,
-    modelPricing, modelSelections,
+    modelPricing, modelSelections, maxEssaisIA,
     onStep,
   });
   if (!auditRes.audit) {
@@ -234,7 +241,7 @@ const runArticlePipeline = async (input) => {
     skills, knowledge, articleUrl, targetKeyword,
     internalLinks, auditSelection, depth,
     instruction: finalInstruction,
-    modelPricing, modelSelections,
+    modelPricing, modelSelections, maxEssaisIA,
     onStep, onReplace: onStep,
   });
   const rawHtml = genRes.article?.html || '';

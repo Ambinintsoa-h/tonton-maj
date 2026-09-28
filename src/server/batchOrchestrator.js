@@ -56,7 +56,21 @@ const DEFAULT_TOKEN_TTL = '20m';
  *   passes étaient réglées sur Haiku 4.5 dans l'UI). Défaut `() => null` : même
  *   comportement qu'avant si le déploiement ne fournit pas cette dépendance.
  * @param {string} deps.apiBaseUrl         ex. https://maj.stomos.net/api
- * @param {number} [deps.concurrency]
+ * @param {number} [deps.concurrency]     valeur figée -- dépassée par getConcurrency
+ *   si fourni (lu à CHAQUE tick, voir Paramètres -> Traitement en lot).
+ * @param {function} [deps.getConcurrency]     () => number -- settings.json
+ *   batchTuning.concurrency. Défaut : renvoie `concurrency` (comportement figé,
+ *   inchangé pour les tests existants qui ne fournissent que `concurrency`).
+ * @param {function} [deps.getMaxEssaisIA]     () => number|undefined --
+ *   settings.json batchTuning.maxEssaisIA, transmis à runQatAudit/runQatRewrite
+ *   (agentQat.js) via spawnPipelineFn. `undefined` = leur défaut (MAX_ESSAIS_IA).
+ * @param {function} [deps.getTimeoutMs]       () => number|undefined --
+ *   settings.json batchTuning.timeoutMinutes*60000, transmis à spawnPipelineFn.
+ *   `undefined` = son défaut (spawnPipeline.js, DEFAULT_TIMEOUT_MS).
+ * @param {function} [deps.getRetryOnError]    () => boolean -- settings.json
+ *   batchTuning.retryOnError. Défaut `() => true` : UN réessai automatique avant
+ *   erreur définitive (comportement du 28/09/2026, voir handleFailure). `false`
+ *   restaure l'ancien comportement -- erreur définitive dès le premier échec.
  * @param {function} [deps.spawnPipelineFn] injecté pour les tests
  * @param {string} [deps.cliPath]          transmis à spawnPipelineFn (tests)
  * @param {function} [deps.httpClientFactory] (authToken) => instance axios (tests)
@@ -71,6 +85,10 @@ function createBatchOrchestrator(deps) {
     getModelSelections = () => null,
     apiBaseUrl,
     concurrency = DEFAULT_CONCURRENCY,
+    getConcurrency = () => concurrency,
+    getMaxEssaisIA = () => undefined,
+    getTimeoutMs = () => undefined,
+    getRetryOnError = () => true,
     spawnPipelineFn = defaultSpawnPipeline,
     cliPath,
     httpClientFactory,
@@ -194,9 +212,14 @@ function createBatchOrchestrator(deps) {
   // définitive. `item.retry_count` vient de claimNext (SELECT bi.retry_count) :
   // 0 -> on tente un réessai (fin de file, voir requeueItem) ; déjà 1 (ou le
   // réessai a échoué à se poser, 409 ou HTTP down) -> erreur définitive,
-  // jamais une 3e tentative.
+  // jamais une 3e tentative. `getRetryOnError()` (settings.json batchTuning,
+  // Paramètres -> Traitement en lot) permet de désactiver ENTIÈREMENT ce
+  // réessai -- toujours au plus UN, jamais un compteur réglable (voir le
+  // commentaire de getBatchTuning, proxy.js, pour pourquoi).
   const handleFailure = async (item, errorMessage) => {
-    if (!item.retry_count) {
+    let retryOnError = true;
+    try { retryOnError = getRetryOnError() !== false; } catch { retryOnError = true; }
+    if (retryOnError && !item.retry_count) {
       try {
         const requeued = await requeueItem(item, errorMessage);
         if (requeued) {
@@ -239,6 +262,16 @@ function createBatchOrchestrator(deps) {
       // défauts du registre au lieu des modèles réellement configurés.
       let modelSelections = null;
       try { modelSelections = getModelSelections() || null; } catch { modelSelections = null; }
+      // Réglages "Traitement en lot" (Paramètres) -- lus à CHAQUE item, jamais
+      // figés au démarrage du process : un changement dans l'admin s'applique
+      // dès le prochain item réclamé, sans redémarrage (même logique que
+      // getModelSelections ci-dessus). `undefined` en cas d'échec de lecture ou
+      // de valeur non fournie -- spawnPipelineFn/agentQat.js retombent alors sur
+      // leurs propres défauts, comportement inchangé.
+      let maxEssaisIA;
+      try { maxEssaisIA = getMaxEssaisIA(); } catch { maxEssaisIA = undefined; }
+      let timeoutMs;
+      try { timeoutMs = getTimeoutMs(); } catch { timeoutMs = undefined; }
       const authToken = buildAuthToken(item);
       const outcome = await spawnPipelineFn({
         articleUrl: item.article_url,
@@ -246,11 +279,12 @@ function createBatchOrchestrator(deps) {
         instruction: item.consigne || '',
         modelPricing,
         modelSelections,
+        maxEssaisIA,
         launchedByUid: item.launched_by,
         launchedByName: item.launched_by_name || 'Batch',
         apiBaseUrl,
         authToken,
-      }, { cliPath, onStep: (s) => onLog(`[batch ${item.id}] ${s}`) });
+      }, { cliPath, timeoutMs, onStep: (s) => onLog(`[batch ${item.id}] ${s}`) });
 
       await reportOutcome(item, {
         status: 'fait',
@@ -292,7 +326,9 @@ function createBatchOrchestrator(deps) {
   // termine (fire-and-forget) : le tick suivant peut réclamer d'autres items
   // dès qu'un créneau se libère, au lieu d'attendre le plus lent du lot.
   const tick = async () => {
-    const slots = concurrency - active;
+    let currentConcurrency = concurrency;
+    try { currentConcurrency = getConcurrency() || concurrency; } catch { currentConcurrency = concurrency; }
+    const slots = currentConcurrency - active;
     if (slots <= 0) return;
     let claimed;
     try {

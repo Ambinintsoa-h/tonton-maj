@@ -60,6 +60,12 @@ const settingsSlice = createSlice({
     // (data/settings.json). {} = aucun override, chaque passe utilise le
     // défaut du registre (MODEL_PASSES, agent.js).
     modelSelections:    {},
+    // Réglages "Traitement en lot" (Paramètres), persistés côté serveur
+    // (data/settings.json, POST /api/settings). {} avant le premier GET
+    // /api/settings -- Parametres.jsx retombe alors sur ses propres défauts
+    // (concurrency 6, timeoutMinutes 20, maxEssaisIA 2, retryOnError true),
+    // identiques aux constantes historiques (batchOrchestrator.js et consorts).
+    batchTuning:        {},
     firebaseReady:      false,
     loading:            false,
     ...loadSavedSettings(),
