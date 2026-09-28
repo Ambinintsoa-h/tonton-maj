@@ -97,6 +97,19 @@ function createBatchOrchestrator(deps) {
   } = deps;
 
   let active = 0;
+  // Un SEUL claimNext() en vol à la fois -- sans ce verrou, un tick (toutes les
+  // 15s) dont le SELECT ... FOR UPDATE traîne (base sous charge, lot de 40
+  // items, verrous concurrents) peut encore tourner quand le tick SUIVANT
+  // démarre : celui-ci lit `active` AVANT que les items du premier tick aient
+  // commencé à s'exécuter (processItem() n'incrémente `active` qu'une fois le
+  // claim résolu), calcule donc `slots` sur une valeur périmée et réclame LUI
+  // AUSSI jusqu'à `concurrency` items -- FOR UPDATE SKIP LOCKED empêche deux
+  // ticks de prendre la MÊME ligne, mais rien n'empêchait plusieurs ticks
+  // empilés de réclamer chacun leur propre lot de `concurrency`, en poussant
+  // le nombre RÉEL d'articles simultanés bien au-delà du réglage (constaté en
+  // production le 28/09/2026 : ~29 articles "en_cours" en même temps pour une
+  // concurrence réglée à 6, saturation mémoire de l'hébergement mutualisé).
+  let claiming = false;
 
   // Jeton interne, jamais stocké, ne sert qu'au temps du run de CET item — même
   // forme que celui miné par la route /run-article-pipeline (Phase 1). Le rôle
@@ -326,16 +339,25 @@ function createBatchOrchestrator(deps) {
   // termine (fire-and-forget) : le tick suivant peut réclamer d'autres items
   // dès qu'un créneau se libère, au lieu d'attendre le plus lent du lot.
   const tick = async () => {
+    // Un tick qui arrive pendant qu'un claimNext() précédent tourne encore
+    // repart les mains vides plutôt que de recalculer `slots` sur un `active`
+    // pas encore à jour -- le tick SUIVANT (15s plus tard) refera le calcul
+    // avec des chiffres à jour, sans rien perdre : les items en_attente
+    // restent en_attente, ils seront réclamés au prochain passage.
+    if (claiming) return;
     let currentConcurrency = concurrency;
     try { currentConcurrency = getConcurrency() || concurrency; } catch { currentConcurrency = concurrency; }
     const slots = currentConcurrency - active;
     if (slots <= 0) return;
+    claiming = true;
     let claimed;
     try {
       claimed = await claimNext(slots);
     } catch (e) {
       onLog(`[batch] Échec de la réclamation d'items : ${e.message}`);
       return;
+    } finally {
+      claiming = false;
     }
     claimed.forEach((item) => { processItem(item); });
   };
