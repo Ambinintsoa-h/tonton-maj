@@ -1104,6 +1104,11 @@ module.exports = ({ requireAuth, requireRole }) => {
     errorMessage: r.error_message,
     startedAt: r.started_at,
     completedAt: r.completed_at,
+    // Présentes seulement après la migration alter-add-batch-item-retry.sql
+    // (colonnes nullable/à défaut 0) -- `!= null` pour ne jamais écrire
+    // `retryCount: undefined` avant son application en base.
+    ...(r.retry_count != null ? { retryCount: r.retry_count } : {}),
+    ...(r.requeued_at != null ? { requeuedAt: r.requeued_at } : {}),
     ...(r.cost_usd != null ? { costUsd: r.cost_usd } : {}),
     ...(r.input_tokens != null ? { inputTokens: r.input_tokens } : {}),
     ...(r.output_tokens != null ? { outputTokens: r.output_tokens } : {}),
@@ -1263,6 +1268,44 @@ module.exports = ({ requireAuth, requireRole }) => {
     } finally {
       conn.release();
     }
+  }));
+
+  // POST /batches/:id/items/:itemId/requeue — un SEUL réessai automatique
+  // après échec (décision Andrianina, 28 septembre 2026), avant erreur
+  // définitive. Route DÉDIÉE plutôt qu'un PUT .../items/:itemId de plus :
+  // ce dernier écrit chaque colonne via COALESCE(?, colonne) (voir juste
+  // au-dessus) -- un NULL explicite n'y vide JAMAIS started_at/completed_at,
+  // il les laisse tels quels. Remettre un item en file a besoin de l'inverse :
+  // vider ces deux colonnes pour de vrai, sans quoi l'item réapparaîtrait
+  // 'en_attente' mais encore marqué "démarré" à son ancienne heure.
+  //
+  // `retry_count` (0 -> 1 ici) est ce qui empêche une 3e tentative :
+  // batchOrchestrator.js n'appelle cette route que si `retry_count` valait 0
+  // au moment de l'échec, jamais au-delà. `requeued_at` fait passer l'item À
+  // LA FIN de la file : `id` (UUID aléatoire) ne représente aucun ordre
+  // d'arrivée, donc claimNext trie sur
+  // `(requeued_at IS NOT NULL), requeued_at, id` -- tout item jamais
+  // réessayé passe avant tout item réessayé, quel que soit son id.
+  //
+  // Ne touche NI compteurs (completed_count/error_count) NI statut du batch
+  // parent : un item requeue N'EST PAS un état terminal, le batch reste
+  // 'running' tel quel -- pas de risque de déclencher l'email de fin de lot
+  // en avance (cette route ne réclame jamais `email_sent`).
+  router.post('/batches/:id/items/:itemId/requeue', requireAuth, wrap(async (req, res) => {
+    const { id, itemId } = req.params;
+    const { errorMessage } = req.body || {};
+    const [result] = await q(
+      `UPDATE batch_items
+          SET status='en_attente', started_at=NULL, completed_at=NULL,
+              error_message=COALESCE(?, error_message),
+              retry_count=retry_count+1, requeued_at=?
+        WHERE id=? AND batch_id=? AND retry_count=0`,
+      [errorMessage ?? null, Date.now(), itemId, id],
+    );
+    if (!result.affectedRows) {
+      return res.status(409).json({ error: "Item introuvable, ou déjà réessayé une fois (retry_count != 0) -- pas de 2e remise en file." });
+    }
+    res.json({ ok: true });
   }));
 
   // GET /batch-items?from=&to=&scope=mine|all — "Mes MAJ" (tableau de bord

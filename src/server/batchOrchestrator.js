@@ -27,20 +27,18 @@ const axios = require('axios');
 const { spawnPipeline: defaultSpawnPipeline } = require('./spawnPipeline');
 const { describeHttpError } = require('./httpErrorDetail');
 
-// Passé de 2 à 4 le 1er septembre 2026, puis de 4 à 8 le 24 septembre 2026
-// (décision Andrianina, les deux fois), après vérification des freins réels :
-// le limiteur interne 60 req/min (proxy.js, partagé avec le reste de l'équipe)
-// est le premier goulot, la RAM du serveur mutualisé (n0c) le second -- ni
-// l'un ni l'autre n'a de plafond documenté permettant de justifier un chiffre
-// plus haut sans le mesurer en conditions réelles. Le passage de 3 à 2 essais
-// max par appel IA (agentQat.js, MAX_ESSAIS_IA) le même jour réduit un peu la
-// charge par item, mais 8 items en parallèle reste 2x le trafic instantané
-// vers l'API Anthropic -- à surveiller en priorité côté erreurs 429 ("trop de
-// requêtes").
-// Une hausse ultérieure doit être suivie d'une surveillance des erreurs
-// "trop de requêtes" et d'un redémarrage inattendu de l'application avant
-// d'aller plus loin.
-const DEFAULT_CONCURRENCY = 8;
+// Passé de 2 à 4 le 1er septembre 2026, puis de 4 à 8 le 24 septembre 2026,
+// puis REDESCENDU à 6 le 28 septembre 2026 (décision Andrianina à chaque
+// fois) : le passage à 8 a bien fait constater le ralentissement redouté par
+// le commentaire d'origine -- le limiteur interne 60 req/min (proxy.js,
+// partagé avec le reste de l'équipe) encaisse mal 2x le trafic instantané
+// vers l'API Anthropic, et la contention qui en résulte (retries, files
+// d'attente internes) finit par coûter plus de temps qu'elle n'en fait gagner
+// en parallélisme. 6 est un compromis délibéré entre les 4 d'origine et les 8
+// qui ont ralenti -- pas encore mesuré sur la durée, à réajuster si la
+// lenteur persiste ou si la RAM du serveur mutualisé (n0c) devient à son tour
+// le goulot.
+const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TOKEN_TTL = '20m';
 
 /**
@@ -113,13 +111,19 @@ function createBatchOrchestrator(deps) {
     const conn = await getPool().getConnection();
     try {
       await conn.beginTransaction();
+      // Tri : `bi.id` est un UUID aléatoire (crypto.randomUUID(), data-api.js)
+      // -- il n'a JAMAIS représenté un ordre d'arrivée, réessai ou pas. Ce qui
+      // compte ici, c'est de faire passer un item réessayé (`requeued_at` posé
+      // par POST .../requeue) APRÈS tout item jamais réessayé
+      // (`requeued_at IS NULL`), quel que soit son id -- pas de reconstituer
+      // un FIFO qui n'a jamais existé.
       const [rows] = await conn.query(
         `SELECT bi.id, bi.batch_id, bi.article_url, bi.target_keyword, bi.consigne,
-                b.launched_by, b.launched_by_name
+                bi.retry_count, b.launched_by, b.launched_by_name
            FROM batch_items bi
            JOIN batches b ON b.id = bi.batch_id
           WHERE bi.status = 'en_attente'
-          ORDER BY bi.id
+          ORDER BY (bi.requeued_at IS NOT NULL), bi.requeued_at, bi.id
           LIMIT ?
           FOR UPDATE SKIP LOCKED`,
         [limit],
@@ -168,6 +172,54 @@ function createBatchOrchestrator(deps) {
     }
   };
 
+  // POST .../requeue (data-api.js) : remet l'item 'en_attente', vidé de son
+  // started_at/completed_at, retry_count 0->1, À LA FIN de la file. Renvoie
+  // `false` sur un 409 (déjà réessayé entre-temps par un autre tick -- course
+  // rarissime, jamais une vraie erreur) : l'appelant doit alors basculer sur
+  // l'erreur définitive plutôt que de considérer le réessai posé.
+  const requeueItem = async (item, errorMessage) => {
+    const http = httpFor(buildAuthToken(item));
+    try {
+      await http.post(`/data/batches/${encodeURIComponent(item.batch_id)}/items/${encodeURIComponent(item.id)}/requeue`, { errorMessage });
+      return true;
+    } catch (e) {
+      if (e.response?.status === 409) return false;
+      throw e;
+    }
+  };
+
+  // Un SEUL réessai automatique après échec (décision Andrianina, 28
+  // septembre 2026), quelle que soit la cause -- scraping, IA, WordPress,
+  // donnée manquante sur la ligne... AVANT de marquer l'item en erreur
+  // définitive. `item.retry_count` vient de claimNext (SELECT bi.retry_count) :
+  // 0 -> on tente un réessai (fin de file, voir requeueItem) ; déjà 1 (ou le
+  // réessai a échoué à se poser, 409 ou HTTP down) -> erreur définitive,
+  // jamais une 3e tentative.
+  const handleFailure = async (item, errorMessage) => {
+    if (!item.retry_count) {
+      try {
+        const requeued = await requeueItem(item, errorMessage);
+        if (requeued) {
+          onLog(`[batch] Item ${item.id} en échec (${errorMessage}) -- remis en fin de file pour un 2e essai`);
+          return;
+        }
+        onLog(`[batch] Item ${item.id} -- déjà réessayé entre-temps (409), passage en erreur définitive`);
+      } catch (e) {
+        onLog(`[batch] Item ${item.id} -- échec de la remise en file (${describeHttpError(e)}), passage en erreur définitive`);
+      }
+    }
+    try {
+      await reportOutcome(item, { status: 'erreur', errorMessage, completedAt: Date.now() });
+    } catch (e2) {
+      // Le report échoue aussi (DB/HTTP down) : l'item reste 'en_cours'.
+      // Non rattrapable ici sans dupliquer la logique de recomptage du
+      // batch parent -- il sera visible comme bloqué dans l'historique et
+      // devra être relancé, comme n'importe quel crash serveur en cours de
+      // traitement.
+      onLog(`[batch] Item ${item.id} -- impossible de reporter l'échec : ${describeHttpError(e2)}`);
+    }
+  };
+
   const processItem = async (item) => {
     active += 1;
     try {
@@ -176,11 +228,7 @@ function createBatchOrchestrator(deps) {
       // plutôt que de laisser runArticlePipeline lever une erreur générique
       // ("targetKeyword requis") qui ne dirait pas QUOI corriger.
       if (!item.target_keyword) {
-        await reportOutcome(item, {
-          status: 'erreur',
-          errorMessage: 'Mot-clé cible manquant sur cette ligne -- impossible de lancer l\'audit.',
-          completedAt: Date.now(),
-        });
+        await handleFailure(item, 'Mot-clé cible manquant sur cette ligne -- impossible de lancer l\'audit.');
         return;
       }
 
@@ -234,20 +282,7 @@ function createBatchOrchestrator(deps) {
         stderrTail ? `\nstderr: ${stderrTail}` : null,
       ].filter(Boolean).join(' ').slice(0, 2000);
       onLog(`[batch] Item ${item.id} en échec : ${errorMessage}`);
-      try {
-        await reportOutcome(item, {
-          status: 'erreur',
-          errorMessage,
-          completedAt: Date.now(),
-        });
-      } catch (e2) {
-        // Le report échoue aussi (DB/HTTP down) : l'item reste 'en_cours'.
-        // Non rattrapable ici sans dupliquer la logique de recomptage du
-        // batch parent -- il sera visible comme bloqué dans l'historique et
-        // devra être relancé, comme n'importe quel crash serveur en cours de
-        // traitement.
-        onLog(`[batch] Item ${item.id} -- impossible de reporter l'échec : ${describeHttpError(e2)}`);
-      }
+      await handleFailure(item, errorMessage);
     } finally {
       active -= 1;
     }
