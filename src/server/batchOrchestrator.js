@@ -97,18 +97,18 @@ function createBatchOrchestrator(deps) {
   } = deps;
 
   let active = 0;
-  // Un SEUL claimNext() en vol à la fois -- sans ce verrou, un tick (toutes les
-  // 15s) dont le SELECT ... FOR UPDATE traîne (base sous charge, lot de 40
-  // items, verrous concurrents) peut encore tourner quand le tick SUIVANT
-  // démarre : celui-ci lit `active` AVANT que les items du premier tick aient
-  // commencé à s'exécuter (processItem() n'incrémente `active` qu'une fois le
-  // claim résolu), calcule donc `slots` sur une valeur périmée et réclame LUI
-  // AUSSI jusqu'à `concurrency` items -- FOR UPDATE SKIP LOCKED empêche deux
-  // ticks de prendre la MÊME ligne, mais rien n'empêchait plusieurs ticks
-  // empilés de réclamer chacun leur propre lot de `concurrency`, en poussant
-  // le nombre RÉEL d'articles simultanés bien au-delà du réglage (constaté en
-  // production le 28/09/2026 : ~29 articles "en_cours" en même temps pour une
-  // concurrence réglée à 6, saturation mémoire de l'hébergement mutualisé).
+  // Un SEUL claimNext() en vol à la fois DANS CE PROCESSUS -- sans ce
+  // verrou, un tick (toutes les 15s) dont le SELECT ... FOR UPDATE traîne
+  // (base sous charge, lot de 40 items, verrous concurrents) peut encore
+  // tourner quand le tick SUIVANT démarre dans le MÊME processus. Insuffisant
+  // À LUI SEUL : cet hébergement mutualisé (Passenger/cPanel) fait tourner
+  // PLUSIEURS PROCESSUS Node pour cette appli, chacun avec sa PROPRE instance
+  // d'orchestrateur et donc son PROPRE `claiming`/`active` -- ce verrou ne
+  // protège que contre le chevauchement DANS un processus donné. La
+  // protection inter-processus (la vraie source du dépassement constaté en
+  // prod, ~29 articles "en_cours" pour une concurrence réglée à 6, y compris
+  // APRÈS ce premier correctif) vit dans claimNext() : voir le verrou DB
+  // `batch_orchestrator_lock` plus bas.
   let claiming = false;
 
   // Jeton interne, jamais stocké, ne sert qu'au temps du run de CET item — même
@@ -137,11 +137,33 @@ function createBatchOrchestrator(deps) {
   // autre process ne peut voir ces lignes (SKIP LOCKED les lui masque plutôt
   // que de le faire attendre, donc deux ticks concurrents se partagent le
   // travail au lieu de se marcher dessus).
-  const claimNext = async (limit) => {
-    if (limit <= 0) return [];
+  const claimNext = async (concurrencyTarget) => {
     const conn = await getPool().getConnection();
     try {
       await conn.beginTransaction();
+      // Verrou global (voir migration create-batch-orchestrator-lock.sql) --
+      // cet hébergement mutualisé fait tourner PLUSIEURS PROCESSUS Node pour
+      // cette appli (Passenger/cPanel) en même temps : chacun a SA PROPRE
+      // instance d'orchestrateur, donc SON PROPRE compteur `active` en
+      // mémoire, qui ne voit RIEN de ce qu'un AUTRE processus a déjà réclamé.
+      // Sans ce verrou, chaque processus autorise sa propre marge de
+      // `concurrency` -- le total réel explose (constaté en prod le
+      // 28/09/2026 : plusieurs dizaines d'articles en_cours simultanés pour un
+      // réglage à 6, alors même que le correctif "un seul tick à la fois PAR
+      // PROCESSUS" -- voir `claiming` ci-dessus -- était déjà en place). Ce
+      // verrou sérialise l'étape "compter les en_cours puis réclamer" entre
+      // TOUS les processus, quel que soit leur nombre : la source de vérité
+      // devient la base (comptage live), plus le compteur mémoire d'un seul
+      // processus.
+      await conn.query('SELECT 1 FROM batch_orchestrator_lock FOR UPDATE');
+      const [countRows] = await conn.query(
+        `SELECT COUNT(*) AS total FROM batch_items WHERE status = 'en_cours'`,
+      );
+      const limit = Math.max(0, concurrencyTarget - countRows[0].total);
+      if (limit <= 0) {
+        await conn.commit();
+        return [];
+      }
       // Tri : `bi.id` est un UUID aléatoire (crypto.randomUUID(), data-api.js)
       // -- il n'a JAMAIS représenté un ordre d'arrivée, réessai ou pas. Ce qui
       // compte ici, c'est de faire passer un item réessayé (`requeued_at` posé
@@ -339,20 +361,25 @@ function createBatchOrchestrator(deps) {
   // termine (fire-and-forget) : le tick suivant peut réclamer d'autres items
   // dès qu'un créneau se libère, au lieu d'attendre le plus lent du lot.
   const tick = async () => {
-    // Un tick qui arrive pendant qu'un claimNext() précédent tourne encore
-    // repart les mains vides plutôt que de recalculer `slots` sur un `active`
-    // pas encore à jour -- le tick SUIVANT (15s plus tard) refera le calcul
-    // avec des chiffres à jour, sans rien perdre : les items en_attente
-    // restent en_attente, ils seront réclamés au prochain passage.
+    // Un tick qui arrive pendant qu'un claimNext() précédent tourne ENCORE
+    // DANS CE PROCESSUS repart les mains vides plutôt que de lancer une 2e
+    // transaction concurrente pour rien -- le tick SUIVANT (15s plus tard)
+    // refera l'appel, sans rien perdre : les items en_attente restent
+    // en_attente, ils seront réclamés au prochain passage. La protection
+    // contre le dépassement de concurrence, elle, vit dans claimNext() (verrou
+    // DB `batch_orchestrator_lock` + comptage global), pas ici.
     if (claiming) return;
     let currentConcurrency = concurrency;
     try { currentConcurrency = getConcurrency() || concurrency; } catch { currentConcurrency = concurrency; }
-    const slots = currentConcurrency - active;
-    if (slots <= 0) return;
     claiming = true;
     let claimed;
     try {
-      claimed = await claimNext(slots);
+      // Le cap réel est appliqué DANS claimNext (comptage global verrouillé,
+      // voir plus haut) -- `active` reste un compteur local utile pour
+      // l'observabilité (getActiveCount()) mais n'est plus ce qui borne la
+      // concurrence : avec plusieurs processus, un `active` local à 0 ne veut
+      // pas dire qu'il n'y a AUCUN item en_cours ailleurs.
+      claimed = await claimNext(currentConcurrency);
     } catch (e) {
       onLog(`[batch] Échec de la réclamation d'items : ${e.message}`);
       return;

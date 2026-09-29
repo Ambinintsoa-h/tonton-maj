@@ -3,10 +3,17 @@ const { createBatchOrchestrator, DEFAULT_CONCURRENCY } = require('./batchOrchest
 const ITEM_A = { id: 'i1', batch_id: 'b1', article_url: 'https://x.test/a', target_keyword: 'kw a', consigne: null, retry_count: 0, launched_by: 'u1', launched_by_name: 'Alice' };
 const ITEM_B = { id: 'i2', batch_id: 'b1', article_url: 'https://x.test/b', target_keyword: 'kw b', consigne: 'Ajoute un H2', retry_count: 0, launched_by: 'u1', launched_by_name: 'Alice' };
 
-function makeConn(claimRows = []) {
+function makeConn(claimRows = [], activeCount = 0) {
   return {
     beginTransaction: jest.fn().mockResolvedValue(),
+    // Ordre des query() dans claimNext() : 1) verrou `batch_orchestrator_lock`
+    // (contenu ignoré) -- 2) COUNT(*) des en_cours (source du calcul de
+    // `limit`, `activeCount` par défaut à 0 = comportement d'avant ce
+    // verrou : `limit` == la concurrence demandée) -- 3) le SELECT ... FOR
+    // UPDATE SKIP LOCKED qui réclame (claimRows) -- 4+) les UPDATE.
     query: jest.fn()
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([[{ total: activeCount }]])
       .mockResolvedValueOnce([claimRows])
       .mockResolvedValue([{}]),
     commit: jest.fn().mockResolvedValue(),
@@ -16,10 +23,10 @@ function makeConn(claimRows = []) {
 }
 
 function makeDeps({
-  claimRows = [], spawnPipelineFn, httpPut, httpPost, concurrency, onBatchDone,
+  claimRows = [], activeCount = 0, spawnPipelineFn, httpPut, httpPost, concurrency, onBatchDone,
   getConcurrency, getMaxEssaisIA, getTimeoutMs, getRetryOnError,
 } = {}) {
-  const conn = makeConn(claimRows);
+  const conn = makeConn(claimRows, activeCount);
   const getPool = jest.fn(() => ({ getConnection: jest.fn().mockResolvedValue(conn) }));
   const jwt = { sign: jest.fn(() => 'fake-jwt') };
   const put = httpPut || jest.fn().mockResolvedValue({ data: { ok: true, batchStatus: 'running' } });
@@ -57,14 +64,17 @@ describe('createBatchOrchestrator', () => {
     const orch = createBatchOrchestrator(deps);
     await orch.tick();
     expect(conn.commit).toHaveBeenCalledTimes(1);
-    expect(conn.query).toHaveBeenCalledTimes(1); // uniquement le SELECT
+    expect(conn.query).toHaveBeenCalledTimes(3); // verrou + COUNT + le SELECT (0 ligne)
   });
 
   it('réclame via FOR UPDATE SKIP LOCKED puis passe les items en_cours', async () => {
     const { deps, conn } = makeDeps({ claimRows: [ITEM_A] });
     const orch = createBatchOrchestrator(deps);
     await orch.tick();
-    const [selectSql] = conn.query.mock.calls[0];
+    // calls[0] = verrou batch_orchestrator_lock, calls[1] = COUNT(*) en_cours
+    // -- voir "verrou global inter-processus" ci-dessus -- calls[2] est le
+    // SELECT de réclamation proprement dit.
+    const [selectSql] = conn.query.mock.calls[2];
     expect(selectSql).toMatch(/FOR UPDATE SKIP LOCKED/);
     expect(selectSql).toMatch(/status = 'en_attente'/);
     // retry_count sélectionné (décide requeue vs erreur définitive dans
@@ -73,10 +83,10 @@ describe('createBatchOrchestrator', () => {
     // ne représente aucun ordre d'arrivée.
     expect(selectSql).toMatch(/bi\.retry_count/);
     expect(selectSql).toMatch(/ORDER BY \(bi\.requeued_at IS NOT NULL\), bi\.requeued_at, bi\.id/);
-    const [updateItemsSql, updateItemsParams] = conn.query.mock.calls[1];
+    const [updateItemsSql, updateItemsParams] = conn.query.mock.calls[3];
     expect(updateItemsSql).toMatch(/UPDATE batch_items SET status='en_cours'/);
     expect(updateItemsParams).toEqual(expect.arrayContaining(['i1']));
-    const [updateBatchSql] = conn.query.mock.calls[2];
+    const [updateBatchSql] = conn.query.mock.calls[4];
     expect(updateBatchSql).toMatch(/UPDATE batches SET status='running'/);
   });
 
@@ -182,10 +192,37 @@ describe('createBatchOrchestrator', () => {
   it('ne réclame rien de plus quand tous les créneaux de concurrence sont occupés', async () => {
     let resolveSpawn;
     const spawnPipelineFn = jest.fn(() => new Promise((r) => { resolveSpawn = r; }));
-    const { deps, getPool } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, concurrency: 1 });
+    // Compteur DB simulé (le vrai COUNT(*) que verrait N'IMPORTE QUEL
+    // processus) -- distinct du compteur mémoire `active`, qui n'existe que
+    // dans CE processus. Après le 1er tick, ITEM_A est en_cours EN BASE, donc
+    // ce compteur passe à 1 -- exactement ce que verrait un 2e processus.
+    let dbActiveCount = 0;
+    const conn = {
+      beginTransaction: jest.fn().mockResolvedValue(),
+      query: jest.fn((sql) => {
+        if (sql.includes('batch_orchestrator_lock')) return Promise.resolve([[]]);
+        if (sql.includes('COUNT(*)')) return Promise.resolve([[{ total: dbActiveCount }]]);
+        if (sql.includes('FOR UPDATE SKIP LOCKED')) return Promise.resolve([dbActiveCount === 0 ? [ITEM_A] : []]);
+        return Promise.resolve([{}]);
+      }),
+      commit: jest.fn().mockResolvedValue(),
+      rollback: jest.fn().mockResolvedValue(),
+      release: jest.fn(),
+    };
+    const getPool = jest.fn(() => ({ getConnection: jest.fn().mockResolvedValue(conn) }));
+    const deps = {
+      getPool, jwt: { sign: jest.fn(() => 'fake-jwt') }, jwtSecret: 'secret',
+      fetchModelPricing: jest.fn().mockResolvedValue(null),
+      apiBaseUrl: 'https://maj.stomos.net/api',
+      httpClientFactory: jest.fn(() => ({ put: jest.fn().mockResolvedValue({ data: { ok: true } }), post: jest.fn().mockResolvedValue({ data: { ok: true } }) })),
+      onLog: jest.fn(),
+      spawnPipelineFn,
+      concurrency: 1,
+    };
     const orch = createBatchOrchestrator(deps);
 
     await orch.tick(); // réclame ITEM_A, spawnPipelineFn ne résout jamais encore
+    dbActiveCount = 1; // reflète l'UPDATE que le vrai claimNext vient de faire
     // tick() ne raccroche pas sur processItem (fire-and-forget) : laisse les
     // microtasks internes (fetchModelPricing, buildAuthToken) atteindre
     // spawnPipelineFn avant de vérifier l'état.
@@ -194,8 +231,13 @@ describe('createBatchOrchestrator', () => {
     expect(spawnPipelineFn).toHaveBeenCalledTimes(1);
 
     getPool.mockClear();
-    await orch.tick(); // aucun créneau libre
-    expect(getPool).not.toHaveBeenCalled();
+    await orch.tick(); // le COUNT global montre déjà 1/1 -- rien à réclamer
+    // Contrairement à l'ancien garde-fou mémoire (qui évitait même d'appeler
+    // getPool), le tick VÉRIFIE maintenant toujours la base -- seule source
+    // de vérité fiable avec plusieurs processus -- mais ne réclame rien de
+    // plus.
+    expect(getPool).toHaveBeenCalledTimes(1);
+    expect(spawnPipelineFn).toHaveBeenCalledTimes(1);
 
     resolveSpawn({ articleId: 'art-1' });
     while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
@@ -235,6 +277,40 @@ describe('createBatchOrchestrator', () => {
     resolveGetConnection(conn);
     await firstTick;
     expect(getPool).toHaveBeenCalledTimes(1); // le 1er tick n'a réclamé qu'une fois lui-même
+  });
+
+  describe("verrou global inter-processus (batch_orchestrator_lock -- incident du 28/09/2026, 2e round : plusieurs processus Passenger tournent en même temps sur l'hébergement mutualisé)", () => {
+    it("verrouille batch_orchestrator_lock puis COMPTE les en_cours EN BASE avant de réclamer -- pas seulement le compteur mémoire `active` (qui ne voit rien des AUTRES processus)", async () => {
+      const { deps, conn } = makeDeps({ claimRows: [ITEM_A], concurrency: 6 });
+      const orch = createBatchOrchestrator(deps);
+      await orch.tick();
+      const calls = conn.query.mock.calls.map((c) => c[0]);
+      expect(calls[0]).toMatch(/batch_orchestrator_lock/);
+      expect(calls[0]).toMatch(/FOR UPDATE/);
+      expect(calls[1]).toMatch(/COUNT\(\*\)/);
+      expect(calls[1]).toMatch(/en_cours/);
+    });
+
+    it("un autre processus a déjà 4 items en_cours (activeCount=4) et la concurrence est réglée à 6 -- ce tick ne réclame QUE 2 items, jamais 6", async () => {
+      const { deps, conn } = makeDeps({ claimRows: [ITEM_A, ITEM_B], activeCount: 4, concurrency: 6 });
+      const orch = createBatchOrchestrator(deps);
+      await orch.tick();
+      // La requête de réclamation (3e query, après le verrou et le COUNT) doit
+      // demander LIMIT 2 (6 - 4), jamais LIMIT 6 -- sinon deux processus qui
+      // tournent chacun avec `active` local à 0 mais 4 en_cours posés par
+      // l'AUTRE processus repousseraient le total réel à 4+6=10.
+      const claimCall = conn.query.mock.calls[2];
+      expect(claimCall[1]).toEqual([2]);
+    });
+
+    it("un autre processus a DÉJÀ atteint (ou dépassé) la concurrence réglée -- ce tick ne réclame RIEN, sans même tenter le SELECT ... FOR UPDATE SKIP LOCKED", async () => {
+      const { deps, conn } = makeDeps({ claimRows: [ITEM_A], activeCount: 6, concurrency: 6 });
+      const orch = createBatchOrchestrator(deps);
+      await orch.tick();
+      expect(orch.getActiveCount()).toBe(0); // rien claimé PAR CE processus
+      expect(conn.query).toHaveBeenCalledTimes(2); // verrou + COUNT -- jamais le SELECT de réclamation
+      expect(conn.commit).toHaveBeenCalledTimes(1); // sortie propre, pas un rollback
+    });
   });
 
   it('une erreur pendant la réclamation (transaction) fait un rollback et ne plante pas le tick', async () => {
@@ -366,25 +442,56 @@ describe('réglages "Traitement en lot" dynamiques (settings.json batchTuning)',
   it('getConcurrency() est consulté à CHAQUE tick, pas seulement à la création', async () => {
     let current = 1;
     const getConcurrency = jest.fn(() => current);
-    let resolveSpawn;
-    const spawnPipelineFn = jest.fn(() => new Promise((r) => { resolveSpawn = r; }));
-    const { deps, getPool } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, getConcurrency });
+    const spawnPipelineFn = jest.fn(() => new Promise((r) => { resolvers.push(r); }));
+    // dbActiveCount simule le COUNT(*) réel -- ITEM_A réclamé au 1er tick
+    // reste en_cours (spawnPipelineFn ne résout jamais encore) tant qu'on ne
+    // le met pas à jour explicitement, exactement comme le ferait le vrai
+    // claimNext() via son UPDATE.
+    let dbActiveCount = 0;
+    const resolvers = [];
+    const claimQueue = [[ITEM_A], [{ ...ITEM_A, id: 'i2' }, { ...ITEM_A, id: 'i3' }]];
+    const conn = {
+      beginTransaction: jest.fn().mockResolvedValue(),
+      query: jest.fn((sql) => {
+        if (sql.includes('batch_orchestrator_lock')) return Promise.resolve([[]]);
+        if (sql.includes('COUNT(*)')) return Promise.resolve([[{ total: dbActiveCount }]]);
+        if (sql.includes('FOR UPDATE SKIP LOCKED')) return Promise.resolve([claimQueue.shift() || []]);
+        return Promise.resolve([{}]);
+      }),
+      commit: jest.fn().mockResolvedValue(),
+      rollback: jest.fn().mockResolvedValue(),
+      release: jest.fn(),
+    };
+    const getPool = jest.fn(() => ({ getConnection: jest.fn().mockResolvedValue(conn) }));
+    const deps = {
+      getPool, jwt: { sign: jest.fn(() => 'fake-jwt') }, jwtSecret: 'secret',
+      fetchModelPricing: jest.fn().mockResolvedValue(null),
+      apiBaseUrl: 'https://maj.stomos.net/api',
+      httpClientFactory: jest.fn(() => ({ put: jest.fn().mockResolvedValue({ data: { ok: true } }), post: jest.fn().mockResolvedValue({ data: { ok: true } }) })),
+      onLog: jest.fn(),
+      spawnPipelineFn,
+      getConcurrency,
+    };
     const orch = createBatchOrchestrator(deps);
 
     await orch.tick();
+    dbActiveCount = 1; // ITEM_A est maintenant en_cours EN BASE
     await new Promise((r) => setTimeout(r, 10));
     expect(getConcurrency).toHaveBeenCalled();
     expect(orch.getActiveCount()).toBe(1);
 
     // Créneau unique (current=1) déjà occupé : un admin qui remonte la
     // concurrence à 3 EN COURS DE ROUTE doit être vu au tick suivant, sans
-    // recréer l'orchestrateur ni redémarrer le process.
+    // recréer l'orchestrateur ni redémarrer le process -- 2 créneaux de
+    // libres maintenant (3 - 1 actif EN BASE), donc 2 nouveaux items réclamés.
     current = 3;
     getPool.mockClear();
     await orch.tick();
-    expect(getPool).toHaveBeenCalled(); // 2 créneaux de libres maintenant (3 - 1 actif)
+    expect(getPool).toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(orch.getActiveCount()).toBe(3); // 1 (déjà en cours) + 2 (nouvellement réclamés)
 
-    resolveSpawn({ articleId: 'art-1' });
+    resolvers.forEach((r) => r({ articleId: 'art-1' }));
     while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
   });
 
