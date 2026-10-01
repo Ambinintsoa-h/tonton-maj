@@ -907,13 +907,39 @@ describe('panne réseau passagère (incident du 01/10/2026, juste après un dép
     expect(put).not.toHaveBeenCalled();
   });
 
-  it('UNE seule fois : un item déjà remis en file (requeued_at posé) qui retombe sur la même panne suit le chemin normal (pas de boucle infinie)', async () => {
+  it('au plus 3 fois par item : à la 4e panne réseau consécutive du MÊME item, chemin normal (pas de boucle infinie)', async () => {
     const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('read ECONNRESET'));
-    const { deps, post } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 0, requeued_at: 1790000000000 }], spawnPipelineFn });
-    const orch = createBatchOrchestrator(deps);
+    // 4 réclamations successives du même item par le même orchestrateur.
+    const conns = [1, 2, 3, 4].map(() => makeConn([{ ...ITEM_A, retry_count: 0 }]));
+    let call = 0;
+    const getPool = jest.fn(() => ({ getConnection: jest.fn().mockResolvedValue(conns[Math.min(call++, 3)]) }));
+    const post = jest.fn().mockResolvedValue({ data: { ok: true } });
+    const put = jest.fn().mockResolvedValue({ data: { ok: true } });
+    const onLog = jest.fn();
+    const orch = createBatchOrchestrator({
+      getPool, jwt: { sign: jest.fn(() => 'fake-jwt') }, jwtSecret: 's',
+      fetchModelPricing: jest.fn().mockResolvedValue(null), apiBaseUrl: 'https://x/api',
+      httpClientFactory: jest.fn(() => ({ put, post })), onLog, spawnPipelineFn,
+    });
+    for (let k = 0; k < 3; k += 1) {
+      await orch.tick();
+      while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(post).not.toHaveBeenCalled();
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('(3/3)'));
     await orch.tick();
     while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
     expect(post).toHaveBeenCalledWith('/data/batches/b1/items/i1/requeue', expect.anything());
+  });
+
+  it('un item déjà remis en file une fois (requeued_at posé) bénéficie quand même du report : cas réel après chaque redémarrage', async () => {
+    const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('read ECONNRESET'));
+    const { deps, post, put } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 0, requeued_at: 1790000000000 }], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(post).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
   });
 
   it('une erreur propre à l\'article (audit illisible) suit toujours le chemin normal', async () => {
@@ -948,5 +974,58 @@ describe('journal : compteurs de progression non journalisés un par un', () => 
     expect(orch.getDiagnostics().items[0].lastStep).toBe('Audit QAT (estimation) — ~153 tokens');
     stepCb('Génération de l\'article...');
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining('Génération de l\'article...'));
+  });
+});
+
+describe('report en base directe (updateItemFn / requeueItemFn) -- plus d\'appel HTTP vers le serveur lui-même', () => {
+  it('un succès est enregistré via updateItemFn, sans aucun appel HTTP', async () => {
+    const updateItemFn = jest.fn().mockResolvedValue({ batchStatus: 'running', shouldNotify: false });
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1', tokenUsage: { costUsd: 0.2, input: 10, output: 5 } });
+    const { deps, put, post, httpClientFactory } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn });
+    const orch = createBatchOrchestrator({ ...deps, updateItemFn, requeueItemFn: jest.fn() });
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(updateItemFn).toHaveBeenCalledWith(expect.objectContaining({ id: 'i1', batch_id: 'b1' }), expect.objectContaining({ status: 'fait', articleId: 'art-1', costUsd: 0.2 }));
+    expect(put).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('shouldNotify renvoyé par updateItemFn déclenche onBatchDone (email de fin de lot)', async () => {
+    const updateItemFn = jest.fn().mockResolvedValue({ batchStatus: 'done', shouldNotify: true });
+    const onBatchDone = jest.fn().mockResolvedValue();
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
+    const { deps } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, onBatchDone });
+    const orch = createBatchOrchestrator({ ...deps, updateItemFn });
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(onBatchDone).toHaveBeenCalledWith('b1');
+  });
+
+  it('un 1er échec passe par requeueItemFn ; false (déjà réessayé) bascule sur l\'erreur définitive via updateItemFn', async () => {
+    const updateItemFn = jest.fn().mockResolvedValue({ batchStatus: 'running', shouldNotify: false });
+    const requeueItemFn = jest.fn().mockResolvedValue(false);
+    const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible'));
+    const { deps, put, post } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 0 }], spawnPipelineFn });
+    const orch = createBatchOrchestrator({ ...deps, updateItemFn, requeueItemFn });
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(requeueItemFn).toHaveBeenCalledWith(expect.objectContaining({ id: 'i1' }), expect.stringContaining('Audit illisible'));
+    expect(updateItemFn).toHaveBeenCalledWith(expect.objectContaining({ id: 'i1' }), expect.objectContaining({ status: 'erreur' }));
+    expect(put).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('une erreur base passagère pendant le report est réessayée (reportRetryDelaysMs)', async () => {
+    const updateItemFn = jest.fn()
+      .mockRejectedValueOnce(new Error('Lock wait timeout exceeded'))
+      .mockResolvedValueOnce({ batchStatus: 'running', shouldNotify: false });
+    const sleepFn = jest.fn().mockResolvedValue();
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
+    const { deps } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn });
+    const orch = createBatchOrchestrator({ ...deps, updateItemFn, reportRetryDelaysMs: [3000], sleepFn });
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(updateItemFn).toHaveBeenCalledTimes(2);
+    expect(sleepFn).toHaveBeenCalledWith(3000);
   });
 });

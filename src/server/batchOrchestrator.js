@@ -46,6 +46,7 @@ const DEFAULT_TOKEN_TTL = '20m';
 // Orphelins (voir claimNext) : un item 'en_cours' sans battement de cœur
 // depuis 3 min (6 battements manqués, un toutes les 30 s) est considéré mort.
 const HEARTBEAT_INTERVAL_MS = 30 * 1000;
+const MAX_INFRA_DEFERRALS = 3;
 const PROGRESS_TICK_RE = /—\s*~[\d\s,.\u202f\u00a0]+tokens\s*$/;
 const HEARTBEAT_STALE_MS = 3 * 60 * 1000;
 // Sans colonne heartbeat_at : marge au-delà du délai dur du pipeline.
@@ -138,6 +139,15 @@ function createBatchOrchestrator(deps) {
     // défaut (aucun nouvel essai -- comportement historique, tests rapides) ;
     // proxy.js passe [3 s, 10 s, 30 s] en production.
     reportRetryDelaysMs = [],
+    // Écriture DIRECTE en base du résultat d'un item (src/server/batchItemStore.js),
+    // sans passer par l'API HTTP de ce même serveur -- dont l'URL publique est
+    // injoignable plusieurs minutes après chaque redémarrage (incident du
+    // 01/10/2026, "read ECONNRESET"). Absentes (tests historiques) : repli sur
+    // les routes HTTP PUT .../items/:itemId et POST .../requeue, comme avant.
+    //   updateItemFn(item, patch)          -> { shouldNotify } | { notFound: true }
+    //   requeueItemFn(item, errorMessage)  -> boolean (false = déjà réessayé)
+    updateItemFn,
+    requeueItemFn,
     sleepFn = (ms) => new Promise((r) => setTimeout(r, ms)),
   } = deps;
 
@@ -148,6 +158,8 @@ function createBatchOrchestrator(deps) {
   // accès au stderr.log du serveur. Chaque item en cours garde sa dernière
   // étape de pipeline et l'heure à laquelle elle est arrivée.
   const activeItems = new Map();
+  // Pannes d'infrastructure déjà "absorbées" par item (voir processItem).
+  const infraDeferrals = new Map();
   const diag = {
     lastTickAt: null,
     lastClaim: null,
@@ -344,15 +356,26 @@ function createBatchOrchestrator(deps) {
   };
 
   const reportOutcome = async (item, patch) => {
-    const http = httpFor(buildAuthToken(item));
-    const res = await withReportRetry(
-      `Report de l'item ${item.id}`,
-      () => http.put(`/data/batches/${encodeURIComponent(item.batch_id)}/items/${encodeURIComponent(item.id)}`, patch),
-    );
-    // `shouldNotify` vient de la réclamation atomique côté data-api.js : un
+    let shouldNotify = false;
+    if (typeof updateItemFn === 'function') {
+      const r = await withReportRetry(`Report de l'item ${item.id}`, () => updateItemFn(item, patch));
+      if (r && r.notFound) {
+        onLog(`[batch] Item ${item.id} introuvable au moment du report (supprimé entre-temps ?)`);
+        return;
+      }
+      shouldNotify = !!(r && r.shouldNotify);
+    } else {
+      const http = httpFor(buildAuthToken(item));
+      const res = await withReportRetry(
+        `Report de l'item ${item.id}`,
+        () => http.put(`/data/batches/${encodeURIComponent(item.batch_id)}/items/${encodeURIComponent(item.id)}`, patch),
+      );
+      shouldNotify = !!res?.data?.shouldNotify;
+    }
+    // `shouldNotify` vient de la réclamation atomique (batchItemStore.js) : un
     // seul item déclencheur par lot, jamais un doublon même si deux items
     // terminent au même instant.
-    if (res?.data?.shouldNotify) {
+    if (shouldNotify) {
       try {
         await onBatchDone(item.batch_id);
       } catch (e) {
@@ -367,6 +390,9 @@ function createBatchOrchestrator(deps) {
   // rarissime, jamais une vraie erreur) : l'appelant doit alors basculer sur
   // l'erreur définitive plutôt que de considérer le réessai posé.
   const requeueItem = async (item, errorMessage) => {
+    if (typeof requeueItemFn === 'function') {
+      return withReportRetry(`Remise en file de l'item ${item.id}`, () => requeueItemFn(item, errorMessage));
+    }
     const http = httpFor(buildAuthToken(item));
     try {
       await withReportRetry(
@@ -524,13 +550,19 @@ function createBatchOrchestrator(deps) {
       // en file elle-même échouait pour la même raison. Plutôt que de consommer
       // l'unique réessai (voire l'erreur définitive), on laisse l'item tel quel :
       // il ne bat plus, la réclamation suivante le remet en file (orphelin) sans
-      // toucher à retry_count. Une seule fois : un item déjà remis en file
-      // (requeued_at posé) qui retombe sur la même panne suit le chemin normal,
-      // pour ne jamais tourner en boucle sur un site qui coupe toutes nos
-      // connexions.
-      if (isTransientInfraError(e) && !item.requeued_at) {
-        onLog(`[batch] Item ${item.id} -- panne réseau/serveur passagère, laissé en attente de reprise automatique (réessai non consommé)`);
-        return;
+      // toucher à retry_count. Au plus MAX_INFRA_DEFERRALS fois par item (compté
+      // en mémoire, par processus) : au-delà, chemin normal, pour ne jamais
+      // tourner en boucle sur un site qui coupe toutes nos connexions. (Pas sur
+      // `requeued_at` comme dans la 1re version : il est aussi posé par la
+      // reprise des orphelins et par le réessai normal, et a renvoyé 3 articles
+      // en "Erreur" sur la coupure qui suit chaque redémarrage.)
+      if (isTransientInfraError(e)) {
+        const deferrals = (infraDeferrals.get(item.id) || 0) + 1;
+        if (deferrals <= MAX_INFRA_DEFERRALS) {
+          infraDeferrals.set(item.id, deferrals);
+          onLog(`[batch] Item ${item.id} -- panne réseau/serveur passagère (${deferrals}/${MAX_INFRA_DEFERRALS}), laissé en attente de reprise automatique (réessai non consommé)`);
+          return;
+        }
       }
       await handleFailure(item, errorMessage);
     } finally {

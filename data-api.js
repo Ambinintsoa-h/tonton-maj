@@ -23,6 +23,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { getPool } = require('./db');
 const { encrypt, decrypt } = require('./crypto-util'); // jetons WP (chiffrés au repos)
+const { updateBatchItem, requeueBatchItem } = require('./src/server/batchItemStore');
 
 const genId = () => crypto.randomUUID();
 
@@ -1197,77 +1198,16 @@ module.exports = ({ requireAuth, requireRole }) => {
     }
   }));
 
-  // PUT /batches/:id/items/:itemId — mise à jour d'UN item par l'orchestrateur
-  // (phase ultérieure). Recalcule les compteurs du batch parent et le fait
-  // passer à 'done' quand tous les items sont dans un état terminal — jamais
-  // l'inverse : un batch 'done' ne redevient pas 'running' ici, un item ne se
-  // relance qu'en créant un nouveau batch.
-  const TERMINAL_STATUSES = ['fait', 'erreur', 'a_revoir'];
+  // PUT /batches/:id/items/:itemId — mise à jour d'UN item. Recalcule les
+  // compteurs du batch parent et le fait passer à 'done' quand tous les items
+  // sont dans un état terminal — jamais l'inverse. Logique partagée avec
+  // l'orchestrateur, qui l'appelle désormais directement (sans passer par
+  // HTTP) : voir src/server/batchItemStore.js.
   router.put('/batches/:id/items/:itemId', requireAuth, wrap(async (req, res) => {
     const { id, itemId } = req.params;
-    const {
-      status, articleId, errorMessage, startedAt, completedAt,
-      costUsd, inputTokens, outputTokens,
-    } = req.body || {};
-    const conn = await getPool().getConnection();
-    try {
-      await conn.beginTransaction();
-      const [existing] = await conn.query('SELECT id, started_at FROM batch_items WHERE id=? AND batch_id=?', [itemId, id]);
-      if (!existing.length) { await conn.rollback(); return res.status(404).json({ error: 'Item introuvable' }); }
-      await conn.query(
-        `UPDATE batch_items SET
-           status=COALESCE(?, status), article_id=COALESCE(?, article_id),
-           error_message=COALESCE(?, error_message), started_at=COALESCE(?, started_at),
-           completed_at=COALESCE(?, completed_at), cost_usd=COALESCE(?, cost_usd),
-           input_tokens=COALESCE(?, input_tokens), output_tokens=COALESCE(?, output_tokens)
-         WHERE id=?`,
-        [status ?? null, articleId ?? null, errorMessage ?? null, startedAt ?? null, completedAt ?? null,
-         costUsd ?? null, inputTokens ?? null, outputTokens ?? null, itemId]);
-
-      // Cumul cout/duree sur le batch parent -- pour la supervision (Phase 8).
-      // La duree ne se deduit QUE si l'item avait bien un started_at (posé par
-      // l'orchestrateur au moment de la réclamation) : jamais négative, jamais
-      // fantaisiste si completedAt arrive seul.
-      const startedAtExisting = existing[0].started_at ?? startedAt ?? null;
-      const durationMs = (completedAt != null && startedAtExisting != null) ? (completedAt - startedAtExisting) : null;
-      const [[counts]] = await conn.query(
-        `SELECT COUNT(*) AS total,
-           SUM(status='fait') AS done_ct,
-           SUM(status='erreur') AS error_ct,
-           SUM(status IN (${TERMINAL_STATUSES.map(() => '?').join(',')})) AS terminal_ct
-         FROM batch_items WHERE batch_id=?`,
-        [...TERMINAL_STATUSES, id]);
-      const batchStatus = Number(counts.terminal_ct) >= Number(counts.total) ? 'done' : 'running';
-      await conn.query(
-        `UPDATE batches SET completed_count=?, error_count=?, status=?,
-           completed_at=CASE WHEN ?='done' THEN ? ELSE completed_at END,
-           total_cost_usd=COALESCE(total_cost_usd,0) + COALESCE(?,0),
-           total_duration_ms=COALESCE(total_duration_ms,0) + COALESCE(?,0)
-         WHERE id=?`,
-        [counts.done_ct || 0, counts.error_ct || 0, batchStatus, batchStatus, Date.now(),
-         costUsd ?? null, durationMs, id]);
-
-      // Réclamation ATOMIQUE du droit d'envoyer l'email de fin de lot : deux
-      // items peuvent terminer au même instant (concurrence de
-      // l'orchestrateur) et arriver TOUS LES DEUX ici avec batchStatus='done'
-      // -- sans ce verrou, chacun enverrait l'email. La ligne `batches` est
-      // déjà verrouillée par la transaction en cours (l'UPDATE juste
-      // au-dessus), donc un seul des deux appels concurrents peut faire
-      // passer email_sent de 0 à 1.
-      let shouldNotify = false;
-      if (batchStatus === 'done') {
-        const [claim] = await conn.query('UPDATE batches SET email_sent=1 WHERE id=? AND email_sent=0', [id]);
-        shouldNotify = claim.affectedRows === 1;
-      }
-
-      await conn.commit();
-      res.json({ ok: true, batchStatus, shouldNotify });
-    } catch (e) {
-      await conn.rollback();
-      throw e;
-    } finally {
-      conn.release();
-    }
+    const r = await updateBatchItem(getPool(), id, itemId, req.body || {});
+    if (r.notFound) return res.status(404).json({ error: 'Item introuvable' });
+    res.json({ ok: true, batchStatus: r.batchStatus, shouldNotify: r.shouldNotify });
   }));
 
   // POST /batches/:id/items/:itemId/requeue — un SEUL réessai automatique
@@ -1294,15 +1234,9 @@ module.exports = ({ requireAuth, requireRole }) => {
   router.post('/batches/:id/items/:itemId/requeue', requireAuth, wrap(async (req, res) => {
     const { id, itemId } = req.params;
     const { errorMessage } = req.body || {};
-    const [result] = await q(
-      `UPDATE batch_items
-          SET status='en_attente', started_at=NULL, completed_at=NULL,
-              error_message=COALESCE(?, error_message),
-              retry_count=retry_count+1, requeued_at=?
-        WHERE id=? AND batch_id=? AND retry_count=0`,
-      [errorMessage ?? null, Date.now(), itemId, id],
-    );
-    if (!result.affectedRows) {
+    // Même requête que l'orchestrateur (src/server/batchItemStore.js).
+    const requeued = await requeueBatchItem(getPool(), id, itemId, errorMessage);
+    if (!requeued) {
       return res.status(409).json({ error: "Item introuvable, ou déjà réessayé une fois (retry_count != 0) -- pas de 2e remise en file." });
     }
     res.json({ ok: true });
