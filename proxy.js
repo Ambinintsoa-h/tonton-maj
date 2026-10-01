@@ -2115,6 +2115,7 @@ if (DATA_BACKEND === 'mysql') {
     HEARTBEAT_INTERVAL_MS: BATCH_HEARTBEAT_INTERVAL_MS,
   } = require('./src/server/batchOrchestrator');
   const { getPool: getBatchPool } = require('./db');
+  const { updateBatchItem, requeueBatchItem } = require('./src/server/batchItemStore');
   const refreshBatchHeartbeatAvailability = async () => {
     try {
       const [rows] = await getBatchPool().query("SHOW COLUMNS FROM batch_items LIKE 'heartbeat_at'");
@@ -2152,6 +2153,12 @@ if (DATA_BACKEND === 'mysql') {
     // redémarre ou sature à ce moment-là, quelques nouveaux essais plutôt que
     // de laisser l'item "en_cours" (voir withReportRetry).
     reportRetryDelaysMs: [3000, 10000, 30000],
+    // Résultat d'un article écrit DIRECTEMENT en base (même logique que les
+    // routes PUT .../items/:itemId et POST .../requeue) -- plus d'appel HTTP
+    // vers l'URL publique de ce même serveur, injoignable plusieurs minutes
+    // après chaque redémarrage (incident du 01/10/2026).
+    updateItemFn: (item, patch) => updateBatchItem(getBatchPool(), item.batch_id, item.id, patch),
+    requeueItemFn: (item, errorMessage) => requeueBatchItem(getBatchPool(), item.batch_id, item.id, errorMessage),
     onLog: (msg) => console.log(msg),
     onBatchDone: sendBatchCompletionEmail,
   });
