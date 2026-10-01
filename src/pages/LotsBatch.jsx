@@ -98,8 +98,143 @@ function LaunchConfirmDialog({ count, username, onConfirm, onCancel }) {
   );
 }
 
+// ── Diagnostic serveur (super_admin) -- incident du 01/10/2026 ───────────────
+// Des articles restaient "en_cours" des heures sans qu'on puisse savoir s'ils
+// tournaient encore, à quelle étape, ni dans quel processus serveur. Ce panneau
+// lit GET /api/internal/batch-diagnostics (proxy.js) toutes les 10 s tant
+// qu'il est ouvert -- rien n'est chargé quand il est replié.
+const fmtClock = (ms) => (ms ? new Date(ms).toLocaleTimeString('fr-FR') : '—');
+const fmtAgo = (ms) => {
+  if (!ms) return '—';
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 90) return `il y a ${s} s`;
+  const m = Math.round(s / 60);
+  return m < 90 ? `il y a ${m} min` : `il y a ${Math.round(m / 60)} h`;
+};
+
+function BatchDiagnosticsPanel() {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [onlyBatchLogs, setOnlyBatchLogs] = useState(true);
+
+  const load = useCallback(async () => {
+    try {
+      const token = sessionStorage.getItem('tonton_auth_token');
+      const res = await fetch('/api/internal/batch-diagnostics?logs=300', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setData(await res.json());
+      setError(null);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    load();
+    const t = setInterval(load, 10000);
+    return () => clearInterval(t);
+  }, [open, load]);
+
+  const orch = data?.orchestrator;
+  const db = data?.db;
+  const logs = (data?.logs || []).filter((l) => !onlyBatchLogs || /\[(batch|pipeline)/.test(l.text));
+
+  return (
+    <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between">
+        <h2 className="font-medium text-gray-900">Diagnostic serveur <span className="text-xs text-gray-400 font-normal">(super admin)</span></h2>
+        {open ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+      </button>
+      {open && (
+        <div className="space-y-4 text-sm" data-testid="batch-diagnostics">
+          {error && <p className="text-red-600">Diagnostic indisponible : {error}</p>}
+          {!data && !error && <p className="text-gray-400">Chargement…</p>}
+          {data && (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="rounded-lg bg-gray-50 p-3">
+                  <div className="text-xs text-gray-500">Processus serveur</div>
+                  <div className="font-medium">pid {data.process.pid}</div>
+                  <div className="text-xs text-gray-500">démarré à {fmtClock(data.process.startedAt)} ({fmtAgo(data.process.startedAt)})</div>
+                  <div className="text-xs text-gray-500">mémoire {data.process.memoryMb.rss} Mo</div>
+                </div>
+                <div className="rounded-lg bg-gray-50 p-3">
+                  <div className="text-xs text-gray-500">En base</div>
+                  <div className="font-medium">{db?.enCours ?? '—'} en cours · {db?.enAttente ?? '—'} en attente</div>
+                  <div className="text-xs text-gray-500">battement de cœur : {db?.heartbeatColumn ? 'actif' : 'inactif (migration à passer)'}</div>
+                </div>
+                <div className="rounded-lg bg-gray-50 p-3">
+                  <div className="text-xs text-gray-500">Ce processus</div>
+                  <div className="font-medium">{orch ? `${orch.activeCount} article(s) lancé(s) ici` : 'orchestrateur absent'}</div>
+                  <div className="text-xs text-gray-500">concurrence {orch?.concurrency ?? '—'} · dernier tick {fmtAgo(orch?.lastTickAt)}</div>
+                </div>
+                <div className="rounded-lg bg-gray-50 p-3">
+                  <div className="text-xs text-gray-500">Dernière réclamation</div>
+                  {orch?.lastClaim ? (
+                    <>
+                      <div className="font-medium">{orch.lastClaim.claimed} réclamé(s) · {orch.lastClaim.limit} place(s) libre(s)</div>
+                      <div className="text-xs text-gray-500">{orch.lastClaim.enCours} en cours en base · {orch.lastClaim.staleRepaired} orphelin(s) remis en file · {fmtAgo(orch.lastClaim.at)}</div>
+                    </>
+                  ) : <div className="font-medium">—</div>}
+                  {orch?.lastClaimError && (
+                    <div className="text-xs text-red-600 mt-1">Échec {fmtAgo(orch.lastClaimError.at)} : {orch.lastClaimError.message}</div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="font-medium text-gray-800 mb-1">Articles en cours en base</h3>
+                {db?.error && <p className="text-red-600">{db.error}</p>}
+                {db?.enCoursItems?.length ? (
+                  <table className="w-full text-xs">
+                    <thead><tr className="text-left text-gray-500"><th className="py-1">Article</th><th>Démarré</th><th>Dernier battement</th><th>Tourne ici</th><th>Dernière étape (si ici)</th></tr></thead>
+                    <tbody>
+                      {db.enCoursItems.map((it) => {
+                        const here = orch?.items?.find((i) => i.id === it.id);
+                        return (
+                          <tr key={it.id} className="border-t border-gray-100 align-top">
+                            <td className="py-1 pr-2 break-all">{it.articleUrl}</td>
+                            <td className="pr-2 whitespace-nowrap">{fmtAgo(it.startedAt)}</td>
+                            <td className="pr-2 whitespace-nowrap">{it.heartbeatAt ? fmtAgo(it.heartbeatAt) : '—'}</td>
+                            <td className="pr-2">{it.runningHere ? 'oui' : 'non'}</td>
+                            <td className="pr-2">{here ? `${here.phase} — ${here.lastStep || '(aucune étape reçue)'} (${here.sinceLastStepS ?? here.elapsedS} s)` : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : <p className="text-gray-400">Aucun article en cours.</p>}
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="font-medium text-gray-800">Journal récent de ce processus</h3>
+                  <label className="text-xs text-gray-500 flex items-center gap-1">
+                    <input type="checkbox" checked={onlyBatchLogs} onChange={(e) => setOnlyBatchLogs(e.target.checked)} />
+                    lignes lot/pipeline uniquement
+                  </label>
+                </div>
+                <pre className="bg-gray-900 text-gray-100 text-[11px] leading-snug rounded-lg p-3 max-h-80 overflow-auto whitespace-pre-wrap">
+                  {logs.length
+                    ? logs.map((l) => `${new Date(l.at).toLocaleTimeString('fr-FR')} ${l.level === 'log' ? '' : `[${l.level}] `}${l.text}`).join('\n')
+                    : '(rien pour l\'instant)'}
+                </pre>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function LotsBatch() {
   const authUsername = useSelector(s => s.auth.username);
+  const authRole = useSelector(s => s.auth.role);
 
   const [rows, setRows] = useState(() => [newRow()]);
   const [commonConsigne, setCommonConsigne] = useState('');
@@ -764,6 +899,8 @@ export default function LotsBatch() {
         </div>
         <Pager page={batchPageClamped} totalPages={batchTotalPages} onChange={setBatchPage} />
       </section>
+
+      {authRole === 'super_admin' && <BatchDiagnosticsPanel />}
 
       {confirmLaunch && (
         <LaunchConfirmDialog
