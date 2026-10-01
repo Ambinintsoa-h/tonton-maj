@@ -46,9 +46,21 @@ const DEFAULT_TOKEN_TTL = '20m';
 // Orphelins (voir claimNext) : un item 'en_cours' sans battement de cœur
 // depuis 3 min (6 battements manqués, un toutes les 30 s) est considéré mort.
 const HEARTBEAT_INTERVAL_MS = 30 * 1000;
+const PROGRESS_TICK_RE = /—\s*~[\d\s,.\u202f\u00a0]+tokens\s*$/;
 const HEARTBEAT_STALE_MS = 3 * 60 * 1000;
 // Sans colonne heartbeat_at : marge au-delà du délai dur du pipeline.
 const LEGACY_STALE_MARGIN_MS = 5 * 60 * 1000;
+
+// Panne d'infrastructure passagère (et non un problème propre à l'article) :
+// connexion coupée/refusée/expirée, ou passerelle 502/503/504.
+const TRANSIENT_INFRA_RE = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|socket hang up|HTTP 50[234]\b|status code 50[234]\b/i;
+const isTransientInfraError = (e) => {
+  if (!e) return false;
+  if (['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'EAI_AGAIN'].includes(e.code)) return true;
+  const status = e.response && e.response.status;
+  if ([502, 503, 504].includes(status)) return true;
+  return TRANSIENT_INFRA_RE.test(String(e.message || ''));
+};
 
 // Lecture défensive d'un réglage injecté : une fonction absente ou qui lève
 // ne doit jamais faire planter un tick.
@@ -260,7 +272,7 @@ function createBatchOrchestrator(deps) {
       // un FIFO qui n'a jamais existé.
       const [rows] = await conn.query(
         `SELECT bi.id, bi.batch_id, bi.article_url, bi.target_keyword, bi.consigne,
-                bi.retry_count, b.launched_by, b.launched_by_name
+                bi.retry_count, bi.requeued_at, b.launched_by, b.launched_by_name
            FROM batch_items bi
            JOIN batches b ON b.id = bi.batch_id
           WHERE bi.status = 'en_attente'
@@ -464,6 +476,11 @@ function createBatchOrchestrator(deps) {
         onStep: (s) => {
           track.lastStep = s;
           track.lastStepAt = Date.now();
+          // Compteurs de progression ("Mise en gras — ~3 186 tokens", émis
+          // toutes les 700 ms) : gardés comme dernière étape pour le
+          // diagnostic, mais pas journalisés un par un -- ils noyaient le
+          // journal récent (500 lignes) en quelques minutes.
+          if (PROGRESS_TICK_RE.test(s)) return;
           onLog(`[batch ${item.id}] ${s}`);
         },
       });
@@ -500,6 +517,21 @@ function createBatchOrchestrator(deps) {
       ].filter(Boolean).join(' ').slice(0, 2000);
       onLog(`[batch] Item ${item.id} en échec : ${errorMessage}`);
       track.phase = 'échec';
+      // Panne d'infrastructure (connexion coupée/refusée, passerelle 502-504)
+      // plutôt qu'un problème de l'article : constaté le 01/10/2026 juste après
+      // un déploiement, 3 articles passés en "Erreur" définitive en 45 s sur des
+      // "read ECONNRESET" -- ils n'avaient jamais vraiment tourné, et la remise
+      // en file elle-même échouait pour la même raison. Plutôt que de consommer
+      // l'unique réessai (voire l'erreur définitive), on laisse l'item tel quel :
+      // il ne bat plus, la réclamation suivante le remet en file (orphelin) sans
+      // toucher à retry_count. Une seule fois : un item déjà remis en file
+      // (requeued_at posé) qui retombe sur la même panne suit le chemin normal,
+      // pour ne jamais tourner en boucle sur un site qui coupe toutes nos
+      // connexions.
+      if (isTransientInfraError(e) && !item.requeued_at) {
+        onLog(`[batch] Item ${item.id} -- panne réseau/serveur passagère, laissé en attente de reprise automatique (réessai non consommé)`);
+        return;
+      }
       await handleFailure(item, errorMessage);
     } finally {
       active -= 1;

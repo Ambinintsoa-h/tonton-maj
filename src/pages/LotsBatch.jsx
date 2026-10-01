@@ -104,9 +104,12 @@ function LaunchConfirmDialog({ count, username, onConfirm, onCancel }) {
 // lit GET /api/internal/batch-diagnostics (proxy.js) toutes les 10 s tant
 // qu'il est ouvert -- rien n'est chargé quand il est replié.
 const fmtClock = (ms) => (ms ? new Date(ms).toLocaleTimeString('fr-FR') : '—');
-const fmtAgo = (ms) => {
+// `skewMs` = avance de l'horloge du poste sur celle du serveur (voir
+// serverNow, proxy.js) : sans correction, un poste en avance de 2 min
+// affichait "il y a 2 min" pour un événement qui venait d'arriver.
+const fmtAgo = (ms, skewMs = 0) => {
   if (!ms) return '—';
-  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  const s = Math.max(0, Math.round((Date.now() - skewMs - ms) / 1000));
   if (s < 90) return `il y a ${s} s`;
   const m = Math.round(s / 60);
   return m < 90 ? `il y a ${m} min` : `il y a ${Math.round(m / 60)} h`;
@@ -117,6 +120,8 @@ function BatchDiagnosticsPanel() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [onlyBatchLogs, setOnlyBatchLogs] = useState(true);
+  const [skewMs, setSkewMs] = useState(0);
+  const ago = (ms) => fmtAgo(ms, skewMs);
 
   const load = useCallback(async () => {
     try {
@@ -125,7 +130,9 @@ function BatchDiagnosticsPanel() {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData(await res.json());
+      const json = await res.json();
+      setSkewMs(json.serverNow ? Date.now() - json.serverNow : 0);
+      setData(json);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -159,7 +166,7 @@ function BatchDiagnosticsPanel() {
                 <div className="rounded-lg bg-gray-50 p-3">
                   <div className="text-xs text-gray-500">Processus serveur</div>
                   <div className="font-medium">pid {data.process.pid}</div>
-                  <div className="text-xs text-gray-500">démarré à {fmtClock(data.process.startedAt)} ({fmtAgo(data.process.startedAt)})</div>
+                  <div className="text-xs text-gray-500">démarré à {fmtClock(data.process.startedAt)} ({ago(data.process.startedAt)})</div>
                   <div className="text-xs text-gray-500">mémoire {data.process.memoryMb.rss} Mo</div>
                 </div>
                 <div className="rounded-lg bg-gray-50 p-3">
@@ -170,18 +177,18 @@ function BatchDiagnosticsPanel() {
                 <div className="rounded-lg bg-gray-50 p-3">
                   <div className="text-xs text-gray-500">Ce processus</div>
                   <div className="font-medium">{orch ? `${orch.activeCount} article(s) lancé(s) ici` : 'orchestrateur absent'}</div>
-                  <div className="text-xs text-gray-500">concurrence {orch?.concurrency ?? '—'} · dernier tick {fmtAgo(orch?.lastTickAt)}</div>
+                  <div className="text-xs text-gray-500">concurrence {orch?.concurrency ?? '—'} · dernier tick {ago(orch?.lastTickAt)}</div>
                 </div>
                 <div className="rounded-lg bg-gray-50 p-3">
                   <div className="text-xs text-gray-500">Dernière réclamation</div>
                   {orch?.lastClaim ? (
                     <>
                       <div className="font-medium">{orch.lastClaim.claimed} réclamé(s) · {orch.lastClaim.limit} place(s) libre(s)</div>
-                      <div className="text-xs text-gray-500">{orch.lastClaim.enCours} en cours en base · {orch.lastClaim.staleRepaired} orphelin(s) remis en file · {fmtAgo(orch.lastClaim.at)}</div>
+                      <div className="text-xs text-gray-500">{orch.lastClaim.enCours} en cours en base · {orch.lastClaim.staleRepaired} orphelin(s) remis en file · {ago(orch.lastClaim.at)}</div>
                     </>
                   ) : <div className="font-medium">—</div>}
                   {orch?.lastClaimError && (
-                    <div className="text-xs text-red-600 mt-1">Échec {fmtAgo(orch.lastClaimError.at)} : {orch.lastClaimError.message}</div>
+                    <div className="text-xs text-red-600 mt-1">Échec {ago(orch.lastClaimError.at)} : {orch.lastClaimError.message}</div>
                   )}
                 </div>
               </div>
@@ -198,8 +205,8 @@ function BatchDiagnosticsPanel() {
                         return (
                           <tr key={it.id} className="border-t border-gray-100 align-top">
                             <td className="py-1 pr-2 break-all">{it.articleUrl}</td>
-                            <td className="pr-2 whitespace-nowrap">{fmtAgo(it.startedAt)}</td>
-                            <td className="pr-2 whitespace-nowrap">{it.heartbeatAt ? fmtAgo(it.heartbeatAt) : '—'}</td>
+                            <td className="pr-2 whitespace-nowrap">{ago(it.startedAt)}</td>
+                            <td className="pr-2 whitespace-nowrap">{it.heartbeatAt ? ago(it.heartbeatAt) : '—'}</td>
                             <td className="pr-2">{it.runningHere ? 'oui' : 'non'}</td>
                             <td className="pr-2">{here ? `${here.phase} — ${here.lastStep || '(aucune étape reçue)'} (${here.sinceLastStepS ?? here.elapsedS} s)` : '—'}</td>
                           </tr>

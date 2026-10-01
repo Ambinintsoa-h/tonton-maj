@@ -2864,6 +2864,10 @@ app.get('/api/internal/batch-diagnostics', requireAuth, requireRole('super_admin
   const mem = process.memoryUsage();
   const toMb = (n) => Math.round(n / 1024 / 1024);
   const payload = {
+    // Horloge du serveur : celle du poste qui consulte peut dériver (constaté
+    // le 01/10/2026 : 1 min 43 s d'avance) -- l'écran calcule les "il y a"
+    // par rapport à CETTE heure, pas à la sienne.
+    serverNow: Date.now(),
     process: {
       pid: process.pid,
       startedAt: PROCESS_STARTED_AT,

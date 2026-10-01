@@ -884,3 +884,69 @@ describe('getDiagnostics()', () => {
     expect(orch.getDiagnostics().lastClaimError).toMatchObject({ message: expect.stringContaining('batch_orchestrator_lock') });
   });
 });
+
+describe('panne réseau passagère (incident du 01/10/2026, juste après un déploiement)', () => {
+  it('un pipeline qui échoue sur "read ECONNRESET" ne consomme PAS le réessai : ni requeue, ni erreur -- laissé à la reprise des orphelins', async () => {
+    const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('read ECONNRESET'));
+    const { deps, put, post, onLog } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 0, requeued_at: null }], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(post).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('réessai non consommé'));
+  });
+
+  it('une passerelle 503 est traitée pareil', async () => {
+    const spawnPipelineFn = jest.fn().mockRejectedValue(Object.assign(new Error('Service Unavailable'), { response: { status: 503 } }));
+    const { deps, put, post } = makeDeps({ claimRows: [{ ...ITEM_A, requeued_at: null }], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(post).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('UNE seule fois : un item déjà remis en file (requeued_at posé) qui retombe sur la même panne suit le chemin normal (pas de boucle infinie)', async () => {
+    const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('read ECONNRESET'));
+    const { deps, post } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 0, requeued_at: 1790000000000 }], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(post).toHaveBeenCalledWith('/data/batches/b1/items/i1/requeue', expect.anything());
+  });
+
+  it('une erreur propre à l\'article (audit illisible) suit toujours le chemin normal', async () => {
+    const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible ou échoué'));
+    const { deps, post } = makeDeps({ claimRows: [{ ...ITEM_A, requeued_at: null }], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('la réclamation sélectionne requeued_at (nécessaire pour ne reprendre qu\'une fois)', async () => {
+    const { deps, conn } = makeDeps({ claimRows: [ITEM_A] });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    expect(conn.query.mock.calls[3][0]).toMatch(/bi\.requeued_at/);
+  });
+});
+
+describe('journal : compteurs de progression non journalisés un par un', () => {
+  it('"Mise en gras — ~3 186 tokens" met à jour la dernière étape mais n\'est pas envoyé à onLog', async () => {
+    let stepCb;
+    const spawnPipelineFn = jest.fn((input, opts) => { stepCb = opts.onStep; return new Promise(() => {}); });
+    const { deps, onLog } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    await new Promise((r) => setTimeout(r, 10));
+    onLog.mockClear();
+    stepCb('Mise en gras — ~3,186 tokens');
+    stepCb('Audit QAT (estimation) — ~153 tokens');
+    expect(onLog).not.toHaveBeenCalled();
+    expect(orch.getDiagnostics().items[0].lastStep).toBe('Audit QAT (estimation) — ~153 tokens');
+    stepCb('Génération de l\'article...');
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('Génération de l\'article...'));
+  });
+});
