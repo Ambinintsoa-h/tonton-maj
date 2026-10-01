@@ -41,7 +41,9 @@ const { describeHttpError } = require('./httpErrorDetail');
 // qui ont ralenti -- pas encore mesuré sur la durée, à réajuster si la
 // lenteur persiste ou si la RAM du serveur mutualisé (n0c) devient à son tour
 // le goulot.
-const DEFAULT_CONCURRENCY = 6;
+// REVENU à 4 le 1er octobre 2026 : retour à la configuration d'avant le 24/09
+// (décision Andrianina, "la seule utilisable").
+const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_TOKEN_TTL = '20m';
 // Orphelins (voir claimNext) : un item 'en_cours' sans battement de cœur
 // depuis 3 min (6 battements manqués, un toutes les 30 s) est considéré mort.
