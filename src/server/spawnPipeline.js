@@ -24,6 +24,13 @@ const DEFAULT_CLI_PATH = path.join(__dirname, '..', '..', 'pipelineCli.js');
 // comme en septembre : si des items se font tuer en cours de route sur un
 // article lourd, c'est ce plafond qu'il faut remonter, pas le nombre d'essais.
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000; // un run complet (5 passes IA, 2 essais max chacune) peut prendre plusieurs minutes
+// Délai dur (voir plus bas) : SIGKILL 5 s après le SIGTERM, promesse réglée
+// au plus tard 20 s après le délai même si le process ne donne plus signe de
+// vie, et 2 s de grâce entre 'exit' et 'close' pour la dernière ligne stdout.
+const KILL_GRACE_MS = 5000;
+const HARD_SETTLE_GRACE_MS = 20000;
+const EXIT_GRACE_MS = 2000;
+const STDERR_MAX_CHARS = 20000;
 
 /**
  * @param {object} input — transmis tel quel en JSON sur stdin de pipelineCli.js
@@ -63,17 +70,46 @@ const spawnPipeline = (input, opts = {}) => new Promise((resolve, reject) => {
       } catch { /* ligne non-JSON (ne devrait pas arriver) — ignorée */ }
     }
   });
-  proc.stderr.on('data', (d) => { stderr += d; });
+  // Borné : un run bavard sur stderr pendant 20 min ne doit pas gonfler la
+  // mémoire du process serveur -- seule la fin sert au diagnostic.
+  proc.stderr.on('data', (d) => { stderr = (stderr + d).slice(-STDERR_MAX_CHARS); });
 
-  proc.stdin.write(JSON.stringify(input));
-  proc.stdin.end();
-
-  const timer = setTimeout(() => proc.kill(), timeoutMs);
-
-  proc.on('close', () => {
+  // ── Délai DUR (incident du 01/10/2026) ───────────────────────────────────
+  // Avant : `setTimeout(() => proc.kill(), timeoutMs)` puis on attendait
+  // l'événement 'close' pour régler la promesse. Constaté en production :
+  // 6 articles toujours "en_cours" 26 min après leur lancement, dans un
+  // processus serveur pourtant vivant (délai réglé à 20 min) -- aucune
+  // erreur, aucun réessai, et leurs 6 créneaux de concurrence bloqués. Or
+  // 'close' n'arrive qu'une fois le process terminé ET tous ses flux stdio
+  // fermés : un SIGTERM ignoré/en attente, ou un descendant qui garde un flux
+  // ouvert, et la promesse ne se règle JAMAIS. Désormais : SIGTERM au délai,
+  // SIGKILL 5 s plus tard, on règle dès 'exit' (après une courte grâce pour
+  // laisser arriver la dernière ligne stdout), et un filet absolu règle de
+  // toute façon la promesse si ni 'exit' ni 'close' ne viennent. Quoi qu'il
+  // arrive côté enfant, l'item est libéré et passe par handleFailure.
+  let settled = false;
+  let timedOut = false;
+  let killTimer = null;
+  let exitGraceTimer = null;
+  let hardTimer = null;
+  const timeoutError = () => Object.assign(
+    new Error(`Délai dépassé (${Math.round(timeoutMs / 60000)} min) -- article interrompu`),
+    { steps, stderr },
+  );
+  const settle = (fn) => {
+    if (settled) return;
+    settled = true;
     clearTimeout(timer);
+    clearTimeout(killTimer);
+    clearTimeout(exitGraceTimer);
+    clearTimeout(hardTimer);
+    fn();
+  };
+  const finish = () => settle(() => {
     if (!resultLine) {
-      reject(Object.assign(new Error('Le runner n\'a renvoyé aucun résultat'), { steps, stderr }));
+      reject(timedOut
+        ? timeoutError()
+        : Object.assign(new Error('Le runner n\'a renvoyé aucun résultat'), { steps, stderr }));
       return;
     }
     if (!resultLine.ok) {
@@ -82,10 +118,36 @@ const spawnPipeline = (input, opts = {}) => new Promise((resolve, reject) => {
     }
     resolve({ ...resultLine, steps });
   });
-  proc.on('error', (e) => {
-    clearTimeout(timer);
-    reject(new Error(`Impossible de démarrer le runner : ${e.message}`));
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    try { proc.kill('SIGTERM'); } catch { /* déjà mort */ }
+    killTimer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* déjà mort */ } }, KILL_GRACE_MS);
+    hardTimer = setTimeout(() => settle(() => reject(timeoutError())), HARD_SETTLE_GRACE_MS);
+  }, timeoutMs);
+
+  proc.on('exit', () => {
+    // Le process est terminé ; ses flux peuvent encore être tenus ouverts par
+    // un descendant -- on laisse une courte grâce à 'close' (dernière ligne
+    // stdout éventuelle), puis on règle sans lui.
+    exitGraceTimer = setTimeout(finish, EXIT_GRACE_MS);
   });
+  proc.on('close', finish);
+  proc.on('error', (e) => {
+    settle(() => reject(new Error(`Impossible de démarrer le runner : ${e.message}`)));
+  });
+
+  // Un enfant qui meurt avant d'avoir lu stdin (crash au démarrage, mémoire
+  // refusée par l'hébergement...) ferait émettre EPIPE sur ce flux -- capté
+  // ici plutôt que de remonter en exception non gérée dans le serveur.
+  if (proc.stdin && typeof proc.stdin.on === 'function') proc.stdin.on('error', () => {});
+  try {
+    proc.stdin.write(JSON.stringify(input));
+    proc.stdin.end();
+  } catch (e) {
+    try { proc.kill('SIGKILL'); } catch { /* déjà mort */ }
+    settle(() => reject(new Error(`Impossible de démarrer le runner : ${e.message}`)));
+  }
 });
 
-module.exports = { spawnPipeline, DEFAULT_CLI_PATH };
+module.exports = { spawnPipeline, DEFAULT_CLI_PATH, DEFAULT_TIMEOUT_MS };

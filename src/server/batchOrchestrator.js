@@ -24,7 +24,10 @@
  */
 const crypto = require('crypto');
 const axios = require('axios');
-const { spawnPipeline: defaultSpawnPipeline } = require('./spawnPipeline');
+const {
+  spawnPipeline: defaultSpawnPipeline,
+  DEFAULT_TIMEOUT_MS: DEFAULT_PIPELINE_TIMEOUT_MS,
+} = require('./spawnPipeline');
 const { describeHttpError } = require('./httpErrorDetail');
 
 // Passé de 2 à 4 le 1er septembre 2026, puis de 4 à 8 le 24 septembre 2026,
@@ -40,6 +43,24 @@ const { describeHttpError } = require('./httpErrorDetail');
 // le goulot.
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TOKEN_TTL = '20m';
+// Orphelins (voir claimNext) : un item 'en_cours' sans battement de cœur
+// depuis 3 min (6 battements manqués, un toutes les 30 s) est considéré mort.
+const HEARTBEAT_INTERVAL_MS = 30 * 1000;
+const HEARTBEAT_STALE_MS = 3 * 60 * 1000;
+// Sans colonne heartbeat_at : marge au-delà du délai dur du pipeline.
+const LEGACY_STALE_MARGIN_MS = 5 * 60 * 1000;
+
+// Lecture défensive d'un réglage injecté : une fonction absente ou qui lève
+// ne doit jamais faire planter un tick.
+const safeCall = (fn, fallback) => {
+  if (typeof fn !== 'function') return fallback;
+  try {
+    const v = fn();
+    return v === undefined ? fallback : v;
+  } catch {
+    return fallback;
+  }
+};
 
 /**
  * @param {object} deps
@@ -94,9 +115,33 @@ function createBatchOrchestrator(deps) {
     httpClientFactory,
     onLog = () => {},
     onBatchDone = async () => {},
+    // Battement de cœur (colonne batch_items.heartbeat_at, migration
+    // alter-add-batch-item-heartbeat.sql) -- `() => false` par défaut : sans la
+    // colonne, on retombe sur la détection par started_at (voir claimNext).
+    // proxy.js vérifie la présence de la colonne et renvoie true une fois la
+    // migration passée.
+    getUseHeartbeat = () => false,
+    // Délais entre nouveaux essais du report HTTP (PUT résultat / POST
+    // requeue) quand le serveur ne répond pas ou renvoie 429/5xx. Vide par
+    // défaut (aucun nouvel essai -- comportement historique, tests rapides) ;
+    // proxy.js passe [3 s, 10 s, 30 s] en production.
+    reportRetryDelaysMs = [],
+    sleepFn = (ms) => new Promise((r) => setTimeout(r, ms)),
   } = deps;
 
   let active = 0;
+  // ── Diagnostic (incident du 01/10/2026) ─────────────────────────────────
+  // État visible depuis GET /api/internal/batch-diagnostics (super_admin) :
+  // jusqu'ici, impossible de savoir OÙ un article "en_cours" était bloqué sans
+  // accès au stderr.log du serveur. Chaque item en cours garde sa dernière
+  // étape de pipeline et l'heure à laquelle elle est arrivée.
+  const activeItems = new Map();
+  const diag = {
+    lastTickAt: null,
+    lastClaim: null,
+    lastClaimError: null,
+    lastHeartbeat: null,
+  };
   // Un SEUL claimNext() en vol à la fois DANS CE PROCESSUS -- sans ce
   // verrou, un tick (toutes les 15s) dont le SELECT ... FOR UPDATE traîne
   // (base sous charge, lot de 40 items, verrous concurrents) peut encore
@@ -156,10 +201,53 @@ function createBatchOrchestrator(deps) {
       // devient la base (comptage live), plus le compteur mémoire d'un seul
       // processus.
       await conn.query('SELECT 1 FROM batch_orchestrator_lock FOR UPDATE');
+
+      // ── Orphelins (incident du 01/10/2026) ──────────────────────────────
+      // Le comptage global ci-dessous compte TOUT item 'en_cours' en base --
+      // y compris ceux dont le pipeline est mort avec son processus serveur
+      // (recyclage Passenger, arrêt, mémoire...). Constaté en production : un
+      // lot de 8 à 0/8 pendant 4 heures, ses 6 "en_cours" orphelins occupant
+      // les 6 places sans que rien ne les libère avant la réparation à 30 min
+      // de repairZombies() -- qui elle-même ne tourne qu'au démarrage ou toutes
+      // les 30 min. Désormais, CHAQUE réclamation commence par remettre en
+      // file les items morts, sous le même verrou :
+      //   - avec battement de cœur (heartbeat_at, rafraîchi toutes les 30 s par
+      //     le processus qui fait tourner l'item) : mort = plus de battement
+      //     depuis HEARTBEAT_STALE_MS (3 min) ;
+      //   - sans (migration pas encore passée) : mort = démarré depuis plus que
+      //     le délai dur du pipeline + 5 min -- un processus vivant a forcément
+      //     réglé l'item avant (voir spawnPipeline.js, délai dur).
+      // `requeued_at` les fait passer après les items jamais démarrés : un
+      // article qui ferait tomber le processus à chaque essai ne monopolise
+      // pas la file.
+      const nowRepair = Date.now();
+      const useHeartbeat = safeCall(getUseHeartbeat, false) === true;
+      let repairResult;
+      if (useHeartbeat) {
+        [repairResult] = await conn.query(
+          `UPDATE batch_items SET status='en_attente', started_at=NULL, heartbeat_at=NULL, requeued_at=?
+            WHERE status='en_cours' AND COALESCE(heartbeat_at, started_at, 0) < ?`,
+          [nowRepair, nowRepair - HEARTBEAT_STALE_MS],
+        );
+      } else {
+        const pipelineTimeout = safeCall(getTimeoutMs, undefined) || DEFAULT_PIPELINE_TIMEOUT_MS;
+        [repairResult] = await conn.query(
+          `UPDATE batch_items SET status='en_attente', started_at=NULL, requeued_at=?
+            WHERE status='en_cours' AND started_at IS NOT NULL AND started_at < ?`,
+          [nowRepair, nowRepair - pipelineTimeout - LEGACY_STALE_MARGIN_MS],
+        );
+      }
+      const staleRepaired = (repairResult && repairResult.affectedRows) || 0;
+      if (staleRepaired > 0) {
+        onLog(`[batch] ${staleRepaired} article(s) "en_cours" orphelin(s) (${useHeartbeat ? 'plus de battement de cœur' : 'délai dépassé'}) remis en file`);
+      }
+
       const [countRows] = await conn.query(
         `SELECT COUNT(*) AS total FROM batch_items WHERE status = 'en_cours'`,
       );
-      const limit = Math.max(0, concurrencyTarget - countRows[0].total);
+      const enCours = Number(countRows[0].total) || 0;
+      const limit = Math.max(0, concurrencyTarget - enCours);
+      diag.lastClaim = { at: Date.now(), concurrency: concurrencyTarget, enCours, limit, claimed: 0, staleRepaired };
       if (limit <= 0) {
         await conn.commit();
         return [];
@@ -187,10 +275,20 @@ function createBatchOrchestrator(deps) {
       }
       const now = Date.now();
       const ids = rows.map((r) => r.id);
-      await conn.query(
-        `UPDATE batch_items SET status='en_cours', started_at=? WHERE id IN (${ids.map(() => '?').join(',')})`,
-        [now, ...ids],
-      );
+      if (useHeartbeat) {
+        // Premier battement posé dès la réclamation : un processus qui meurt
+        // entre ce commit et le lancement des pipelines laisse quand même un
+        // horodatage exploitable par la réparation des orphelins.
+        await conn.query(
+          `UPDATE batch_items SET status='en_cours', started_at=?, heartbeat_at=? WHERE id IN (${ids.map(() => '?').join(',')})`,
+          [now, now, ...ids],
+        );
+      } else {
+        await conn.query(
+          `UPDATE batch_items SET status='en_cours', started_at=? WHERE id IN (${ids.map(() => '?').join(',')})`,
+          [now, ...ids],
+        );
+      }
       // Le batch passe à 'running' dès qu'un item démarre. Jamais l'inverse :
       // un batch déjà 'done'/'error' n'a par construction plus d'item
       // en_attente (voir la clause WHERE ci-dessus), donc cette mise à jour ne
@@ -201,6 +299,7 @@ function createBatchOrchestrator(deps) {
         batchIds,
       );
       await conn.commit();
+      if (diag.lastClaim) diag.lastClaim.claimed = rows.length;
       return rows;
     } catch (e) {
       await conn.rollback();
@@ -210,9 +309,34 @@ function createBatchOrchestrator(deps) {
     }
   };
 
+  // Report HTTP vers l'API du MÊME serveur, via son URL publique : si le
+  // processus web redémarre ou sature au même moment (429/502/503/504/508),
+  // un seul échec suffisait à laisser l'item "en_cours" pour toujours (voir
+  // handleFailure). Quelques nouveaux essais espacés avant d'abandonner --
+  // jamais sur une erreur applicative (400/401/404/409...), qui ne
+  // changerait pas en réessayant.
+  const RETRYABLE_HTTP_STATUSES = [429, 502, 503, 504, 508];
+  const withReportRetry = async (label, fn) => {
+    const delays = Array.isArray(reportRetryDelaysMs) ? reportRetryDelaysMs : [];
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await fn();
+      } catch (e) {
+        const status = e && e.response && e.response.status;
+        const retryable = !(e && e.response) || RETRYABLE_HTTP_STATUSES.includes(status);
+        if (!retryable || attempt >= delays.length) throw e;
+        onLog(`[batch] ${label} en échec (${describeHttpError(e)}) -- nouvel essai dans ${Math.round(delays[attempt] / 1000)} s`);
+        await sleepFn(delays[attempt]);
+      }
+    }
+  };
+
   const reportOutcome = async (item, patch) => {
     const http = httpFor(buildAuthToken(item));
-    const res = await http.put(`/data/batches/${encodeURIComponent(item.batch_id)}/items/${encodeURIComponent(item.id)}`, patch);
+    const res = await withReportRetry(
+      `Report de l'item ${item.id}`,
+      () => http.put(`/data/batches/${encodeURIComponent(item.batch_id)}/items/${encodeURIComponent(item.id)}`, patch),
+    );
     // `shouldNotify` vient de la réclamation atomique côté data-api.js : un
     // seul item déclencheur par lot, jamais un doublon même si deux items
     // terminent au même instant.
@@ -233,7 +357,10 @@ function createBatchOrchestrator(deps) {
   const requeueItem = async (item, errorMessage) => {
     const http = httpFor(buildAuthToken(item));
     try {
-      await http.post(`/data/batches/${encodeURIComponent(item.batch_id)}/items/${encodeURIComponent(item.id)}/requeue`, { errorMessage });
+      await withReportRetry(
+        `Remise en file de l'item ${item.id}`,
+        () => http.post(`/data/batches/${encodeURIComponent(item.batch_id)}/items/${encodeURIComponent(item.id)}/requeue`, { errorMessage }),
+      );
       return true;
     } catch (e) {
       if (e.response?.status === 409) return false;
@@ -280,6 +407,17 @@ function createBatchOrchestrator(deps) {
 
   const processItem = async (item) => {
     active += 1;
+    const track = {
+      id: item.id,
+      batchId: item.batch_id,
+      articleUrl: item.article_url,
+      targetKeyword: item.target_keyword || null,
+      startedAt: Date.now(),
+      phase: 'démarrage',
+      lastStep: null,
+      lastStepAt: null,
+    };
+    activeItems.set(item.id, track);
     try {
       // Ligne posée avant la migration qui ajoute target_keyword, ou saisie
       // vide échappée à la validation de l'écran /lots : on le dit clairement
@@ -308,6 +446,7 @@ function createBatchOrchestrator(deps) {
       let timeoutMs;
       try { timeoutMs = getTimeoutMs(); } catch { timeoutMs = undefined; }
       const authToken = buildAuthToken(item);
+      track.phase = 'pipeline';
       const outcome = await spawnPipelineFn({
         articleUrl: item.article_url,
         targetKeyword: item.target_keyword,
@@ -319,8 +458,17 @@ function createBatchOrchestrator(deps) {
         launchedByName: item.launched_by_name || 'Batch',
         apiBaseUrl,
         authToken,
-      }, { cliPath, timeoutMs, onStep: (s) => onLog(`[batch ${item.id}] ${s}`) });
+      }, {
+        cliPath,
+        timeoutMs,
+        onStep: (s) => {
+          track.lastStep = s;
+          track.lastStepAt = Date.now();
+          onLog(`[batch ${item.id}] ${s}`);
+        },
+      });
 
+      track.phase = 'report';
       await reportOutcome(item, {
         status: 'fait',
         articleId: outcome.articleId,
@@ -351,10 +499,51 @@ function createBatchOrchestrator(deps) {
         stderrTail ? `\nstderr: ${stderrTail}` : null,
       ].filter(Boolean).join(' ').slice(0, 2000);
       onLog(`[batch] Item ${item.id} en échec : ${errorMessage}`);
+      track.phase = 'échec';
       await handleFailure(item, errorMessage);
     } finally {
       active -= 1;
+      activeItems.delete(item.id);
     }
+  };
+
+  // Battement de cœur des items que CE processus fait tourner -- appelé
+  // toutes les 30 s par proxy.js. S'il meurt, ses items cessent de battre et
+  // le prochain claimNext() de N'IMPORTE QUEL processus les remet en file au
+  // bout de HEARTBEAT_STALE_MS (au lieu de les laisser occuper les places
+  // jusqu'à repairZombies, 30 min plus tard au mieux). Ne lève jamais.
+  const heartbeat = async () => {
+    if (!activeItems.size) return 0;
+    if (safeCall(getUseHeartbeat, false) !== true) return 0;
+    const ids = [...activeItems.keys()];
+    try {
+      const [result] = await getPool().query(
+        `UPDATE batch_items SET heartbeat_at=? WHERE status='en_cours' AND id IN (${ids.map(() => '?').join(',')})`,
+        [Date.now(), ...ids],
+      );
+      diag.lastHeartbeat = { at: Date.now(), items: ids.length, updated: (result && result.affectedRows) || 0 };
+      return diag.lastHeartbeat.updated;
+    } catch (e) {
+      diag.lastHeartbeat = { at: Date.now(), items: ids.length, error: e.message };
+      onLog(`[batch] Battement de cœur en échec : ${e.message}`);
+      return 0;
+    }
+  };
+
+  const getDiagnostics = () => {
+    const now = Date.now();
+    return {
+      activeCount: active,
+      claiming,
+      useHeartbeat: safeCall(getUseHeartbeat, false) === true,
+      concurrency: safeCall(getConcurrency, concurrency) || concurrency,
+      ...diag,
+      items: [...activeItems.values()].map((t) => ({
+        ...t,
+        elapsedS: Math.round((now - t.startedAt) / 1000),
+        sinceLastStepS: t.lastStepAt ? Math.round((now - t.lastStepAt) / 1000) : null,
+      })),
+    };
   };
 
   // Un tick réclame ce qu'il peut et lance chaque item SANS attendre qu'il
@@ -369,6 +558,7 @@ function createBatchOrchestrator(deps) {
     // contre le dépassement de concurrence, elle, vit dans claimNext() (verrou
     // DB `batch_orchestrator_lock` + comptage global), pas ici.
     if (claiming) return;
+    diag.lastTickAt = Date.now();
     let currentConcurrency = concurrency;
     try { currentConcurrency = getConcurrency() || concurrency; } catch { currentConcurrency = concurrency; }
     claiming = true;
@@ -381,6 +571,7 @@ function createBatchOrchestrator(deps) {
       // pas dire qu'il n'y a AUCUN item en_cours ailleurs.
       claimed = await claimNext(currentConcurrency);
     } catch (e) {
+      diag.lastClaimError = { at: Date.now(), message: e.message };
       onLog(`[batch] Échec de la réclamation d'items : ${e.message}`);
       return;
     } finally {
@@ -419,7 +610,18 @@ function createBatchOrchestrator(deps) {
     return repaired;
   };
 
-  return { tick, repairZombies, getActiveCount: () => active };
+  return {
+    tick,
+    repairZombies,
+    heartbeat,
+    getDiagnostics,
+    getActiveCount: () => active,
+  };
 }
 
-module.exports = { createBatchOrchestrator, DEFAULT_CONCURRENCY };
+module.exports = {
+  createBatchOrchestrator,
+  DEFAULT_CONCURRENCY,
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_STALE_MS,
+};

@@ -3,16 +3,18 @@ const { createBatchOrchestrator, DEFAULT_CONCURRENCY } = require('./batchOrchest
 const ITEM_A = { id: 'i1', batch_id: 'b1', article_url: 'https://x.test/a', target_keyword: 'kw a', consigne: null, retry_count: 0, launched_by: 'u1', launched_by_name: 'Alice' };
 const ITEM_B = { id: 'i2', batch_id: 'b1', article_url: 'https://x.test/b', target_keyword: 'kw b', consigne: 'Ajoute un H2', retry_count: 0, launched_by: 'u1', launched_by_name: 'Alice' };
 
-function makeConn(claimRows = [], activeCount = 0) {
+function makeConn(claimRows = [], activeCount = 0, staleRepaired = 0) {
   return {
     beginTransaction: jest.fn().mockResolvedValue(),
     // Ordre des query() dans claimNext() : 1) verrou `batch_orchestrator_lock`
-    // (contenu ignoré) -- 2) COUNT(*) des en_cours (source du calcul de
+    // (contenu ignoré) -- 2) remise en file des orphelins (UPDATE, voir
+    // "orphelins" plus bas) -- 3) COUNT(*) des en_cours (source du calcul de
     // `limit`, `activeCount` par défaut à 0 = comportement d'avant ce
-    // verrou : `limit` == la concurrence demandée) -- 3) le SELECT ... FOR
-    // UPDATE SKIP LOCKED qui réclame (claimRows) -- 4+) les UPDATE.
+    // verrou : `limit` == la concurrence demandée) -- 4) le SELECT ... FOR
+    // UPDATE SKIP LOCKED qui réclame (claimRows) -- 5+) les UPDATE.
     query: jest.fn()
       .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([{ affectedRows: staleRepaired }])
       .mockResolvedValueOnce([[{ total: activeCount }]])
       .mockResolvedValueOnce([claimRows])
       .mockResolvedValue([{}]),
@@ -64,17 +66,18 @@ describe('createBatchOrchestrator', () => {
     const orch = createBatchOrchestrator(deps);
     await orch.tick();
     expect(conn.commit).toHaveBeenCalledTimes(1);
-    expect(conn.query).toHaveBeenCalledTimes(3); // verrou + COUNT + le SELECT (0 ligne)
+    expect(conn.query).toHaveBeenCalledTimes(4); // verrou + orphelins + COUNT + le SELECT (0 ligne)
   });
 
   it('réclame via FOR UPDATE SKIP LOCKED puis passe les items en_cours', async () => {
     const { deps, conn } = makeDeps({ claimRows: [ITEM_A] });
     const orch = createBatchOrchestrator(deps);
     await orch.tick();
-    // calls[0] = verrou batch_orchestrator_lock, calls[1] = COUNT(*) en_cours
-    // -- voir "verrou global inter-processus" ci-dessus -- calls[2] est le
+    // calls[0] = verrou batch_orchestrator_lock, calls[1] = remise en file
+    // des orphelins, calls[2] = COUNT(*) en_cours -- voir "verrou global
+    // inter-processus" ci-dessus -- calls[3] est le
     // SELECT de réclamation proprement dit.
-    const [selectSql] = conn.query.mock.calls[2];
+    const [selectSql] = conn.query.mock.calls[3];
     expect(selectSql).toMatch(/FOR UPDATE SKIP LOCKED/);
     expect(selectSql).toMatch(/status = 'en_attente'/);
     // retry_count sélectionné (décide requeue vs erreur définitive dans
@@ -83,10 +86,10 @@ describe('createBatchOrchestrator', () => {
     // ne représente aucun ordre d'arrivée.
     expect(selectSql).toMatch(/bi\.retry_count/);
     expect(selectSql).toMatch(/ORDER BY \(bi\.requeued_at IS NOT NULL\), bi\.requeued_at, bi\.id/);
-    const [updateItemsSql, updateItemsParams] = conn.query.mock.calls[3];
+    const [updateItemsSql, updateItemsParams] = conn.query.mock.calls[4];
     expect(updateItemsSql).toMatch(/UPDATE batch_items SET status='en_cours'/);
     expect(updateItemsParams).toEqual(expect.arrayContaining(['i1']));
-    const [updateBatchSql] = conn.query.mock.calls[4];
+    const [updateBatchSql] = conn.query.mock.calls[5];
     expect(updateBatchSql).toMatch(/UPDATE batches SET status='running'/);
   });
 
@@ -287,19 +290,19 @@ describe('createBatchOrchestrator', () => {
       const calls = conn.query.mock.calls.map((c) => c[0]);
       expect(calls[0]).toMatch(/batch_orchestrator_lock/);
       expect(calls[0]).toMatch(/FOR UPDATE/);
-      expect(calls[1]).toMatch(/COUNT\(\*\)/);
-      expect(calls[1]).toMatch(/en_cours/);
+      expect(calls[2]).toMatch(/COUNT\(\*\)/);
+      expect(calls[2]).toMatch(/en_cours/);
     });
 
     it("un autre processus a déjà 4 items en_cours (activeCount=4) et la concurrence est réglée à 6 -- ce tick ne réclame QUE 2 items, jamais 6", async () => {
       const { deps, conn } = makeDeps({ claimRows: [ITEM_A, ITEM_B], activeCount: 4, concurrency: 6 });
       const orch = createBatchOrchestrator(deps);
       await orch.tick();
-      // La requête de réclamation (3e query, après le verrou et le COUNT) doit
+      // La requête de réclamation (4e query, après le verrou, les orphelins et le COUNT) doit
       // demander LIMIT 2 (6 - 4), jamais LIMIT 6 -- sinon deux processus qui
       // tournent chacun avec `active` local à 0 mais 4 en_cours posés par
       // l'AUTRE processus repousseraient le total réel à 4+6=10.
-      const claimCall = conn.query.mock.calls[2];
+      const claimCall = conn.query.mock.calls[3];
       expect(claimCall[1]).toEqual([2]);
     });
 
@@ -308,7 +311,7 @@ describe('createBatchOrchestrator', () => {
       const orch = createBatchOrchestrator(deps);
       await orch.tick();
       expect(orch.getActiveCount()).toBe(0); // rien claimé PAR CE processus
-      expect(conn.query).toHaveBeenCalledTimes(2); // verrou + COUNT -- jamais le SELECT de réclamation
+      expect(conn.query).toHaveBeenCalledTimes(3); // verrou + orphelins + COUNT -- jamais le SELECT de réclamation
       expect(conn.commit).toHaveBeenCalledTimes(1); // sortie propre, pas un rollback
     });
   });
@@ -606,5 +609,278 @@ describe('repairZombies', () => {
     const cutoff = params[0];
     expect(cutoff).toBeGreaterThanOrEqual(before - 30 * 60 * 1000);
     expect(cutoff).toBeLessThanOrEqual(after - 30 * 60 * 1000);
+  });
+});
+
+// ── Incident du 01/10/2026 : lot de 8 à 0/8 pendant 4 h ─────────────────────
+// Des items "en_cours" orphelins (pipeline mort avec son processus, ou bloqué
+// au-delà du délai) occupaient les places de concurrence sans que rien ne les
+// libère avant repairZombies (30 min, et seulement au démarrage / toutes les
+// 30 min). Chaque réclamation commence maintenant par les remettre en file.
+describe('orphelins remis en file à chaque réclamation', () => {
+  // Fausse base minimale : interprète les quelques requêtes de claimNext /
+  // heartbeat sur un tableau de lignes en mémoire -- assez pour rejouer le
+  // scénario de bout en bout (processus mort -> autre processus qui reprend).
+  function makeFakeDb(rows) {
+    const query = jest.fn(async (sql, params = []) => {
+      if (sql.includes('batch_orchestrator_lock')) return [[]];
+      if (sql.startsWith('UPDATE batch_items SET status=\'en_attente\'')) {
+        const [requeuedAt, cutoff] = params;
+        let affectedRows = 0;
+        for (const r of rows) {
+          if (r.status !== 'en_cours') continue;
+          const ref = sql.includes('COALESCE(heartbeat_at')
+            ? (r.heartbeat_at ?? r.started_at ?? 0)
+            : r.started_at;
+          if (ref != null && ref < cutoff) {
+            r.status = 'en_attente'; r.started_at = null; r.heartbeat_at = null; r.requeued_at = requeuedAt;
+            affectedRows += 1;
+          }
+        }
+        return [{ affectedRows }];
+      }
+      if (sql.includes('COUNT(*)')) return [[{ total: rows.filter((r) => r.status === 'en_cours').length }]];
+      if (sql.includes('FOR UPDATE SKIP LOCKED')) {
+        const limit = params[0];
+        // Même tri que la vraie requête : jamais réessayé d'abord, puis par requeued_at.
+        const waiting = rows.filter((r) => r.status === 'en_attente')
+          .sort((a, b) => ((a.requeued_at != null) - (b.requeued_at != null)) || ((a.requeued_at || 0) - (b.requeued_at || 0)));
+        return [waiting.slice(0, limit).map((r) => ({ ...r }))];
+      }
+      if (sql.startsWith('UPDATE batch_items SET status=\'en_cours\'')) {
+        const withHb = sql.includes('heartbeat_at');
+        const now = params[0];
+        const ids = params.slice(withHb ? 2 : 1);
+        for (const r of rows) {
+          if (ids.includes(r.id)) { r.status = 'en_cours'; r.started_at = now; if (withHb) r.heartbeat_at = params[1]; }
+        }
+        return [{ affectedRows: ids.length }];
+      }
+      if (sql.startsWith('UPDATE batch_items SET heartbeat_at')) {
+        const now = params[0];
+        const ids = params.slice(1);
+        let affectedRows = 0;
+        for (const r of rows) {
+          if (r.status === 'en_cours' && ids.includes(r.id)) { r.heartbeat_at = now; affectedRows += 1; }
+        }
+        return [{ affectedRows }];
+      }
+      return [{}];
+    });
+    const conn = {
+      beginTransaction: jest.fn().mockResolvedValue(),
+      query,
+      commit: jest.fn().mockResolvedValue(),
+      rollback: jest.fn().mockResolvedValue(),
+      release: jest.fn(),
+    };
+    const getPool = jest.fn(() => ({ getConnection: jest.fn().mockResolvedValue(conn), query }));
+    return { rows, conn, query, getPool };
+  }
+
+  const baseDeps = (getPool, extra = {}) => ({
+    getPool,
+    jwt: { sign: jest.fn(() => 'fake-jwt') },
+    jwtSecret: 'secret',
+    fetchModelPricing: jest.fn().mockResolvedValue(null),
+    apiBaseUrl: 'https://maj.stomos.net/api',
+    httpClientFactory: jest.fn(() => ({ put: jest.fn().mockResolvedValue({ data: { ok: true } }), post: jest.fn().mockResolvedValue({ data: { ok: true } }) })),
+    onLog: jest.fn(),
+    spawnPipelineFn: jest.fn(() => new Promise(() => {})), // pipelines longs, jamais terminés ici
+    concurrency: 6,
+    ...extra,
+  });
+
+  const item = (n, extra = {}) => ({
+    id: `x${n}`, batch_id: 'b1', article_url: `https://x.test/${n}`, target_keyword: 'kw',
+    consigne: null, retry_count: 0, launched_by: 'u1', launched_by_name: 'Alice',
+    status: 'en_attente', started_at: null, heartbeat_at: null, requeued_at: null, ...extra,
+  });
+
+  it('avec battement de cœur : 6 orphelins (processus mort il y a 5 min) sont remis en file puis réclamés par un AUTRE processus au tick suivant', async () => {
+    const now = Date.now();
+    const rows = [
+      ...[1, 2, 3, 4, 5, 6].map((n) => item(n, { status: 'en_cours', started_at: now - 10 * 60000, heartbeat_at: now - 5 * 60000 })),
+      item(7), item(8),
+    ];
+    const { getPool } = makeFakeDb(rows);
+    const onLog = jest.fn();
+    const orch = createBatchOrchestrator(baseDeps(getPool, { getUseHeartbeat: () => true, onLog }));
+    await orch.tick();
+    await new Promise((r) => setTimeout(r, 10));
+    // Les 6 orphelins + les 2 jamais démarrés sont en file ; 6 places -> 6 réclamés.
+    expect(rows.filter((r) => r.status === 'en_cours')).toHaveLength(6);
+    expect(orch.getActiveCount()).toBe(6);
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('6 article(s) "en_cours" orphelin(s)'));
+    // Les items jamais démarrés passent AVANT les orphelins remis en file (requeued_at posé).
+    expect(rows.find((r) => r.id === 'x7').status).toBe('en_cours');
+    expect(rows.find((r) => r.id === 'x8').status).toBe('en_cours');
+  });
+
+  it('avec battement de cœur : un item qui bat encore (autre processus vivant) n\'est JAMAIS repris', async () => {
+    const now = Date.now();
+    const rows = [
+      item(1, { status: 'en_cours', started_at: now - 40 * 60000, heartbeat_at: now - 20000 }),
+      item(2),
+    ];
+    const { getPool } = makeFakeDb(rows);
+    const orch = createBatchOrchestrator(baseDeps(getPool, { getUseHeartbeat: () => true, concurrency: 1 }));
+    await orch.tick();
+    expect(rows.find((r) => r.id === 'x1').status).toBe('en_cours');
+    expect(rows.find((r) => r.id === 'x1').heartbeat_at).toBe(now - 20000);
+    // La seule place est prise par x1 (vivant) -> x2 attend.
+    expect(rows.find((r) => r.id === 'x2').status).toBe('en_attente');
+  });
+
+  it('la réclamation pose le premier battement (heartbeat_at) en même temps que started_at', async () => {
+    const rows = [item(1)];
+    const { getPool } = makeFakeDb(rows);
+    const orch = createBatchOrchestrator(baseDeps(getPool, { getUseHeartbeat: () => true }));
+    const before = Date.now();
+    await orch.tick();
+    expect(rows[0].status).toBe('en_cours');
+    expect(rows[0].heartbeat_at).toBeGreaterThanOrEqual(before);
+    expect(rows[0].heartbeat_at).toBe(rows[0].started_at);
+  });
+
+  it('heartbeat() rafraîchit heartbeat_at des items que CE processus fait tourner -- et seulement ceux-là', async () => {
+    const now = Date.now();
+    const rows = [item(1), item(9, { status: 'en_cours', started_at: now - 60000, heartbeat_at: now - 60000 })];
+    const { getPool } = makeFakeDb(rows);
+    const orch = createBatchOrchestrator(baseDeps(getPool, { getUseHeartbeat: () => true, concurrency: 6 }));
+    await orch.tick(); // réclame x1 (x9 appartient à un autre processus, encore vivant)
+    await new Promise((r) => setTimeout(r, 10));
+    const hbBefore = rows[0].heartbeat_at;
+    await new Promise((r) => setTimeout(r, 5));
+    const updated = await orch.heartbeat();
+    expect(updated).toBe(1);
+    expect(rows[0].heartbeat_at).toBeGreaterThan(hbBefore);
+    expect(rows[1].heartbeat_at).toBe(now - 60000); // pas touché
+    expect(orch.getDiagnostics().lastHeartbeat).toMatchObject({ items: 1, updated: 1 });
+  });
+
+  it('heartbeat() ne fait rien sans la colonne (getUseHeartbeat absent) ou sans item en cours, et ne lève jamais', async () => {
+    const { getPool, query } = makeFakeDb([]);
+    const orch = createBatchOrchestrator(baseDeps(getPool));
+    await expect(orch.heartbeat()).resolves.toBe(0);
+    expect(query).not.toHaveBeenCalled();
+
+    const failing = jest.fn(() => ({ getConnection: jest.fn(), query: jest.fn().mockRejectedValue(new Error('DB down')) }));
+    const rows = [item(1)];
+    const db = makeFakeDb(rows);
+    const orch2 = createBatchOrchestrator(baseDeps(db.getPool, { getUseHeartbeat: () => true }));
+    await orch2.tick();
+    await new Promise((r) => setTimeout(r, 10));
+    // On remplace getPool par une base en panne pour le battement.
+    const orch3 = createBatchOrchestrator(baseDeps(failing, { getUseHeartbeat: () => true }));
+    await expect(orch3.heartbeat()).resolves.toBe(0); // aucun item actif dans orch3
+    await expect(orch2.heartbeat()).resolves.toBe(1);
+  });
+
+  it('sans battement de cœur (migration pas encore passée) : orphelin = démarré depuis plus que le délai du pipeline + 5 min', async () => {
+    const now = Date.now();
+    const rows = [
+      item(1, { status: 'en_cours', started_at: now - 26 * 60000 }), // > 20 + 5 min -> orphelin
+      item(2, { status: 'en_cours', started_at: now - 10 * 60000 }), // peut encore tourner -> intouché
+    ];
+    const { getPool, query } = makeFakeDb(rows);
+    const orch = createBatchOrchestrator(baseDeps(getPool, { getTimeoutMs: () => 20 * 60000 }));
+    await orch.tick();
+    const repairCall = query.mock.calls.find(([sql]) => sql.startsWith('UPDATE batch_items SET status=\'en_attente\''));
+    expect(repairCall[0]).not.toMatch(/heartbeat_at/);
+    const cutoff = repairCall[1][1];
+    expect(cutoff).toBeLessThanOrEqual(Date.now() - 25 * 60000);
+    expect(cutoff).toBeGreaterThan(now - 25 * 60000 - 1000);
+    expect(rows.find((r) => r.id === 'x2').status).toBe('en_cours');
+    // x1 remis en file puis aussitôt re-réclamé (place libre).
+    expect(rows.find((r) => r.id === 'x1').status).toBe('en_cours');
+    expect(rows.find((r) => r.id === 'x1').requeued_at).not.toBeNull();
+  });
+});
+
+describe('report HTTP avec nouveaux essais (reportRetryDelaysMs)', () => {
+  it('un 503 au report "fait" est réessayé, puis réussit -- l\'item n\'est jamais laissé "en_cours"', async () => {
+    const put = jest.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('Service Unavailable'), { response: { status: 503, data: {} } }))
+      .mockResolvedValueOnce({ data: { ok: true } });
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
+    const sleepFn = jest.fn().mockResolvedValue();
+    const { deps, post } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, httpPut: put });
+    const orch = createBatchOrchestrator({ ...deps, reportRetryDelaysMs: [3000, 10000], sleepFn });
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(put).toHaveBeenCalledTimes(2);
+    expect(sleepFn).toHaveBeenCalledWith(3000);
+    expect(put.mock.calls[1][1]).toMatchObject({ status: 'fait', articleId: 'art-1' });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('une coupure réseau pure (pas de réponse) est aussi réessayée', async () => {
+    const put = jest.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }))
+      .mockResolvedValueOnce({ data: { ok: true } });
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
+    const { deps } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, httpPut: put });
+    const orch = createBatchOrchestrator({ ...deps, reportRetryDelaysMs: [1], sleepFn: jest.fn().mockResolvedValue() });
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(put).toHaveBeenCalledTimes(2);
+  });
+
+  it('une erreur applicative (400) n\'est PAS réessayée', async () => {
+    const put = jest.fn().mockRejectedValue(Object.assign(new Error('Bad Request'), { response: { status: 400, data: {} } }));
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
+    const sleepFn = jest.fn().mockResolvedValue();
+    const { deps } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 1 }], spawnPipelineFn, httpPut: put });
+    const orch = createBatchOrchestrator({ ...deps, reportRetryDelaysMs: [3000, 10000], sleepFn });
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(sleepFn).not.toHaveBeenCalled();
+  });
+
+  it('un 409 à la remise en file n\'est pas réessayé (déjà réessayé ailleurs) -- bascule sur l\'erreur définitive', async () => {
+    const spawnPipelineFn = jest.fn().mockRejectedValue(new Error('Audit illisible'));
+    const post = jest.fn().mockRejectedValue(Object.assign(new Error('Conflict'), { response: { status: 409 } }));
+    const sleepFn = jest.fn().mockResolvedValue();
+    const { deps, put } = makeDeps({ claimRows: [{ ...ITEM_A, retry_count: 0 }], spawnPipelineFn, httpPost: post });
+    const orch = createBatchOrchestrator({ ...deps, reportRetryDelaysMs: [3000], sleepFn });
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(sleepFn).not.toHaveBeenCalled();
+    expect(put).toHaveBeenCalledWith('/data/batches/b1/items/i1', expect.objectContaining({ status: 'erreur' }));
+  });
+});
+
+describe('getDiagnostics()', () => {
+  it('expose chaque item en cours avec sa dernière étape de pipeline et le dernier bilan de réclamation', async () => {
+    let stepCb;
+    const spawnPipelineFn = jest.fn((input, opts) => { stepCb = opts.onStep; return new Promise(() => {}); });
+    const { deps } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn, concurrency: 6, activeCount: 2 });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    await new Promise((r) => setTimeout(r, 10));
+    stepCb('Audit QAT -- essai 1/2');
+    const d = orch.getDiagnostics();
+    expect(d.activeCount).toBe(1);
+    expect(d.lastClaim).toMatchObject({ concurrency: 6, enCours: 2, limit: 4, claimed: 1, staleRepaired: 0 });
+    expect(d.items).toHaveLength(1);
+    expect(d.items[0]).toMatchObject({ id: 'i1', phase: 'pipeline', lastStep: 'Audit QAT -- essai 1/2' });
+    expect(typeof d.items[0].elapsedS).toBe('number');
+    expect(d.lastTickAt).toEqual(expect.any(Number));
+  });
+
+  it('garde la trace d\'un échec de réclamation', async () => {
+    const conn = {
+      beginTransaction: jest.fn().mockResolvedValue(),
+      query: jest.fn().mockRejectedValue(new Error("Table 'batch_orchestrator_lock' doesn't exist")),
+      commit: jest.fn(), rollback: jest.fn().mockResolvedValue(), release: jest.fn(),
+    };
+    const getPool = jest.fn(() => ({ getConnection: jest.fn().mockResolvedValue(conn) }));
+    const orch = createBatchOrchestrator({
+      getPool, jwt: { sign: jest.fn() }, jwtSecret: 's', fetchModelPricing: jest.fn(), apiBaseUrl: 'x', onLog: jest.fn(),
+    });
+    await orch.tick();
+    expect(orch.getDiagnostics().lastClaimError).toMatchObject({ message: expect.stringContaining('batch_orchestrator_lock') });
   });
 });

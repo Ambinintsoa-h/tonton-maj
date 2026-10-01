@@ -19,6 +19,29 @@ const multer = require('multer');
 const FormData = require('form-data');
 const { spawnPipeline } = require('./src/server/spawnPipeline');
 
+// ─── Journal récent en mémoire (diagnostic, incident du 01/10/2026) ──────────
+// Sans accès SSH, le seul journal du serveur est stderr.log sur n0c -- hors
+// de portée depuis l'appli. On garde ici les 500 dernières lignes de console
+// (lignes [batch], [pipeline], erreurs...) pour les afficher aux super_admin
+// via GET /api/internal/batch-diagnostics. Rien n'est retiré de la sortie
+// d'origine : chaque ligne part toujours vers stdout/stderr comme avant.
+const PROCESS_STARTED_AT = Date.now();
+const RECENT_LOG_MAX = 500;
+const recentLogs = [];
+for (const level of ['log', 'warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => {
+    try {
+      const text = args.map((a) => (typeof a === 'string' ? a : (a && a.message) || (() => {
+        try { return JSON.stringify(a); } catch { return String(a); }
+      })())).join(' ');
+      recentLogs.push({ at: Date.now(), level, text: text.slice(0, 2000) });
+      if (recentLogs.length > RECENT_LOG_MAX) recentLogs.splice(0, recentLogs.length - RECENT_LOG_MAX);
+    } catch { /* le journal de diagnostic ne doit jamais casser un log */ }
+    original(...args);
+  };
+}
+
 // ── Décodeur HTML entities (WordPress renvoie &amp; &#8211; etc.) ─────────────
 const decodeHtmlEntities = (str) => {
   if (!str || typeof str !== 'string') return str;
@@ -2076,10 +2099,34 @@ const sendBatchCompletionEmail = async (batchId) => {
 // Instance partagée entre le cron ci-dessous et POST /api/internal/gsheet-sync
 // (bouton "Synchroniser maintenant") -- null tant que DATA_BACKEND=firestore.
 let googleSheetSyncInstance = null;
+// Orchestrateur "MAJ en lot" de CE processus -- exposé à
+// GET /api/internal/batch-diagnostics. null tant que DATA_BACKEND=firestore.
+let batchOrchestratorInstance = null;
+// Colonne batch_items.heartbeat_at présente ? (migration
+// alter-add-batch-item-heartbeat.sql) -- vérifié au démarrage puis toutes les
+// 10 min : tant qu'elle manque, l'orchestrateur retombe sur la détection des
+// orphelins par started_at, sans jamais planter.
+let batchHeartbeatAvailable = false;
 
 if (DATA_BACKEND === 'mysql') {
-  const { createBatchOrchestrator, DEFAULT_CONCURRENCY: BATCH_DEFAULT_CONCURRENCY } = require('./src/server/batchOrchestrator');
+  const {
+    createBatchOrchestrator,
+    DEFAULT_CONCURRENCY: BATCH_DEFAULT_CONCURRENCY,
+    HEARTBEAT_INTERVAL_MS: BATCH_HEARTBEAT_INTERVAL_MS,
+  } = require('./src/server/batchOrchestrator');
   const { getPool: getBatchPool } = require('./db');
+  const refreshBatchHeartbeatAvailability = async () => {
+    try {
+      const [rows] = await getBatchPool().query("SHOW COLUMNS FROM batch_items LIKE 'heartbeat_at'");
+      const available = Array.isArray(rows) && rows.length > 0;
+      if (available !== batchHeartbeatAvailable) {
+        console.log(`[batch] Battement de cœur ${available ? 'ACTIVÉ (colonne heartbeat_at présente)' : 'indisponible (colonne heartbeat_at absente -- migration alter-add-batch-item-heartbeat.sql)'}`);
+      }
+      batchHeartbeatAvailable = available;
+    } catch (e) {
+      console.error('[batch] Vérification de la colonne heartbeat_at impossible :', e.message);
+    }
+  };
   const batchOrchestrator = createBatchOrchestrator({
     getPool: getBatchPool,
     jwt,
@@ -2100,28 +2147,30 @@ if (DATA_BACKEND === 'mysql') {
     getMaxEssaisIA: () => getBatchTuning().maxEssaisIA,
     getTimeoutMs: () => getBatchTuning().timeoutMinutes * 60 * 1000,
     getRetryOnError: () => getBatchTuning().retryOnError,
+    getUseHeartbeat: () => batchHeartbeatAvailable,
+    // Le report d'un résultat passe par l'URL publique de CE serveur : s'il
+    // redémarre ou sature à ce moment-là, quelques nouveaux essais plutôt que
+    // de laisser l'item "en_cours" (voir withReportRetry).
+    reportRetryDelaysMs: [3000, 10000, 30000],
     onLog: (msg) => console.log(msg),
     onBatchDone: sendBatchCompletionEmail,
   });
+  batchOrchestratorInstance = batchOrchestrator;
   // Démarrage 10s après le boot (laisse le pool DB se stabiliser), puis un
   // tick toutes les 15s -- assez réactif pour qu'un lot lancé depuis /lots ne
   // traîne pas en "en attente", sans marteler la base entre deux lots.
   //
-  // repairZombies() D'ABORD, avant le premier tick : un redémarrage du
-  // serveur (déploiement, crash, recyclage Passenger) laisse en base des
-  // items 'en_cours' que plus rien ne reprend jamais (le compteur `active`
-  // qui borne la concurrence repart de 0 en mémoire, mais `claimNext` ne
-  // réclame que 'en_attente'). Repassage périodique (30 min) en plus du
-  // passage au démarrage : filet de sécurité si un item se bloque pour une
-  // autre raison qu'un redémarrage (ex. connexion DB perdue en plein run).
+  // Plus de repairZombies() ici (30 min, au démarrage + toutes les 30 min) :
+  // CHAQUE tick remet désormais en file les items orphelins sous le verrou de
+  // réclamation (battement de cœur absent depuis 3 min, ou à défaut délai du
+  // pipeline + 5 min) -- voir claimNext, incident du 01/10/2026 (lot bloqué
+  // 4 h à 0/8, ses places occupées par des orphelins).
   setTimeout(() => {
-    batchOrchestrator.repairZombies()
-      .then(() => batchOrchestrator.tick())
-      .catch((e) => console.error('[batch] Réparation au démarrage échouée :', e.message));
+    refreshBatchHeartbeatAvailability()
+      .finally(() => batchOrchestrator.tick());
     setInterval(() => batchOrchestrator.tick(), 15000);
-    setInterval(() => {
-      batchOrchestrator.repairZombies().catch((e) => console.error('[batch] Réparation périodique échouée :', e.message));
-    }, 30 * 60 * 1000);
+    setInterval(() => { batchOrchestrator.heartbeat(); }, BATCH_HEARTBEAT_INTERVAL_MS);
+    setInterval(refreshBatchHeartbeatAvailability, 10 * 60 * 1000);
   }, 10000);
 
   // ─── Synchronisation Google Sheet (détection seule -- JAMAIS de lancement) ──
@@ -2795,6 +2844,70 @@ app.post('/api/internal/gsheet-sync', requireAuth, requireRole('super_admin', 'm
     console.error('[proxy] /api/internal/gsheet-sync erreur:', e.message);
     res.status(500).json({ error: safeError(e, 'Synchronisation Google Sheet échouée') });
   }
+});
+
+/**
+ * GET /api/internal/batch-diagnostics — état en direct du traitement en lot
+ * (super_admin). Incident du 01/10/2026 : des articles restaient "en_cours"
+ * des heures sans qu'on puisse savoir s'ils tournaient encore, à quelle étape,
+ * ni dans quel processus -- sans SSH, le seul journal (stderr.log) était hors
+ * de portée. Renvoie :
+ *   - process  : identité et âge du processus Node qui a répondu (Passenger
+ *                peut en faire tourner plusieurs, ou les recycler -- un pid ou
+ *                un startedAt qui change d'un appel à l'autre le montre),
+ *   - orchestrator : items que CE processus fait tourner (dernière étape de
+ *                pipeline, depuis combien de temps), dernier bilan de réclamation,
+ *   - db       : ce que la base voit (items en_cours, tous processus confondus),
+ *   - logs     : les dernières lignes de console de CE processus.
+ */
+app.get('/api/internal/batch-diagnostics', requireAuth, requireRole('super_admin'), async (req, res) => {
+  const mem = process.memoryUsage();
+  const toMb = (n) => Math.round(n / 1024 / 1024);
+  const payload = {
+    process: {
+      pid: process.pid,
+      startedAt: PROCESS_STARTED_AT,
+      uptimeS: Math.round(process.uptime()),
+      memoryMb: { rss: toMb(mem.rss), heapUsed: toMb(mem.heapUsed) },
+      node: process.version,
+    },
+    orchestrator: batchOrchestratorInstance ? batchOrchestratorInstance.getDiagnostics() : null,
+    db: null,
+    logs: recentLogs.slice(-Math.min(parseInt(req.query.logs, 10) || 150, RECENT_LOG_MAX)),
+  };
+  if (DATA_BACKEND === 'mysql') {
+    try {
+      const { getPool: getDiagPool } = require('./db');
+      const pool = getDiagPool();
+      const [[counts]] = await pool.query(
+        `SELECT SUM(status='en_cours') AS enCours, SUM(status='en_attente') AS enAttente FROM batch_items`,
+      );
+      const hbCol = batchHeartbeatAvailable ? ', heartbeat_at' : '';
+      const [enCoursRows] = await pool.query(
+        `SELECT id, batch_id, article_url, started_at${hbCol}, retry_count
+           FROM batch_items WHERE status='en_cours' ORDER BY started_at LIMIT 50`,
+      );
+      payload.db = {
+        enCours: Number(counts.enCours) || 0,
+        enAttente: Number(counts.enAttente) || 0,
+        heartbeatColumn: batchHeartbeatAvailable,
+        enCoursItems: enCoursRows.map((r) => ({
+          id: r.id,
+          batchId: r.batch_id,
+          articleUrl: r.article_url,
+          startedAt: r.started_at,
+          heartbeatAt: r.heartbeat_at ?? null,
+          retryCount: r.retry_count,
+          // Item en base mais inconnu de CE processus : tourne ailleurs, ou orphelin.
+          runningHere: !!(batchOrchestratorInstance
+            && batchOrchestratorInstance.getDiagnostics().items.some((i) => i.id === r.id)),
+        })),
+      };
+    } catch (e) {
+      payload.db = { error: e.message };
+    }
+  }
+  res.json(payload);
 });
 
 // ─── Fallback : claude.exe CLI ────────────────────────────────────────────────
