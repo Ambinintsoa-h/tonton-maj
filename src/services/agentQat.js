@@ -58,11 +58,10 @@ const MAX_SOURCES_INJECTED = 6;
 // d'abandonner -- SOURCE UNIQUE, jamais un « 3 » recopié dans une boucle ou un
 // message : un appelant qui lit encore l'ancien nombre en dur induirait le
 // rédacteur en erreur sur le nombre réel d'essais restants. Passé de 3 à 2 le
-// 24 septembre 2026 (décision Andrianina), en même temps que le budget de
-// spawnPipeline.js redescend de 25 à 20 min (voir son commentaire) -- les deux
-// changements vont ensemble : moins d'essais par passe rend un budget plus
-// court à nouveau tenable.
-const MAX_ESSAIS_IA = 2;
+// 24 septembre 2026, puis REVENU à 3 le 1er octobre 2026 (décision Andrianina :
+// retour à la configuration d'avant le 24/09, la seule jugée utilisable), en
+// même temps que le budget de spawnPipeline.js revient à 25 min.
+const MAX_ESSAIS_IA = 3;
 
 /**
  * Plafond des liens internes SUGGÉRÉS par l'audit (`internal_linking.liens_entrants`).

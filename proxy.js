@@ -170,10 +170,12 @@ const SETTINGS_WHITELIST = [
 // admin qui remonterait la concurrence à 20 recréerait exactement la
 // contention constatée le 24 septembre 2026 (voir batchOrchestrator.js) --
 // les bornes ne sont pas une formalité, elles protègent contre CE risque précis.
+// Défauts = configuration d'avant le 24/09/2026 (4 en parallèle, 25 min, 3
+// essais IA, pas de réessai auto), rétablie le 01/10/2026 (décision Andrianina).
 const BATCH_TUNING_BOUNDS = {
-  concurrency:     { min: 1, max: 10, default: 6 },
-  timeoutMinutes:  { min: 5, max: 40, default: 20 },
-  maxEssaisIA:     { min: 1, max: 4,  default: 2 },
+  concurrency:     { min: 1, max: 10, default: 4 },
+  timeoutMinutes:  { min: 5, max: 40, default: 25 },
+  maxEssaisIA:     { min: 1, max: 4,  default: 3 },
 };
 const clampBatchTuningInt = (value, key) => {
   const { min, max, default: def } = BATCH_TUNING_BOUNDS[key];
@@ -197,7 +199,9 @@ const getBatchTuning = () => {
     // (retry_count=0 dans son WHERE) -- un nombre de réessais réglable
     // demanderait de revoir aussi cette route et le schéma, hors du besoin
     // exprimé ("si ça échoue encore, on laisse").
-    retryOnError:   bt.retryOnError !== false,
+    // Désactivé par défaut depuis le 01/10/2026 (retour à la config d'avant) :
+    // seul un `true` explicite posé dans Paramètres l'active.
+    retryOnError:   bt.retryOnError === true,
   };
 };
 

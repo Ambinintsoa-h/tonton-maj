@@ -23,7 +23,10 @@ const DEFAULT_CLI_PATH = path.join(__dirname, '..', '..', 'pipelineCli.js');
 // chacune), ce qui rend un budget plus court à nouveau tenable. À surveiller
 // comme en septembre : si des items se font tuer en cours de route sur un
 // article lourd, c'est ce plafond qu'il faut remonter, pas le nombre d'essais.
-const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000; // un run complet (5 passes IA, 2 essais max chacune) peut prendre plusieurs minutes
+// REVENU à 25 min le 1er octobre 2026 (retour à la configuration d'avant le
+// 24/09, décision Andrianina) -- constaté le même jour : à 20 min, des articles
+// étaient coupés à quelques minutes de la fin (mise en gras), deux fois de suite.
+const DEFAULT_TIMEOUT_MS = 25 * 60 * 1000; // un run complet (5 passes IA, 3 essais max chacune) peut prendre plusieurs minutes
 // Délai dur (voir plus bas) : SIGKILL 5 s après le SIGTERM, promesse réglée
 // au plus tard 20 s après le délai même si le process ne donne plus signe de
 // vie, et 2 s de grâce entre 'exit' et 'close' pour la dernière ligne stdout.

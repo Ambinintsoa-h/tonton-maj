@@ -77,6 +77,11 @@ function SecretTextarea({ label, value, onChange, placeholder, hint }) {
   );
 }
 
+// "Traitement en lot" : configuration d'avant le 24/09/2026, rétablie le
+// 01/10/2026 (décision Andrianina) -- mêmes valeurs que BATCH_TUNING_BOUNDS
+// (proxy.js), qui reste la vraie garde-fou côté serveur.
+const BATCH_DEFAULTS = { concurrency: 4, timeoutMinutes: 25, maxEssaisIA: 3, retryOnError: false };
+
 export default function Parametres() {
   const dispatch = useDispatch();
   const stored = useSelector(s => s.settings);
@@ -136,10 +141,11 @@ export default function Parametres() {
     // injoignable sur cet hébergement mutualisé. Bornes appliquées ici pour
     // le retour visuel immédiat ; la vraie garde-fou reste serveur (POST
     // /api/settings, BATCH_TUNING_BOUNDS).
-    batchConcurrency:    stored.batchTuning?.concurrency ?? 6,
-    batchTimeoutMinutes: stored.batchTuning?.timeoutMinutes ?? 20,
-    batchMaxEssaisIA:    stored.batchTuning?.maxEssaisIA ?? 2,
-    batchRetryOnError:   stored.batchTuning?.retryOnError ?? true,
+    // Défauts = configuration d'avant le 24/09/2026 (rétablie le 01/10/2026).
+    batchConcurrency:    stored.batchTuning?.concurrency ?? BATCH_DEFAULTS.concurrency,
+    batchTimeoutMinutes: stored.batchTuning?.timeoutMinutes ?? BATCH_DEFAULTS.timeoutMinutes,
+    batchMaxEssaisIA:    stored.batchTuning?.maxEssaisIA ?? BATCH_DEFAULTS.maxEssaisIA,
+    batchRetryOnError:   stored.batchTuning?.retryOnError ?? BATCH_DEFAULTS.retryOnError,
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -307,9 +313,9 @@ export default function Parametres() {
       googleSheetsId: form.googleSheetsId,
       modelSelections: form.modelSelections,
       batchTuning: {
-        concurrency:     Number(form.batchConcurrency)    || 6,
-        timeoutMinutes:  Number(form.batchTimeoutMinutes) || 20,
-        maxEssaisIA:     Number(form.batchMaxEssaisIA)    || 2,
+        concurrency:     Number(form.batchConcurrency)    || BATCH_DEFAULTS.concurrency,
+        timeoutMinutes:  Number(form.batchTimeoutMinutes) || BATCH_DEFAULTS.timeoutMinutes,
+        maxEssaisIA:     Number(form.batchMaxEssaisIA)    || BATCH_DEFAULTS.maxEssaisIA,
         retryOnError:    !!form.batchRetryOnError,
       },
     };
@@ -383,6 +389,15 @@ export default function Parametres() {
       googleSheetsServiceAccountJson: stored.googleSheetsServiceAccountJson || '',
       googleSheetsId: stored.googleSheetsId || '',
       modelSelections: stored.modelSelections || {},
+      // Oubli corrigé le 01/10/2026 : sans ces 4 lignes, le formulaire gardait
+      // les valeurs par défaut au lieu de celles enregistrées sur le serveur
+      // (chargées APRÈS le premier affichage) -- et un simple "Enregistrer"
+      // fait pour une autre raison (changer un modèle, une clé...) écrasait
+      // silencieusement le réglage "Traitement en lot" de toute l'équipe.
+      batchConcurrency:    stored.batchTuning?.concurrency ?? BATCH_DEFAULTS.concurrency,
+      batchTimeoutMinutes: stored.batchTuning?.timeoutMinutes ?? BATCH_DEFAULTS.timeoutMinutes,
+      batchMaxEssaisIA:    stored.batchTuning?.maxEssaisIA ?? BATCH_DEFAULTS.maxEssaisIA,
+      batchRetryOnError:   stored.batchTuning?.retryOnError ?? BATCH_DEFAULTS.retryOnError,
     }));
   }, [stored]); // eslint-disable-line react-hooks/exhaustive-deps
 
