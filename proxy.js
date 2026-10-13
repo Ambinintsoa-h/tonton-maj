@@ -277,6 +277,7 @@ app.use('/api/data', require('./data-api')({ requireAuth, requireRole }));
 // Voir src/server/safeFetch.js (extrait pour être testable -- logique sécurité
 // jamais couverte par un test tant qu'elle vivait ici en inline).
 const { assertSafeUrl, fetchFollowingSafeRedirects } = require('./src/server/safeFetch');
+const { retirerBlocsInjectes, urlsRestWordPress, estPageWordPress } = require('./src/server/injectedBlocks');
 const { fetchSitePostUrls } = require('./src/server/sitemapFetch');
 
 // ─── Helper erreur (M4) ───────────────────────────────────────────────────────
@@ -3409,6 +3410,30 @@ app.post('/api/transcribe/file', requireAuth, upload.single('audio'), async (req
 // ─── Scraping article ──────────────────────────────────────────────────────────
 // Utilise @mozilla/readability (même algo que le mode lecture Firefox)
 // pour n'extraire que le contenu de l'article : titre + corps, sans nav/footer/pub
+/**
+ * Contenu ENREGISTRÉ d'une page WordPress (`content.rendered` de l'API REST
+ * publique), pour le comparer à la page affichée (voir injectedBlocks.js).
+ * Jamais bloquant : la moindre erreur rend `null` et le scraping continue
+ * exactement comme avant.
+ */
+const lireContenuWordPress = async (pageUrl) => {
+  for (const restUrl of urlsRestWordPress(pageUrl)) {
+    try {
+      await assertSafeUrl(restUrl, 'URL API WordPress');
+      const r = await fetchFollowingSafeRedirects(restUrl, {
+        timeout: 10000,
+        headers: { Accept: 'application/json' },
+      });
+      const rows = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+      const html = Array.isArray(rows) && rows[0]?.content?.rendered;
+      if (html) return html;
+    } catch (e) {
+      console.warn('[scrape] API WordPress illisible :', restUrl, '—', e.message);
+    }
+  }
+  return null;
+};
+
 app.post('/api/scrape', requireAuth, async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL manquante' });
@@ -3471,6 +3496,23 @@ app.post('/api/scrape', requireAuth, async (req, res) => {
 
     // 3. Parsing DOM + extraction Readability
     const dom = new JSDOM(response.data, { url });
+
+    // 3a. Blocs AJOUTÉS PAR LE THÈME à l'affichage (encart « Nous recommandons
+    //     Philibert » sur ludikbazar.com, incident du 13/10/2026) : absents du
+    //     contenu WordPress, ils ne font pas partie de l'article. Retirés AVANT
+    //     Readability — c'est lui qui les mêlait au texte — avec les copies
+    //     qu'une MAJ précédente avait déjà enregistrées. Voir injectedBlocks.js.
+    let blocsInjectes = null;
+    if (estPageWordPress(response.data)) {
+      const contenuWp = await lireContenuWordPress(url);
+      if (contenuWp) {
+        blocsInjectes = retirerBlocsInjectes(dom.window.document, contenuWp);
+        if (blocsInjectes.retires.length || blocsInjectes.copies.length) {
+          console.log('[scrape] blocs du thème retirés :', JSON.stringify(blocsInjectes));
+        }
+      }
+    }
+
     const reader = new Readability(dom.window.document, {
       charThreshold: 100,
       keepClasses: true,
@@ -3621,6 +3663,8 @@ app.post('/api/scrape', requireAuth, async (req, res) => {
       byline:      article.byline   || '',
       siteName:    article.siteName || '',
       length:      textContent.length,
+      // Blocs du thème retirés (et copies déjà enregistrées) — affichés à l'étape.
+      injected:    blocsInjectes,
     });
 
   } catch (err) {

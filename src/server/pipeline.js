@@ -190,6 +190,12 @@ const runArticlePipeline = async (input) => {
   const scrapedHtml = scraped?.content || scraped?.html || '';
   if (!scrapedHtml.trim()) throw new Error('Contenu de l\'article vide après scraping');
   const title = scraped?.title || '';
+  // Encart ajouté par le thème (ex. « Nous recommandons Philibert ») : déjà retiré
+  // par /api/scrape, avec ses copies d'une MAJ précédente. On le DIT à l'étape.
+  const injected = scraped?.injected;
+  if (injected && (injected.retires?.length || injected.copies?.length)) {
+    onStep(`Bloc(s) ajouté(s) par le thème exclu(s) de la MAJ : ${injected.retires.map((b) => `« ${b.extrait.slice(0, 40)}… »`).join(', ')}${injected.copies.length ? ` — ${injected.copies.length} copie(s) d'une MAJ précédente retirée(s)` : ''}`);
+  }
 
   // Même point de nettoyage que le flux interactif (Articles.jsx, "point de
   // passage unique" des trois sources) -- jamais appliqué ici jusqu'à
