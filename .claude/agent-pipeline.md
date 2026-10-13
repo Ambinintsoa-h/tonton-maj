@@ -45,7 +45,17 @@ Le proxy n0c coupe les connexions HTTP/2 silencieuses (~30 s sans octet) → l'a
 - **Additions** interdites sans source web scrapée réelle (jamais depuis training data)
 - `"original"` = copie EXACTE mot-pour-mot du texte de l'article
 - `"updates: []"` inacceptable sauf article < 3 mois
-- Fallback si 0 résultat web : utiliser training data avec mention `[à vérifier en {year}]`
+- ~~Fallback si 0 résultat web : utiliser training data avec mention `[à vérifier en {year}]`~~ — **remplacé le 03/10/2026** par le garde-fou « limite de mémoire » ci-dessous : sans source, le modèle s'abstient.
+
+## Garde-fou « limite de mémoire » (codé en dur, 03/10/2026)
+
+Injecté par **proxy.js** dans le `system` de CHAQUE appel à Anthropic, pour le modèle **réellement appelé** (si la cascade descend de Sonnet 5 à Haiku, la limite suit) : clé API, OAuth/cascade, streaming SSE, `claude-tools`, repli CLI. Aucune passe ne peut l'oublier, aucun réglage ne le coupe. Seul le ping `testOneModel` s'en dispense (`noKnowledgeGuard`, jamais lisible depuis `req.body`).
+
+- **Table en dur** : `src/server/modelKnowledge.js` → `MODEL_KNOWLEDGE_CUTOFFS` (« reliable knowledge cutoff » de la doc Anthropic). Modèle absent → date la plus ancienne (prudence). Sonnet 5 : janvier 2026 · Opus 4.5 : mai 2025 · Haiku 4.5 : février 2025 · Sonnet 4.5 : janvier 2025.
+- **Barème** (5 règles) : après la limite → uniquement les sources fournies, sinon abstention ; donnée de l'article non confirmée → laissée telle quelle, jamais « corrigée » de mémoire ; avant la limite → pas de chiffre de mémoire sans source ; « actuel/dernier/récent » seulement si une source datée l'établit ; aucune estimation.
+- **Pourquoi une table et pas une question au modèle** : un modèle se trompe souvent sur sa propre date, et la question coûterait un appel par phase.
+- **Ajout d'un modèle** (MODEL_CASCADE ou MODELS) : ajouter sa ligne dans la table, sinon `modelKnowledge.test.js` échoue.
+- Placé en DERNIER bloc du `system` : le préfixe mis en cache (`cache_control`) n'est pas invalidé.
 
 ## Format JSON attendu
 ```json

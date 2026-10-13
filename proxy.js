@@ -12,6 +12,7 @@ const cors = require('cors');
 const { spawn, execSync } = require('child_process');
 const { createDecipheriv } = require('crypto');
 const https = require('https');
+const { withKnowledgeGuard } = require('./src/server/modelKnowledge');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -2512,7 +2513,11 @@ const callAnthropicWithApiKey = (apiKey, bodyObj) => new Promise((resolve, rejec
     max_tokens: bodyObj.max_tokens || 4096,
     messages: bodyObj.messages,
   };
-  if (bodyObj.system) requestBody.system = bodyObj.system;
+  // GARDE-FOU MÉMOIRE (modelKnowledge.js) : injecté pour le modèle RÉELLEMENT
+  // appelé — la cascade peut descendre de Sonnet 5 à Haiku, dont la mémoire
+  // s'arrête un an plus tôt. Seul le ping de testOneModel s'en dispense.
+  requestBody.system = bodyObj.noKnowledgeGuard ? bodyObj.system : withKnowledgeGuard(bodyObj.system, bodyObj.model);
+  if (requestBody.system == null) delete requestBody.system;
   if (bodyObj.tools?.length) requestBody.tools = bodyObj.tools;
   // Le corps est reconstruit champ par champ : tout paramètre non recopié ICI
   // est SILENCIEUSEMENT perdu. `thinking` et `output_config` gouvernent le
@@ -2606,7 +2611,11 @@ const callAnthropicDirect = (token, bodyObj) => new Promise((resolve, reject) =>
     max_tokens: bodyObj.max_tokens || 4096,
     messages: bodyObj.messages,
   };
-  if (bodyObj.system) requestBody.system = bodyObj.system;
+  // GARDE-FOU MÉMOIRE (modelKnowledge.js) : injecté pour le modèle RÉELLEMENT
+  // appelé — la cascade peut descendre de Sonnet 5 à Haiku, dont la mémoire
+  // s'arrête un an plus tôt. Seul le ping de testOneModel s'en dispense.
+  requestBody.system = bodyObj.noKnowledgeGuard ? bodyObj.system : withKnowledgeGuard(bodyObj.system, bodyObj.model);
+  if (requestBody.system == null) delete requestBody.system;
   if (bodyObj.tools?.length) requestBody.tools = bodyObj.tools;
   // Le corps est reconstruit champ par champ : tout paramètre non recopié ICI
   // est SILENCIEUSEMENT perdu. `thinking` et `output_config` gouvernent le
@@ -2738,7 +2747,10 @@ const testOneModel = async (modelId) => {
     : null;
   // max_tokens minimal, un seul message court : le test doit coûter le moins
   // possible tout en touchant réellement l'API (pas un ping local).
-  const body = { model: modelId, max_tokens: 8, messages: [{ role: 'user', content: 'ping' }] };
+  // `noKnowledgeGuard` : un ping n'est pas une génération, et le garde-fou y
+  // coûterait plus que le ping lui-même. Les routes ne lisent jamais ce champ
+  // depuis le client (corps reconstruit champ par champ) : impossible à forcer.
+  const body = { model: modelId, max_tokens: 8, messages: [{ role: 'user', content: 'ping' }], noKnowledgeGuard: true };
   try {
     if (clientApiKey) {
       await callAnthropicWithApiKey(clientApiKey, body);
@@ -3006,7 +3018,10 @@ const executeClaudeCall = async ({ system, messages, max_tokens = 4096, model, t
     : null;
 
   // Prompt CLI (seulement si OAuth échoue — le CLI reçoit le tout en une chaîne)
-  const systemBlock = system ? `[SYSTEM]\n${system}\n\n[USER]\n` : '';
+  // Repli CLI : on ignore quel modèle répondra → garde-fou au plus prudent.
+  const systemCli = withKnowledgeGuard(system, 'cli-fallback');
+  const systemTexte = Array.isArray(systemCli) ? systemCli.map(b => (b && b.text) || '').join('\n\n') : systemCli;
+  const systemBlock = `[SYSTEM]\n${systemTexte}\n\n[USER]\n`;
   const cliContent = systemBlock + messages.map(m => m.content).join('\n');
 
   const requestedModel = resolveRequestedModel(model);
@@ -3180,7 +3195,8 @@ app.post('/api/claude-stream', requireAuth, (req, res) => {
   // ── Corps de la requête Anthropic (streaming activé) ──────────────────────────
   const requestedModel = resolveRequestedModel(model);
   const requestBody = { model: requestedModel, max_tokens, messages, stream: true };
-  if (system) requestBody.system = system;
+  // GARDE-FOU MÉMOIRE — voie de l'audit et de la refonte (mode QAT).
+  requestBody.system = withKnowledgeGuard(system, requestedModel);
   // Voie réellement empruntée par l'audit et la refonte (cf. diagnostic ci-dessous) :
   // c'est ICI que le passe-plat compte. Sans lui, `thinking` est perdu et Sonnet 5
   // raisonne sur le budget `max_tokens` destiné à l'article.
