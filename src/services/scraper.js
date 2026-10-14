@@ -43,7 +43,7 @@ export const scrapeUrl = async (url, signal) => {
       () => axios.post(PROXY_SCRAPE, { url }, { timeout: 50000, ...(signal ? { signal } : {}) }),
     );
 
-    const { content, textContent, title } = resp.data;
+    const { content, textContent, title, injected } = resp.data;
 
     if (content && content.trim().length >= 100) {
       // On préfixe le titre sous forme de <h1> s'il n'est pas déjà dans le contenu
@@ -59,6 +59,7 @@ export const scrapeUrl = async (url, signal) => {
         content:     titleHtml + content,   // HTML structuré
         textContent: textContent || content, // texte brut pour Claude
         title,
+        injected: injected || null,          // blocs du thème exclus (voir injectedBlocks.js)
       };
     }
   } catch (proxyErr) {

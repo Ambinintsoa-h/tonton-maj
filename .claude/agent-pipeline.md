@@ -57,6 +57,15 @@ Injecté par **proxy.js** dans le `system` de CHAQUE appel à Anthropic, pour le
 - **Ajout d'un modèle** (MODEL_CASCADE ou MODELS) : ajouter sa ligne dans la table, sinon `modelKnowledge.test.js` échoue.
 - Placé en DERNIER bloc du `system` : le préfixe mis en cache (`cache_control`) n'est pas invalidé.
 
+## Blocs ajoutés par le thème : hors MAJ (13/10/2026)
+
+Incident ludikbazar.com : l'encart « 🔥 Nous recommandons Philibert » (div.gb-element-…, GenerateBlocks) est ajouté par le thème À L'AFFICHAGE, il n'est pas dans le contenu enregistré. Le scraping le captait, l'IA le réécrivait en paragraphes, la publication l'enregistrait : encart du thème + sa copie sous le chapô (11 articles touchés au 13/10).
+
+- **`/api/scrape`** (proxy.js) compare la page au `content.rendered` de l'API REST WordPress publique : un bloc de premier niveau de `.entry-content` dont aucune classe ni id n'existe dans le contenu enregistré est retiré AVANT Readability (`src/server/injectedBlocks.js`). Générique, aucun site codé en dur. Le thème continue de l'afficher avant et après la MAJ.
+- Les copies déjà enregistrées par une MAJ précédente (même texte, bloc pour bloc, qu'un bloc retiré de la même page) sont retirées aussi : la MAJ suivante répare l'article.
+- Garde-fous : conteneurs avec texte seulement (jamais un habillage de vidéo), abstention si l'API renvoie un contenu bien plus court que la page (constructeur de page), jamais plus de 40 % du texte retiré. Toute erreur de l'API → scraping inchangé.
+- Le flux WordPress connecté (`wp_get_post`) lit déjà l'API : il ne voit pas ces blocs.
+
 ## Format JSON attendu
 ```json
 {

@@ -392,6 +392,12 @@ export default function Articles() {
         articleHtml    = result.content;
         articleContent = result.textContent || result.content;
         dispatch(addStep('Article récupéré avec succès !'));
+        // Encart ajouté par le thème (« Nous recommandons Philibert »…) : exclu
+        // de la MAJ par /api/scrape, il reste affiché par le thème. Voir injectedBlocks.js.
+        const inj = result.injected;
+        if (inj && (inj.retires?.length || inj.copies?.length)) {
+          dispatch(addStep(`Bloc(s) ajouté(s) par le thème exclu(s) de la MAJ : ${inj.retires.length}${inj.copies?.length ? ` (+ ${inj.copies.length} copie(s) d'une MAJ précédente)` : ''}`));
+        }
       } else {
         setScraping(false);
       }
