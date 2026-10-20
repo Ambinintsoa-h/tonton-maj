@@ -1,3 +1,9 @@
+/**
+ * @jest-environment node
+ */
+// Environnement NODE et non jsdom (celui de react-scripts par défaut) : ce test
+// construit ses pages avec la bibliothèque jsdom, qui ne se charge pas DANS
+// l'environnement jsdom de Jest (« TextEncoder is not defined »).
 /* eslint-env jest */
 /**
  * Blocs ajoutés par le thème — incident ludikbazar.com du 13/10/2026.

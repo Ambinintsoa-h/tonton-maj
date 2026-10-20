@@ -43,7 +43,7 @@ export const DEFAULT_SKILLS = [
 
 <h3>4. Liens internes</h3>
 <ul>
-<li>Viser au moins 6 liens internes pertinents vers d'autres articles du site, 10 au maximum.</li>
+<li>5 liens internes nouveaux par mise à jour, pas davantage, vers d'autres articles du site.</li>
 <li>Ancres courtes (2-5 mots) présentes mot-pour-mot dans l'article ; cibles proches du sujet.</li>
 <li>Aucun lien dans la FAQ, un titre, le TL;DR, un tableau ou une citation.</li>
 </ul>

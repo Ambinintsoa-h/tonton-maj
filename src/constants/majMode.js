@@ -67,10 +67,13 @@ export const TARGET_WORDS_MIN = 800;
 // sujet dense (au-delà de 3 000 mots, le taux de citation par les IA double).
 export const TARGET_WORDS_MAX = 5000;
 
-// Maillage interne : le rédacteur fournit des paires ancre + URL. Les articles
-// publiés en portent 8 à 15 ; on part sur 3 lignes vides et on laisse ajouter.
+// Maillage interne : le rédacteur fournit des paires ancre + URL. On part sur 3
+// lignes vides et on laisse ajouter, jusqu'à 5 : décision Andrianina du 20/10/2026
+// (« on réduit les liens internes à 5 »), avant 15. Le même plafond borne les
+// suggestions de l'audit et la fusion des deux (auditSuggestions.js) : une MAJ
+// ajoute 5 liens internes nouveaux au plus, saisis ou suggérés.
 export const INTERNAL_LINK_ROWS_INITIAL = 3;
-export const INTERNAL_LINK_ROWS_MAX = 15;
+export const INTERNAL_LINK_ROWS_MAX = 5;
 
 /** Ligne de maillage vide — { anchor, url } */
 export const emptyLinkRow = () => ({ anchor: '', url: '' });

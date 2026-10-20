@@ -54,24 +54,22 @@ describe('découpage soumis au modèle', () => {
 describe('le prompt porte les règles à fort impact SEO', () => {
   const p = buildBoldPrompt(splitSectionsForBold(ARTICLE), KW, ['saga complète']);
 
-  it('la RÉPONSE À LA REQUÊTE est la priorité 1', () => {
-    // C'est le passage repris en position zéro et cité par les IA — le plus
-    // rentable, et celui que le modèle n'a jamais posé de lui-même.
-    expect(p).toMatch(/1\. LA RÉPONSE À LA REQUÊTE/);
+  it('trois familles seulement, mot-clé principal en tête (décision du 20/10/2026)', () => {
+    // Plus de « réponse à la requête » : elle produisait des phrases en gras.
+    expect(p).toMatch(/1\. LE MOT-CLÉ PRINCIPAL/);
+    expect(p).toMatch(/2\. LES MOTS-CLÉS SECONDAIRES/);
+    expect(p).toMatch(/3\. LES MOTS OU GROUPES DE MOTS IMPORTANTS/);
+    expect(p).not.toMatch(/RÉPONSE À LA REQUÊTE/);
   });
 
-  it('les chiffres sont explicitement les DERNIERS et bornés à la moitié', () => {
-    expect(p).toMatch(/6\. LES CHIFFRES/);
+  it('les chiffres restent bornés à la moitié des passages d\'une section', () => {
     expect(p).toMatch(/MOITIÉ/);
   });
 
-  it('le PLANCHER est posé comme une règle, sans plafond', () => {
-    // Le plancher reste structurel : une section H2 sans gras est un fragment muet
-    // pour un moteur génératif. Le PLAFOND, lui, a été retiré le 19/08 — le modèle
-    // juge le nombre d'après la longueur et la densité de la section.
+  it('le PLANCHER par section reste une règle ; la longueur est une borne de 4 mots', () => {
     expect(p).toMatch(/CHAQUE section H2 doit porter AU MOINS 2/);
     expect(p).toMatch(/fragment sans/);
-    expect(p).toMatch(/AUCUN PLAFOND IMPOSÉ/);
+    expect(p).toMatch(/De 1 à 4 mots par passage, pas un de plus/);
     expect(p).not.toMatch(/doit porter 2 à 4/);
   });
 
@@ -119,14 +117,16 @@ describe('validation — le code n\'applique QUE ce qu\'il a vérifié', () => {
     expect(ecartes[0].motif).toBe('balisage');
   });
 
-  it('un passage long n\'est PLUS écarté, mais une phrase entière l\'est', () => {
-    // Le rejet sur la longueur a été retiré le 19/08 (voir le bloc dédié plus bas).
-    // Ce qui reste attrape ce cas par sa NATURE : le passage contient une phrase
-    // terminée par un point, donc il ne met plus en avant, il remplace le texte.
-    const { ecartes } = normalizeBoldProposals(
+  it('un passage long est écarté (trop-long), une phrase courte aussi (phrase-entiere)', () => {
+    // Borne de 4 mots rétablie le 20/10/2026 (voir le bloc dédié plus bas).
+    const long = normalizeBoldProposals(
       [{ section: 1, passage: 'Trois approches existent. L\'ordre de sortie convient aux puristes' }], sections,
     );
-    expect(ecartes[0].motif).toBe('phrase-entiere');
+    expect(long.ecartes[0].motif).toBe('trop-long');
+    const court = normalizeBoldProposals(
+      [{ section: 1, passage: 'Trois approches existent.' }], sections,
+    );
+    expect(court.ecartes[0].motif).toBe('phrase-entiere');
   });
 
   it('un doublon est écarté', () => {
@@ -278,63 +278,61 @@ describe('JAMAIS SILENCIEUSE — le no-op de production', () => {
   });
 });
 
-describe('AUCUN REJET SUR LA LONGUEUR — decision du 19/08', () => {
-  // « enleve le trop-long de la mise en gras, on va observer le resultat »
-  // (Andrianina). Historique en deux temps : la borne unique de 4 mots rejetait 70
-  // propositions sur 89, dont TOUTES les reponses a la requete. Le plafond par type
-  // a ramene ce chiffre a 3 rejets et fait passer les passages poses de 9 a 22. Il
-  // ne restait donc presque rien a gagner en durcissant, et un rejet est toujours
-  // une decision du modele annulee par un nombre ecrit d avance.
+describe('PLUS DE PHRASE EN GRAS — decision du 20/10/2026', () => {
+  // « On ne met plus une phrase complete en gras, mais seulement les mots-cles
+  // principaux, les mots-cles secondaires, les mots ou groupes de mots importants »
+  // (Andrianina). Le type « reponse » (12 mots) disparait et la borne de 4 mots
+  // (GRAS_MAX_MOTS) revient en code, pour TOUS les types.
   const sections = splitSectionsForBold(ARTICLE);
   const LONG = 'ordre de sortie convient aux puristes de la saga';
 
-  it('un passage LONG est retenu, quel que soit son type', () => {
-    ['reponse', 'entite', 'chiffre', ''].forEach((type) => {
+  it('un passage de plus de 4 mots est REFUSE (trop-long), quel que soit son type', () => {
+    ['reponse', 'motcle', 'secondaire', 'important', ''].forEach((type) => {
       const { retenus, ecartes } = normalizeBoldProposals(
         [{ section: 1, passage: LONG, type }], sections,
       );
-      expect(ecartes).toEqual([]);
-      expect(retenus).toHaveLength(1);
+      expect(retenus).toEqual([]);
+      expect(ecartes[0].motif).toBe('trop-long');
     });
   });
 
-  it('le motif « trop-long » n existe PLUS', () => {
-    const props = ['Trois approches existent', LONG]
-      .map((passage) => ({ section: 1, passage, type: 'entite' }));
-    const { ecartes } = normalizeBoldProposals(props, sections);
-    expect(ecartes.some((e) => e.motif === 'trop-long')).toBe(false);
+  it('un mot ou un groupe de 4 mots au plus est retenu', () => {
+    const { retenus, ecartes } = normalizeBoldProposals([
+      { section: 1, passage: 'ordre de sortie', type: 'motcle' },
+      { section: 1, passage: 'puristes de la saga', type: 'important' },
+      { section: 2, passage: 'série TV Amazon', type: 'important' },
+    ], splitSectionsForBold(ARTICLE.replace('<h2>La série TV Amazon</h2>', '<h2>La série TV Amazon</h2><p>La série TV Amazon reste en suspens.</p>')));
+    expect(ecartes).toEqual([]);
+    expect(retenus).toHaveLength(3);
   });
 
-  it('mais une PHRASE ENTIERE reste refusee — une nature, pas une longueur', () => {
-    // Mettre une phrase complete en gras n est plus une mise en avant, c est un
-    // changement de corps de texte. Le point final ne demande aucun jugement.
+  it('une PHRASE ENTIERE reste refusee, meme courte — une nature, pas une longueur', () => {
     const { ecartes } = normalizeBoldProposals(
-      [{ section: 1, passage: 'Trois approches existent.', type: 'reponse' }], sections,
+      [{ section: 1, passage: 'Trois approches existent.', type: 'important' }], sections,
     );
     expect(ecartes[0].motif).toBe('phrase-entiere');
   });
 
-  it('UNE SEULE reponse par section, sans plafond de mots', () => {
+  it('plus de role « reponse » : deux passages courts de ce type ne se concurrencent plus', () => {
     const { retenus, ecartes } = normalizeBoldProposals([
-      { section: 1, passage: LONG, type: 'reponse' },
-      { section: 1, passage: 'ordre chronologique seduit les amateurs de lore', type: 'reponse' },
+      { section: 1, passage: 'ordre de sortie', type: 'reponse' },
+      { section: 1, passage: 'ordre chronologique', type: 'reponse' },
     ], sections);
-    expect(retenus).toHaveLength(1);
-    expect(ecartes[0].motif).toBe('reponse-en-double');
+    expect(ecartes).toEqual([]);
+    expect(retenus).toHaveLength(2);
   });
 
-  it('le prompt annonce la longueur comme une VISEE, pas un couperet', () => {
-    // Une consigne qui annonce un rejet inexistant est trompeuse : le prompt et le
-    // code doivent dire la meme chose.
+  it('le prompt annonce la borne comme un REFUS, et ne parle plus de « reponse »', () => {
     const p = buildBoldPrompt(sections, KW);
-    expect(p).toContain('"type": "reponse"');
-    expect(p).toMatch(/pas un couperet/);
-    expect(p).toContain('rejeté sur la longueur');
-    expect(p).not.toMatch(/JAMAIS plus de \d+ mots/);
-    expect(p).toMatch(/UNE SEULE par section/);
+    expect(p).not.toContain('reponse');
+    expect(p).not.toMatch(/RÉPONSE À LA REQUÊTE/);
+    expect(p).toContain('"type": "motcle|secondaire|important"');
+    expect(p).toMatch(/De 1 à 4 mots par passage/);
+    expect(p).toMatch(/le code REFUSE le passage/);
+    expect(p).toMatch(/MOTS-CLÉS SECONDAIRES/);
+    expect(p).toMatch(/GROUPES DE MOTS IMPORTANTS/);
   });
 });
-
 describe('ECHEC DE LECTURE — diagnosticable, pas silencieux', () => {
   // Constate en production le 19/08 : la passe a appele l IA (reponse de 9 419 car.,
   // visible dans la console) et `grasPasse` etait ENTIEREMENT vide — posed [],

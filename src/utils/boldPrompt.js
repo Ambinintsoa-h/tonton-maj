@@ -28,107 +28,63 @@
 import { GRAS_MIN_PAR_H2, GRAS_MAX_MOTS } from './boldCarry';
 
 /**
- * PLAFOND DE MOTS pour un passage de type « reponse ».
+ * PLUS DE « RÉPONSE À LA REQUÊTE » EN GRAS — décision Andrianina, 20 octobre 2026 :
+ * « on ne met plus une phrase complète en gras, seulement les mots-clés
+ * principaux, les mots-clés secondaires, les mots ou groupes de mots importants ».
  *
- * Corrigé le 19 août 2026, sur mesure de production. La priorité 1 de cette passe
- * est « la réponse à la requête » — le fragment qu'un moteur reprend en position
- * zéro. Or le plafond général était de GRAS_MAX_MOTS (4) mots : un fragment de
- * réponse n'y tient pas.
- *
- * MESURE : sur 89 propositions du modèle, 70 rejetées pour « trop-long ». Cinq
- * exemples, tous légitimes, tous jetés :
- *   « Sept jeux canoniques couvrent cette période »
- *   « Sorti sur console PS3 en 2013 »
- *   « Ascension reçoit un accueil mitigé »
- *   « six mois après le meurtre de la famille de Kratos »
- *   « du piège tendu par Arès jusqu'à la chute de l'Olympe »
- * Ma priorité la plus rentable était rendue IMPOSSIBLE par ma propre borne : deux
- * consignes qui se contredisent, et l'une des deux perd en silence. Exactement le
- * défaut qu'on reproche au prompt de refonte.
- *
- * UNE SEULE par section : c'est un RÔLE, pas une quantité. Sans cette limite, le
- * plafond élevé s'appliquerait à tout et « jamais une phrase entière » ne voudrait
- * plus rien dire.
+ * Le type « reponse » (jusqu'à 12 mots, priorité 1 depuis le 19 août) produisait
+ * exactement ce que l'équipe ne veut plus voir : des morceaux de phrase entiers en
+ * gras. Il disparaît, et la borne de longueur revient en code : GRAS_MAX_MOTS (4),
+ * la même que le skill « Style d'écriture » (« groupes de 1 à 4 mots »). Au-delà,
+ * le passage est REFUSÉ (`trop-long`), quel que soit son type.
  */
-export const MOTS_MAX_REPONSE = 12;
-
-/** Type déclaré par le modèle pour la réponse à la requête. */
-const TYPE_REPONSE = 'reponse';
+const TYPES_GRAS = ['motcle', 'secondaire', 'important'];
 
 const LIGNE = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
 
 /**
- * RÈGLES DE MISE EN GRAS — classées par IMPACT SEO/GEO DÉCROISSANT.
+ * RÈGLES DE MISE EN GRAS — trois familles, par ordre d'importance.
  *
  * Elles vivent dans le code et non dans un skill, pour la même raison que
  * `buildStyleFixPrompt` : ce n'est pas une préférence éditoriale mais le CONTRAT
  * de cette passe. Le skill « Style d'écriture » (règle 13) reste la source
  * éditoriale ; ce bloc est ce qui le rend exécutable.
  *
- * Pourquoi cet ordre, concrètement :
- *   1. LA RÉPONSE À LA REQUÊTE d'abord. C'est le passage qu'un moteur extrait en
- *      position zéro et qu'un moteur génératif cite. Aucun autre gras n'a ce
- *      rendement — et c'est précisément celui que le modèle n'a jamais posé.
- *   2. LE MOT-CLÉ ET SES VARIANTES : le signal de sujet. Une seule fois chacun.
- *   3. LES ENTITÉS du sujet (produits, versions, studios, normes) : elles
- *      alimentent la reconnaissance d'entités, donc l'association thématique.
- *   4. LES CHIFFRES DÉCISIFS en DERNIER — utiles et très citables, mais c'est la
- *      catégorie que le modèle sur-produit spontanément (19 sur 29, puis 26 sur 42).
- *
- * AUCUN PLAFOND n'est imposé au modèle depuis le 19/08 : il juge le nombre d'après
- * la longueur et la densité de la section. Le code ne borne que ce qui ne demande
- * aucun jugement (doublons, longueur d'un passage, emplacements) et MESURE le reste.
- *
- * Et la contrainte de RÉPARTITION est traitée comme une règle à part entière :
- * un article est découpé en fragments par les moteurs génératifs. Une section
- * sans gras est un fragment sans signal.
+ * La contrainte de RÉPARTITION reste une règle à part entière : un article est
+ * découpé en fragments par les moteurs génératifs, et une section sans gras est un
+ * fragment sans signal.
  */
 const REGLES = (kw, secondaires) => [
   `## Mot-clé principal : « ${kw} »`,
   secondaires.length ? `Mots-clés secondaires : ${secondaires.map((s) => `« ${s} »`).join(', ')}.` : '',
   '',
-  'Choisis les passages à mettre en gras, par ORDRE D\'IMPORTANCE DÉCROISSANTE :',
+  'Mets en gras UNIQUEMENT des mots ou de courts groupes de mots, jamais une phrase.',
+  'Trois familles, par ordre d\'importance :',
   '',
-  '1. LA RÉPONSE À LA REQUÊTE. Le fragment de phrase qui répond directement à la',
-  '   question posée par le mot-clé. C\'est le passage qu\'un moteur reprend en',
-  '   position zéro et qu\'une IA cite. Le plus rentable de tous : ne le manque pas.',
-  `   Marque-le "type": "${TYPE_REPONSE}". UNE SEULE par section — c'est un rôle, pas`,
-  '   une quantité.',
-  `2. LE MOT-CLÉ PRINCIPAL, sa première occurrence utile dans le corps, et ses`,
-  '   VARIANTES proches (reformulations, synonymes, pluriel). Une seule fois chacune.',
-  '3. LES MOTS-CLÉS SECONDAIRES, là où ils apparaissent naturellement.',
-  '4. LES ENTITÉS centrales du sujet : noms de produits, de versions, de studios,',
-  '   de normes, de lieux. Elles portent la reconnaissance d\'entités.',
-  '5. LE VOCABULAIRE TECHNIQUE propre au sujet.',
-  '6. LES CHIFFRES DÉCISIFS avec leur unité (prix, notes, dates, durées) —',
-  '   EN DERNIER. Ils sont citables, mais tu en mets spontanément trop : ils ne',
-  '   doivent JAMAIS dépasser la MOITIÉ des passages d\'une section.',
+  '1. LE MOT-CLÉ PRINCIPAL, à sa première occurrence utile dans le corps, et ses',
+  '   VARIANTES proches (pluriel, synonyme, reformulation courte). Une fois chacune.',
+  '   "type": "motcle".',
+  '2. LES MOTS-CLÉS SECONDAIRES, là où ils apparaissent naturellement.',
+  '   "type": "secondaire".',
+  '3. LES MOTS OU GROUPES DE MOTS IMPORTANTS du sujet : noms de produits, de marques,',
+  '   de normes, de lieux, vocabulaire technique, et chiffres décisifs avec leur unité',
+  '   (les chiffres jamais plus de la MOITIÉ des passages d\'une section).',
+  '   "type": "important".',
+  '',
+  '## Longueur — une borne, plus une visée',
+  `De 1 à ${GRAS_MAX_MOTS} mots par passage, pas un de plus : au-delà, le code REFUSE le passage.`,
+  'Jamais une phrase entière, jamais un morceau de phrase avec son verbe (« le',
+  'modèle coûte 299 € »), jamais une proposition complète : seulement le terme',
+  '(« 299 € », « pompe à chaleur air-eau », « RE2020 »).',
   '',
   '## Répartition — une règle, pas un détail',
   `CHAQUE section H2 doit porter AU MOINS ${GRAS_MIN_PAR_H2} passages. Pas une seule`,
   'section vide : les moteurs génératifs découpent l\'article en fragments, et un',
   'fragment sans gras est un fragment sans signal. Traite les sections une par une.',
-  '',
-  // PLAFOND SUPPRIMÉ le 19 août 2026, sur objection d'Andrianina : « le modèle peut
-  // juger par lui-même, il comprend le mot-clé et le contenu de l'article ». Les
-  // données lui donnaient raison. Sur la section à 11 passages, le défaut n'était
-  // pas le nombre mais la COMPOSITION : 6 chiffres sur 11. Les cinq autres —
-  // studios, nom du jeu, genre technique — étaient exactement ce qu'on veut, et un
-  // plafond à 4 aurait coupé dans le bon, au hasard de l'ordre d'arrivée.
-  // Un nombre fixe ignore aussi la longueur : 3 passages sur 107 mots et 3 sur 231
-  // ne sont pas la même densité, et l'ancien plafond traitait les deux à l'identique.
-  'AUCUN PLAFOND IMPOSÉ. Tu juges combien une section en mérite, d\'après sa longueur',
-  'et sa densité d\'information : une section de 230 mots riche en entités en porte',
-  'légitimement plus qu\'une section de 60 mots. Garde le sens de la mesure — du gras',
-  'partout ne met plus rien en avant.',
-  '',
-  '## Longueur — une visée, pas un couperet',
-  `Vise ${GRAS_MAX_MOTS} mots par passage, et jusqu'à ${MOTS_MAX_REPONSE} pour une réponse. Rien n'est`,
-  'rejeté sur la longueur : ton jugement tranche. Mais un gras trop long cesse',
-  'd\'attirer l\'œil, et tu perds ce que tu cherchais à souligner.',
+  'Garde le sens de la mesure : du gras partout ne met plus rien en avant.',
   '',
   '## Interdits',
-  '- JAMAIS une phrase entière terminée par un point : le gras met en avant, il ne',
+  '- JAMAIS une phrase ni une proposition : le gras désigne un terme, il ne',
   '  remplace pas le corps du texte.',
   '- JAMAIS un titre (H1-H6), JAMAIS le texte d\'un lien, JAMAIS la FAQ ni le TL;DR.',
   '- JAMAIS deux fois le même terme dans tout l\'article.',
@@ -161,7 +117,7 @@ export const buildBoldPrompt = (sections = [], targetKeyword = '', secondaires =
     '',
     'Réponds UNIQUEMENT par un tableau JSON, sans texte autour. Chaque passage doit',
     'être une COPIE EXACTE, au caractère près, d\'un extrait de la section indiquée :',
-    `[{ "section": 1, "passage": "copie exacte", "type": "${TYPE_REPONSE}|motcle|entite|technique|chiffre" }]`,
+    `[{ "section": 1, "passage": "copie exacte", "type": "${TYPES_GRAS.join('|')}" }]`,
   ].join('\n');
 };
 
@@ -177,12 +133,11 @@ const PORTE_BALISAGE = /<|>|href\s*=|&[a-z]+;/i;
  *     dangereux : appliquer un passage approximatif déplacerait le gras ailleurs ;
  *   • `balisage` — le modèle a renvoyé du HTML malgré la consigne. L'appliquer
  *     injecterait des balises dans le texte ;
- *   • `phrase-entiere` — un passage terminé par un point. SEULE borne de longueur
- *     encore appliquée, et elle ne mesure rien : elle constate une nature. Le rejet
- *     `trop-long` a été SUPPRIMÉ le 19/08 sur décision d'Andrianina — après le
- *     plafond par type, il ne restait que 3 rejets sur 89, donc presque rien à
- *     gagner en durcissant, et un rejet est toujours une décision du modèle annulée
- *     par un nombre écrit d'avance ;
+ *   • `trop-long` — plus de GRAS_MAX_MOTS (4) mots. Supprimé le 19/08, RÉTABLI le
+ *     20/10/2026 (décision Andrianina : plus de phrase en gras, seulement des
+ *     mots-clés et des groupes de mots), pour tous les types sans exception ;
+ *   • `phrase-entiere` — un passage terminé par un point ou qui enjambe deux
+ *     phrases : il constate une nature, même sous 4 mots (« Prix en baisse. ») ;
  *   • `doublon` — le même terme deux fois. Le modèle l'a fait en production
  *     (`Valhalla` deux fois dans la MÊME section) : il comprend l'article et se
  *     répète quand même. Aucun jugement n'est requis pour le refuser, donc c'est
@@ -232,7 +187,6 @@ export const normalizeBoldProposals = (brut, sections = []) => {
   const ecartes = [];
   const vus = new Set();
   const parSection = new Map();
-  const reponsesParSection = new Set();
 
   items.forEach((it) => {
     if (!it) return;
@@ -243,36 +197,25 @@ export const normalizeBoldProposals = (brut, sections = []) => {
     const sec = sections[idx - 1];
     if (!sec) { ecartes.push({ passage, motif: 'section-inconnue' }); return; }
     if (PORTE_BALISAGE.test(passage)) { ecartes.push({ passage, motif: 'balisage' }); return; }
-    // PLUS AUCUN REJET SUR LA LONGUEUR — décision d'Andrianina, 19 août 2026 :
-    // « enlève le trop-long de la mise en gras, on va observer le résultat ».
-    //
-    // Historique, en deux temps. La borne unique de 4 mots rejetait 70 propositions
-    // sur 89, dont TOUTES les « réponses à la requête » — la priorité 1. Le plafond
-    // par type (12 mots pour une réponse) a ramené ce chiffre à 3 rejets et fait
-    // passer les passages posés de 9 à 22. Il ne reste donc presque rien à gagner
-    // en durcissant, et tout à perdre : chaque rejet est une décision du modèle
-    // annulée par un nombre écrit d'avance.
-    //
-    // Ce qui subsiste est la seule borne qui ne demande AUCUN jugement : une phrase
-    // entière, reconnue à son point final. Elle ne mesure pas une longueur, elle
-    // constate une nature — mettre une phrase complète en gras n'est plus une mise
-    // en avant, c'est un changement de corps de texte.
-    const type = String(it.type || '').trim().toLowerCase();
-    if (type === TYPE_REPONSE) {
-      // Le rôle reste unique par section, même sans plafond de mots.
-      if (reponsesParSection.has(idx)) { ecartes.push({ passage, motif: 'reponse-en-double' }); return; }
+    // LA BORNE DE LONGUEUR REVIENT — décision d'Andrianina, 20 octobre 2026 : « on
+    // ne met plus une phrase complète en gras ». Historique : retirée le 19 août
+    // (« enlève le trop-long, on va observer le résultat »), parce qu'elle refusait
+    // toutes les « réponses à la requête » de 12 mots. Observé depuis : ces
+    // réponses sont précisément les phrases en gras que l'équipe corrige à la main.
+    // Le type « reponse » est supprimé (voir TYPES_GRAS) et la borne s'applique à
+    // TOUT passage, sans exception par type.
+    if (passage.split(/\s+/).length > GRAS_MAX_MOTS) {
+      ecartes.push({ passage, motif: 'trop-long' });
+      return;
     }
     // Deux formes, une seule nature : le passage porte une phrase complète.
     //   • il se TERMINE par un point : « Trois approches existent. » ;
     //   • il ENJAMBE une frontière de phrase : « …existent. L'ordre de sortie… ».
-    // Le second cas manquait, et il passait donc au travers une fois le rejet sur la
-    // longueur retiré — attrapé par un test. Aucun jugement requis : la ponctuation
-    // constate, elle ne mesure pas.
+    // Aucun jugement requis : la ponctuation constate, elle ne mesure pas.
     if (/[.!?]\s*$/.test(passage) || /[.!?]\s+\p{Lu}/u.test(passage)) {
       ecartes.push({ passage, motif: 'phrase-entiere' });
       return;
     }
-    if (type === TYPE_REPONSE) reponsesParSection.add(idx);
 
     const cle = passage.toLowerCase();
     if (vus.has(cle)) { ecartes.push({ passage, motif: 'doublon' }); return; }

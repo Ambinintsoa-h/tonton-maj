@@ -27,8 +27,15 @@ export const GRAS_MAX_MOTS = 4;
 
 /** Longueur mini d'un terme repris : « m2 » ou « et » ne portent aucun sens. */
 const MIN_CARS = 4;
-/** Au-delà, ce n'est plus un terme mis en avant mais une phrase entière. */
-const MAX_MOTS = 6;
+/**
+ * Au-delà, ce n'est plus un terme mis en avant mais une phrase. Était 6, aligné
+ * sur GRAS_MAX_MOTS (4) le 20/10/2026 : un gras d'origine plus long n'est plus
+ * reporté, puisque `plafonnerGras` le retirerait de toute façon.
+ */
+const MAX_MOTS = GRAS_MAX_MOTS;
+
+/** Un gras qui porte une fin de phrase, ou qui enjambe deux phrases. */
+const FIN_DE_PHRASE = /[.!?…]$|[.!?]\s+\p{Lu}/u;
 /**
  * Plafond de remises en gras. Un article d'origine sur-balisé (30 termes) ne doit
  * pas produire un article réécrit tout en gras : au-delà, le gras ne met plus
@@ -67,6 +74,7 @@ export const listBoldTerms = (html = '') => {
     const t = norm(el.textContent);
     if (t.length < MIN_CARS) return;
     if (t.split(' ').length > MAX_MOTS) return;
+    if (FIN_DE_PHRASE.test(t)) return;
     const cle = t.toLowerCase();
     if (vus.has(cle)) return;
     vus.add(cle);
@@ -143,6 +151,53 @@ export const carryOverBold = (originalHtml = '', newHtml = '') => {
     console.warn(`[R5 gras] ${missing.length} terme(s) en gras non replacé(s) (les mots ne figurent plus dans le texte) :`, missing);
   }
   return { html: root.innerHTML, restored, missing };
+};
+
+/**
+ * PLAFOND DU GRAS — le FILET de la règle « jamais une phrase en gras ».
+ *
+ * Décision d'Andrianina, 20 octobre 2026 : « on ne met plus une phrase complète
+ * en gras, mais seulement les mots-clés principaux, les mots-clés secondaires, les
+ * mots ou groupes de mots importants ».
+ *
+ * Le gras arrive par TROIS portes : la génération (consigne du prompt), la reprise
+ * du gras d'origine (`carryOverBold`) et la passe dédiée (`agentBold.js`). Chacune
+ * porte désormais la borne de 4 mots, mais une consigne n'est pas un verrou : ce
+ * filet passe EN DERNIER sur l'article et ôte la balise de tout gras de plus de
+ * GRAS_MAX_MOTS mots ou qui porte une phrase. Le texte n'est jamais touché, seule
+ * la balise `<strong>`/`<b>` disparaît.
+ *
+ * Exception unique : le CHAPÔ, gras + italique par gabarit (skill « Guide de
+ * rédaction »). Il est reconnu à sa forme — premier paragraphe de premier niveau,
+ * entièrement en gras et en italique — et laissé intact.
+ *
+ * @returns {{ html: string, retires: string[] }}
+ */
+export const plafonnerGras = (html = '') => {
+  const rien = { html, retires: [] };
+  if (!html || typeof document === 'undefined' || !/<(?:strong|b)\b/i.test(html)) return rien;
+  const root = document.createElement('div');
+  root.innerHTML = html;
+
+  const premierP = Array.from(root.children).find((el) => el.tagName === 'P') || null;
+  const grasDuP = premierP
+    ? norm(Array.from(premierP.querySelectorAll('strong, b')).map((e) => e.textContent).join(' '))
+    : '';
+  const chapo = premierP && premierP.querySelector('em, i') && grasDuP && grasDuP === norm(premierP.textContent)
+    ? premierP : null;
+
+  const retires = [];
+  Array.from(root.querySelectorAll('strong, b')).forEach((el) => {
+    if (chapo && chapo.contains(el)) return;
+    if (!el.parentNode) return;
+    const t = norm(el.textContent);
+    if (!t) return;
+    if (t.split(' ').length <= GRAS_MAX_MOTS && !FIN_DE_PHRASE.test(t)) return;
+    retires.push(t);
+    while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
+    el.remove();
+  });
+  return retires.length ? { html: root.innerHTML, retires } : rien;
 };
 
 /**

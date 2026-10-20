@@ -18,7 +18,7 @@
  * sans recours et n'apparaît JAMAIS ici : verrou liens externes (règle 8),
  * dofollow/nofollow à l'export, reprise des liens et des images (R1/R4),
  * maillage à 100 % et déliage des zones interdites (R2/R2a), plafond de 20 mots
- * par phrase et gras sémantique (règle 10), plancher de 6 à 10 liens internes
+ * par phrase et gras sémantique (règle 10), 5 liens internes (6 à 10 avant le 20/10/2026)
  * suggérés, schéma JSON et `max_tokens`.
  *
  * Deux champs d'audit sont volontairement ABSENTS de la liste cochable sans être

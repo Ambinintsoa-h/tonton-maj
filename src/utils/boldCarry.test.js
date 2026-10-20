@@ -3,7 +3,7 @@
  * Même famille que la reprise des liens (R1) et des images (R4) : consigne au
  * modèle, PLUS un contrôle déterministe et non bloquant.
  */
-import { carryOverBold, listBoldTerms, constatGras } from './boldCarry';
+import { carryOverBold, listBoldTerms, constatGras, plafonnerGras } from './boldCarry';
 
 const gras = (html) => (html.match(/<strong>/g) || []).length;
 
@@ -133,5 +133,53 @@ describe('constatGras — la consigne de gras est enfin MESURÉE', () => {
       sections: [], sousPlancher: 0, surPlafond: 0,
       dansTitre: 0, dansLien: 0, tropLongs: 0, total: 0,
     });
+  });
+});
+
+
+describe('plafonnerGras — jamais une phrase en gras (décision du 20/10/2026)', () => {
+  const CHAPO = '<p><strong><em>Le chapô est en gras et en italique par gabarit, il peut faire trente-cinq mots.</em></strong></p>';
+
+  test('retire la balise d\'un gras de plus de 4 mots, garde le texte', () => {
+    const r = plafonnerGras('<p>Le <strong>modèle coûte 299 euros en magasin</strong> cette année.</p>');
+    expect(r.retires).toEqual(['modèle coûte 299 euros en magasin']);
+    expect(r.html).toBe('<p>Le modèle coûte 299 euros en magasin cette année.</p>');
+  });
+
+  test('garde un mot-clé ou un groupe de 4 mots au plus', () => {
+    const html = '<p>La <strong>pompe à chaleur air-eau</strong> coûte <strong>299 €</strong>.</p>';
+    const r = plafonnerGras(html);
+    expect(r.retires).toEqual([]);
+    expect(r.html).toBe(html);
+  });
+
+  test('retire un gras qui porte une phrase, même court', () => {
+    const r = plafonnerGras('<p>Avis. <strong>Prix en baisse.</strong> Suite du texte.</p>');
+    expect(r.retires).toEqual(['Prix en baisse.']);
+    expect(r.html).not.toContain('<strong>');
+  });
+
+  test('le chapô (premier paragraphe, entièrement en gras et en italique) est laissé intact', () => {
+    const html = `${CHAPO}<h2>Prix</h2><p>Une <strong>phrase entière mise en gras par erreur ici</strong>.</p>`;
+    const r = plafonnerGras(html);
+    expect(r.html).toContain(CHAPO);
+    expect(r.retires).toEqual(['phrase entière mise en gras par erreur ici']);
+  });
+
+  test('un premier paragraphe tout en gras SANS italique n\'est pas un chapô : son gras long est retiré', () => {
+    const r = plafonnerGras('<p><strong>Ce paragraphe entier est en gras sans être un chapô.</strong></p>');
+    expect(r.retires).toHaveLength(1);
+    expect(r.html).toBe('<p>Ce paragraphe entier est en gras sans être un chapô.</p>');
+  });
+
+  test('sans gras : no-op strict', () => {
+    const html = '<p>Rien à faire.</p>';
+    expect(plafonnerGras(html).html).toBe(html);
+    expect(plafonnerGras('').retires).toEqual([]);
+  });
+
+  test('la reprise du gras d\'origine ne reporte plus un passage de 5 mots ni une phrase', () => {
+    expect(listBoldTerms('<p><strong>cinq mots en gras ici</strong> et <strong>Prix bas.</strong></p>')).toEqual([]);
+    expect(listBoldTerms('<p><strong>quatre mots en gras</strong></p>')).toEqual(['quatre mots en gras']);
   });
 });
