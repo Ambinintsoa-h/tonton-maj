@@ -18,7 +18,7 @@ import {
 } from '../utils/internalWeave';
 import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 // R5 — le gras de l'article d'origine ne disparaît pas (module AUTONOME).
-import { carryOverBold, constatGras, GRAS_MIN_PAR_H2, GRAS_MAX_MOTS } from '../utils/boldCarry';
+import { carryOverBold, constatGras, plafonnerGras, GRAS_MIN_PAR_H2, GRAS_MAX_MOTS } from '../utils/boldCarry';
 import { runBoldPass } from './agentBold';
 import {
   phrasesTropLongues, MOTS_MAX_PHRASE, MOTS_MAX_TITRE,
@@ -42,7 +42,7 @@ import { filterAuditBySelection, isSelectionEmpty } from '../utils/auditSelectio
 import { constatFaq, FAQ_MIN_QUESTIONS, FAQ_MAX_QUESTIONS, FAQ_MOTS_MAX_REPONSE } from '../utils/faq';
 import {
   DEFAULT_ARTICLE_TYPE, DEFAULT_SEO_PLUGIN, DEFAULT_TARGET_WORDS,
-  ARTICLE_TYPES, SEO_PLUGINS, cleanLinkRows,
+  ARTICLE_TYPES, SEO_PLUGINS, cleanLinkRows, INTERNAL_LINK_ROWS_MAX,
 } from '../constants/majMode';
 import {
   callWpTool, selectModel, getDateContext, calcCost, callClaudeWithProgress, callClaudeStream,
@@ -76,10 +76,10 @@ const MAX_ESSAIS_IA = 3;
  * puisse pas le supprimer par inadvertance. Le plancher de 3, lui, reste la
  * demande métier — il est dit dans le même bloc de prompt.
  *
- * Sans rapport avec INTERNAL_LINK_ROWS_MAX (15) : celui-là borne ce que le
+ * Sans rapport avec INTERNAL_LINK_ROWS_MAX (5 depuis le 20/10/2026) : celui-là borne ce que le
  * RÉDACTEUR peut saisir à la main, pas ce que l'IA propose.
  */
-const MAX_LIENS_ENTRANTS = 10;
+const MAX_LIENS_ENTRANTS = 5;
 
 /**
  * PLANCHER des liens internes suggérés — décision Andrianina, 17 août 2026 :
@@ -93,8 +93,15 @@ const MAX_LIENS_ENTRANTS = 10;
  * Le plafond de 10 reste l'enveloppe technique (taille du JSON) ; ce plancher est
  * une exigence métier. Les deux sont dits dans le même bloc de prompt, et repris
  * dans le skill (`maillage-interne-ancres.md`).
+ *
+ * RAMENÉS À 5 ET 5 le 20 octobre 2026 — décision Andrianina : « on réduit les
+ * liens internes à 5 ». Plancher = plafond : l'audit propose CINQ paires, R2 les
+ * place toutes, l'article reçoit donc cinq liens internes nouveaux. Le nombre
+ * prime sur le skill cerveau, qui dit encore « au moins 6, 10 au maximum »
+ * (`maillage-quantite.md`, `audit-framework.md`) : voir LIENS_INTERNES_NOUVEAUX
+ * dans le brief de la refonte.
  */
-const MIN_LIENS_ENTRANTS = 6;
+const MIN_LIENS_ENTRANTS = 5;
 
 /**
  * CONTRAINTES RÉDACTIONNELLES TENUES EN DUR — demande explicite d'Andrianina,
@@ -136,13 +143,16 @@ ${targetKeyword
     ? `Mot-clé principal : « ${targetKeyword} ».`
     : 'Mot-clé principal : celui du brief ci-dessus.'}
 
-Enveloppe dans \`<strong>\` les termes qui portent le sens pour ce mot-clé : ses
-variantes, ses termes sémantiquement voisins, le vocabulaire technique du sujet,
-et les données chiffrées décisives (prix, normes, délais, pourcentages).
+Enveloppe dans \`<strong>\` UNIQUEMENT des mots ou de courts groupes de mots :
+le mot-clé principal et ses variantes, les mots-clés secondaires, et les mots ou
+groupes de mots importants du sujet (noms de produits, normes, vocabulaire
+technique, chiffres décisifs avec leur unité). JAMAIS une phrase, jamais une
+proposition avec son verbe : « 299 € », pas « le modèle coûte 299 € ».
 
 Bornes, à respecter — un texte tout en gras ne met plus rien en avant :
 - **2 à 4 passages en gras par section H2**, pas davantage ;
-- un groupe de **1 à 4 mots** à la fois, JAMAIS une phrase entière ni un paragraphe ;
+- un groupe de **1 à ${GRAS_MAX_MOTS} mots** à la fois, JAMAIS une phrase entière ni un paragraphe —
+  un contrôle technique retire ensuite tout gras plus long ;
 - **jamais** de gras dans un titre (h1-h6), ni à l'intérieur du texte d'un lien
   \`<a>\` — le lien a déjà son propre repère visuel ;
 - le même terme n'est pas mis en gras à chacune de ses occurrences : la première
@@ -150,7 +160,8 @@ Bornes, à respecter — un texte tout en gras ne met plus rien en avant :
 
 **REPRENDS LE GRAS DE L'ARTICLE D'ORIGINE.** Tout mot ou groupe de mots déjà
 enveloppé dans \`<strong>\` ou \`<b>\` avant la réécriture doit le rester, même si
-tu reformules la phrase autour. Ce balisage est un choix éditorial déjà validé :
+tu reformules la phrase autour — sauf une phrase entière ou un passage de plus de
+${GRAS_MAX_MOTS} mots en gras : celui-là n'est PAS repris. Ce balisage est un choix éditorial déjà validé :
 le perdre est une régression silencieuse. Un contrôle technique le remet ensuite,
 mais ne compte pas dessus — il ne sait pas replacer ce que tu as réécrit.
 
@@ -410,6 +421,10 @@ const buildBriefBlock = ({
   if (links.length) linkBlock = listeSeule;
   if (links.length && redaction) {
     linkBlock = `${listeSeule}
+
+⚠️ NOMBRE DE LIENS INTERNES NOUVEAUX : ${links.length}, pas un de plus (${INTERNAL_LINK_ROWS_MAX} au
+maximum par mise à jour, décision d'équipe). Ce nombre PRIME sur tout plancher indiqué
+dans les ressources (« au moins 6 », « 10 au maximum ») : n'en signale pas le manque.
 
 ⚠️ EXHAUSTIVITÉ EXIGÉE — les ${links.length} paires ci-dessus, SANS EXCEPTION.
 Chacune doit figurer dans article_html sous la forme <a href="URL">ancre</a>, dans
@@ -719,7 +734,10 @@ morte.
 ${siteUrls.join('\n')}
 
 ` : ''}## ENVELOPPE DE TAILLE — internal_linking.liens_entrants
-Donne **au moins ${MIN_LIENS_ENTRANTS}** paires ancre + URL, et **au maximum ${MAX_LIENS_ENTRANTS}**.
+Donne ${MIN_LIENS_ENTRANTS === MAX_LIENS_ENTRANTS
+    ? `**exactement ${MAX_LIENS_ENTRANTS}** paires ancre + URL, ni plus ni moins (au maximum ${MAX_LIENS_ENTRANTS})`
+    : `**au moins ${MIN_LIENS_ENTRANTS}** paires ancre + URL, et **au maximum ${MAX_LIENS_ENTRANTS}**`}.
+S'il existe moins de ${MAX_LIENS_ENTRANTS} pages réellement pertinentes, donne celles qui existent : une URL inventée est un lien mort.
 Ce plafond prime sur toute autre limite indiquée ailleurs : le JSON d'audit doit
 tenir en une seule réponse, et une liste sans borne le faisait tronquer — audit
 illisible, 3 essais facturés, phase 2 sans ampleur ni score. Mesuré en production
@@ -1444,6 +1462,17 @@ N'ajoute aucun AUTRE lien externe.`;
       });
       if (passeGras.posed.length) withBold.html = passeGras.html;
       if (passeGras.tokenUsage) trackCall(passeGras.tokenUsage, 'gras');
+
+      // ── FILET — jamais une phrase en gras (décision Andrianina, 20/10/2026) ──
+      // EN DERNIER, après les trois portes du gras (génération, reprise R5, passe
+      // dédiée) : tout gras de plus de GRAS_MAX_MOTS mots ou qui porte une phrase
+      // perd sa balise, le texte reste. Le chapô (gras + italique par gabarit) est
+      // reconnu et laissé intact. Voir plafonnerGras (boldCarry.js).
+      const plafond = plafonnerGras(withBold.html);
+      if (plafond.retires.length) {
+        withBold.html = plafond.html;
+        onStep(`🅱️ ${plafond.retires.length} gras trop long(s) retiré(s) — une phrase n'est jamais mise en gras, seulement des mots-clés et des groupes de ${GRAS_MAX_MOTS} mots au plus : « ${plafond.retires[0].slice(0, 60)}${plafond.retires[0].length > 60 ? '…' : ''} »${plafond.retires.length > 1 ? '…' : ''}`);
+      }
 
       // ── CONSTAT — le gras est COMPTÉ PAR SECTION, pas seulement demandé ──────
       // La reprise ci-dessus ne dit rien du gras NEUF : le prompt exige 2 à 4
