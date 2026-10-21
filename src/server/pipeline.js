@@ -312,6 +312,7 @@ const runArticlePipeline = async (input) => {
     modelPricing, modelSelections,
     depth,
     instruction: DEFAULT_VERIFICATION_TEMPLATE,
+    articleUrl,
     onStep,
   });
   tokenUsage = mergeTokenUsage(tokenUsage, obsoRes.tokenUsage);

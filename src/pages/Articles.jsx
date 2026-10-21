@@ -20,6 +20,7 @@ import { cacheSiteFonts } from '../store/slices/wordpressSlice';
 import axios from 'axios';
 import { scrapeUrl } from '../services/scraper';
 import { stripNonEditorialLinks, stripNonEditorialUrlsFromText } from '../utils/scrapeClean';
+import { applyLinkFollowPolicyHtml } from '../utils/export';
 import { isArticleUrlDead, ARTICLE_INTROUVABLE_MESSAGE } from '../utils/articleLiveness';
 import { runQatAudit } from '../services/agentQat';
 import { aggregateCallsByPass } from '../services/agent';
@@ -429,6 +430,20 @@ export default function Articles() {
     }
     articleHtml    = ingestion.html;
     articleContent = stripNonEditorialUrlsFromText(articleContent);
+
+    // ── Liens EXTERNES en nofollow DÈS L'INGESTION (décision Andrianina, 21/10/2026) ──
+    // « Les liens externes dans Tonton doivent tous être en nofollow » : visibles
+    // comme tels dans l'éditeur, plus seulement à la publication. Même politique
+    // qu'à l'export (applyLinkFollowPolicy) : externe → nofollow, interne →
+    // dofollow. Seulement quand l'URL de l'article est connue — sans elle, un lien
+    // interne absolu serait pris pour un externe.
+    if (articleUrl) {
+      const suivi = applyLinkFollowPolicyHtml(articleHtml, articleUrl);
+      if (suivi.nofollowAjoutes || suivi.bloqueursRetires) {
+        articleHtml = suivi.html;
+        if (suivi.nofollowAjoutes) dispatch(addStep(`🔗 ${suivi.nofollowAjoutes} lien(s) externe(s) de l'article passé(s) en nofollow`));
+      }
+    }
 
     // originalContent stocke le HTML → affiché avec mise en page préservée
     dispatch(setOriginalContent(articleHtml));
