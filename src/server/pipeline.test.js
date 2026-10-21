@@ -105,6 +105,12 @@ describe('runArticlePipeline — chemin complet', () => {
     runReviewAgent.mockResolvedValue({ updates: [], tokenUsage: usage(500, 200, 'obsolescence') });
   });
 
+  test('la passe d\'obsolescence reçoit l\'URL de l\'article (liens externes des propositions en nofollow)', async () => {
+    await runArticlePipeline(baseInput());
+    expect(runReviewAgent).toHaveBeenCalledTimes(1);
+    expect(runReviewAgent.mock.calls[0][0].articleUrl).toBe(baseInput().articleUrl);
+  });
+
   test('déduit scope=simple / depth=ciblee depuis un audit "maj_ciblee", et reprend le maillage suggéré tel quel', async () => {
     await runArticlePipeline(baseInput());
 

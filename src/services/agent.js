@@ -4,6 +4,7 @@ import { scrapeUrl } from './scraper';
 import { MAJ_DEPTHS, DEFAULT_DEPTH } from '../constants/majDepth';
 import { filterSameSiteLinks } from '../utils/diff';
 import { applyStyleGuards, stripForbiddenDashes, stripForbiddenDashesText } from '../utils/textRules';
+import { applyLinkFollowPolicyToUpdates } from '../utils/export';
 import { encodeMediaUrl } from '../utils/mediaUrl';
 
 const LOCAL_PROXY    = '/api/claude';
@@ -2077,6 +2078,7 @@ export const runReviewAgent = async ({
   modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
   depth         = DEFAULT_DEPTH, // profondeur de MAJ (héritée de la passe 1)
   instruction   = '',   // consigne libre de l'équipe — injectée en priorité haute
+  articleUrl    = '',   // URL de l'article : liens externes des propositions en nofollow (21/10/2026)
   onStep = () => {},
   onProgress = () => {},
 }) => {
@@ -2238,6 +2240,12 @@ ${content}
 
   // Garde-fou de style : mêmes règles qu'en passe 1 (tirets interdits dans le généré)
   result.updates = applyStyleGuards(result.updates);
+
+  // Liens EXTERNES des propositions en nofollow, visibles dans l'éditeur dès
+  // qu'une proposition est acceptée (décision Andrianina, 21/10/2026). Seulement
+  // si l'URL de l'article est connue : sans elle, un lien interne absolu serait
+  // pris pour un externe. La publication rejoue la politique de toute façon.
+  result.updates = applyLinkFollowPolicyToUpdates(result.updates, articleUrl);
 
   onProgress(100);
   onStep('Deuxième passe terminée !');

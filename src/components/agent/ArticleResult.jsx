@@ -2204,6 +2204,7 @@ export default function ArticleResult() {
           modelSelections: settings.modelSelections || null,
           depth: agent.majDepth,
           instruction: verifPrompt,
+          articleUrl,
           onStep: (t) => setVerifStep(t),
           onProgress: (p) => setVerifProgress(p),
         });
@@ -2566,6 +2567,7 @@ export default function ArticleResult() {
           tavilyKey: settings.tavilyKey,
           modelSelections: settings.modelSelections || null,
           manualSources,
+          articleUrl,
           onStep: (s) => setReviewStep(s),
           onProgress: (p) => setReviewProgress(p),
         });

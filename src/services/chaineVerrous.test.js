@@ -220,8 +220,10 @@ describe('les six pièges, en une seule chaîne', () => {
   test('1. le lien EXTERNE traverse la chaîne INTACT — href et ancre au caractère près', async () => {
     // Règle 8, le verrou le plus cher du projet. Aucun verrou de la chaîne ne
     // doit y toucher : R2a ne délie que l'interne, R6 ne déplace que l'interne.
+    // Seule exception voulue (21/10/2026) : la politique R3 lui ajoute
+    // rel="nofollow" — tout lien externe sort de Tonton en nofollow.
     const { html } = await lancerChaine();
-    expect(html).toContain('<a href="https://acermi.fr/fiche-technique">la fiche technique ACERMI</a>');
+    expect(html).toContain('<a href="https://acermi.fr/fiche-technique" rel="nofollow">la fiche technique ACERMI</a>');
     // et il reste UNIQUE : ni dupliqué par un verrou, ni déplacé en encart
     expect((html.match(/acermi\.fr/g) || []).length).toBe(1);
   });

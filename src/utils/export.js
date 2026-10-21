@@ -74,7 +74,10 @@ const hostDe = (u = '') => {
  * c'est la protection maximale, et c'est déjà la convention de `diff.js`.
  */
 export const applyLinkFollowPolicy = (root, articleUrl = '') => {
-  if (!root || typeof root.querySelectorAll !== 'function') return;
+  // Compteurs rendus depuis le 21/10/2026 (nofollow visible dans l'éditeur) : les
+  // appelants de la génération et de l'ingestion DISENT ce qui a été posé.
+  const bilan = { nofollowAjoutes: 0, bloqueursRetires: 0 };
+  if (!root || typeof root.querySelectorAll !== 'function') return bilan;
   const siteHost = hostDe(articleUrl);
   root.querySelectorAll('a[href]').forEach((a) => {
     const href = (a.getAttribute('href') || '').trim();
@@ -86,15 +89,53 @@ export const applyLinkFollowPolicy = (root, articleUrl = '') => {
 
     const tokens = (a.getAttribute('rel') || '').split(/\s+/).filter(Boolean);
     if (externe) {
-      if (!tokens.some((t) => t.toLowerCase() === 'nofollow')) tokens.push('nofollow');
+      if (!tokens.some((t) => t.toLowerCase() === 'nofollow')) {
+        tokens.push('nofollow');
+        bilan.nofollowAjoutes += 1;
+      }
       a.setAttribute('rel', tokens.join(' '));
     } else {
       const kept = tokens.filter((t) => !FOLLOW_BLOCKERS.has(t.toLowerCase()));
       if (kept.length === tokens.length) return;      // rien à retirer : on ne réécrit pas
       if (kept.length === 0) a.removeAttribute('rel');
       else a.setAttribute('rel', kept.join(' '));
+      bilan.bloqueursRetires += 1;
     }
   });
+  return bilan;
+};
+
+/**
+ * Même politique sur une CHAÎNE HTML — pour l'appliquer DANS l'outil, pas
+ * seulement à la sortie. Décision Andrianina du 21/10/2026 : « les liens externes
+ * dans Tonton doivent tous être en nofollow », visibles comme tels dans l'éditeur
+ * (ingestion, article généré, propositions d'obsolescence).
+ *
+ * Le HTML n'est réécrit QUE si un lien a changé : sinon la chaîne d'origine est
+ * rendue telle quelle (aucune re-sérialisation, aucune churn).
+ *
+ * @returns {{ html: string, nofollowAjoutes: number, bloqueursRetires: number }}
+ */
+export const applyLinkFollowPolicyHtml = (html = '', articleUrl = '') => {
+  const rien = { html, nofollowAjoutes: 0, bloqueursRetires: 0 };
+  if (!html || typeof html !== 'string' || !/<a\b/i.test(html) || typeof document === 'undefined') return rien;
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  const bilan = applyLinkFollowPolicy(div, articleUrl);
+  if (!bilan.nofollowAjoutes && !bilan.bloqueursRetires) return rien;
+  return { html: div.innerHTML, ...bilan };
+};
+
+/**
+ * Même politique sur les propositions d'une passe IA (`updates[].updated`) —
+ * propositions d'obsolescence notamment (runReviewAgent). Sans URL d'article,
+ * rien n'est touché : un lien interne absolu serait pris pour un externe.
+ */
+export const applyLinkFollowPolicyToUpdates = (updates, articleUrl = '') => {
+  if (!articleUrl || !Array.isArray(updates)) return updates;
+  return updates.map((u) => (u && typeof u.updated === 'string'
+    ? { ...u, updated: applyLinkFollowPolicyHtml(u.updated, articleUrl).html }
+    : u));
 };
 
 // Convertit les sections FAQ au format h2/h3/p → <details>/<summary> pour WordPress.

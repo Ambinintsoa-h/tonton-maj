@@ -278,6 +278,7 @@ app.use('/api/data', require('./data-api')({ requireAuth, requireRole }));
 // jamais couverte par un test tant qu'elle vivait ici en inline).
 const { assertSafeUrl, fetchFollowingSafeRedirects } = require('./src/server/safeFetch');
 const { retirerBlocsInjectes, urlsRestWordPress, estPageWordPress } = require('./src/server/injectedBlocks');
+const { politiqueSuiviHtml } = require('./src/server/linkFollowPolicy');
 const { fetchSitePostUrls } = require('./src/server/sitemapFetch');
 
 // ─── Helper erreur (M4) ───────────────────────────────────────────────────────
@@ -4132,7 +4133,17 @@ async function executeWpTool(toolName, toolInput, wpSites = []) {
       // • Jamais de champs SEO (meta, _seopress_*, _yoast_*) — gérés par SEOPRESS séparément
       const { categories, tags } = toolInput;
       const body = {};
-      if (content           !== undefined) body.content        = content;
+      if (content           !== undefined) {
+        // VERROU SERVEUR — liens EXTERNES en nofollow, INTERNES en dofollow
+        // (décision Andrianina du 21/10/2026, « point très important »). Le client
+        // applique déjà la politique (exportAsHtml) ; ici, c'est la dernière porte
+        // avant WordPress, que rien ne contourne. Voir src/server/linkFollowPolicy.js.
+        const suivi = typeof content === 'string' ? politiqueSuiviHtml(content, site.url) : { html: content };
+        if (suivi.nofollowAjoutes || suivi.bloqueursRetires) {
+          console.warn(`[wp_update_post] politique des liens appliquée côté serveur (post ${post_id}) : ${suivi.nofollowAjoutes} externe(s) passé(s) en nofollow, ${suivi.bloqueursRetires} interne(s) repassé(s) en dofollow`);
+        }
+        body.content = suivi.html;
+      }
       if (status            !== undefined) body.status         = status;
       if (featured_media_id !== undefined) body.featured_media = featured_media_id;
       if (Array.isArray(categories))       body.categories     = categories;

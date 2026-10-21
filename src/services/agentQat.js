@@ -20,6 +20,7 @@ import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 // R5 — le gras de l'article d'origine ne disparaît pas (module AUTONOME).
 import { carryOverBold, constatGras, plafonnerGras, GRAS_MIN_PAR_H2, GRAS_MAX_MOTS } from '../utils/boldCarry';
 import { runBoldPass } from './agentBold';
+import { applyLinkFollowPolicyHtml } from '../utils/export';
 import {
   phrasesTropLongues, MOTS_MAX_PHRASE, MOTS_MAX_TITRE,
   VERBES_INTERDITS, PARTICIPES, CLICHES, META,
@@ -1520,6 +1521,17 @@ N'ajoute aucun AUTRE lien externe.`;
         onStep(`⚠️ FAQ de ${faq.questions} question(s) seulement — ${FAQ_MIN_QUESTIONS} au minimum. À compléter en relecture.`);
       } else if (faq.tropLongue) {
         onStep(`ℹ️ FAQ de ${faq.questions} questions — ${FAQ_MAX_QUESTIONS} au maximum. À élaguer en relecture.`);
+      }
+
+      // ── LIENS EXTERNES EN NOFOLLOW DANS L'ARTICLE GÉNÉRÉ (21/10/2026) ───────
+      // L'IA reproduit les liens externes (verrou règle 8) mais pas toujours leur
+      // rel : sans cette passe, ils apparaissaient suivis dans l'éditeur jusqu'à
+      // la publication. Même politique qu'à l'export ; la publication et le
+      // serveur la rejouent de toute façon (export.js, linkFollowPolicy.js).
+      if (articleUrl) {
+        const suivi = applyLinkFollowPolicyHtml(withBold.html, articleUrl);
+        if (suivi.nofollowAjoutes || suivi.bloqueursRetires) withBold.html = suivi.html;
+        if (suivi.nofollowAjoutes) onStep(`🔗 ${suivi.nofollowAjoutes} lien(s) externe(s) passé(s) en nofollow.`);
       }
 
       sanitized = {
