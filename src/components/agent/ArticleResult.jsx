@@ -89,6 +89,11 @@ import QatAuditPanel from './QatAuditPanel';
  */
 const TOPBAR_HEIGHT = 62;
 
+// Bouton « Publier dans brouillons » MASQUÉ pour le moment (demande Andrianina,
+// 22/10/2026). Le chemin `handlePublish(site, 'updateDraft')` reste intact :
+// repasser à `true` suffit à le réafficher.
+const AFFICHER_PUBLIER_BROUILLONS = false;
+
 const TAB_AUDIT = 'audit';
 const TAB_AVANT = 'avant';
 const TAB_APRES = 'apres';
@@ -5106,16 +5111,18 @@ export default function ArticleResult() {
                                   <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full shrink-0">MCP</span>
                                 )}
                               </button>
-                              {/* ── Choix 2 : Publier dans brouillons (hors ligne) ── */}
-                              <button
-                                onClick={() => handlePublish(site, 'updateDraft')}
-                                disabled={publishing}
-                                title="Repasse l'article en brouillon (retiré du site public jusqu'à republication)"
-                                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
-                              >
-                                <FileText size={13} className="text-gray-500" />
-                                <span className="flex-1 text-left truncate">Publier dans brouillons</span>
-                              </button>
+                              {/* ── Choix 2 : Publier dans brouillons (hors ligne) — masqué pour le moment ── */}
+                              {AFFICHER_PUBLIER_BROUILLONS && (
+                                <button
+                                  onClick={() => handlePublish(site, 'updateDraft')}
+                                  disabled={publishing}
+                                  title="Repasse l'article en brouillon (retiré du site public jusqu'à republication)"
+                                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+                                >
+                                  <FileText size={13} className="text-gray-500" />
+                                  <span className="flex-1 text-left truncate">Publier dans brouillons</span>
+                                </button>
+                              )}
                               {!wpFoundPost && !wpSearching && wpNotFoundReason && showWP === site.id && (
                                 <p className="px-3 py-1.5 text-[11px] text-amber-600 leading-snug">
                                   <AlertTriangle size={13} className="inline text-amber-500 shrink-0" /> {wpNotFoundReason}
