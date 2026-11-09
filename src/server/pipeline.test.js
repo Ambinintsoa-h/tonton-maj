@@ -58,6 +58,9 @@ const fakeHttp = () => ({
   post: jest.fn(async (url) => {
     if (url === '/scrape') return { data: { content: '<p>Article original.</p>', title: 'Titre original' } };
     if (url === '/data/articles') return { data: { id: 'art-123' } };
+    // Suivi de position Haloscan (J+0) -- mêmes routes que le parcours interactif.
+    if (url === '/haloscan/check') return { data: { success: true, results: [{ keyword: 'mot cle', position: 12 }] } };
+    if (/^\/data\/articles\/[^/]+\/seo\/(init|snapshot)$/.test(url)) return { data: { ok: true } };
     throw new Error(`POST inattendu: ${url}`);
   }),
   put: jest.fn(async () => ({ data: { ok: true } })),
@@ -289,5 +292,92 @@ describe('runArticlePipeline — chemin complet', () => {
       throw new Error(`POST inattendu: ${url}`);
     });
     await expect(runArticlePipeline(baseInput())).rejects.toThrow(/data\/articles.*id/);
+  });
+});
+
+/**
+ * Suivi de position Haloscan sur le chemin des lots (09/11/2026).
+ *
+ * `initArticleSeoTracking` n'était appelé QUE depuis Articles.jsx (parcours
+ * interactif). Mesuré sur la prod : 256 MAJ en octobre, 143 en novembre,
+ * AUCUNE suivie, sans un log ni une erreur -- les 333 suivis en base
+ * s'arrêtent fin septembre, quand l'équipe est passée aux lots. Ces tests
+ * verrouillent le branchement ET son caractère non bloquant : perdre un
+ * article payé pour une panne Haloscan serait une très mauvaise affaire.
+ */
+describe('runArticlePipeline — suivi de position Haloscan (J+0)', () => {
+  let http;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    http = fakeHttp();
+    axios.create = jest.fn(() => http);
+    runQatAudit.mockResolvedValue({ audit: AUDIT_SIMPLE, tokenUsage: usage(1000, 500, 'audit_qat') });
+    runQatRewrite.mockResolvedValue({
+      article: { html: '<p>Article réécrit, correct et sobre.</p>', titreSeo: 'Titre SEO' },
+      tokenUsage: usage(2000, 1000, 'refonte'),
+    });
+    runReviewAgent.mockResolvedValue({ updates: [], tokenUsage: usage(500, 200, 'obsolescence') });
+  });
+
+  test('initialise le suivi avec le mot-clé cible et l\'URL de l\'article', async () => {
+    const out = await runArticlePipeline(baseInput());
+    expect(http.post).toHaveBeenCalledWith('/data/articles/art-123/seo/init',
+      { keywords: ['mot cle'], articleUrl: 'https://site.fr/article' });
+    expect(out.seoTracked).toBe(true);
+  });
+
+  test('relève la position de départ et l\'enregistre comme snapshot « before »', async () => {
+    const out = await runArticlePipeline(baseInput());
+    expect(http.post).toHaveBeenCalledWith('/haloscan/check',
+      { keywords: ['mot cle'], articleUrl: 'https://site.fr/article' }, expect.anything());
+    expect(http.post).toHaveBeenCalledWith('/data/articles/art-123/seo/snapshot',
+      expect.objectContaining({ type: 'before', results: [{ keyword: 'mot cle', position: 12 }] }));
+    expect(out.seoBaseline).toBe(true);
+  });
+
+  // L'instance axios du runner n'accorde que 30 s, alors que /haloscan/check en
+  // laisse 25 à l'API PAR mot-clé : sans marge explicite, le client abandonne
+  // avant le serveur et le « avant » manque sur les mots-clés lents.
+  test('laisse à /haloscan/check plus de temps que le timeout global du runner', async () => {
+    await runArticlePipeline(baseInput());
+    const appel = http.post.mock.calls.find((c) => c[0] === '/haloscan/check');
+    expect(appel[2].timeout).toBeGreaterThan(30000);
+  });
+
+  test('une panne Haloscan ne fait PAS échouer le run, et le suivi reste créé pour le cron J+7/J+30', async () => {
+    http.post.mockImplementation(async (url) => {
+      if (url === '/scrape') return { data: { content: '<p>Article original.</p>', title: 'Titre original' } };
+      if (url === '/data/articles') return { data: { id: 'art-123' } };
+      if (url === '/haloscan/check') throw new Error('timeout of 25000ms exceeded');
+      if (/\/seo\/init$/.test(url)) return { data: { ok: true } };
+      throw new Error(`POST inattendu: ${url}`);
+    });
+    const out = await runArticlePipeline(baseInput());
+    expect(out.articleId).toBe('art-123');
+    expect(out.seoTracked).toBe(true);    // le cron prendra J+7 et J+30
+    expect(out.seoBaseline).toBe(false);  // seul le point de départ est perdu
+  });
+
+  // Clé Haloscan absente : /haloscan/check répond 503. Le suivi doit exister
+  // quand même -- il deviendra exploitable dès que la clé sera renseignée.
+  test('un échec de l\'init ne fait pas échouer le run non plus', async () => {
+    http.post.mockImplementation(async (url) => {
+      if (url === '/scrape') return { data: { content: '<p>Article original.</p>', title: 'Titre original' } };
+      if (url === '/data/articles') return { data: { id: 'art-123' } };
+      if (/\/seo\/init$/.test(url)) throw new Error('503 Clé Haloscan non configurée');
+      throw new Error(`POST inattendu: ${url}`);
+    });
+    const out = await runArticlePipeline(baseInput());
+    expect(out.articleId).toBe('art-123');
+    expect(out.seoTracked).toBe(false);
+  });
+
+  // C'est l'absence de signal qui a laissé la panne durer six semaines : le
+  // journal du lot doit dire ce qui s'est passé, dans les deux cas.
+  test('annonce le résultat du suivi dans le journal du lot', async () => {
+    const steps = [];
+    await runArticlePipeline({ ...baseInput(), onStep: (s) => steps.push(s) });
+    expect(steps.some((s) => /Suivi de position initialisé/.test(s))).toBe(true);
   });
 });

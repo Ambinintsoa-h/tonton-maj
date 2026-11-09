@@ -86,6 +86,61 @@ const dispatchPhaseStat = async (http, { articleId, title, tokenUsage, pass, mod
 };
 
 /**
+ * Suivi de position Haloscan — initialisation + relevé « avant » (J+0).
+ *
+ * MIROIR EXACT du parcours interactif (`Articles.jsx`, `handleRun`) : même
+ * paire d'appels, même moment (fin de génération, AVANT toute publication —
+ * la position relevée est donc bien celle de l'ancienne version en ligne),
+ * même caractère non bloquant. Rien de nouveau n'est inventé ici : ce chemin
+ * rattrape un appel qu'il n'a jamais eu.
+ *
+ * Car `initArticleSeoTracking` n'était appelé QUE depuis `Articles.jsx`.
+ * Mesuré sur la prod le 09/11/2026 : 256 MAJ en octobre, 143 en novembre,
+ * AUCUNE suivie — sans un log ni une erreur. Le suivi de position s'est
+ * éteint quand l'équipe est passée aux lots (dernier suivi créé fin
+ * septembre 2026, les 333 suivis en base s'arrêtent là). Même classe de panne
+ * silencieuse que le cron Firestore d'août : la fonctionnalité marche, son
+ * appelant a disparu.
+ *
+ * NON BLOQUANT, et dans les deux sens :
+ *   - l'init échoue → pas de suivi, mais l'article (déjà payé) part quand même ;
+ *   - le relevé « avant » échoue (clé Haloscan absente → 503, SERP muet,
+ *     timeout) → le suivi RESTE créé, et le cron prendra J+7 puis J+30. On perd
+ *     le point de départ, jamais la série.
+ */
+const captureSeoBaseline = async (http, { articleId, articleUrl, targetKeyword, onStep }) => {
+  const keywords = [targetKeyword].filter(Boolean);
+  if (!articleId || !articleUrl || !keywords.length) return { tracked: false, baseline: false };
+
+  try {
+    await http.post(`/data/articles/${encodeURIComponent(articleId)}/seo/init`, { keywords, articleUrl });
+  } catch (e) {
+    onStep(`Suivi de position non initialisé — ${e.message}`);
+    return { tracked: false, baseline: false };
+  }
+
+  try {
+    // Marge de timeout explicite : `/haloscan/check` laisse 25 s à l'API
+    // Haloscan PAR mot-clé, quand l'instance axios du runner n'en accorde que
+    // 30 au total. Sans cette marge, le client abandonnerait avant le serveur
+    // et le relevé « avant » manquerait précisément sur les mots-clés lents.
+    const resp = await http.post('/haloscan/check', { keywords, articleUrl }, { timeout: 40000 });
+    if (resp.data?.success) {
+      await http.post(`/data/articles/${encodeURIComponent(articleId)}/seo/snapshot`, {
+        type: 'before', capturedAt: Date.now(), results: resp.data.results || [],
+      });
+      onStep('Suivi de position initialisé — position de départ relevée.');
+      return { tracked: true, baseline: true };
+    }
+  } catch (e) {
+    onStep(`Suivi de position initialisé, position de départ non relevée — ${e.message}`);
+    return { tracked: true, baseline: false };
+  }
+  onStep('Suivi de position initialisé, position de départ non relevée.');
+  return { tracked: true, baseline: false };
+};
+
+/**
  * Exécute le pipeline complet (Audit → Génération → Obsolescence → Style) sur
  * UN article, du scraping à la persistance, avec les défauts déterministes
  * qui remplacent les clics manuels de l'UI (voir Phase 1 du chantier batch) :
@@ -359,16 +414,25 @@ const runArticlePipeline = async (input) => {
     });
   }
 
+  // Suivi de position — DERNIER geste, une fois le HTML définitif écrit : un
+  // échec Haloscan ne doit jamais remettre en cause un article enregistré.
+  const seo = await captureSeoBaseline(http, { articleId, articleUrl, targetKeyword, onStep });
+
   onStep('Terminé — en attente de relecture humaine.');
   return {
     articleId,
     articleUrl,
     scope, depth,
     tokenUsage,
+    // Remontés au lot pour que « aucun suivi créé » soit visible dans le
+    // journal plutôt que déductible : c'est l'absence de signal qui a laissé
+    // la panne durer six semaines.
+    seoTracked: seo.tracked,
+    seoBaseline: seo.baseline,
     obsolescenceSuggestions: Array.isArray(obsoRes?.updates) ? obsoRes.updates : [],
     styleFindingsCount: findings.length,
     stylePropositionsCount: (styleRes.proposals || []).length,
   };
 };
 
-module.exports = { runArticlePipeline, mergeTokenUsage };
+module.exports = { runArticlePipeline, mergeTokenUsage, captureSeoBaseline };
