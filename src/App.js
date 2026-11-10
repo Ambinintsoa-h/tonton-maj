@@ -27,6 +27,7 @@ import Tickets from './pages/Tickets';
 import SupportDashboard from './pages/SupportDashboard';
 import Archives from './pages/Archives';
 import SuiviPositions from './pages/SuiviPositions';
+import BilanSeo from './pages/BilanSeo';
 import LotsBatch from './pages/LotsBatch';
 import { setSettings, setFirebaseReady, DEFAULT_FIREBASE_CONFIG } from './store/slices/settingsSlice';
 import { setSkills, setSkillsBootstrapped } from './store/slices/skillsSlice';
@@ -535,6 +536,11 @@ function AppRoutes() {
               <Route path="/suivi-positions" element={
                 <RoleGuard allowedRoles={['super_admin']}>
                   <SuiviPositions />
+                </RoleGuard>
+              } />
+              <Route path="/bilan-seo" element={
+                <RoleGuard allowedRoles={['super_admin']}>
+                  <BilanSeo />
                 </RoleGuard>
               } />
               <Route path="/equipe"         element={<Equipe />}       />

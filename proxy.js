@@ -1965,6 +1965,244 @@ setTimeout(() => {
   setInterval(_seoSnapshotCheck, 6 * 60 * 60 * 1000);
 }, 30000);
 
+// ─── Dashboard « Effet des MAJ » — cache des historiques de position ─────────
+//
+// POURQUOI UNE AUTRE SOURCE QUE `seo_snapshots`
+// Le suivi J+0/J+7/J+30 relève UNE position par échéance. Mesuré en production
+// le 09/11/2026 : 97 positions trouvées sur 988 relevés, soit 9,8 %. Un bilan
+// calculé là-dessus porterait sur une vingtaine d'articles en ayant l'air d'en
+// couvrir 333. /keywords/serp/pageEvolution renvoie au contraire la COURBE
+// complète d'une URL sur un mot-clé — plusieurs points avant la MAJ, plusieurs
+// après — donc une médiane au lieu d'un relevé unique.
+//
+// POURQUOI UN CACHE ET PAS UN APPEL À L'OUVERTURE DE LA PAGE
+// 225 couples URL+mot-clé : les rappeler à chaque chargement viderait le budget
+// mensuel en quelques jours. Ici chaque couple est rafraîchi au plus une fois
+// par semaine (~900 crédits/mois, 9 % du budget). Rien ne se perd à espacer :
+// l'appel renvoie l'historique ENTIER, jamais seulement le dernier point.
+//
+// MySQL uniquement : la table `seo_position_cache` n'existe pas côté Firestore,
+// et la prod est en MySQL depuis le 27/07/2026.
+const SEO_CACHE_TTL_MS      = 7 * 24 * 60 * 60 * 1000;
+const SEO_CACHE_PAR_PASSE   = 15;   // plafond par passe ; régime établi ≈ 8
+const SEO_CACHE_MARGE_JOURS = 90;   // historique demandé AVANT la 1ʳᵉ MAJ
+
+const _coupleHash = (url, keyword) => sha256Hex(`${url}|${keyword}`);
+
+// Une URL d'article peut dépasser la taille indexable d'une clé MySQL ; d'où le
+// hash. Sérialisation identique côté lecture et côté écriture, sinon le cache
+// ne serait jamais retrouvé — et se remplirait en double sans que rien ne crie.
+const _parseJsonCol = (v, repli) => {
+  if (v == null) return repli;
+  if (typeof v !== 'string') return v;
+  try { return JSON.parse(v); } catch { return repli; }
+};
+
+const _haloscanHistorique = async (keyword, articleUrl, firstDate, haloscanKey) => {
+  const resp = await axios.post(`${HALOSCAN_BASE}/keywords/serp/pageEvolution`, {
+    keyword,
+    url:         articleUrl,
+    first_date:  firstDate,
+    second_date: new Date().toISOString().slice(0, 10),
+  }, { headers: haloscanHeaders(haloscanKey), timeout: 30000 });
+  return {
+    history: resp.data?.results?.position_history || [],
+    volume:  resp.data?.results?.volume_history   || [],
+  };
+};
+
+// Couples (URL + mot-clé) à suivre, dédupliqués, avec la date de la PREMIÈRE
+// MAJ — c'est elle qui fixe le début de l'historique demandé. La base porte 333
+// suivis pour 155 URL distinctes (rejeux de test) : sans cette déduplication, le
+// même couple serait racheté 29 fois à chaque passe.
+const _seoCouplesASuivre = async () => {
+  const { getPool } = require('./db');
+  const [rows] = await getPool().query(
+    `SELECT article_url, keywords, created_at
+       FROM seo_tracking
+      WHERE enabled = 1 AND article_url IS NOT NULL AND article_url <> ''`);
+  const couples = new Map();
+  for (const r of rows) {
+    const url = (r.article_url || '').trim();
+    const at  = Number(r.created_at) || null;
+    const kws = _parseJsonCol(r.keywords, []);
+    if (!url || !at || !Array.isArray(kws)) continue;
+    for (const brut of kws) {
+      const keyword = String(brut || '').trim();
+      if (!keyword) continue;
+      const hash = _coupleHash(url, keyword);
+      const prec = couples.get(hash);
+      if (!prec) couples.set(hash, { hash, url, keyword, firstMajAt: at });
+      else prec.firstMajAt = Math.min(prec.firstMajAt, at);
+    }
+  }
+  return [...couples.values()];
+};
+
+const _seoCacheEcrire = async (c, { history, volume, erreur }) => {
+  const { getPool } = require('./db');
+  if (erreur) {
+    // UN ÉCHEC N'EFFACE PAS L'HISTORIQUE DÉJÀ EN CACHE. Un timeout passager
+    // écraserait sinon une courbe valide par du vide, et le dashboard
+    // afficherait « page inconnue d'Haloscan » pour une page parfaitement
+    // suivie. Seules la date et l'erreur sont écrites — la date, pour que le
+    // couple ne soit pas rappelé à chaque passe et ne brûle pas le budget en
+    // boucle sur une URL qui échoue toujours.
+    await getPool().query(
+      `INSERT INTO seo_position_cache (couple_hash, article_url, keyword, history, volume_history, fetched_at, error)
+       VALUES (?,?,?,NULL,NULL,?,?)
+       ON DUPLICATE KEY UPDATE fetched_at=VALUES(fetched_at), error=VALUES(error)`,
+      [c.hash, c.url, c.keyword, Date.now(), String(erreur).slice(0, 500)]);
+    return;
+  }
+  await getPool().query(
+    `INSERT INTO seo_position_cache (couple_hash, article_url, keyword, history, volume_history, fetched_at, error)
+     VALUES (?,?,?,?,?,?,NULL)
+     ON DUPLICATE KEY UPDATE article_url=VALUES(article_url), keyword=VALUES(keyword),
+       history=VALUES(history), volume_history=VALUES(volume_history),
+       fetched_at=VALUES(fetched_at), error=NULL`,
+    [c.hash, c.url, c.keyword, JSON.stringify(history || []), JSON.stringify(volume || []), Date.now()]);
+};
+
+const _seoRafraichirCouple = async (c, haloscanKey) => {
+  const base = Number.isFinite(c.firstMajAt) ? c.firstMajAt : Date.now();
+  const firstDate = new Date(base - SEO_CACHE_MARGE_JOURS * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  try {
+    const { history, volume } = await _haloscanHistorique(c.keyword, c.url, firstDate, haloscanKey);
+    await _seoCacheEcrire(c, { history, volume });
+    return { ok: true, points: history.length };
+  } catch (e) {
+    const erreur = `${e.response?.status ? `HTTP ${e.response.status} — ` : ''}${e.message}`;
+    await _seoCacheEcrire(c, { erreur });
+    return { ok: false, erreur };
+  }
+};
+
+const _seoDashboardRefresh = async () => {
+  const haloscanKey = readServerSettings().haloscanKey;
+  if (!haloscanKey || DATA_BACKEND !== 'mysql') return;
+  const { getPool } = require('./db');
+  try {
+    const couples = await _seoCouplesASuivre();
+    if (!couples.length) return;
+
+    const [cached] = await getPool().query('SELECT couple_hash, fetched_at FROM seo_position_cache');
+    const vuLe = new Map(cached.map((r) => [r.couple_hash, Number(r.fetched_at) || 0]));
+    const limite = Date.now() - SEO_CACHE_TTL_MS;
+
+    // Les plus anciens d'abord : un couple jamais relevé (0) passe avant un
+    // couple vieux de huit jours, donc le premier balayage couvre tout le parc
+    // avant de commencer à rafraîchir ce qui est déjà connu.
+    const aFaire = couples
+      .filter((c) => (vuLe.get(c.hash) || 0) <= limite)
+      .sort((a, b) => (vuLe.get(a.hash) || 0) - (vuLe.get(b.hash) || 0))
+      .slice(0, SEO_CACHE_PAR_PASSE);
+    if (!aFaire.length) return;
+
+    console.log(`[seo-dashboard] ${aFaire.length} couple(s) à rafraîchir (parc : ${couples.length})`);
+    for (const c of aFaire) {
+      const r = await _seoRafraichirCouple(c, haloscanKey);
+      if (!r.ok) console.warn(`[seo-dashboard] ${c.keyword} @ ${c.url} :`, r.erreur);
+    }
+  } catch (e) {
+    console.warn('[seo-dashboard] Erreur :', e.message);
+  }
+};
+
+// Ordonnanceur SÉPARÉ de celui de _seoSnapshotCheck, décalé de 60 s : au
+// démarrage les deux taperaient sinon sur Haloscan en même temps, et une panne
+// de l'un emporterait l'autre.
+setTimeout(() => {
+  _seoDashboardRefresh();
+  setInterval(_seoDashboardRefresh, 6 * 60 * 60 * 1000);
+}, 90000);
+
+// GET /api/haloscan/dashboard — matière PREMIÈRE du bilan « Effet des MAJ ».
+//
+// La route ne calcule RIEN : elle sert les suivis et le cache, l'agrégation
+// (médianes, fenêtres, seuil de bruit) vit dans src/utils/seoEffect.js, testée
+// sans base ni réseau. Un seul endroit où les règles se lisent et se changent.
+app.get('/api/haloscan/dashboard', requireAuth, requireRole('super_admin'), async (_req, res) => {
+  if (DATA_BACKEND !== 'mysql') {
+    return res.status(501).json({ error: 'Le bilan « Effet des MAJ » nécessite le backend MySQL' });
+  }
+  const { getPool } = require('./db');
+  try {
+    const [tracks] = await getPool().query(
+      `SELECT article_id, keywords, article_url, created_at
+         FROM seo_tracking WHERE enabled = 1`);
+
+    // `articles` n'est interrogée que pour id/title/url : un SELECT * y
+    // ramènerait le HTML complet de chaque article (30+ secondes documentées
+    // ailleurs dans ce fichier).
+    let titres = new Map();
+    const ids = tracks.map((t) => t.article_id).filter(Boolean);
+    if (ids.length) {
+      const [arts] = await getPool().query(
+        `SELECT id, title, url FROM articles WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+      titres = new Map(arts.map((a) => [a.id, a]));
+    }
+
+    const [cacheRows] = await getPool().query(
+      'SELECT article_url, keyword, history, fetched_at, error FROM seo_position_cache');
+
+    // Relevés « before » du suivi existant : repli quand l'historique Haloscan
+    // ne remonte pas avant la MAJ. Une mesure unique, mais prise le jour même —
+    // la jeter reviendrait à déclarer « pas de position avant » une page dont on
+    // a précisément la position d'avant.
+    const [avantRows] = await getPool().query(
+      "SELECT article_id, captured_at, data FROM seo_snapshots WHERE type = 'before'");
+
+    res.json({
+      trackings: tracks.map((t) => {
+        const a = titres.get(t.article_id) || {};
+        return {
+          articleId: t.article_id,
+          title:     a.title || '',
+          url:       a.url || t.article_url || '',
+          keywords:  _parseJsonCol(t.keywords, []),
+          createdAt: Number(t.created_at) || null,
+        };
+      }),
+      cache: cacheRows.map((c) => ({
+        articleUrl: c.article_url,
+        keyword:    c.keyword,
+        history:    _parseJsonCol(c.history, null),
+        fetchedAt:  Number(c.fetched_at) || null,
+        error:      c.error || null,
+      })),
+      beforeSnapshots: avantRows.map((s) => ({
+        articleId:  s.article_id,
+        capturedAt: Number(s.captured_at) || null,
+        results:    _parseJsonCol(s.data, {})?.results || [],
+      })),
+    });
+  } catch (e) {
+    console.error('[seo-dashboard]', e.message);
+    res.status(500).json({ error: 'Erreur lecture du bilan', detail: e.message });
+  }
+});
+
+// POST /api/haloscan/dashboard/refresh — rafraîchit UN couple, hors délai.
+// Le cron attend sept jours ; quand on veut voir l'effet d'une MAJ tout de
+// suite, attendre une semaine sans recours est une impasse. Borné à un couple
+// par appel : un « tout rafraîchir » depuis l'interface viderait le budget.
+app.post('/api/haloscan/dashboard/refresh', requireAuth, requireRole('super_admin'), async (req, res) => {
+  const { articleUrl, keyword, firstMajAt } = req.body || {};
+  const haloscanKey = readServerSettings().haloscanKey;
+  if (!haloscanKey)                 return res.status(503).json({ error: 'Clé Haloscan non configurée' });
+  if (DATA_BACKEND !== 'mysql')     return res.status(501).json({ error: 'Backend MySQL requis' });
+  if (!articleUrl || !keyword)      return res.status(400).json({ error: 'articleUrl et keyword requis' });
+
+  const url = String(articleUrl).trim();
+  const kw  = String(keyword).trim();
+  const r = await _seoRafraichirCouple(
+    { hash: _coupleHash(url, kw), url, keyword: kw, firstMajAt: Number(firstMajAt) || Date.now() },
+    haloscanKey);
+  if (!r.ok) return res.status(502).json({ error: 'Erreur Haloscan pageEvolution', detail: r.erreur });
+  res.json({ success: true, points: r.points });
+});
+
 // ─── Orchestrateur de batches (chantier MAJ en masse, Phase 5) ───────────────
 // Réclame les batch_items en_attente et les traite un par un (borné par
 // concurrence) via le runner headless de la Phase 1 -- voir
