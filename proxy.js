@@ -159,6 +159,11 @@ const SETTINGS_WHITELIST = [
   'firebaseConfig', 'useLocalProxy', 'modelSelections',
   'googleSheetsServiceAccountJson', 'googleSheetsId',
   'batchTuning',
+  // Destinataire(s) de l'alerte « budget API bas » (sous 50 $). Un champ
+  // plutot qu'une constante en dur : changer de destinataire ne doit pas
+  // exiger une PR et un deploiement. Vide => repli sur BATCH_EMAIL_TEST_CC,
+  // voir budgetAlertEmails().
+  'budgetAlertEmail',
 ];
 
 // ─── Réglages "Traitement en lot" (Paramètres -> settings.json batchTuning) ──
@@ -1511,6 +1516,22 @@ app.post('/api/settings', requireAuth, requireRole('super_admin'), async (req, r
         }
       } catch {
         return res.status(400).json({ error: 'Clé de compte de service Google invalide -- JSON illisible' });
+      }
+    }
+
+    // budgetAlertEmail : une ou plusieurs adresses separees par des virgules.
+    // Valide ICI et pas seulement a l'envoi : une adresse mal tapee ne se
+    // decouvrirait qu'au premier franchissement du seuil -- c'est-a-dire le
+    // jour ou l'alerte compte, et sans que personne ne le voie, puisque le
+    // mail partirait dans le vide. Vide est accepte : c'est le repli.
+    if (incoming.budgetAlertEmail !== undefined) {
+      const brut = String(incoming.budgetAlertEmail || '').trim();
+      if (brut) {
+        const liste = brut.split(/[,;\s]+/).filter(Boolean);
+        const mauvaise = liste.find((a) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a));
+        if (mauvaise) {
+          return res.status(400).json({ error: `Adresse d'alerte budget invalide : « ${mauvaise} »` });
+        }
       }
     }
 
@@ -5058,6 +5079,307 @@ app.post('/api/wordpress', requireAuth, async (req, res) => {
     const status  = e.response?.status;
     const message = e.response?.data?.message || e.message;
     return res.status(status || 500).json({ success: false, error: message });
+  }
+});
+
+// ─── Budget API Anthropic — recharges, restant, alerte sous seuil ────────────
+//
+// POURQUOI UNE SOUSTRACTION ET PAS UNE LECTURE
+// Anthropic n'expose aucun point d'entrée « solde restant ». Le seul chiffre
+// officiel approchant est `GET /v1/organizations/cost_report`, qui exige une
+// clé Admin (`sk-ant-admin…`) que ce projet n'a pas — il ne détient qu'une clé
+// d'API ordinaire. Le restant est donc calculé : recharges saisies à la main,
+// moins la consommation mesurée par `model_call_log`.
+//
+// La route ne décide RIEN : toute la règle (fenêtre de départ, facturation du
+// cache, ventilations, décision d'alerte) vit dans `src/server/apiBudget.js`,
+// testée sans base ni réseau. Elle l'APPLIQUE, en revanche, au lieu de servir
+// des lignes brutes à agréger côté navigateur : la page et le cron lisent ainsi
+// le même nombre, calculé une seule fois, et ne peuvent pas diverger.
+// L'en-tête d'`apiBudget.js` dit pourquoi ce module ne pouvait pas vivre dans
+// `src/utils/` comme `seoEffect.js`.
+//
+// MySQL uniquement : `api_recharges` n'existe pas côté Firestore, et la prod
+// est en MySQL depuis le 27/07/2026.
+const {
+  calculerBudget, decisionAlerte, projection: _projection,
+  derniereRechargeMs: _derniereRechargeMs,
+  SEUIL_ALERTE_USD, ALERTE_RAPPEL,
+} = require('./src/server/apiBudget');
+
+const budgetAlertEmails = () => {
+  const brut = readServerSettings().budgetAlertEmail;
+  // Repli sur l'adresse déjà codée en dur pour les mails de fin de lot : à la
+  // première mise en service le champ de Paramètres est vide, et une alerte qui
+  // n'a personne à qui parler ne sert à rien. Le champ reprend la main dès
+  // qu'il est renseigné.
+  const liste = String(brut || BATCH_EMAIL_TEST_CC)
+    .split(/[,;\s]+/).map((s) => s.trim()).filter((s) => s.includes('@'));
+  return [...new Set(liste)];
+};
+
+// Lecture brute. `depuis` borne la requête : `model_call_log` porte des mois
+// d'historique antérieur à la première recharge, et tout ramener ferait un
+// SELECT inutilement large à chaque ouverture de page.
+const _budgetDonnees = async () => {
+  const { getPool } = require('./db');
+  const pool = getPool();
+
+  const [recharges] = await pool.query(
+    'SELECT id, amount_usd, recharged_on, note, created_by, created_at FROM api_recharges ORDER BY recharged_on ASC, id ASC');
+
+  // `recharged_on` revient en objet Date avec mysql2 : on le rend en
+  // 'YYYY-MM-DD' LOCAL, forme attendue par apiBudget.js. `toISOString()`
+  // passerait par UTC et ferait reculer la date d'un jour à l'est de Greenwich.
+  const jour = (v) => {
+    if (!v) return null;
+    if (typeof v === 'string') return v.slice(0, 10);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`;
+  };
+  const rechargesOut = recharges.map((r) => ({
+    id: r.id,
+    amount_usd: Number(r.amount_usd),
+    recharged_on: jour(r.recharged_on),
+    note: r.note || null,
+    created_by: r.created_by || null,
+    created_at: Number(r.created_at) || null,
+  }));
+
+  let appels = [];
+  if (rechargesOut.length) {
+    const dates = rechargesOut.map((r) => r.recharged_on).filter(Boolean).sort();
+    const [a, m, j] = dates[0].split('-').map(Number);
+    const depuis = new Date(a, m - 1, j, 0, 0, 0, 0).getTime();
+    // PAS de LIMIT, volontairement — contrairement à GET /model-call-log, qui en
+    // porte un à 5 000. Là-bas une liste tronquée reste une liste ; ici une
+    // consommation tronquée devient un budget restant GONFLÉ, et l'alerte ne
+    // partirait jamais. Un chiffre faux dans le sens rassurant est exactement ce
+    // que ce dispositif doit empêcher. La requête est bornée par la date de la
+    // première recharge et sert l'index idx_model_call_log_date.
+    const [rows] = await pool.query(
+      `SELECT article_id, sub_pass, model, input_tokens, output_tokens, cost_usd,
+              cache_write_tokens, cache_read_tokens, logged_at
+         FROM model_call_log WHERE logged_at >= ? ORDER BY logged_at ASC`, [depuis]);
+    appels = rows;
+  }
+
+  const [alertes] = await pool.query(
+    'SELECT id, sent_at, kind, status, remaining_usd, threshold_usd, recipients, error FROM api_budget_alerts ORDER BY sent_at DESC LIMIT 50');
+
+  return { recharges: rechargesOut, appels, alertes };
+};
+
+// L'envoi, et SURTOUT sa trace. Le piège documenté de ce projet : tous les
+// envois SMTP existants (sendTicketEmail, sendResetEmail, sendInviteEmail) se
+// contentent d'un console.warn et d'un `return` quand SMTP n'est pas configuré.
+// Une alerte budget qui ne part jamais sans que personne ne le sache serait
+// pire que pas d'alerte : on se croirait prévenu. Ici CHAQUE tentative écrit
+// sa ligne dans `api_budget_alerts` — y compris `smtp_absent` et `echec` — et
+// la page affiche cette ligne telle quelle.
+const _budgetEnvoyerAlerte = async ({ kind, restant, seuil, projectionJours }) => {
+  const { getPool } = require('./db');
+  const destinataires = budgetAlertEmails();
+  const tracer = async (status, erreur) => {
+    try {
+      await getPool().query(
+        `INSERT INTO api_budget_alerts (sent_at, kind, status, remaining_usd, threshold_usd, recipients, error)
+         VALUES (?,?,?,?,?,?,?)`,
+        [Date.now(), kind, status, restant, seuil,
+          destinataires.join(', ').slice(0, 512), erreur ? String(erreur).slice(0, 500) : null]);
+    } catch (e) {
+      console.error("[budget-api] journal d'alerte NON écrit —", e.message);
+    }
+    return { status, erreur: erreur || null, destinataires };
+  };
+
+  const s = readServerSettings();
+  if (!s.smtpHost || !s.smtpUser || !s.smtpPass) {
+    console.warn('[budget-api] SMTP non configuré — alerte NON envoyée (tracée en base)');
+    return tracer('smtp_absent', 'SMTP non configuré dans les paramètres');
+  }
+  if (!destinataires.length) return tracer('echec', 'Aucun destinataire valide');
+
+  const appUrl = IS_PROD ? 'https://maj.stomos.net' : 'http://localhost:3000';
+  const usd = (n) => `$${Number(n || 0).toFixed(2)}`;
+  const titre = kind === ALERTE_RAPPEL ? 'Budget API toujours bas' : 'Budget API bas';
+  const projLigne = projectionJours != null
+    ? `Au rythme actuel, il reste environ ${Math.floor(projectionJours)} jour(s) avant épuisement.`
+    : "Pas assez de recul pour estimer la date d'épuisement.";
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: s.smtpHost, port: s.smtpPort || 587, secure: (s.smtpPort || 587) === 465,
+      auth: { user: s.smtpUser, pass: s.smtpPass },
+    });
+    await transporter.sendMail({
+      from: s.smtpFrom || DEFAULT_MAIL_FROM,
+      to: destinataires.join(', '),
+      subject: `TONTON AI — ${titre} : ${usd(restant)} restants`,
+      text: [
+        `${titre}.`, '',
+        `Restant estimé : ${usd(restant)} (seuil d'alerte : ${usd(seuil)}).`,
+        projLigne, '',
+        `Détail et saisie d'une recharge : ${appUrl}/budget-api`, '',
+        "Rappel : ce montant est une estimation — recharges saisies dans Tonton moins la consommation mesurée. Un solde antérieur à la première recharge n'est pas compté.",
+        '', "L'équipe PUBLITHINGS",
+      ].join('\n'),
+      html: `
+      <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">
+        <div style="background:#111;padding:32px 36px 24px">
+          <p style="margin:0;color:#fff;font-size:20px;font-weight:800;letter-spacing:-0.02em">TONTON AI</p>
+          <p style="margin:4px 0 0;color:#aaa;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em">BUDGET API</p>
+        </div>
+        <div style="padding:32px 36px">
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111">${escapeHtml(titre)}</p>
+          <div style="background:#fef2f2;border-radius:12px;padding:18px;text-align:center;margin:0 0 20px">
+            <div style="font-size:30px;font-weight:800;color:#dc2626">${escapeHtml(usd(restant))}</div>
+            <div style="font-size:11px;color:#dc2626;text-transform:uppercase;font-weight:700;letter-spacing:0.04em">restants — seuil ${escapeHtml(usd(seuil))}</div>
+          </div>
+          <p style="margin:0 0 24px;color:#555;font-size:14px;line-height:1.6">${escapeHtml(projLigne)}</p>
+          <a href="${appUrl}/budget-api" style="display:inline-block;background:#111;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:14px 28px;border-radius:999px">
+            Voir le budget →
+          </a>
+          <p style="margin:24px 0 0;color:#9ca3af;font-size:12px;line-height:1.5">
+            Estimation : recharges saisies dans Tonton moins la consommation mesurée. Un solde antérieur à la première recharge n'est pas compté.
+          </p>
+        </div>
+      </div>`,
+    });
+    console.log(`[budget-api] alerte « ${kind} » envoyée à ${destinataires.join(', ')}`);
+    return tracer('envoye', null);
+  } catch (e) {
+    console.error("[budget-api] envoi de l'alerte en ÉCHEC —", e.message);
+    return tracer('echec', e.message);
+  }
+};
+
+// Passe du cron. Ne décide de rien : lit, délègue la décision à
+// `decisionAlerte` (testée), puis envoie si elle le dit.
+const _budgetAlerteCheck = async () => {
+  if (DATA_BACKEND !== 'mysql') return;
+  try {
+    const { recharges, appels, alertes } = await _budgetDonnees();
+    if (!recharges.length) return; // aucune recharge saisie : rien à surveiller
+
+    const grille = await fetchModelPricing();
+    const b = calculerBudget({ recharges, appels, grille });
+    const d = decisionAlerte({
+      restant: b.restant,
+      alertes,
+      derniereRechargeMs: _derniereRechargeMs(recharges),
+    });
+    if (!d.envoyer) return;
+
+    // La même projection que celle affichée sur la page — pas une seconde
+    // formule recopiée ici, qui finirait par annoncer dans le mail un délai
+    // différent de celui lu à l'écran.
+    const proj = _projection({ consomme: b.consomme, restant: b.restant, depuis: b.depuis });
+
+    console.log(`[budget-api] ${d.motif} — restant ${b.restant.toFixed(2)} $`);
+    await _budgetEnvoyerAlerte({
+      kind: d.kind, restant: b.restant, seuil: SEUIL_ALERTE_USD, projectionJours: proj.jours,
+    });
+  } catch (e) {
+    // Une table pas encore migrée ne doit pas remplir les logs d'une trace
+    // complète toutes les 6 h — le message suffit à dire quoi faire.
+    console.warn("[budget-api] passe d'alerte ignorée —", e.message);
+  }
+};
+
+// Ordonnanceur SÉPARÉ de ceux de _seoSnapshotCheck (30 s) et _seoDashboardRefresh
+// (90 s), décalé à 150 s : chacun son `setInterval`, pour qu'une panne de l'un
+// n'emporte pas les autres. Toutes les 6 h — le réarmement hebdomadaire de
+// `decisionAlerte` fait le reste du travail.
+setTimeout(() => {
+  _budgetAlerteCheck();
+  setInterval(_budgetAlerteCheck, 6 * 60 * 60 * 1000);
+}, 150000);
+
+// GET /api/budget-api — matière PREMIÈRE de la page budget.
+app.get('/api/budget-api', requireAuth, requireRole('super_admin'), async (_req, res) => {
+  if (DATA_BACKEND !== 'mysql') {
+    return res.status(501).json({ error: 'Le suivi du budget API nécessite le backend MySQL' });
+  }
+  try {
+    const { recharges, appels, alertes } = await _budgetDonnees();
+    const s = readServerSettings();
+    const budget = calculerBudget({ recharges, appels, grille: await fetchModelPricing() });
+    res.json({
+      recharges,
+      alertes,
+      budget,
+      projection: _projection({ consomme: budget.consomme, restant: budget.restant, depuis: budget.depuis }),
+      // Ce que le cron DÉCIDERAIT à cet instant. Servi à la page pour qu'elle
+      // puisse dire où en est l'alerte : sans ça, voir « 42 $ restants » et
+      // n'avoir reçu aucun mail ne permet pas de distinguer « déjà alerté »,
+      // « rappel pas encore dû » et « en panne ».
+      alerte: decisionAlerte({
+        restant: budget.restant, alertes, derniereRechargeMs: _derniereRechargeMs(recharges),
+      }),
+      seuil: SEUIL_ALERTE_USD,
+      // La page doit pouvoir dire « l'alerte ne partira pas » AVANT qu'un
+      // franchissement ne le prouve. C'est le piège SMTP du projet, pris à
+      // l'envers : on annonce la panne au lieu de la constater après coup.
+      smtpConfigure: !!(s.smtpHost && s.smtpUser && s.smtpPass),
+      destinataires: budgetAlertEmails(),
+    });
+  } catch (e) {
+    const manquant = /doesn't exist|Unknown column/i.test(e.message || '');
+    res.status(manquant ? 503 : 500).json({
+      error: manquant
+        ? 'Base non migrée — passer migration/alter-add-api-budget.sql dans phpMyAdmin.'
+        : 'Erreur lecture du budget',
+      detail: e.message,
+    });
+  }
+});
+
+// POST /api/budget-api/recharges — saisir une recharge.
+app.post('/api/budget-api/recharges', requireAuth, requireRole('super_admin'), async (req, res) => {
+  if (DATA_BACKEND !== 'mysql') return res.status(501).json({ error: 'Backend MySQL requis' });
+  const { amountUsd, rechargedOn, note } = req.body || {};
+  const montant = Number(amountUsd);
+  // Un montant à zéro ou négatif n'est pas une recharge ; le laisser passer
+  // fausserait le restant sans que rien ne le dise. Plafond à 100 000 $ : une
+  // faute de frappe sur le pavé numérique ne doit pas éteindre l'alerte pour
+  // des années.
+  if (!Number.isFinite(montant) || montant <= 0 || montant > 100000) {
+    return res.status(400).json({ error: 'Montant invalide (attendu : entre 0 et 100 000 $)' });
+  }
+  const date = String(rechargedOn || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Date invalide (attendu : AAAA-MM-JJ)' });
+  }
+  try {
+    const { getPool } = require('./db');
+    const [r] = await getPool().query(
+      'INSERT INTO api_recharges (amount_usd, recharged_on, note, created_by, created_at) VALUES (?,?,?,?,?)',
+      [montant, date, (note ? String(note).slice(0, 255) : null), req.user?.email || req.user?.uid || null, Date.now()]);
+    res.json({ success: true, id: r.insertId });
+  } catch (e) {
+    const manquant = /doesn't exist/i.test(e.message || '');
+    res.status(manquant ? 503 : 500).json({
+      error: manquant ? 'Base non migrée — passer migration/alter-add-api-budget.sql.' : 'Erreur enregistrement',
+      detail: e.message,
+    });
+  }
+});
+
+// DELETE /api/budget-api/recharges/:id — corriger une saisie.
+// Un montant mal tapé fausse le restant ET le seuil d'alerte : sans recours
+// depuis l'interface, il faudrait phpMyAdmin pour réparer une faute de frappe.
+app.delete('/api/budget-api/recharges/:id', requireAuth, requireRole('super_admin'), async (req, res) => {
+  if (DATA_BACKEND !== 'mysql') return res.status(501).json({ error: 'Backend MySQL requis' });
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Identifiant invalide' });
+  try {
+    const { getPool } = require('./db');
+    const [r] = await getPool().query('DELETE FROM api_recharges WHERE id=?', [id]);
+    if (!r.affectedRows) return res.status(404).json({ error: 'Recharge introuvable' });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Erreur suppression', detail: e.message });
   }
 });
 

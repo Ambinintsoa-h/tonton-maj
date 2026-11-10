@@ -130,6 +130,7 @@ export default function Parametres() {
     smtpUser:  stored.smtpUser  || '',
     smtpPass:  stored.smtpPass  || '',
     smtpFrom:    stored.smtpFrom    || '',
+    budgetAlertEmail: stored.budgetAlertEmail || '',
     defaultTicketAssigneeEmail: stored.defaultTicketAssigneeEmail || '',
     haloscanKey: stored.haloscanKey || '',
     googleSheetsServiceAccountJson: stored.googleSheetsServiceAccountJson || '',
@@ -307,6 +308,7 @@ export default function Parametres() {
       smtpUser:    form.smtpUser,
       smtpPass:    form.smtpPass,
       smtpFrom:    form.smtpFrom,
+      budgetAlertEmail: form.budgetAlertEmail,
       defaultTicketAssigneeEmail: form.defaultTicketAssigneeEmail,
       haloscanKey: form.haloscanKey,
       googleSheetsServiceAccountJson: form.googleSheetsServiceAccountJson,
@@ -384,6 +386,7 @@ export default function Parametres() {
       smtpUser:    stored.smtpUser    || '',
       smtpPass:    stored.smtpPass    || '',
       smtpFrom:    stored.smtpFrom    || '',
+      budgetAlertEmail: stored.budgetAlertEmail || '',
       defaultTicketAssigneeEmail: stored.defaultTicketAssigneeEmail || '',
       haloscanKey: stored.haloscanKey || '',
       googleSheetsServiceAccountJson: stored.googleSheetsServiceAccountJson || '',
@@ -895,6 +898,24 @@ export default function Parametres() {
             placeholder="Mot de passe ou App Password"
             hint="Gmail : utilisez un App Password (compte → Sécurité → Mots de passe des applications)"
           />
+          {/* Destinataire de l'alerte « budget API bas ». Ici plutôt que dans une
+              page à part : c'est un réglage d'envoi, il se lit à côté du SMTP qui
+              le fait partir — et le jour où l'alerte ne part pas, on regarde au
+              même endroit pourquoi. */}
+          <div className="space-y-1.5 md:col-span-2">
+            <label className="text-sm font-medium text-gray-700">Alerte budget API — destinataire(s)</label>
+            <input
+              type="text"
+              value={form.budgetAlertEmail}
+              onChange={e => set('budgetAlertEmail', e.target.value)}
+              placeholder="andrianina@publithings.com"
+              className="input-glass"
+            />
+            <p className="text-xs text-gray-400">
+              Prévenu quand le budget API passe sous 50 $. Plusieurs adresses : séparées par des virgules.
+              Vide → andrianina@publithings.com.
+            </p>
+          </div>
         </div>
 
         <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700 space-y-1">

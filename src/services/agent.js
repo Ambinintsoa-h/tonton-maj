@@ -180,6 +180,24 @@ export const calcCost = (calls, pricing = TOKEN_PRICING_FALLBACK) => calls.reduc
  * ce sont des articles traités AVANT que `makeTokenTracker().track()` ne
  * porte ce label — ce n'est pas une perte de données, juste une agrégation
  * qui ne pouvait pas exister avant que le label existe.
+ *
+ * ── `cacheWrite` / `cacheRead` : MESURÉS ICI, FACTURÉS AILLEURS ────────────
+ * Ajoutés le 10/11/2026 pour le suivi du budget API. `makeTokenTracker` les
+ * comptait déjà par appel ; cette agrégation les JETAIT, si bien que le coût
+ * réel du cache n'existait nulle part — alors que le diagnostic laissé dans
+ * proxy.js relève « cache_creation_input_tokens (9674) a chaque fois » sur des
+ * audits réels, écriture facturée 1,25× et jamais relue.
+ *
+ * `costUsd` N'EST PAS TOUCHÉ, volontairement : il alimente `stats`, le
+ * Dashboard et `model_call_log.cost_usd`, chiffres affichés à toute l'équipe
+ * depuis des mois. Les faire bouger dans une PR qui porte sur le budget ferait
+ * exactement ce que la règle 7 interdit. Seule `src/utils/apiBudget.js`
+ * facture le cache, à partir de ces deux compteurs.
+ *
+ * Ces deux champs traversent `statsSlice.history[].byPass` (stocké tel quel)
+ * jusqu'à `logModelCalls` (data-api.js). Ils ne traversent PAS `totalByPass` :
+ * `mergeByPass` reconstruit ses objets sur quatre clés fixes et les ignore —
+ * donc le cumul par passe du panneau superadmin garde sa forme à l'octet près.
  */
 export const aggregateCallsByPass = (calls, pricing = TOKEN_PRICING_FALLBACK) => {
   const table = pricing || TOKEN_PRICING_FALLBACK;
@@ -188,12 +206,14 @@ export const aggregateCallsByPass = (calls, pricing = TOKEN_PRICING_FALLBACK) =>
     if (!c.pass) continue;
     const p = table[c.model] || table['claude-haiku-4-5'] || TOKEN_PRICING_FALLBACK['claude-haiku-4-5'];
     const costUsd = (c.input / 1_000_000) * p.input + (c.output / 1_000_000) * p.output;
-    const cur = out[c.pass] || { model: c.model, input: 0, output: 0, costUsd: 0 };
+    const cur = out[c.pass] || { model: c.model, input: 0, output: 0, costUsd: 0, cacheWrite: 0, cacheRead: 0 };
     out[c.pass] = {
       model:   c.model || cur.model,
       input:   cur.input   + (c.input   || 0),
       output:  cur.output  + (c.output  || 0),
       costUsd: cur.costUsd + costUsd,
+      cacheWrite: (cur.cacheWrite || 0) + (c.cacheWrite || 0),
+      cacheRead:  (cur.cacheRead  || 0) + (c.cacheRead  || 0),
     };
   }
   return out;
