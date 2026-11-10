@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
+import axios from 'axios';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
@@ -11,9 +12,10 @@ import {
   BarChart3, Zap, DollarSign, Trash2, Clock,
   AlertCircle, Users, CheckCircle2, TrendingUp,
   Sparkles, Calendar, ArrowRight,
-  User, ListTodo, Target, Activity, Award,
+  User, ListTodo, Target, Activity, Award, Wallet,
 } from 'lucide-react';
 import { resetStats } from '../store/slices/statsSlice';
+
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import { ROLE_COLORS } from '../constants/theme';
 import { getActivitySessionsRange } from '../services/firebase';
@@ -717,6 +719,63 @@ const TeamActivityWidget = ({ delay = 0 }) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // SUPER ADMIN — Vue globale
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Bandeau Budget API (super_admin) ───────────────────────────────
+// UNE ligne, et un lien vers /budget-api. Volontairement maigre : le Dashboard
+// compte des articles et des coûts d'équipe, le budget est une enveloppe — la
+// saisie des recharges, les ventilations et l'état de l'alerte vivent sur leur
+// propre page. Ce bandeau ne répond qu'à « combien reste-t-il ? », pour qu'on
+// n'ait pas à ouvrir une page pour le savoir.
+//
+// Le nombre vient de la route, qui l'a calculé avec le MÊME module que le cron
+// d'alerte (src/server/apiBudget.js) : trois affichages d'un seul calcul.
+// Échec silencieux assumé ici, et seulement ici : si la route répond mal (base
+// non migrée, backend Firestore), le bandeau ne s'affiche pas et le Dashboard
+// reste exactement ce qu'il était. Il n'est pas le lieu où l'on diagnostique le
+// budget — /budget-api, lui, dit précisément ce qui manque.
+const BudgetBanner = ({ delay = 0 }) => {
+  const [budget, setBudget] = useState(null);
+
+  useEffect(() => {
+    let vivant = true;
+    axios.get('/api/budget-api')
+      .then((r) => {
+        if (!vivant) return;
+        const b = r.data?.budget;
+        if (!b || b.aucuneRecharge) return;
+        setBudget({ ...b, seuil: r.data?.seuil ?? 50, smtpConfigure: r.data?.smtpConfigure });
+      })
+      .catch(() => {});
+    return () => { vivant = false; };
+  }, []);
+
+  if (!budget) return null;
+  const bas = budget.restant < budget.seuil;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay }}>
+      <Link
+        to="/budget-api"
+        className={`flex items-center gap-3 rounded-2xl border px-5 py-3.5 transition-colors ${
+          bas ? 'bg-red-50 border-red-200 hover:border-red-300' : 'bg-white border-gray-100 hover:border-gray-200'}`}
+      >
+        <Wallet size={16} className={bas ? 'text-red-500' : 'text-gray-400'} />
+        <span className={`text-xl font-bold tabular-nums ${bas ? 'text-red-600' : 'text-gray-900'}`}>
+          {fmtUsd(budget.restant)}
+        </span>
+        <span className="text-xs text-gray-500">
+          restants sur {fmtUsd(budget.totalRecharge)} rechargés
+        </span>
+        {bas && budget.smtpConfigure === false && (
+          <span className="text-[10px] font-bold uppercase tracking-wide bg-red-500 text-white rounded-full px-2 py-0.5">
+            alerte HS — SMTP absent
+          </span>
+        )}
+        <ArrowRight size={14} className="text-gray-300 ml-auto" />
+      </Link>
+    </motion.div>
+  );
+};
+
 function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, dispatch, modelPricing }) {
   const activeItems = pendingItems.filter(i => i.status !== 'done');
   const memberStats = users
@@ -764,6 +823,9 @@ function DashboardSuperAdmin({ stats, history, pendingItems, users, navigate, di
           confirmLabel="RÉINITIALISER"
         />
       </div>
+
+      {/* Budget API — l'enveloppe avant le détail des dépenses */}
+      <BudgetBanner delay={0} />
 
       {/* Widget coût — en premier, le plus important */}
       <div className="grid grid-cols-1">

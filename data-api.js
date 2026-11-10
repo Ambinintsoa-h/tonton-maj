@@ -174,6 +174,12 @@ module.exports = ({ requireAuth, requireRole }) => {
           call.input || 0, call.output || 0, call.costUsd || 0,
           entry.createdAt ? Date.parse(entry.createdAt) || null : null,
           loggedAt,
+          // Tokens de cache — NULL quand l'appelant ne les fournit pas (client
+          // plus ancien que la migration alter-add-api-budget.sql). NULL et pas
+          // 0 : un zéro se lirait « pas de cache sur cet appel », faux, et le
+          // budget facturerait du cache gratuit. apiBudget.js distingue les deux.
+          call.cacheWrite != null ? call.cacheWrite : null,
+          call.cacheRead  != null ? call.cacheRead  : null,
         ]);
       }
     }
@@ -181,14 +187,42 @@ module.exports = ({ requireAuth, requireRole }) => {
     try {
       await q(
         `INSERT INTO model_call_log
-           (article_id, pass, sub_pass, article_title, model, input_tokens, output_tokens, cost_usd, article_created_at, logged_at)
+           (article_id, pass, sub_pass, article_title, model, input_tokens, output_tokens, cost_usd, article_created_at, logged_at,
+            cache_write_tokens, cache_read_tokens)
          VALUES ?
          ON DUPLICATE KEY UPDATE article_title=VALUES(article_title), model=VALUES(model),
            input_tokens=VALUES(input_tokens), output_tokens=VALUES(output_tokens),
-           cost_usd=VALUES(cost_usd), article_created_at=VALUES(article_created_at), logged_at=VALUES(logged_at)`,
+           cost_usd=VALUES(cost_usd), article_created_at=VALUES(article_created_at), logged_at=VALUES(logged_at),
+           cache_write_tokens=VALUES(cache_write_tokens), cache_read_tokens=VALUES(cache_read_tokens)`,
         [rows]
       );
     } catch (e) {
+      // ── COLONNES DE CACHE ABSENTES : ON RÉÉCRIT SANS ELLES ────────────────
+      // Les migrations de ce projet se passent À LA MAIN en phpMyAdmin, et
+      // rien ne garantit l'ordre entre ce passage et le déploiement. Sans ce
+      // repli, un code déployé avant alter-add-api-budget.sql ferait échouer
+      // l'INSERT EN ENTIER : le journal permanent des coûts — qui fonctionne
+      // depuis le 22/09/2026 — cesserait d'être alimenté, en silence, pour une
+      // colonne qui n'intéresse que le budget. Exactement la régression que la
+      // règle 7 interdit.
+      if (/Unknown column/i.test(e.message || '')) {
+        try {
+          await q(
+            `INSERT INTO model_call_log
+               (article_id, pass, sub_pass, article_title, model, input_tokens, output_tokens, cost_usd, article_created_at, logged_at)
+             VALUES ?
+             ON DUPLICATE KEY UPDATE article_title=VALUES(article_title), model=VALUES(model),
+               input_tokens=VALUES(input_tokens), output_tokens=VALUES(output_tokens),
+               cost_usd=VALUES(cost_usd), article_created_at=VALUES(article_created_at), logged_at=VALUES(logged_at)`,
+            [rows.map((r) => r.slice(0, 10))]
+          );
+          console.warn('[model_call_log] colonnes de cache absentes — journalisé sans elles (passer migration/alter-add-api-budget.sql)');
+          return;
+        } catch (e2) {
+          console.warn('[model_call_log] écriture ignorée —', e2.message);
+          return;
+        }
+      }
       // Table pas encore migrée, ou base non-MySQL en local : ne jamais bloquer
       // la sauvegarde des stats pour ça.
       console.warn('[model_call_log] écriture ignorée —', e.message);

@@ -18,6 +18,7 @@ const PAGE_LABELS = {
   '/equipe':         'Équipe',
   '/parametres':     'Paramètres',
   '/dashboard':      'Dashboard',
+  '/budget-api':     'Budget API',
   '/tickets':        'Tickets',
 };
 
