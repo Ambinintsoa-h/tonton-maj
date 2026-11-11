@@ -5082,6 +5082,120 @@ app.post('/api/wordpress', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Test SMTP ────────────────────────────────────────────────────────────────
+// POST /api/settings/test-email — prouver que le SMTP ENVOIE, et pas seulement
+// qu'il est renseigné.
+//
+// Pourquoi cette route existe. Partout ailleurs dans le projet, un envoi qui
+// échoue se contente d'un `console.warn` et d'un `return` — `sendTicketEmail`,
+// `sendResetEmail`, `sendInviteEmail`. On apprend donc qu'un mail n'est pas parti
+// le jour où quelqu'un s'étonne de ne rien avoir reçu, ou jamais. Le cas précis
+// qui a motivé cette route : `smtpConfigure`, sur la page Budget API, vaut
+// `!!(host && user && pass)`. C'est « les trois champs sont remplis », PAS
+// « l'envoi aboutit ». Avec des identifiants faux, la page afficherait un état
+// rassurant et on ne découvrirait la panne qu'au premier franchissement du
+// seuil — dans plusieurs mois.
+//
+// super_admin uniquement : la réponse renvoie le message d'erreur SMTP BRUT, qui
+// peut citer l'hôte et l'utilisateur. Ce rôle lit déjà ces valeurs en clair par
+// `GET /api/settings` (`smtpPass` compris) — rien de nouveau n'est exposé, et un
+// message maquillé ne permettrait pas de diagnostiquer.
+app.post('/api/settings/test-email', requireAuth, requireRole('super_admin'), async (req, res) => {
+  const to = String((req.body || {}).to || '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    return res.status(400).json({ etape: 'saisie', error: 'Adresse destinataire invalide.' });
+  }
+
+  // Les réglages ENREGISTRÉS, jamais ceux encore dans le formulaire : le test
+  // doit porter sur ce que le serveur utilisera vraiment. Valider des valeurs
+  // non sauvegardées donnerait un vert qui ne prouve rien.
+  const s = readServerSettings();
+  if (!s.smtpHost || !s.smtpUser || !s.smtpPass) {
+    return res.status(400).json({
+      etape: 'configuration',
+      error: "SMTP incomplet — hôte, utilisateur et mot de passe sont requis. Enregistrez d'abord les paramètres.",
+    });
+  }
+
+  const port = Number(s.smtpPort) || 587;
+  const from = s.smtpFrom || DEFAULT_MAIL_FROM;
+
+  // Délais EXPLICITES, et seulement ici. Les envois ordinaires partent en
+  // arrière-plan et peuvent attendre ; celui-ci répond à quelqu'un qui regarde
+  // son écran, et une requête qui ne revient jamais est exactement aussi peu
+  // informative que l'échec silencieux qu'on cherche à supprimer. Les quatre
+  // autres transporteurs ne sont pas touchés.
+  const transporter = nodemailer.createTransport({
+    host: s.smtpHost, port, secure: port === 465,
+    auth: { user: s.smtpUser, pass: s.smtpPass },
+    connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 20000,
+  });
+
+  // DEUX étapes séparées, parce qu'elles échouent pour des raisons différentes et
+  // qu'un unique « ça n'a pas marché » n'indiquerait pas où chercher :
+  //   verify()   → hôte, port, TLS, identifiants
+  //   sendMail() → expéditeur refusé, destinataire rejeté, quota dépassé
+  try {
+    await transporter.verify();
+  } catch (e) {
+    return res.status(502).json({
+      etape: 'connexion', error: e.message, code: e.code || null, host: s.smtpHost, port,
+    });
+  }
+
+  const quand = new Date().toLocaleString('fr-FR');
+  const par = req.user.username || req.user.uid || 'inconnu';
+  const pied = 'Si vous le recevez, les envois de TONTON AI aboutissent : alerte budget API, tickets, invitations, réinitialisation de mot de passe.';
+
+  try {
+    const info = await transporter.sendMail({
+      from,
+      to,
+      subject: 'TONTON AI — test SMTP',
+      text: [
+        "Cet e-mail prouve que la configuration SMTP de TONTON AI fonctionne.",
+        '',
+        `Demandé par : ${par}`,
+        `Le : ${quand}`,
+        `Serveur : ${s.smtpHost}:${port}`,
+        `Expéditeur : ${from}`,
+        '',
+        pied,
+      ].join('\n'),
+      html: `<p>Cet e-mail prouve que la configuration SMTP de <strong>TONTON AI</strong> fonctionne.</p>
+<ul style="color:#444;font-size:14px;line-height:1.7">
+  <li>Demandé par : <strong>${escapeHtml(par)}</strong></li>
+  <li>Le : ${escapeHtml(quand)}</li>
+  <li>Serveur : ${escapeHtml(s.smtpHost)}:${port}</li>
+  <li>Expéditeur : ${escapeHtml(from)}</li>
+</ul>
+<p style="color:#999;font-size:13px">${escapeHtml(pied)}</p>`,
+    });
+
+    // Un serveur peut ACCEPTER le message et REFUSER le destinataire : sans ce
+    // contrôle, `sendMail` ne lève pas et on afficherait un succès pour un mail
+    // qui n'arrivera nulle part — le faux vert que toute cette route combat.
+    const rejected = info.rejected || [];
+    if (rejected.length) {
+      return res.status(502).json({
+        etape: 'destinataire',
+        error: `Le serveur SMTP a refusé ${rejected.join(', ')}.`,
+        code: info.response || null, from, to, host: s.smtpHost, port,
+      });
+    }
+
+    return res.json({
+      ok: true, to, from, host: s.smtpHost, port,
+      accepted: info.accepted || [],
+      messageId: info.messageId || null,
+    });
+  } catch (e) {
+    return res.status(502).json({
+      etape: 'envoi', error: e.message, code: e.code || null, from, to, host: s.smtpHost, port,
+    });
+  }
+});
+
 // ─── Budget API Anthropic — recharges, restant, alerte sous seuil ────────────
 //
 // POURQUOI UNE SOUSTRACTION ET PAS UNE LECTURE

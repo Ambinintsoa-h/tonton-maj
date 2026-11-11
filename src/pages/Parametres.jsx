@@ -90,6 +90,14 @@ export default function Parametres() {
   const [testing, setTesting] = useState(false);
   const [testingHaloscan, setTestingHaloscan] = useState(false);
   const [haloscanStatus, setHaloscanStatus] = useState(null);
+  // Test d'envoi SMTP. `testEmailTo` n'est PAS dans `form` : ce n'est pas un
+  // réglage, il ne doit jamais partir dans POST /api/settings ni être
+  // enregistré. Le résultat reste affiché — un toast disparaît, et c'est
+  // justement le message d'erreur brut qu'on a besoin de relire.
+  const myEmail = useSelector(s => s.auth?.email || '');
+  const [testEmailTo, setTestEmailTo] = useState('');
+  const [testingEmail, setTestingEmail] = useState(false);
+  const [testEmailResult, setTestEmailResult] = useState(null);
   const [testingGsheet, setTestingGsheet] = useState(false);
   const [gsheetStatus, setGsheetStatus] = useState(null); // null | 'ok' | 'error'
   const [gsheetStatusDetail, setGsheetStatusDetail] = useState('');
@@ -222,6 +230,34 @@ export default function Parametres() {
   // On sauvegarde donc le formulaire AVANT de lancer une synchronisation
   // réelle -- qui, comme le bouton "Synchroniser maintenant" de /lots, ne
   // fait que DÉTECTER des lignes neuves, jamais les lancer.
+  // Pré-remplissage avec l'adresse du compte connecté : c'est la boîte qu'on
+  // peut ouvrir dans la seconde. Le champ reste modifiable — tester vers une
+  // autre boîte est le seul moyen de distinguer « le SMTP n'envoie pas » de
+  // « le serveur de réception filtre ».
+  useEffect(() => {
+    if (myEmail && !testEmailTo) setTestEmailTo(myEmail);
+  }, [myEmail]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleTestEmail = async () => {
+    setTestingEmail(true);
+    setTestEmailResult(null);
+    try {
+      const r = await axios.post('/api/settings/test-email', { to: testEmailTo.trim() });
+      setTestEmailResult({ ok: true, ...r.data });
+      toast.success(`E-mail de test envoyé à ${r.data.to}`);
+    } catch (e) {
+      const d = e.response?.data || {};
+      setTestEmailResult({
+        ok: false,
+        etape: d.etape || 'inconnue',
+        error: d.error || e.message || 'Échec inconnu',
+        code: d.code || null,
+      });
+      toast.error(`Test SMTP échoué — ${d.etape || 'erreur'}`);
+    }
+    setTestingEmail(false);
+  };
+
   const handleTestGsheet = async () => {
     if (!form.googleSheetsServiceAccountJson || !form.googleSheetsId) {
       toast.error('Renseigne la clé de compte de service et l\'identifiant du Sheet d\'abord');
@@ -916,6 +952,55 @@ export default function Parametres() {
               Vide → andrianina@publithings.com.
             </p>
           </div>
+        </div>
+
+        {/* La coche verte du titre, et `smtpConfigure` sur la page Budget API, ne
+            disent qu'une chose : les champs sont remplis. Seul un envoi réel
+            prouve que les identifiants sont bons. Sans ce bouton, la preuve
+            n'arrivait qu'au premier franchissement du seuil budget — des mois
+            plus tard, et sous la forme d'un échec. */}
+        <div className="pt-4 border-t border-gray-100 space-y-2">
+          <label className="text-sm font-medium text-gray-700">Vérifier que l'envoi aboutit</label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="email"
+              value={testEmailTo}
+              onChange={e => { setTestEmailTo(e.target.value); setTestEmailResult(null); }}
+              placeholder="vous@exemple.com"
+              className="input-glass flex-1"
+            />
+            <button
+              type="button"
+              onClick={handleTestEmail}
+              disabled={testingEmail || !testEmailTo.trim()}
+              className="btn-secondary text-xs whitespace-nowrap"
+            >
+              {testingEmail ? <Loader size={13} className="animate-spin" /> : <Mail size={13} />}
+              {testingEmail ? 'Envoi…' : 'Envoyer un test'}
+            </button>
+          </div>
+          <p className="text-xs text-gray-400">
+            Teste les réglages <strong>enregistrés</strong>, pas ce qui est affiché à l'écran :
+            enregistrez d'abord si vous venez de modifier un champ. Un test vert prouve que
+            l'alerte budget, les tickets, les invitations et les réinitialisations peuvent partir.
+          </p>
+          {testEmailResult?.ok && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 text-xs text-emerald-700">
+              <p className="font-semibold flex items-center gap-1.5"><CheckCircle2 size={13} /> Envoyé à {testEmailResult.to}</p>
+              <p className="mt-1 text-emerald-600">
+                Via {testEmailResult.host}:{testEmailResult.port}, expéditeur {testEmailResult.from}.
+                Vérifiez la boîte — et les indésirables.
+              </p>
+            </div>
+          )}
+          {testEmailResult && !testEmailResult.ok && (
+            <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 text-xs text-red-700">
+              <p className="font-semibold flex items-center gap-1.5"><AlertCircle size={13} /> Échec à l'étape : {testEmailResult.etape}</p>
+              <p className="mt-1 font-mono text-[11px] break-all text-red-600">
+                {testEmailResult.error}{testEmailResult.code ? ` (${testEmailResult.code})` : ''}
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700 space-y-1">
