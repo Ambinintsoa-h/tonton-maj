@@ -54,6 +54,7 @@ import { defaultAuditSelection, unselectedFactualFields, unselectedNonEmptyField
 import { isArticleUrlDead, ARTICLE_INTROUVABLE_MESSAGE } from '../../utils/articleLiveness';
 import { liensManquants } from '../../utils/linkPreserved';
 import { decodeEntities } from '../../utils/htmlText';
+import { mustResetTitle, titleToPublish } from '../../utils/titlePublish';
 import { setProfile } from '../../store/slices/authSlice';
 import PhaseStepper from './PhaseStepper';
 import PhaseAudit from './PhaseAudit';
@@ -588,7 +589,24 @@ export default function ArticleResult() {
     } catch { return ''; }
   };
 
+  // ── Un effet de CONTENU n'efface pas l'intention d'un humain ─────────────────
+  // Cet effet surveille `currentArticle.title`. Or `handleTerminer` écrit
+  // précisément ce titre (`title: editedTitle`) : l'article enregistré changeait
+  // donc `currentArticle.title`, l'effet repartait, remettait `titleDirty` à FAUX
+  // et réécrivait le champ avec… le même texte. À l'écran rien ne bougeait ; à la
+  // publication `titleDirty && editedTitle` était faux et le titre ne partait pas
+  // (tourismefrance.org, 12/11/2026 : H1 inchangé, contenu et métas à jour).
+  // On ne réinitialise donc que si l'ARTICLE a changé, ou si rien n'a été saisi.
+  // `titleDirtyRef` plutôt que la valeur d'état : l'effet ne doit pas se
+  // redéclencher à chaque frappe, seulement lire la dernière valeur.
+  const titleDirtyRef  = useRef(false);
+  titleDirtyRef.current = titleDirty;
+  const titleOwnerRef  = useRef(undefined);   // undefined = montage : toujours initialisé
   useEffect(() => {
+    const articleKey = agent.currentArticleId || cqItem?.id || null;
+    const previousArticleKey = titleOwnerRef.current;
+    titleOwnerRef.current = articleKey;
+    if (!mustResetTitle({ previousArticleKey, articleKey, titleDirty: titleDirtyRef.current })) return;
     setTitleDirty(false);
     // Priorité 1 : titre WP réel (API REST) — source la plus fiable
     // DÉCODÉ : `title.rendered` de l'API REST WordPress porte les ENTITÉS
@@ -4327,7 +4345,16 @@ export default function ArticleResult() {
         slugOfUrl(articleUrl) === slugOfUrl(postToUse?.link);
 
       const postData = { content: htmlContent, status: wantDraft ? 'draft' : 'publish' };
-      if (titleDirty && editedTitle) postData.title = editedTitle;
+      // Titre : voir `titlePublish.js`. Le drapeau seul ne suffit pas — il retombait
+      // à faux sans que le champ ne change (12/11/2026, article du Mont-Dore :
+      // contenu et métas publiés, H1 inchangé). Un titre déjà validé ET enregistré
+      // avec l'article part aussi ; un titre parasite, jamais persisté, reste exclu.
+      const titreAPublier = titleToPublish({
+        titleDirty,
+        editedTitle,
+        savedEditedTitle: currentArticle?.editedTitle || cqItem?.majResult?.editedTitle || '',
+      });
+      if (titreAPublier) postData.title = titreAPublier;
       if (featuredMatchesTarget) postData.featured_media = wpMcpData.featuredMediaId;
       // Catégories : envoyées UNIQUEMENT si l'utilisateur les a modifiées à la main.
       // Sinon on ne TOUCHE PAS aux catégories du post existant → son permalien
