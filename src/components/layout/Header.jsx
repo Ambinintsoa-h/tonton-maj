@@ -179,7 +179,12 @@ export default function Header() {
   const accountRef = useRef(null);
   const notifRef   = useRef(null);
 
-  const pageLabel = PAGE_LABELS[location.pathname] || 'TONTON AI';
+  // Les tutoriels ont des sous-routes (/tutoriel/:chapitre) : un libellé par préfixe,
+  // sinon le titre retomberait sur « TONTON AI » dès qu'on ouvre un chapitre.
+  const pageLabel = PAGE_LABELS[location.pathname]
+    || (location.pathname.startsWith('/tutoriel-admin') ? 'Tutoriel admin'
+      : location.pathname.startsWith('/tutoriel') ? 'Tutoriel'
+        : 'TONTON AI');
 
   // Fermer l'autre panneau quand on en ouvre un
   const handleOpenAccount = () => { setOpenNotifs(false); setOpenAccount(v => !v); };

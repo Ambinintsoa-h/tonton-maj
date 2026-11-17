@@ -3,7 +3,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import { motion } from 'framer-motion';
 import {
   Zap, Globe, Settings, Clock, ChevronRight, BarChart3, ListTodo, Users, LogOut, Bug, MessageSquare,
-  Archive, Layers, TrendingUp, LineChart, Wallet,
+  Archive, Layers, TrendingUp, LineChart, Wallet, GraduationCap, ShieldCheck,
 } from 'lucide-react';
 import { logout } from '../../store/slices/authSlice';
 
@@ -37,6 +37,10 @@ const NAV_ALL = [
   { to: '/budget-api',     label: 'Budget API',       icon: Wallet,   roles: ['super_admin'] },
   { to: '/equipe',         label: 'Équipe',            icon: Users,   roles: ['super_admin', 'manager'] },
   { to: '/tickets',        label: 'Tickets',           icon: Bug,      badge: true },
+  // Deux tutoriels, deux menus : l'usage quotidien d'un rédacteur (tous les rôles) et
+  // les actions d'admin (managers et super admins). Voir src/tutoriel/chapitres.js.
+  { to: '/tutoriel',       label: 'Tutoriel',          icon: GraduationCap },
+  { to: '/tutoriel-admin', label: 'Tutoriel admin',    icon: ShieldCheck, roles: ['super_admin', 'manager'] },
 ];
 
 function NavItem({ to, label, icon: Icon, badge, beta, badgeColor = 'bg-amber-400', badgeTitle }) {
