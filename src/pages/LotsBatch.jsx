@@ -644,7 +644,7 @@ export default function LotsBatch() {
                 value={r.consigne}
                 onChange={e => updateRow(r.id, { consigne: e.target.value })}
                 placeholder="Consigne (optionnel)"
-                title="Fil conducteur de la MAJ : dès qu'elle est renseignée, elle mène et remplace les directives rédigées par l'audit. L'audit ne la complète que par le nécessaire (données à jour). L'ampleur reste celle du menu. 2 500 caractères maximum."
+                title="Fil conducteur de la MAJ : dès qu'elle est renseignée, elle mène et remplace les directives rédigées par l'audit. L'audit ne la complète que par le nécessaire (données à jour). L'ampleur reste celle du menu. 2 500 caractères maximum. LIMITES MESURÉES : les minima de longueur (mots par section, nombre d'occurrences d'un mot) ne sont PAS garantis ; un TL;DR reste placé après l'introduction ; précisez où va chaque section existante. Les titres, tableaux, listes, FAQ et suppressions demandés sont respectés."
                 className="flex-1 min-w-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
               <button type="button" onClick={() => removeRow(r.id)} className="text-gray-400 hover:text-red-500 p-1.5" title="Retirer la ligne">
