@@ -908,6 +908,12 @@ export const runQatRewrite = async ({
   auditSelection = null,
   depth = 'auto',
   instruction = '',
+  // `true` UNIQUEMENT quand la consigne est celle qu'un humain a saisie sur une
+  // ligne de lot : elle devient le FIL CONDUCTEUR de la MAJ, et l'audit ne fait
+  // plus que la compléter (voir `enteteAudit` plus bas). `false` par défaut : les
+  // prompts de l'écran interactif — où l'instruction est le texte pré-rempli à
+  // partir de l'audit puis retouché — restent identiques à l'octet près.
+  consigneFilConducteur = false,
   modelPricing = null,
   modelSelections = null, // choix de modèle par passe (settings.json) — null = défaut du registre
   maxEssaisIA = MAX_ESSAIS_IA, // settings.json batchTuning.maxEssaisIA (lot) — sinon la constante par défaut
@@ -1020,7 +1026,14 @@ ${buildSkillsBlock(
     'RÈGLES D\'ÉQUIPE (menu SKILLS IA) — OBLIGATOIRES'
   )}${buildKnowledgeBlock(knowledge)}
 
-${brief}${instr.texte ? `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instr.texte}\nElle prime sur les règles générales, sauf le verrou liens externes.` : ''}`;
+${brief}${instr.texte
+    ? (consigneFilConducteur
+      // FIL CONDUCTEUR (consigne de ligne de lot, décision d'Andrianina du
+      // 17/11/2026) : la consigne dit ce que l'article doit devenir, l'audit ne
+      // fait que la compléter. Elle prime donc aussi sur ses conclusions.
+      ? `\n\n## ═══ CONSIGNE DE L'ÉQUIPE — FIL CONDUCTEUR DE CETTE MAJ ═══\n${instr.texte}\nCette consigne est le FIL CONDUCTEUR de la mise à jour : elle dit ce que l'article doit devenir, et chaque modification s'y rattache. Elle prime sur les règles générales et sur les conclusions de l'audit, sauf le verrou liens externes.`
+      : `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instr.texte}\nElle prime sur les règles générales, sauf le verrou liens externes.`)
+    : ''}`;
 
   const system = [
     { type: 'text', text: socle, cache_control: { type: 'ephemeral', ttl: '1h' } },
@@ -1093,6 +1106,16 @@ reproduire n'est pas facultatif, et tu n'en inventes aucun autre.
 ${imageBody}`
     : '## ═══ MÉDIAS ═══\nL\'article d\'origine n\'en contient aucun : n\'en ajoute aucun.';
 
+  // L'audit « pilote » la réécriture — SAUF quand une consigne de lot est le fil
+  // conducteur : il ne fait alors que la compléter, et seulement par le nécessaire
+  // (données périmées ou fausses, standards d'une MAJ). Sans cette inversion, le
+  // modèle lisait « elles pilotent la réécriture » juste sous une consigne censée
+  // mener : deux chefs, et l'audit — plus long, plus détaillé — l'emportait.
+  const enteteAudit = consigneFilConducteur
+    ? `## CONCLUSIONS DE L'AUDIT — COMPLÉMENTAIRES (la consigne de l'équipe mène)
+N'en retiens que le NÉCESSAIRE : les données périmées ou fausses à corriger et les standards d'une mise à jour. Une conclusion qui contredit la consigne, ou la dilue, ne s'applique pas.`
+    : '## CONCLUSIONS DE L\'AUDIT (elles pilotent la réécriture)';
+
   const user = `## ARTICLE D'ORIGINE (HTML — à réécrire)
 ${sourceHtml}
 
@@ -1102,7 +1125,7 @@ ${internalBlock}
 
 ${imageBlock}
 
-## CONCLUSIONS DE L'AUDIT (elles pilotent la réécriture)
+${enteteAudit}
 ${summarizeAuditForRewrite(audit, auditSelection)}
 
 ## SOURCES WEB DISPONIBLES (pour les données récentes — ne cite jamais une source non listée ici)

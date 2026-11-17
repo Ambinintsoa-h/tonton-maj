@@ -145,6 +145,53 @@ describe('runArticlePipeline — chemin complet', () => {
       expect(args.depth).toBe('ciblee');
     });
 
+    // ── FIL CONDUCTEUR (décision d'Andrianina, 17/11/2026) ──────────────────
+    // « Dès qu'une instruction est renseignée, elle sert de fil conducteur.
+    // L'audit complète uniquement le nécessaire ou les standards des MAJ. »
+    const AUDIT_REFONTE_LOCAL = { ampleur: { decision: 'refonte_totale' }, scores: { global: 4 } };
+
+    test('une consigne est annoncée au rédacteur comme FIL CONDUCTEUR', async () => {
+      await runArticlePipeline({ ...baseInput(), instruction: 'Ajoute une section sur le prix au m2.' });
+      expect(runQatRewrite.mock.calls[0][0].consigneFilConducteur).toBe(true);
+    });
+
+    test('l\'audit se réduit au NÉCESSAIRE : les actions prioritaires et le factuel ne concurrencent plus la consigne', async () => {
+      // Audit qui recommande une refonte : sans consigne, la sélection serait
+      // factuel + P1 — soit les directives qui entreraient en concurrence.
+      runQatAudit.mockResolvedValue({ audit: AUDIT_REFONTE_LOCAL, tokenUsage: usage(1000, 500, 'audit_qat') });
+      await runArticlePipeline({ ...baseInput(), instruction: 'Ajoute une section sur le prix au m2.' });
+      const args = runQatRewrite.mock.calls[0][0];
+      expect(args.auditSelection).toMatchObject({
+        recent_context: true, a_supprimer: false, sources_check: false, priority_actions: [],
+      });
+    });
+
+    test('…sans toucher à l\'ampleur : une consigne ne décide pas de ciblée ou de refonte', async () => {
+      runQatAudit.mockResolvedValue({ audit: AUDIT_REFONTE_LOCAL, tokenUsage: usage(1000, 500, 'audit_qat') });
+      await runArticlePipeline({ ...baseInput(), instruction: 'Ajoute une section sur le prix au m2.' });
+      expect(runQatRewrite.mock.calls[0][0].depth).toBe('refonte');
+    });
+
+    test('SANS consigne : rien ne change — pas de fil conducteur, sélection d\'après l\'ampleur', async () => {
+      runQatAudit.mockResolvedValue({ audit: AUDIT_REFONTE_LOCAL, tokenUsage: usage(1000, 500, 'audit_qat') });
+      await runArticlePipeline(baseInput());
+      const args = runQatRewrite.mock.calls[0][0];
+      expect(args.consigneFilConducteur).toBe(false);
+      expect(args.auditSelection).toMatchObject({ a_supprimer: true, sources_check: true, priority_actions: ['P1'] });
+    });
+
+    test('une consigne faite d\'espaces n\'en est pas une : directives de l\'audit, pas de fil conducteur', async () => {
+      await runArticlePipeline({ ...baseInput(), instruction: '   \n  ' });
+      const args = runQatRewrite.mock.calls[0][0];
+      expect(args.consigneFilConducteur).toBe(false);
+      expect(args.instruction.trim().length).toBeGreaterThan(0);
+    });
+
+    test('la consigne part TRIMÉE', async () => {
+      await runArticlePipeline({ ...baseInput(), instruction: '  Ajoute une section sur le prix au m2.  \n' });
+      expect(runQatRewrite.mock.calls[0][0].instruction).toBe('Ajoute une section sur le prix au m2.');
+    });
+
     test('sans consigne : les directives sont rédigées à partir de l\'audit, non vides', async () => {
       await runArticlePipeline(baseInput());
       const args = runQatRewrite.mock.calls[0][0];
@@ -179,6 +226,51 @@ describe('runArticlePipeline — chemin complet', () => {
       const args = runQatRewrite.mock.calls[0][0];
       expect(args.depth).toBe('ciblee');
       expect(onStep).not.toHaveBeenCalledWith(expect.stringMatching(/imposée/));
+    });
+
+    // ── « ciblee » : la MAJ ciblée devient OBTENABLE en lot ──────────────────
+    // L'audit recommande une refonte pour la quasi-totalité des articles (0 sur
+    // 1 000 en MAJ ciblée, mesuré en prod le 17/11/2026) : sans valeur imposante,
+    // aucune ligne de lot ne pouvait produire une MAJ ciblée.
+    const AUDIT_REFONTE = { ampleur: { decision: 'refonte_totale' }, scores: { global: 4 } };
+
+    test('« ciblee » PRIME sur un audit qui recommandait une refonte', async () => {
+      runQatAudit.mockResolvedValue({ audit: AUDIT_REFONTE, tokenUsage: usage(1000, 500, 'audit_qat') });
+      const onStep = jest.fn();
+      await runArticlePipeline({ ...baseInput(), majType: 'ciblee', onStep });
+      expect(runQatRewrite.mock.calls[0][0].depth).toBe('ciblee');
+      expect(onStep).toHaveBeenCalledWith(expect.stringMatching(/MAJ ciblée imposée par le lot/));
+    });
+
+    test('…et la sélection des cases d\'audit suit : celle d\'une MAJ simple, pas d\'une refonte', async () => {
+      runQatAudit.mockResolvedValue({ audit: AUDIT_REFONTE, tokenUsage: usage(1000, 500, 'audit_qat') });
+      await runArticlePipeline({ ...baseInput(), majType: 'ciblee' });
+      // Refonte = factuel + P1. MAJ simple = recent_context seul.
+      expect(runQatRewrite.mock.calls[0][0].auditSelection)
+        .toMatchObject({ recent_context: true, a_supprimer: false, sources_check: false, priority_actions: [] });
+    });
+
+    test('« ciblee » quand l\'audit recommande DÉJÀ une MAJ ciblée : rien d\'imposé, rien d\'annoncé', async () => {
+      const onStep = jest.fn();
+      await runArticlePipeline({ ...baseInput(), majType: 'ciblee', onStep });
+      expect(runQatRewrite.mock.calls[0][0].depth).toBe('ciblee');
+      expect(onStep).not.toHaveBeenCalledWith(expect.stringMatching(/imposée/));
+    });
+
+    test('« maj » (le défaut, et l\'import GSheet sur `[MAJ]`) ne force JAMAIS la MAJ ciblée', async () => {
+      // Le point qui a motivé une valeur neuve : forcer « maj » ferait passer en
+      // MAJ ciblée tous les lots existants.
+      runQatAudit.mockResolvedValue({ audit: AUDIT_REFONTE, tokenUsage: usage(1000, 500, 'audit_qat') });
+      await runArticlePipeline({ ...baseInput(), majType: 'maj' });
+      expect(runQatRewrite.mock.calls[0][0].depth).toBe('refonte');
+    });
+
+    test('une valeur inconnue ou piégée (colonne libre) laisse l\'audit décider, sans planter', async () => {
+      for (const v of ['constructor', 'toString', '__proto__', 'CIBLEE', 'n\'importe quoi']) {
+        runQatRewrite.mockClear();
+        await runArticlePipeline({ ...baseInput(), majType: v });
+        expect(runQatRewrite.mock.calls[0][0].depth).toBe('ciblee'); // AUDIT_SIMPLE par défaut
+      }
     });
 
     test('majType absent (ancien appelant) : comportement inchangé', async () => {
