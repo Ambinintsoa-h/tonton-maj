@@ -286,7 +286,7 @@ function createBatchOrchestrator(deps) {
       // un FIFO qui n'a jamais existé.
       const [rows] = await conn.query(
         `SELECT bi.id, bi.batch_id, bi.article_url, bi.target_keyword, bi.consigne,
-                bi.retry_count, bi.requeued_at, b.launched_by, b.launched_by_name
+                bi.maj_type, bi.retry_count, bi.requeued_at, b.launched_by, b.launched_by_name
            FROM batch_items bi
            JOIN batches b ON b.id = bi.batch_id
           WHERE bi.status = 'en_attente'
@@ -491,6 +491,11 @@ function createBatchOrchestrator(deps) {
         articleUrl: item.article_url,
         targetKeyword: item.target_keyword,
         instruction: item.consigne || '',
+        // Le choix « MAJ ciblée / Refonte » de la ligne. Enregistré depuis le début
+        // (colonne `maj_type`, `[refonte]` dans le GSheet) mais JAMAIS relu : le
+        // SELECT ci-dessus ne le ramenait même pas. Voir `pipeline.js` pour ce
+        // qu'il pilote — seulement « refonte », pas « maj ».
+        majType: item.maj_type || undefined,
         modelPricing,
         modelSelections,
         maxEssaisIA,

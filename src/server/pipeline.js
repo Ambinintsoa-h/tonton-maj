@@ -41,7 +41,7 @@ const { cleanLinkRows } = require('../constants/majMode');
 const { stripNonEditorialLinks } = require('../utils/scrapeClean');
 const { SCRAPE_RETRY_DELAYS_MS, avecReessaiScrape } = require('../utils/scrapeRetry');
 const { buildGenerationPrompt, DEFAULT_VERIFICATION_TEMPLATE } = require('../utils/generationPrompt');
-const { SCOPE_SIMPLE, scopeProposedByAudit } = require('../constants/majPhases');
+const { SCOPE_SIMPLE, SCOPE_REFONTE, scopeProposedByAudit } = require('../constants/majPhases');
 const statsReducer = require('../store/slices/statsSlice').default;
 const { addArticleStat } = require('../store/slices/statsSlice');
 
@@ -147,6 +147,7 @@ const captureSeoBaseline = async (http, { articleId, articleUrl, targetKeyword, 
  *   - sélection des cases d'audit  → `defaultAuditSelection(scope)`
  *   - liens internes               → `auditSuggestedLinkRows(audit)` tels quels
  *   - ampleur / depth              → `scopeProposedByAudit(audit)`, jamais 'auto'
+ *     (sauf une ligne de lot marquée « refonte », qui impose la refonte)
  *     manuel : ce sont EXACTEMENT les valeurs que l'UI calcule elle-même avant
  *     de les proposer au rédacteur (ArticleResult.jsx:2301) — pas une nouvelle
  *     règle inventée pour le runner.
@@ -176,6 +177,9 @@ const captureSeoBaseline = async (http, { articleId, articleUrl, targetKeyword, 
 const runArticlePipeline = async (input) => {
   const {
     articleUrl, targetKeyword, instruction = '',
+    // Choix de la ligne du lot (« maj » | « refonte »). Seul « refonte » est
+    // honoré — voir le calcul de `scope` plus bas.
+    majType = '',
     modelSelections = null, modelPricing = null,
     // Réglages "traitement en lot" (Paramètres -> settings.json batchTuning) --
     // undefined quand l'appelant ne les fournit pas (flux manuel /run-article-pipeline,
@@ -286,10 +290,37 @@ const runArticlePipeline = async (input) => {
   tokenUsage = mergeTokenUsage(tokenUsage, auditRes.tokenUsage);
 
   // ── Défauts déterministes (remplacent les clics manuels de la phase 2) ──
-  const scope = scopeProposedByAudit(auditJson);
+  // ── AMPLEUR : le choix « Refonte » de la ligne PRIME sur l'audit ────────────
+  // La colonne `maj_type` existe depuis la création des lots (menu « MAJ ciblée /
+  // Refonte », étiquette `[refonte]` dans le GSheet) mais aucun code ne la lisait :
+  // l'ampleur venait de l'audit seul, quoi qu'on ait choisi.
+  //
+  // SEUL « refonte » est honoré, et c'est voulu. « maj » est la valeur PAR DÉFAUT
+  // de toute ligne : on ne peut pas distinguer « ciblée choisie » de « rien
+  // choisi ». La forcer ferait passer en MAJ ciblée tous les lots lancés sans
+  // toucher au menu, y compris les articles que l'audit juge à refaire — un
+  // changement massif de ce que les lots produisent. « maj » laisse donc la
+  // décision à l'audit, comme avant.
+  //
+  // `scope` unique : l'ampleur, la sélection des cases d'audit et le prompt de
+  // génération en dérivent tous. Forcer seulement `depth` laisserait la sélection
+  // d'une MAJ simple (recent_context seul) avec une réécriture complète.
+  const scopeAudit = scopeProposedByAudit(auditJson);
+  const scope = majType === 'refonte' ? SCOPE_REFONTE : scopeAudit;
+  if (scope !== scopeAudit) {
+    onStep('Refonte imposée par le lot — l\'audit recommandait une MAJ ciblée.');
+  }
   const depth = scope === SCOPE_SIMPLE ? 'ciblee' : 'refonte';
   const auditSelection = defaultAuditSelection(scope);
   const internalLinks = cleanLinkRows(auditSuggestedLinkRows(auditJson), articleUrl);
+  // ── CONSIGNE = DIRECTIVE MAJEURE ────────────────────────────────────────────
+  // Une consigne REMPLACE les directives rédigées à partir de l'audit
+  // (`buildGenerationPrompt`) ; elle ne s'y ajoute pas. Décision d'Andrianina,
+  // 17/11/2026 : l'audit apporte les essentiels, la consigne mène.
+  // L'audit N'EST PAS perdu pour autant : `audit` et `auditSelection` partent
+  // toujours à `runQatRewrite`, qui en injecte les conclusions dans le message
+  // (« CONCLUSIONS DE L'AUDIT ») indépendamment de `instruction`. Ce qui
+  // disparaît, c'est seulement leur reformulation en directives.
   const finalInstruction = instruction || buildGenerationPrompt({
     audit: auditJson, scope, targetKeyword, selection: auditSelection,
   });

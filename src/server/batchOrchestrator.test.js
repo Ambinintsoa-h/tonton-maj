@@ -93,6 +93,53 @@ describe('createBatchOrchestrator', () => {
     expect(updateBatchSql).toMatch(/UPDATE batches SET status='running'/);
   });
 
+  // Le trajet de la consigne et du choix « Refonte » jusqu'au runner. Le jeu de
+  // données ITEM_B portait déjà une consigne, mais aucun test ne vérifiait qu'elle
+  // ARRIVAIT : `maj_type`, lui, n'était même pas dans le SELECT.
+  it('transmet la consigne de la ligne au runner, telle quelle', async () => {
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-b' });
+    const { deps } = makeDeps({ claimRows: [ITEM_B], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(spawnPipelineFn).toHaveBeenCalledWith(
+      expect.objectContaining({ instruction: 'Ajoute un H2' }),
+      expect.anything(),
+    );
+  });
+
+  it('transmet le choix « refonte » de la ligne au runner', async () => {
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-r' });
+    const { deps } = makeDeps({ claimRows: [{ ...ITEM_A, maj_type: 'refonte' }], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(spawnPipelineFn).toHaveBeenCalledWith(
+      expect.objectContaining({ majType: 'refonte' }),
+      expect.anything(),
+    );
+  });
+
+  it('ligne sans maj_type (lot ancien) : majType absent, jamais une chaîne vide forcée', async () => {
+    const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-a' });
+    const { deps } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn });
+    const orch = createBatchOrchestrator(deps);
+    await orch.tick();
+    while (orch.getActiveCount() > 0) await new Promise((r) => setTimeout(r, 0));
+    expect(spawnPipelineFn.mock.calls[0][0].majType).toBeUndefined();
+  });
+
+  it('le SELECT de réclamation ramène bien maj_type (sans elle, le choix n\'arrive jamais)', () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, 'batchOrchestrator.js'), 'utf8');
+    const debut = src.indexOf('SELECT bi.id, bi.batch_id');
+    // Borné à partir du SELECT : « FOR UPDATE SKIP LOCKED » apparaît déjà dans un
+    // commentaire plus haut, et une découpe sans point de départ rendait ''.
+    const fin = src.indexOf('FOR UPDATE SKIP LOCKED', debut);
+    expect(debut).toBeGreaterThan(-1);
+    expect(fin).toBeGreaterThan(debut);
+    expect(src.slice(debut, fin)).toMatch(/bi\.maj_type/);
+  });
+
   it('lance le pipeline avec les bons champs puis reporte "fait" avec l\'articleId', async () => {
     const spawnPipelineFn = jest.fn().mockResolvedValue({ articleId: 'art-1' });
     const { deps, put } = makeDeps({ claimRows: [ITEM_A], spawnPipelineFn });
