@@ -105,7 +105,11 @@ export function Etapes({ etapes, initial = 0, idGroupe = 'etapes' }) {
   const e = etapes[i] || etapes[0];
   return (
     <div className="my-4 rounded-2xl border border-gray-200 bg-white overflow-hidden">
-      <ol className="flex flex-col sm:flex-row border-b border-gray-200" aria-label="Étapes">
+      {/* En colonne JUSQU'À `lg` : `sm` se déclenche sur la largeur de la FENÊTRE, or le
+          contenu d'un chapitre n'occupe que ~550 px à 860 px de fenêtre (barre latérale
+          + sommaire). Quatre étapes en ligne y rognaient « Relecture » — constaté en
+          production le 17/11/2026. */}
+      <ol className="flex flex-col lg:flex-row border-b border-gray-200" aria-label="Étapes">
         {etapes.map((x, k) => {
           const on = k === i;
           const faite = k < i;
@@ -326,7 +330,9 @@ export function FenetreMaquette({ titre, children, legende }) {
             Maquette cliquable
           </span>
         </div>
-        <div className="p-4 bg-gray-50/60">{children}</div>
+        {/* `overflow-x-auto` : une maquette trop large pour sa colonne défile dans son cadre
+            au lieu de déborder de la page (et d'être rognée sur le bord). */}
+        <div className="p-4 bg-gray-50/60 overflow-x-auto">{children}</div>
       </div>
       {legende && <figcaption className="text-xs text-gray-500 mt-2">{legende}</figcaption>}
     </figure>
