@@ -147,7 +147,7 @@ const captureSeoBaseline = async (http, { articleId, articleUrl, targetKeyword, 
  *   - sélection des cases d'audit  → `defaultAuditSelection(scope)`
  *   - liens internes               → `auditSuggestedLinkRows(audit)` tels quels
  *   - ampleur / depth              → `scopeProposedByAudit(audit)`, jamais 'auto'
- *     (sauf une ligne de lot marquée « refonte », qui impose la refonte)
+ *     (sauf une ligne de lot marquée « refonte » ou « ciblee », qui l'impose)
  *     manuel : ce sont EXACTEMENT les valeurs que l'UI calcule elle-même avant
  *     de les proposer au rédacteur (ArticleResult.jsx:2301) — pas une nouvelle
  *     règle inventée pour le runner.
@@ -177,8 +177,8 @@ const captureSeoBaseline = async (http, { articleId, articleUrl, targetKeyword, 
 const runArticlePipeline = async (input) => {
   const {
     articleUrl, targetKeyword, instruction = '',
-    // Choix de la ligne du lot (« maj » | « refonte »). Seul « refonte » est
-    // honoré — voir le calcul de `scope` plus bas.
+    // Choix de la ligne du lot (« maj » = selon l'audit | « ciblee » | « refonte »).
+    // Voir le calcul de `scope` plus bas.
     majType = '',
     modelSelections = null, modelPricing = null,
     // Réglages "traitement en lot" (Paramètres -> settings.json batchTuning) --
@@ -290,38 +290,70 @@ const runArticlePipeline = async (input) => {
   tokenUsage = mergeTokenUsage(tokenUsage, auditRes.tokenUsage);
 
   // ── Défauts déterministes (remplacent les clics manuels de la phase 2) ──
-  // ── AMPLEUR : le choix « Refonte » de la ligne PRIME sur l'audit ────────────
-  // La colonne `maj_type` existe depuis la création des lots (menu « MAJ ciblée /
-  // Refonte », étiquette `[refonte]` dans le GSheet) mais aucun code ne la lisait :
-  // l'ampleur venait de l'audit seul, quoi qu'on ait choisi.
+  // ── AMPLEUR : le choix de la ligne PRIME sur l'audit ────────────────────────
+  // La colonne `maj_type` existe depuis la création des lots mais aucun code ne la
+  // lisait : l'ampleur venait de l'audit seul, quoi qu'on ait choisi.
   //
-  // SEUL « refonte » est honoré, et c'est voulu. « maj » est la valeur PAR DÉFAUT
-  // de toute ligne : on ne peut pas distinguer « ciblée choisie » de « rien
-  // choisi ». La forcer ferait passer en MAJ ciblée tous les lots lancés sans
-  // toucher au menu, y compris les articles que l'audit juge à refaire — un
-  // changement massif de ce que les lots produisent. « maj » laisse donc la
-  // décision à l'audit, comme avant.
+  // Trois valeurs, et le défaut ne change PAS :
+  //   • « refonte » → réécriture complète, quoi que recommande l'audit ;
+  //   • « ciblee »  → MAJ ciblée, quoi que recommande l'audit (décision
+  //                   d'Andrianina, 17/11/2026 : en lot, on ne pouvait pas obtenir
+  //                   une vraie MAJ ciblée, l'audit recommandant une refonte pour
+  //                   la quasi-totalité des articles — 0 sur 1 000 en MAJ ciblée) ;
+  //   • « maj » ou rien → l'audit décide, comme avant.
+  //
+  // « maj » reste « selon l'audit » PARCE QUE c'est la valeur par défaut de toute
+  // ligne, et celle que l'import GSheet pose sur toute cellule sans étiquette ET
+  // sur `[MAJ]` : on ne peut pas distinguer « ciblée choisie » de « rien choisi ».
+  // La forcer ferait passer en MAJ ciblée tous les lots existants, y compris les
+  // articles que l'audit juge à refaire. D'où une valeur NEUVE, « ciblee » : une
+  // MAJ ciblée ne s'obtient que par un choix explicite.
   //
   // `scope` unique : l'ampleur, la sélection des cases d'audit et le prompt de
   // génération en dérivent tous. Forcer seulement `depth` laisserait la sélection
-  // d'une MAJ simple (recent_context seul) avec une réécriture complète.
+  // d'une refonte (factuel + P1) avec une MAJ ciblée, ou l'inverse.
   const scopeAudit = scopeProposedByAudit(auditJson);
-  const scope = majType === 'refonte' ? SCOPE_REFONTE : scopeAudit;
+  // Comparaisons explicites, pas une table indexée par `majType` : la valeur vient
+  // d'une colonne libre (VARCHAR) et `{…}['constructor']` rendrait une FONCTION.
+  const scopeImpose = majType === 'refonte' ? SCOPE_REFONTE
+    : majType === 'ciblee' ? SCOPE_SIMPLE
+    : null;
+  const scope = scopeImpose || scopeAudit;
   if (scope !== scopeAudit) {
-    onStep('Refonte imposée par le lot — l\'audit recommandait une MAJ ciblée.');
+    onStep(scope === SCOPE_REFONTE
+      ? 'Refonte imposée par le lot — l\'audit recommandait une MAJ ciblée.'
+      : 'MAJ ciblée imposée par le lot — l\'audit recommandait une refonte.');
   }
   const depth = scope === SCOPE_SIMPLE ? 'ciblee' : 'refonte';
-  const auditSelection = defaultAuditSelection(scope);
   const internalLinks = cleanLinkRows(auditSuggestedLinkRows(auditJson), articleUrl);
-  // ── CONSIGNE = DIRECTIVE MAJEURE ────────────────────────────────────────────
-  // Une consigne REMPLACE les directives rédigées à partir de l'audit
-  // (`buildGenerationPrompt`) ; elle ne s'y ajoute pas. Décision d'Andrianina,
-  // 17/11/2026 : l'audit apporte les essentiels, la consigne mène.
-  // L'audit N'EST PAS perdu pour autant : `audit` et `auditSelection` partent
-  // toujours à `runQatRewrite`, qui en injecte les conclusions dans le message
-  // (« CONCLUSIONS DE L'AUDIT ») indépendamment de `instruction`. Ce qui
-  // disparaît, c'est seulement leur reformulation en directives.
-  const finalInstruction = instruction || buildGenerationPrompt({
+  // ── CONSIGNE = FIL CONDUCTEUR DE LA MAJ ─────────────────────────────────────
+  // Décision d'Andrianina, 17/11/2026 : « dès qu'une instruction est renseignée,
+  // elle sert de fil conducteur. L'audit vient compléter uniquement le
+  // nécessaire ou les standards des MAJ, mais la consigne est le fil conducteur. »
+  //
+  // Trois effets, tous conditionnés à une consigne RÉELLEMENT saisie :
+  //   1. elle REMPLACE les directives rédigées à partir de l'audit
+  //      (`buildGenerationPrompt`) — elle ne s'y ajoute pas ;
+  //   2. la sélection des cases d'audit se réduit au MINIMUM : celle d'une MAJ
+  //      simple (`recent_context`, les données à jour). Les actions prioritaires
+  //      et les écarts SEO/GEO sont des directives CONCURRENTES de la consigne ;
+  //      les standards d'une MAJ (20 mots, gras, FAQ, liens) n'en dépendent pas,
+  //      ils sont tenus en dur dans le prompt de rédaction ;
+  //   3. `consigneFilConducteur` renverse le cadrage dans le prompt : l'audit n'y
+  //      « pilote » plus la réécriture, il la complète.
+  // Le factuel écarté (`a_supprimer`, `sources_check`) n'est pas perdu en silence :
+  // la sélection est enregistrée dans `qatBrief`, et la publication redemande
+  // confirmation (`unselectedFactualFields`, ArticleResult.jsx).
+  //
+  // L'AMPLEUR, elle, reste pilotée par le menu de la ligne : une consigne ne
+  // décide pas de ciblée ou de refonte.
+  // Sans consigne, rien ne change : sélection d'après l'ampleur, directives
+  // rédigées par `buildGenerationPrompt`.
+  const consigne = String(instruction || '').trim();
+  const auditSelection = consigne
+    ? defaultAuditSelection(SCOPE_SIMPLE)
+    : defaultAuditSelection(scope);
+  const finalInstruction = consigne || buildGenerationPrompt({
     audit: auditJson, scope, targetKeyword, selection: auditSelection,
   });
 
@@ -333,6 +365,7 @@ const runArticlePipeline = async (input) => {
     skills, knowledge, articleUrl, targetKeyword,
     internalLinks, auditSelection, depth,
     instruction: finalInstruction,
+    consigneFilConducteur: !!consigne,
     modelPricing, modelSelections, maxEssaisIA,
     onStep, onReplace: onStep,
   });

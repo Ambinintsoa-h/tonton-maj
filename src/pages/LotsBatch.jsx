@@ -47,8 +47,16 @@ function Pager({ page, totalPages, onChange }) {
   );
 }
 
+// « maj » reste la valeur PAR DÉFAUT de toute ligne (et celle que l'import GSheet
+// pose sur une cellule sans étiquette, comme sur `[MAJ]`) : elle n'a JAMAIS imposé
+// l'ampleur, l'audit décidait. Son ancienne étiquette « MAJ ciblée » promettait
+// donc autre chose que ce qui se passait. Elle s'appelle maintenant ce qu'elle
+// fait, et « MAJ ciblée » est une valeur NEUVE (`ciblee`) qui, elle, l'impose.
+// Pas de migration : `maj_type` est un VARCHAR(16), et les anciens lots gardent
+// leur valeur — affichée avec l'étiquette qui décrit leur comportement réel.
 const MAJ_TYPES = [
-  { value: 'maj',     label: 'MAJ ciblée' },
+  { value: 'maj',     label: 'Selon l\'audit' },
+  { value: 'ciblee',  label: 'MAJ ciblée' },
   { value: 'refonte', label: 'Refonte' },
 ];
 
@@ -626,7 +634,7 @@ export default function LotsBatch() {
               <select
                 value={r.majType}
                 onChange={e => updateRow(r.id, { majType: e.target.value })}
-                title="Refonte : l'article est réécrit en entier, quoi que recommande l'audit. MAJ ciblée : l'audit choisit l'ampleur (ciblée ou refonte)."
+                title="Selon l'audit : l'audit choisit l'ampleur (le plus souvent une refonte). MAJ ciblée : modifications ciblées, structure et texte conservés, quoi que recommande l'audit. Refonte : article réécrit en entier, quoi que recommande l'audit."
                 className="rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
               >
                 {MAJ_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
@@ -636,7 +644,7 @@ export default function LotsBatch() {
                 value={r.consigne}
                 onChange={e => updateRow(r.id, { consigne: e.target.value })}
                 placeholder="Consigne (optionnel)"
-                title="Directive majeure : elle remplace les directives rédigées à partir de l'audit. Les conclusions de l'audit sont toujours transmises à l'IA. 2 500 caractères maximum."
+                title="Fil conducteur de la MAJ : dès qu'elle est renseignée, elle mène et remplace les directives rédigées par l'audit. L'audit ne la complète que par le nécessaire (données à jour). L'ampleur reste celle du menu. 2 500 caractères maximum."
                 className="flex-1 min-w-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
               <button type="button" onClick={() => removeRow(r.id)} className="text-gray-400 hover:text-red-500 p-1.5" title="Retirer la ligne">

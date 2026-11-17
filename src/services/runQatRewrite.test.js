@@ -162,6 +162,58 @@ describe('contraintes rédactionnelles en dur dans le prompt de refonte', () => 
   });
 });
 
+// ── La consigne d'une ligne de lot est le FIL CONDUCTEUR (17/11/2026) ──────────
+// Avant : « CONCLUSIONS DE L'AUDIT (elles pilotent la réécriture) » juste sous une
+// consigne censée mener — deux chefs, et l'audit, plus long, l'emportait. Le
+// cadrage ne s'inverse QUE sur demande explicite ; l'écran interactif, où
+// l'instruction est le texte pré-rempli d'après l'audit, garde ses prompts.
+describe('runQatRewrite — consigne = fil conducteur', () => {
+  const lancer = async (extra) => {
+    callClaudeWithProgress.mockResolvedValueOnce(reply({
+      h1: 'T', article_html: '<h2>A</h2><p>B</p>', mot_cle_retenu: 'x',
+    }));
+    await runQatRewrite({ ...baseArgs('<p>Ancien texte.</p>'), ...extra });
+    const params = callClaudeWithProgress.mock.calls[0][1];
+    return { systeme: JSON.stringify(params.system), message: params.messages[0].content };
+  };
+
+  test('avec le fil conducteur : la consigne est nommée ainsi et prime sur les conclusions de l\'audit', async () => {
+    const { systeme } = await lancer({ instruction: 'Ajoute une section prix.', consigneFilConducteur: true });
+    expect(systeme).toMatch(/FIL CONDUCTEUR DE CETTE MAJ/);
+    expect(systeme).toContain('Ajoute une section prix.');
+    expect(systeme).toMatch(/prime sur les règles générales et sur les conclusions de l'audit/);
+    expect(systeme).not.toMatch(/INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE/);
+  });
+
+  test('avec le fil conducteur : l\'audit COMPLÈTE, il ne pilote plus la réécriture', async () => {
+    const { message } = await lancer({ instruction: 'Ajoute une section prix.', consigneFilConducteur: true });
+    expect(message).toMatch(/COMPLÉMENTAIRES \(la consigne de l'équipe mène\)/);
+    expect(message).toMatch(/n'en retiens que le NÉCESSAIRE/i);
+    expect(message).not.toMatch(/elles pilotent la réécriture/);
+  });
+
+  test('SANS le drapeau (écran interactif) : prompts INCHANGÉS, l\'audit pilote toujours', async () => {
+    const { systeme, message } = await lancer({ instruction: 'Directives rédigées.' });
+    expect(systeme).toMatch(/INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE/);
+    expect(systeme).not.toMatch(/FIL CONDUCTEUR/);
+    expect(message).toMatch(/CONCLUSIONS DE L'AUDIT \(elles pilotent la réécriture\)/);
+    expect(message).not.toMatch(/COMPLÉMENTAIRES/);
+  });
+
+  test('le drapeau sans texte de consigne n\'ajoute aucun bloc : rien à faire mener', async () => {
+    const { systeme } = await lancer({ instruction: '', consigneFilConducteur: true });
+    expect(systeme).not.toMatch(/FIL CONDUCTEUR/);
+  });
+
+  test('le socle système (mis en cache) n\'est PAS touché par le fil conducteur', async () => {
+    const a = await lancer({ instruction: 'X.', consigneFilConducteur: true });
+    callClaudeWithProgress.mockClear();
+    const b = await lancer({ instruction: 'Y.', consigneFilConducteur: false });
+    const socle = (s) => JSON.parse(s)[0];
+    expect(socle(a.systeme)).toEqual(socle(b.systeme));
+  });
+});
+
 describe('runQatRewrite — cas nominal', () => {
   test('retourne l\'article assaini, avec le chapô replacé en tête du corps', async () => {
     callClaudeWithProgress.mockResolvedValueOnce(reply({
