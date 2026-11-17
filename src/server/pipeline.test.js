@@ -125,6 +125,79 @@ describe('runArticlePipeline — chemin complet', () => {
     expect(args.auditSelection).toMatchObject({ recent_context: true, a_supprimer: false, sources_check: false });
   });
 
+  // ── CONSIGNE = DIRECTIVE MAJEURE (décision d'Andrianina, 17/11/2026) ────────
+  // « L'audit ajoute les essentiels, mais la consigne sert de directive majeure. »
+  // Deux choses à verrouiller ENSEMBLE : la consigne REMPLACE les directives
+  // rédigées par l'audit, ET l'audit part quand même (c'est lui qui fournit les
+  // essentiels) — sans quoi une consigne ferait perdre tout l'audit.
+  describe('la consigne du lot', () => {
+    test('REMPLACE les directives rédigées par l\'audit : elle part telle quelle, sans ajout', async () => {
+      await runArticlePipeline({ ...baseInput(), instruction: 'Ajoute une section sur le prix au m2.' });
+      const args = runQatRewrite.mock.calls[0][0];
+      expect(args.instruction).toBe('Ajoute une section sur le prix au m2.');
+    });
+
+    test('l\'audit PART QUAND MÊME : conclusions et sélection transmises, indépendamment de la consigne', async () => {
+      await runArticlePipeline({ ...baseInput(), instruction: 'Ajoute une section sur le prix au m2.' });
+      const args = runQatRewrite.mock.calls[0][0];
+      expect(args.audit).toBe(AUDIT_SIMPLE);
+      expect(args.auditSelection).toMatchObject({ recent_context: true });
+      expect(args.depth).toBe('ciblee');
+    });
+
+    test('sans consigne : les directives sont rédigées à partir de l\'audit, non vides', async () => {
+      await runArticlePipeline(baseInput());
+      const args = runQatRewrite.mock.calls[0][0];
+      expect(typeof args.instruction).toBe('string');
+      expect(args.instruction.trim().length).toBeGreaterThan(0);
+    });
+  });
+
+  // ── AMPLEUR : le choix « Refonte » de la ligne du lot ──────────────────────
+  // La colonne `maj_type` était enregistrée mais jamais lue : l'ampleur venait de
+  // l'audit seul. Seul « refonte » est honoré — « maj » est la valeur par défaut
+  // de toute ligne, la forcer changerait tous les lots lancés sans toucher au menu.
+  describe('l\'ampleur choisie sur la ligne du lot', () => {
+    test('« refonte » PRIME sur un audit qui recommandait une MAJ ciblée', async () => {
+      const onStep = jest.fn();
+      await runArticlePipeline({ ...baseInput(), majType: 'refonte', onStep });
+      const args = runQatRewrite.mock.calls[0][0];
+      expect(args.depth).toBe('refonte');
+      expect(onStep).toHaveBeenCalledWith(expect.stringMatching(/Refonte imposée par le lot/));
+    });
+
+    test('…et la sélection des cases d\'audit suit : celle d\'une refonte, pas d\'une MAJ simple', async () => {
+      await runArticlePipeline({ ...baseInput(), majType: 'refonte' });
+      const args = runQatRewrite.mock.calls[0][0];
+      // MAJ simple = recent_context seul. Une refonte réécrit tout : factuel + P1.
+      expect(args.auditSelection).toMatchObject({ a_supprimer: true, sources_check: true, priority_actions: ['P1'] });
+    });
+
+    test('« maj » (la valeur par défaut) LAISSE l\'audit décider, comme avant', async () => {
+      const onStep = jest.fn();
+      await runArticlePipeline({ ...baseInput(), majType: 'maj', onStep });
+      const args = runQatRewrite.mock.calls[0][0];
+      expect(args.depth).toBe('ciblee');
+      expect(onStep).not.toHaveBeenCalledWith(expect.stringMatching(/imposée/));
+    });
+
+    test('majType absent (ancien appelant) : comportement inchangé', async () => {
+      await runArticlePipeline(baseInput());
+      expect(runQatRewrite.mock.calls[0][0].depth).toBe('ciblee');
+    });
+
+    test('« refonte » quand l\'audit recommande DÉJÀ une refonte : rien d\'imposé, rien d\'annoncé', async () => {
+      runQatAudit.mockResolvedValue({
+        audit: { ampleur: { decision: 'refonte_totale' }, scores: { global: 4 } },
+        tokenUsage: usage(1000, 500, 'audit_qat'),
+      });
+      const onStep = jest.fn();
+      await runArticlePipeline({ ...baseInput(), majType: 'refonte', onStep });
+      expect(runQatRewrite.mock.calls[0][0].depth).toBe('refonte');
+      expect(onStep).not.toHaveBeenCalledWith(expect.stringMatching(/imposée/));
+    });
+  });
+
   // Régression confirmée en production le 4 septembre 2026 sur un article
   // réel : le filtre anti-widget Google Discover (stripNonEditorialLinks,
   // src/utils/scrapeClean.js) tourne dans le flux interactif (Articles.jsx)

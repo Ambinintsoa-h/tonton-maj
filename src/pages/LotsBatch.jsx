@@ -626,6 +626,7 @@ export default function LotsBatch() {
               <select
                 value={r.majType}
                 onChange={e => updateRow(r.id, { majType: e.target.value })}
+                title="Refonte : l'article est réécrit en entier, quoi que recommande l'audit. MAJ ciblée : l'audit choisit l'ampleur (ciblée ou refonte)."
                 className="rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
               >
                 {MAJ_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
@@ -635,6 +636,7 @@ export default function LotsBatch() {
                 value={r.consigne}
                 onChange={e => updateRow(r.id, { consigne: e.target.value })}
                 placeholder="Consigne (optionnel)"
+                title="Directive majeure : elle remplace les directives rédigées à partir de l'audit. Les conclusions de l'audit sont toujours transmises à l'IA. 2 500 caractères maximum."
                 className="flex-1 min-w-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
               <button type="button" onClick={() => removeRow(r.id)} className="text-gray-400 hover:text-red-500 p-1.5" title="Retirer la ligne">
