@@ -29,6 +29,7 @@ import Archives from './pages/Archives';
 import SuiviPositions from './pages/SuiviPositions';
 import BilanSeo from './pages/BilanSeo';
 import BudgetApi from './pages/BudgetApi';
+import Tutoriel from './pages/Tutoriel';
 import LotsBatch from './pages/LotsBatch';
 import { setSettings, setFirebaseReady, DEFAULT_FIREBASE_CONFIG } from './store/slices/settingsSlice';
 import { setSkills, setSkillsBootstrapped } from './store/slices/skillsSlice';
@@ -547,6 +548,15 @@ function AppRoutes() {
               <Route path="/budget-api" element={
                 <RoleGuard allowedRoles={['super_admin']}>
                   <BudgetApi />
+                </RoleGuard>
+              } />
+              {/* Tutoriels : deux parcours servis par la même page. Le parcours admin est
+                  protégé ICI aussi (pas seulement masqué dans le menu) ; la page redirige en
+                  plus tout rôle qui n'y a pas droit. */}
+              <Route path="/tutoriel/:id?" element={<Tutoriel parcours="redacteur" />} />
+              <Route path="/tutoriel-admin/:id?" element={
+                <RoleGuard allowedRoles={['super_admin', 'manager']}>
+                  <Tutoriel parcours="admin" />
                 </RoleGuard>
               } />
               <Route path="/equipe"         element={<Equipe />}       />
