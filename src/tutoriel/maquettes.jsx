@@ -247,20 +247,24 @@ export function MaquetteLot() {
       titre="MAJ en lot — Nouveau lot"
       legende="Changez le type, écrivez une consigne, puis lancez : le lot passe par « En attente », « En cours », « Fait »."
     >
-      <div className="grid gap-2 md:grid-cols-[1.4fr_1fr_0.9fr_1.6fr]">
-        <input aria-label="URL de l'article" readOnly value="https://exemple.com/mon-article/" className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-500" />
-        <input aria-label="Mot-clé cible" readOnly value="devis toiture" className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-500" />
+      {/* Une rangée qui SE REPLIE, et non quatre colonnes fixes : `md:grid-cols-4` se
+          déclenche sur la largeur de la FENÊTRE (≥ 768 px), alors que la colonne d'un
+          chapitre n'en fait que ~550 à 860 px. Le sélecteur et la consigne débordaient
+          alors de leur cadre — constaté en production le 17/11/2026. */}
+      <div className="flex flex-wrap gap-2">
+        <input aria-label="URL de l'article" readOnly value="https://exemple.com/mon-article/" className="flex-1 min-w-[11rem] rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-500" />
+        <input aria-label="Mot-clé cible" readOnly value="devis toiture" className="flex-1 min-w-[8rem] rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-500" />
         <select
           aria-label="Type de mise à jour" value={type}
           onChange={(e) => { setType(e.target.value); setEtape(-1); }}
-          className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm"
+          className="min-w-[8rem] rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm"
         >
           {TYPES_LOT.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
         </select>
         <input
           aria-label="Consigne (optionnel)" placeholder="Consigne (optionnel)" value={consigne}
           onChange={(e) => { setConsigne(e.target.value); setEtape(-1); }}
-          className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm"
+          className="flex-1 min-w-[14rem] rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm"
         />
       </div>
 

@@ -15,6 +15,34 @@ import {
 
 afterEach(() => { cleanup(); jest.useRealTimers(); window.localStorage.clear(); });
 
+// ── Largeur : les breakpoints Tailwind mesurent la FENÊTRE, pas la colonne ───────
+// Constaté en production le 17/11/2026, fenêtre de 860 px : la colonne d'un chapitre
+// n'en fait que ~550 (barre latérale + sommaire). `sm:flex-row` (stepper) et
+// `md:grid-cols-[4 colonnes]` (ligne de lot) s'y déclenchaient quand même : « Relecture »
+// était rognée et le sélecteur débordait. jsdom ne mesure aucune mise en page : ce
+// verrou lit la source pour qu'on ne remette pas la cause.
+describe('mise en page : rien qui ne tienne que sur grand écran', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const lire = (f) => fs.readFileSync(path.join(__dirname, f), 'utf8');
+
+  it('les étapes ne passent en ligne qu\'à partir de `lg`', () => {
+    const ui = lire('ui.jsx');
+    expect(ui).toMatch(/flex flex-col lg:flex-row/);
+    expect(ui).not.toMatch(/flex flex-col sm:flex-row/);
+  });
+
+  it('la ligne de lot se replie (flex-wrap) au lieu d\'imposer des colonnes fixes', () => {
+    const mq = lire('maquettes.jsx');
+    expect(mq).toMatch(/flex flex-wrap gap-2/);
+    expect(mq).not.toMatch(/md:grid-cols-\[1\.4fr/);
+  });
+
+  it('une maquette trop large défile dans son cadre au lieu de déborder de la page', () => {
+    expect(lire('ui.jsx')).toMatch(/p-4 bg-gray-50\/60 overflow-x-auto/);
+  });
+});
+
 describe('Onglets', () => {
   const onglets = [
     { id: 'a', label: 'Premier', contenu: <p>Contenu A</p> },
