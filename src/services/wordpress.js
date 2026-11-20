@@ -45,12 +45,59 @@ const extractSlug = (articleUrl) => {
   }
 };
 
+const cheminDe = (u = '') => {
+  try { return new URL(String(u)).pathname.replace(/\/+$/, '').toLowerCase(); }
+  catch { return ''; }
+};
+
+/**
+ * ID numérique en fin de permalien (`/rubrique/slug/4063/`), ou null.
+ * Exige au moins un segment avant : `/2026/` seul n'est pas un ID de post.
+ */
+export const extractNumericId = (articleUrl) => {
+  try {
+    const parts = new URL(articleUrl).pathname.split('/').filter(Boolean);
+    const last = parts[parts.length - 1] || '';
+    return parts.length >= 2 && /^\d+$/.test(last) ? last : null;
+  } catch { return null; }
+};
+
+/**
+ * Cherche le post par son ID (permaliens terminés par l'ID). Garde-fou : le
+ * `link` renvoyé doit avoir le MÊME chemin que l'URL demandée — sinon un slug
+ * numérique ordinaire désignerait le mauvais article. Aucun hôte comparé : un
+ * même WordPress sert plusieurs sous-domaines de langue.
+ * Retourne le post ({ id, link, … , postType }) ou null.
+ */
+const findPostByNumericId = async (site, articleUrl) => {
+  const id = extractNumericId(articleUrl);
+  if (!id) return null;
+  const voulu = cheminDe(articleUrl);
+  for (const type of ['posts', 'pages']) {
+    const r = await wpRequest(
+      site, 'GET',
+      `/wp-json/wp/v2/${type}/${id}?_fields=id,link,title,slug,status,type`
+    );
+    const p = r.success ? r.data : null;
+    if (p && String(p.id) === id && cheminDe(p.link) === voulu) {
+      return { ...p, postType: type };
+    }
+  }
+  return null;
+};
+
 /**
  * Cherche un post WordPress par son slug, dans les posts ET les pages.
  * Retourne { success, post: { id, title, link, slug, postType } }
  */
 export const findPostByUrl = async (site, articleUrl) => {
   try {
+    // Permalien « …/slug/12345/ » (las-motorsport.com) : le dernier segment est
+    // l'ID du post, pas son slug. On le cherche d'abord par ID — mais on ne
+    // retient le post que si SON lien est bien le chemin de l'URL demandée.
+    const parParId = await findPostByNumericId(site, articleUrl);
+    if (parParId) return { success: true, post: parParId };
+
     const slug = extractSlug(articleUrl);
     if (!slug) return { success: false, error: "Impossible d'extraire le slug depuis l'URL" };
 
