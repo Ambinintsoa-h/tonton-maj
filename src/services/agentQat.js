@@ -948,6 +948,27 @@ comme de vraies questions, réordonne du général au spécifique, fais descendr
 sujets secondaires en H3, et ajoute ce qui manque (TL;DR, FAQ, tableau, sections
 de priorité haute). Le nombre de H2 peut BAISSER : c'est l'objectif. Tu renvoies
 l'article ENTIER dans article_html.`
+    : resolved.depth === 'ciblee' && consigneFilConducteur && instr.texte
+    // MAJ CIBLÉE MENÉE PAR UNE CONSIGNE (23/11/2026). Le bloc générique ci-dessous
+    // ordonne de « conserver à leur texte d'origine » et de « se limiter à » une liste
+    // qui ne cite PAS la consigne : il la contredit dès qu'elle demande de changer un
+    // passage. Mesuré en production sur un article réel — consigne « Change les H2, le
+    // chapô et l'introduction » : chapô réécrit (proximité de mots 0,23), 6 H2 sur 9
+    // changés, mais introduction seulement REFORMULÉE (0,61 : mêmes phrases, synonymes).
+    // Le modèle arbitrait entre deux ordres opposés. Ici la consigne définit ce qui est
+    // visé : cela est réécrit pour de bon, et le reste seulement est conservé.
+    ? `## ═══ AMPLEUR RETENUE : MAJ CIBLÉE, MENÉE PAR LA CONSIGNE DE L'ÉQUIPE ═══
+Tu ne réécris PAS tout : ce que la consigne de l'équipe ne vise pas reste à son texte
+d'origine, à l'identique.
+Ce que la consigne vise est, en revanche, RÉÉCRIT POUR DE BON : une nouvelle
+formulation, un nouvel angle, de nouvelles phrases. Une reformulation à la marge
+(mêmes phrases, mêmes tournures, quelques synonymes) ne compte PAS comme une
+réécriture. Quand la consigne demande de changer un passage (titres H2, chapô,
+introduction, conclusion…), tu ne reprends aucune phrase d'origine de ce passage.
+En plus de la consigne, tu peux corriger les données fausses ou obsolètes, retirer
+ce que liste a_supprimer, ajouter le TL;DR, la FAQ, le tableau et les sections
+manquantes signalées en priorité haute. Tu renvoies malgré tout l'article ENTIER
+dans article_html (parties non visées incluses, à l'identique).`
     : resolved.depth === 'ciblee'
     ? `## ═══ AMPLEUR RETENUE : MAJ CIBLÉE ═══
 Tu ne réécris PAS tout. Conserve la structure et les sections qui fonctionnent, à
