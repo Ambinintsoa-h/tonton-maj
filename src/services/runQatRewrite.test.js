@@ -205,6 +205,54 @@ describe('runQatRewrite — consigne = fil conducteur', () => {
     expect(systeme).not.toMatch(/FIL CONDUCTEUR/);
   });
 
+  // ── MAJ ciblée menée par une consigne (23/11/2026) ──────────────────────────
+  // Constaté en production (article réel, consigne « Change les H2, le chapô et
+  // l'introduction ») : chapô réécrit, mais introduction seulement reformulée. Le bloc
+  // générique « MAJ CIBLÉE » ordonnait de conserver « à leur texte d'origine » et de se
+  // limiter à une liste qui ne citait pas la consigne : deux ordres opposés.
+  describe('MAJ ciblée menée par la consigne', () => {
+    const ciblee = (extra) => lancer({ depth: 'ciblee', instruction: 'Change l\'introduction.', ...extra });
+
+    test('ce que la consigne vise est RÉÉCRIT, une reformulation à la marge ne compte pas', async () => {
+      const { systeme } = await ciblee({ consigneFilConducteur: true });
+      expect(systeme).toMatch(/MAJ CIBLÉE, MENÉE PAR LA CONSIGNE DE L'ÉQUIPE/);
+      expect(systeme).toMatch(/RÉÉCRIT POUR DE BON/);
+      expect(systeme).toMatch(/reformulation à la marge/);
+      expect(systeme).toMatch(/tu ne reprends aucune phrase d'origine de ce passage/);
+    });
+
+    test('le reste de l\'article reste à l\'identique, et l\'article est toujours renvoyé en entier', async () => {
+      const { systeme } = await ciblee({ consigneFilConducteur: true });
+      expect(systeme).toMatch(/ce que la consigne de l'équipe ne vise pas reste à son texte/);
+      expect(systeme).toMatch(/l'article ENTIER/);
+    });
+
+    test('le bloc générique, qui contredisait la consigne, n\'est plus servi', async () => {
+      const { systeme } = await ciblee({ consigneFilConducteur: true });
+      expect(systeme).not.toMatch(/Limite-toi à : corriger/);
+      expect(systeme).not.toMatch(/Conserve la structure et les sections qui fonctionnent/);
+    });
+
+    test('SANS consigne meneuse : le bloc générique est INCHANGÉ', async () => {
+      const { systeme } = await ciblee({});
+      expect(systeme).toMatch(/AMPLEUR RETENUE : MAJ CIBLÉE ═/);
+      expect(systeme).toMatch(/Conserve la structure et les sections qui fonctionnent/);
+      expect(systeme).not.toMatch(/MENÉE PAR LA CONSIGNE/);
+    });
+
+    test('le drapeau sans texte de consigne ne change rien au bloc', async () => {
+      const { systeme } = await ciblee({ consigneFilConducteur: true, instruction: '' });
+      expect(systeme).not.toMatch(/MENÉE PAR LA CONSIGNE/);
+      expect(systeme).toMatch(/Conserve la structure et les sections qui fonctionnent/);
+    });
+
+    test('une REFONTE menée par la consigne garde son bloc de refonte', async () => {
+      const { systeme } = await lancer({ depth: 'refonte', instruction: 'Change l\'angle.', consigneFilConducteur: true });
+      expect(systeme).toMatch(/REFONTE TOTALE/);
+      expect(systeme).not.toMatch(/MENÉE PAR LA CONSIGNE/);
+    });
+  });
+
   test('le socle système (mis en cache) n\'est PAS touché par le fil conducteur', async () => {
     const a = await lancer({ instruction: 'X.', consigneFilConducteur: true });
     callClaudeWithProgress.mockClear();
