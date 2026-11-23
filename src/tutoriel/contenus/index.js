@@ -6,6 +6,7 @@
 import Bienvenue from './bienvenue';
 import PremiersPas from './premiers-pas';
 import FaireUneMaj from './faire-une-maj';
+import ConsigneMaj from './consigne-maj';
 import RelirePublier from './relire-publier';
 import MajEnLot from './maj-en-lot';
 import SuivreSonTravail from './suivre-son-travail';
@@ -23,6 +24,7 @@ export const CONTENUS = {
   'bienvenue': Bienvenue,
   'premiers-pas': PremiersPas,
   'faire-une-maj': FaireUneMaj,
+  'consigne-maj': ConsigneMaj,
   'relire-publier': RelirePublier,
   'maj-en-lot': MajEnLot,
   'suivre-son-travail': SuivreSonTravail,
