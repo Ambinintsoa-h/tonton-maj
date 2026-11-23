@@ -15,6 +15,39 @@ import {
 } from 'lucide-react';
 import { basculerCoche, lireCoches } from './progression';
 
+// ── Capture d'écran annotée ───────────────────────────────────────────────────
+/**
+ * Une VRAIE capture de l'application (rangée dans `public/tutoriel/`), avec des
+ * pastilles numérotées posées par-dessus. Contrairement aux maquettes, elle montre
+ * l'écran tel qu'il est : à n'utiliser que pour un écran qu'on ne peut pas
+ * reproduire fidèlement, et seulement après avoir retiré toute donnée réelle (nom du
+ * membre, texte d'un article) — le dossier `public/` est servi sans connexion.
+ *
+ * `pastilles` : [{ n, x, y }] — x et y en POURCENTAGE de l'image (0-100), pour que
+ * les pastilles suivent la capture à toutes les largeurs.
+ */
+export function Capture({ fichier, alt, legende, pastilles = [] }) {
+  const src = `${process.env.PUBLIC_URL || ''}/tutoriel/${fichier}`;
+  return (
+    <figure className="my-4">
+      <div className="relative rounded-xl border border-gray-200 overflow-hidden bg-white">
+        <img src={src} alt={alt} loading="lazy" className="block w-full h-auto" />
+        {pastilles.map((p) => (
+          <span
+            key={p.n}
+            aria-hidden="true"
+            style={{ left: `${p.x}%`, top: `${p.y}%` }}
+            className="absolute -translate-x-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-rose-600 text-white text-xs font-bold flex items-center justify-center ring-2 ring-white shadow"
+          >
+            {p.n}
+          </span>
+        ))}
+      </div>
+      {legende && <figcaption className="text-xs text-gray-500 mt-1.5">{legende}</figcaption>}
+    </figure>
+  );
+}
+
 // ── Encadrés ──────────────────────────────────────────────────────────────────
 const ENCADRES = {
   regle:     { Icone: ShieldCheck,   fond: 'bg-emerald-50 border-emerald-200', texte: 'text-emerald-900', icone: 'text-emerald-600', titre: 'Règle absolue' },

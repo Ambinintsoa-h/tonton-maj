@@ -67,6 +67,11 @@ export const CHAPITRES = [
     resume: 'Lancer l\'analyse, lire l\'audit, générer, vérifier.',
   },
   {
+    id: 'consigne-maj', parcours: PARCOURS_REDACTEUR, minutes: 8, roles: TOUS,
+    titre: 'Ajouter une consigne à une MAJ',
+    resume: 'Où la saisir selon la façon de lancer la MAJ, et comment l\'écrire.',
+  },
+  {
     id: 'relire-publier', parcours: PARCOURS_REDACTEUR, minutes: 7, roles: TOUS,
     titre: 'Relire et publier',
     resume: 'Corriger le texte, régler le titre, publier sans mauvaise surprise.',
