@@ -506,7 +506,7 @@ describe('runQatRewrite — réponses non conformes', () => {
 // Mesuré en production le 23/11/2026 (même article, trois essais) : introduction
 // à 0,44 / 0,54 / 0,14 de proximité avec l'original, H2 changés 0 / 4 / 1 sur 9.
 // Le bloc de prompt ne suffit pas ; le code mesure et relance UNE fois.
-describe('runQatRewrite — la consigne nommée est vérifiée, puis relancée une fois', () => {
+describe('runQatRewrite — la consigne nommée est vérifiée, puis relancée (2 fois au plus)', () => {
   const CHAPO = 'Fondée en 1976 aux États-Unis et implantée en France via Ticketnet en 1997, la plateforme distribue des millions de places.';
   const INTRO = 'Acheter une place de concert sur une billetterie en ligne semble d’une simplicité enfantine, mais le parcours reste complexe pour beaucoup.';
   const SOURCE = `<p>${CHAPO}</p><p>${INTRO}</p>`
@@ -556,14 +556,34 @@ describe('runQatRewrite — la consigne nommée est vérifiée, puis relancée u
     expect(steps.join('\n')).toMatch(/nouvelle rédaction ciblée/);
   });
 
-  test('JAMAIS plus d\'une relance, même si elle ne change rien', async () => {
-    await lancer([gen(SOURCE), gen(SOURCE)]);
-    expect(appelsGeneration()).toBe(2);
+  test('JAMAIS plus de deux relances, même si elles ne changent rien', async () => {
+    const { article } = await lancer([gen(SOURCE), gen(SOURCE), gen(SOURCE)]);
+    expect(appelsGeneration()).toBe(3);
+    expect(article.constatConsigne.relances).toBe(2);
+  });
+
+  test('2e relance : l\'introduction seule restée trop proche est reprise une 2e fois', async () => {
+    // 1re : tout identique ; 2e : H2 et chapô neufs mais introduction identique ; 3e : tout neuf.
+    const introIdentique = REECRIT.replace(/<p>Voici comment[^<]*<\/p>/, `<p>${INTRO}</p>`);
+    const { article } = await lancer([gen(SOURCE), gen(introIdentique), gen(REECRIT)]);
+    expect(appelsGeneration()).toBe(3);
+    const troisieme = callClaudeWithProgress.mock.calls
+      .filter(([, , , , label]) => !/Mise en gras/i.test(String(label || '')))[2][1].messages[0].content;
+    expect(troisieme).toMatch(/l'INTRODUCTION : trop proche/);
+    expect(troisieme).not.toMatch(/les TITRES H2/);   // déjà changés à la 2e génération
+    expect(article.html).toContain('Voici comment');
+    expect(article.constatConsigne.relances).toBe(2);
+    expect(article.constatConsigne.retenue).toBe('reprise');
+  });
+
+  test('le constat persisté ne porte pas les textes d\'origine (déjà dans l\'article d\'origine)', async () => {
+    const { article } = await lancer([gen(SOURCE), gen(REECRIT)]);
+    expect(JSON.stringify(article.constatConsigne)).not.toContain('Fondée en 1976');
   });
 
   test('une relance PIRE que la première n\'est pas retenue', async () => {
     const un = REECRIT.replace(/<h2>[^<]*<\/h2>/g, '<h2>Ticketnet, entité française</h2>');   // chapô/intro neufs, H2 identiques
-    const { article } = await lancer([gen(un), gen(SOURCE)]);
+    const { article } = await lancer([gen(un), gen(SOURCE), gen(SOURCE)]);
     expect(article.html).toContain('Un clic suffit');
     expect(article.constatConsigne.retenue).toBe('premiere');
   });
@@ -571,7 +591,7 @@ describe('runQatRewrite — la consigne nommée est vérifiée, puis relancée u
   test('une relance illisible : la première génération est CONSERVÉE, pas d\'erreur', async () => {
     const { article, steps } = await lancer([gen(SOURCE), { h1: 'vide' }]);
     expect(article.html).toContain('Fondée en 1976');
-    expect(steps.join('\n')).toMatch(/première génération conservée/);
+    expect(steps.join('\n')).toMatch(/génération précédente conservée/);
   });
 
   test('une relance qui perd un lien externe : la première génération est conservée', async () => {
