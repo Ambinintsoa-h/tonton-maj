@@ -99,4 +99,16 @@ describe('ce qui ne doit PAS s\'afficher', () => {
     avec({ suroptimisation: { h2AvecMotCle: 2, h2Total: 9, excesH2: 0 } });
     expect(screen.queryByText(/titres H2 sur/)).not.toBeInTheDocument();
   });
+  // La consigne nommait des passages et ils sont restés trop proches malgré les
+  // relances automatiques : le rédacteur doit le savoir, sinon il croit l'introduction changée.
+  it('une cible restée trop proche après les relances est DITE au rédacteur', () => {
+    avec({ constatConsigne: { cibles: ['intro'], relance: true, relances: 2, apres: { insuffisantes: ['intro'] } } });
+    expect(screen.getByText(/demandait de changer l'introduction/)).toBeInTheDocument();
+    expect(screen.getByText(/malgré 2 reprise\(s\) automatique\(s\)/)).toBeInTheDocument();
+  });
+
+  it("une consigne suivie (avec ou sans relance) n'affiche rien : ce n'est pas une anomalie", () => {
+    avec({ constatConsigne: { cibles: ['intro'], relance: true, relances: 1, apres: { insuffisantes: [] } } });
+    expect(screen.queryByText(/demandait de changer/)).not.toBeInTheDocument();
+  });
 });

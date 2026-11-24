@@ -20,7 +20,7 @@ import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 // R5 — le gras de l'article d'origine ne disparaît pas (module AUTONOME).
 import { carryOverBold, constatGras, plafonnerGras, GRAS_MIN_PAR_H2, GRAS_MAX_MOTS } from '../utils/boldCarry';
 import { runBoldPass } from './agentBold';
-import { detecterCibles, mesurerCibles, repriseConsigne } from '../utils/consigneCibles';
+import { detecterCibles, mesurerCibles, repriseConsigne, MAX_RELANCES_CONSIGNE } from '../utils/consigneCibles';
 import { applyLinkFollowPolicyHtml } from '../utils/export';
 import {
   phrasesTropLongues, MOTS_MAX_PHRASE, MOTS_MAX_TITRE,
@@ -1171,10 +1171,10 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
   // JSON ou du verrou externe.
   const ciblesConsigne = (resolved.depth === 'ciblee' && consigneFilConducteur && instr.texte)
     ? detecterCibles(instr.texte) : [];
-  const essaisMax = maxEssaisIA + (ciblesConsigne.length ? 1 : 0);
-  let premiere = null;       // 1re génération valide, gardée en repli de la relance
-  let relanceFaite = false;
-  let constatConsigne = { cibles: ciblesConsigne, relance: false, avant: null, apres: null, retenue: null };
+  const essaisMax = maxEssaisIA + (ciblesConsigne.length ? MAX_RELANCES_CONSIGNE : 0);
+  let meilleure = null;      // meilleure génération valide jusqu'ici, gardée en repli des relances
+  let relances = 0;
+  let constatConsigne = { cibles: ciblesConsigne, relance: false, relances: 0, avant: null, apres: null, retenue: null };
   // Message utilisateur de l'essai courant : enrichi à chaque rejet du détail de
   // ce qui a manqué. Relancer un prompt IDENTIQUE reproduirait la même erreur.
   let currentUser = user;
@@ -1236,17 +1236,17 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
         // tronquée est un échec total, pas partiel. La marge doit être plus
         // large qu'ailleurs, pas ajustée au plus juste.
         params: { system, max_tokens: 48000, model: selectModel('refonte', modelSelections), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
-        label: attempt === 1 ? 'Rédaction de l\'article' : (relanceFaite && attempt === 2 ? 'Rédaction — reprise de la consigne' : `Rédaction — essai ${attempt}/${essaisMax}`),
+        label: attempt === 1 ? 'Rédaction de l\'article' : (relances > 0 ? `Rédaction — reprise de la consigne (${relances}/${MAX_RELANCES_CONSIGNE})` : `Rédaction — essai ${attempt}/${essaisMax}`),
         pass: 'refonte',
         onStep, onReplace, onProgress, onDelta, trackCall,
         progressFrom: 55, progressTo: 88,
       });
       raw = (text || '').trim();
       article = parseJsonLoose(raw);
-      if (!article?.article_html && premiere) {
-        // La RELANCE a échoué : la 1re génération était valide, on la reprend.
-        onStep('⚠️ La reprise de la consigne n\'a rien produit d\'exploitable — première génération conservée.');
-        article = premiere.article;
+      if (!article?.article_html && meilleure) {
+        // La RELANCE a échoué : une génération précédente était valide, on la reprend.
+        onStep('⚠️ La reprise de la consigne n\'a rien produit d\'exploitable — meilleure génération précédente conservée.');
+        article = meilleure.article;
       } else if (!article?.article_html) {
         onStep(`⚠️ Réponse illisible ou article vide — nouvel essai (${attempt}/${essaisMax})...`);
         // La FIN du texte est ce qui compte : une troncature par max_tokens se
@@ -1275,11 +1275,11 @@ complet.`;
 
       // ── Verrou liens externes + sécurité structure (règle 8, non négociable) ──
       let check = sanitizeFullArticle(sourceHtml, composed, articleUrl);
-      if (check.missing.length && premiere && article !== premiere.article) {
+      if (check.missing.length && meilleure && article !== meilleure.article) {
         // La RELANCE a perdu un lien externe : jamais de publication avec ce
-        // verrou rouge. La 1re génération l'avait passé, on la reprend.
-        onStep('⚠️ La reprise de la consigne a perdu un lien externe — première génération conservée.');
-        ({ article, composed, check } = premiere);
+        // verrou rouge. Une génération précédente l'avait passé, on la reprend.
+        onStep('⚠️ La reprise de la consigne a perdu un lien externe — meilleure génération précédente conservée.');
+        ({ article, composed, check } = meilleure);
       }
       if (check.missing.length) {
         onStep(`⚠️ ${check.missing.length} lien(s) externe(s) d'origine perdu(s) — génération rejetée, nouvel essai (${attempt}/${essaisMax})...`);
@@ -1313,37 +1313,35 @@ N'ajoute aucun AUTRE lien externe.`;
       // AVANT R1/R2 : la relance repasse de toute façon par toute la chaîne.
       if (ciblesConsigne.length) {
         const mesure = mesurerCibles(sourceHtml, check.html, ciblesConsigne);
-        if (!premiere) {
-          constatConsigne.avant = mesure;
-          if (mesure.insuffisantes.length && attempt < essaisMax) {
+        // Repli : on est revenu à une génération déjà mesurée (relance illisible
+        // ou qui a perdu un lien externe) — rien de neuf à mesurer ni à relancer.
+        const repli = !!meilleure && article === meilleure.article;
+        if (!repli) {
+          if (relances === 0) constatConsigne.avant = mesure;
+          if (!meilleure || mesure.score < meilleure.mesure.score) {
+            meilleure = { article, composed, check, mesure, rang: relances };
+          } else {
+            onStep('ℹ️ La nouvelle rédaction ne se rapproche pas mieux de la consigne — meilleure génération précédente conservée.');
+          }
+          if (mesure.insuffisantes.length && relances < MAX_RELANCES_CONSIGNE && attempt < essaisMax) {
             const noms = mesure.insuffisantes.map((c) => ({ chapo: 'chapô', intro: 'introduction', titres: 'titres H2' }[c])).join(', ');
-            onStep(`🔁 La consigne demandait de changer ${noms} : resté(s) trop proche(s) de l'original — nouvelle rédaction ciblée (1 essai).`);
-            premiere = { article, composed, check, mesure };
-            relanceFaite = true;
-            constatConsigne = { ...constatConsigne, relance: true };
+            relances += 1;
+            onStep(`🔁 La consigne demandait de changer ${noms} : resté(s) trop proche(s) de l'original — nouvelle rédaction ciblée (${relances}/${MAX_RELANCES_CONSIGNE}).`);
+            constatConsigne = { ...constatConsigne, relance: true, relances };
             currentUser = `${user}${repriseConsigne(mesure)}`;
             article = null;
             continue;
           }
-          constatConsigne.apres = mesure;
-          constatConsigne.retenue = 'premiere';
-        } else if (article === premiere.article) {
-          // La relance n'a rien produit d'exploitable et on est revenu à la 1re.
-          constatConsigne.apres = mesure;
-          constatConsigne.retenue = 'premiere';
-        } else {
-          // Seconde génération : on garde la meilleure, jamais une régression.
-          constatConsigne.apres = mesure;
-          if (mesure.score > premiere.mesure.score) {
-            onStep('ℹ️ La nouvelle rédaction ne se rapproche pas mieux de la consigne — première génération conservée.');
-            ({ article, composed, check } = premiere);
-            constatConsigne.retenue = 'premiere';
-          } else {
-            onStep(mesure.insuffisantes.length
-              ? `ℹ️ Après reprise, encore trop proche de l'original : ${mesure.insuffisantes.join(', ')} — à retravailler en relecture.`
-              : '✅ Après reprise, la consigne est appliquée (chapô, introduction, titres).');
-            constatConsigne.retenue = 'reprise';
-          }
+        }
+        // Fin des essais : on retient la MEILLEURE génération, jamais la dernière
+        // par défaut — une relance peut régresser.
+        ({ article, composed, check } = meilleure);
+        constatConsigne.apres = meilleure.mesure;
+        constatConsigne.retenue = meilleure.rang === 0 ? 'premiere' : 'reprise';
+        if (relances > 0) {
+          onStep(meilleure.mesure.insuffisantes.length
+            ? `ℹ️ Après ${relances} reprise(s), encore trop proche de l'original : ${meilleure.mesure.insuffisantes.join(', ')} — à retravailler en relecture.`
+            : '✅ Après reprise, la consigne est appliquée (chapô, introduction, titres).');
         }
       }
 
@@ -1669,7 +1667,9 @@ N'ajoute aucun AUTRE lien externe.`;
         // Mesure de la consigne (cibles, proximité avant/après, relance). null
         // quand la consigne ne nomme aucune cible : jamais `undefined`, la
         // persistance refuse les champs indéfinis.
-        constatConsigne: ciblesConsigne.length ? JSON.parse(JSON.stringify(constatConsigne)) : null,
+        constatConsigne: ciblesConsigne.length
+          ? JSON.parse(JSON.stringify(constatConsigne, (k, v) => (k === 'originaux' ? undefined : v)))
+          : null,
         // RAPPORT DE LA PASSE DE GRAS, PERSISTÉ. Les messages `onStep` disparaissent
         // dès que la génération se termine — les étapes se replient et rien n'est
         // conservé. Impossible alors de savoir ce que la passe a proposé ni ce

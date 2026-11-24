@@ -149,6 +149,21 @@ export default function PhaseGeneration({
       });
     }
   }
+  // LA CONSIGNE NOMMAIT DES PASSAGES (chapô, introduction, H2) ET ILS SONT RESTÉS
+  // TROP PROCHES de l'original malgré les relances. Affiché seulement dans ce cas :
+  // une consigne suivie, avec ou sans relance, n'est pas une anomalie (même règle
+  // que les mesures à zéro ci-dessus). Sans cette ligne, le rédacteur croirait
+  // « l'introduction a changé » alors qu'elle n'est que reformulée à la marge.
+  const cc = qatArticle?.constatConsigne;
+  if (cc?.apres?.insuffisantes?.length) {
+    const noms = cc.apres.insuffisantes
+      .map((c) => ({ chapo: 'le chapô', intro: "l'introduction", titres: 'les titres H2' }[c] || c)).join(', ');
+    constats.push({
+      cle: 'consigne', icone: '🎯',
+      texte: `La consigne demandait de changer ${noms} : resté(s) trop proche(s) de l'original`
+        + `${cc.relances ? ` malgré ${cc.relances} reprise(s) automatique(s)` : ''}. À réécrire en relecture.`,
+    });
+  }
   // MODE AFFILIATION — le compte rendu de ce qui a été appliqué ET de ce qui ne
   // l'a pas été. Un bloc non appliqué garde son texte d'origine : sans ce
   // constat, le rédacteur croirait tout l'article à jour alors qu'une partie

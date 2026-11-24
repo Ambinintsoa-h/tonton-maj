@@ -18,6 +18,12 @@
  * modèle à changer ce que l'équipe a demandé de laisser.
  */
 
+/**
+ * Relances maximales quand une cible reste trop proche. Mesuré le 24/11/2026 (3
+ * articles réels, 1 relance) : 2 sur 3 conformes, le 3e gardait une introduction à
+ * 0,63. Chaque relance coûte une génération (~1 min) : deux, pas plus.
+ */
+export const MAX_RELANCES_CONSIGNE = 2;
 /** Au-dessus, un chapô ou une introduction est jugé reformulé à la marge. */
 export const SEUIL_PROXIMITE_PARAGRAPHE = 0.40;
 /** Au-dessus, un titre est jugé inchangé (apostrophes, accents, casse ignorés). */
