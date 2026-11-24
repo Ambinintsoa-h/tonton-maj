@@ -20,6 +20,7 @@ import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 // R5 — le gras de l'article d'origine ne disparaît pas (module AUTONOME).
 import { carryOverBold, constatGras, plafonnerGras, GRAS_MIN_PAR_H2, GRAS_MAX_MOTS } from '../utils/boldCarry';
 import { runBoldPass } from './agentBold';
+import { detecterCibles, mesurerCibles, repriseConsigne } from '../utils/consigneCibles';
 import { applyLinkFollowPolicyHtml } from '../utils/export';
 import {
   phrasesTropLongues, MOTS_MAX_PHRASE, MOTS_MAX_TITRE,
@@ -1163,6 +1164,17 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
   let article = null;
   let raw = '';
   let sanitized = null;
+  // ── LA CONSIGNE NOMME DES PASSAGES : ON VÉRIFIE, UNE FOIS, PUIS ON RELANCE ──
+  // Voir `consigneCibles.js`. Seulement pour une MAJ ciblée menée par la
+  // consigne : c'est le cas mesuré (23/11/2026). UN seul essai supplémentaire,
+  // budgété EN PLUS de `maxEssaisIA` pour ne pas manger les essais de reprise du
+  // JSON ou du verrou externe.
+  const ciblesConsigne = (resolved.depth === 'ciblee' && consigneFilConducteur && instr.texte)
+    ? detecterCibles(instr.texte) : [];
+  const essaisMax = maxEssaisIA + (ciblesConsigne.length ? 1 : 0);
+  let premiere = null;       // 1re génération valide, gardée en repli de la relance
+  let relanceFaite = false;
+  let constatConsigne = { cibles: ciblesConsigne, relance: false, avant: null, apres: null, retenue: null };
   // Message utilisateur de l'essai courant : enrichi à chaque rejet du détail de
   // ce qui a manqué. Relancer un prompt IDENTIQUE reproduirait la même erreur.
   let currentUser = user;
@@ -1206,7 +1218,7 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
     /* eslint-enable no-console */
   } catch { /* la journalisation ne doit JAMAIS empêcher une génération */ }
 
-  for (let attempt = 1; attempt <= maxEssaisIA && !sanitized; attempt++) {
+  for (let attempt = 1; attempt <= essaisMax && !sanitized; attempt++) {
     try {
       const { text } = await callWithLiveText({
         // Voir le commentaire de l'audit : raisonnement désactivé pour la bascule,
@@ -1224,15 +1236,19 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
         // tronquée est un échec total, pas partiel. La marge doit être plus
         // large qu'ailleurs, pas ajustée au plus juste.
         params: { system, max_tokens: 48000, model: selectModel('refonte', modelSelections), thinking: { type: 'disabled' }, messages: [{ role: 'user', content: currentUser }] },
-        label: attempt === 1 ? 'Rédaction de l\'article' : `Rédaction — essai ${attempt}/${maxEssaisIA}`,
+        label: attempt === 1 ? 'Rédaction de l\'article' : (relanceFaite && attempt === 2 ? 'Rédaction — reprise de la consigne' : `Rédaction — essai ${attempt}/${essaisMax}`),
         pass: 'refonte',
         onStep, onReplace, onProgress, onDelta, trackCall,
         progressFrom: 55, progressTo: 88,
       });
       raw = (text || '').trim();
       article = parseJsonLoose(raw);
-      if (!article?.article_html) {
-        onStep(`⚠️ Réponse illisible ou article vide — nouvel essai (${attempt}/${maxEssaisIA})...`);
+      if (!article?.article_html && premiere) {
+        // La RELANCE a échoué : la 1re génération était valide, on la reprend.
+        onStep('⚠️ La reprise de la consigne n\'a rien produit d\'exploitable — première génération conservée.');
+        article = premiere.article;
+      } else if (!article?.article_html) {
+        onStep(`⚠️ Réponse illisible ou article vide — nouvel essai (${attempt}/${essaisMax})...`);
         // La FIN du texte est ce qui compte : une troncature par max_tokens se
         // voit à ce qu'elle s'arrête en plein milieu d'un objet JSON ; un
         // guillemet non échappé dans le HTML se voit à ce que la fin ne
@@ -1255,14 +1271,20 @@ complet.`;
       // corps unique : on le replace en tête AVANT le contrôle, pour qu'il passe
       // lui aussi par le verrou liens externes et la sécurité structure.
       const chapo = String(article.chapo_html || '').trim();
-      const composed = chapo ? `${chapo}\n${article.article_html}` : article.article_html;
+      let composed = chapo ? `${chapo}\n${article.article_html}` : article.article_html;
 
       // ── Verrou liens externes + sécurité structure (règle 8, non négociable) ──
-      const check = sanitizeFullArticle(sourceHtml, composed, articleUrl);
+      let check = sanitizeFullArticle(sourceHtml, composed, articleUrl);
+      if (check.missing.length && premiere && article !== premiere.article) {
+        // La RELANCE a perdu un lien externe : jamais de publication avec ce
+        // verrou rouge. La 1re génération l'avait passé, on la reprend.
+        onStep('⚠️ La reprise de la consigne a perdu un lien externe — première génération conservée.');
+        ({ article, composed, check } = premiere);
+      }
       if (check.missing.length) {
-        onStep(`⚠️ ${check.missing.length} lien(s) externe(s) d'origine perdu(s) — génération rejetée, nouvel essai (${attempt}/${maxEssaisIA})...`);
-        if (attempt === maxEssaisIA) {
-          throw new Error(`Verrou liens externes : ${check.missing.length} lien(s) externe(s) de l'article d'origine absent(s) de la réécriture après ${maxEssaisIA} essais (${check.missing.join(', ')}).`);
+        onStep(`⚠️ ${check.missing.length} lien(s) externe(s) d'origine perdu(s) — génération rejetée, nouvel essai (${attempt}/${essaisMax})...`);
+        if (attempt >= essaisMax) {
+          throw new Error(`Verrou liens externes : ${check.missing.length} lien(s) externe(s) de l'article d'origine absent(s) de la réécriture après ${essaisMax} essais (${check.missing.join(', ')}).`);
         }
         // Reprise INSTRUITE : on nomme les liens perdus et leur ancre d'origine.
         // Sans ce retour, l'essai suivant repartait du même prompt et échouait
@@ -1284,6 +1306,45 @@ Ne les mets ni dans un titre, ni dans le TL;DR, ni dans un tableau, ni dans la F
 N'ajoute aucun AUTRE lien externe.`;
         article = null;
         continue;
+      }
+
+      // ── LA CONSIGNE A-T-ELLE ÉTÉ SUIVIE ? (chapô, introduction, titres H2) ────
+      // APRÈS le verrou externe (une génération rejetée n'est pas mesurée) et
+      // AVANT R1/R2 : la relance repasse de toute façon par toute la chaîne.
+      if (ciblesConsigne.length) {
+        const mesure = mesurerCibles(sourceHtml, check.html, ciblesConsigne);
+        if (!premiere) {
+          constatConsigne.avant = mesure;
+          if (mesure.insuffisantes.length && attempt < essaisMax) {
+            const noms = mesure.insuffisantes.map((c) => ({ chapo: 'chapô', intro: 'introduction', titres: 'titres H2' }[c])).join(', ');
+            onStep(`🔁 La consigne demandait de changer ${noms} : resté(s) trop proche(s) de l'original — nouvelle rédaction ciblée (1 essai).`);
+            premiere = { article, composed, check, mesure };
+            relanceFaite = true;
+            constatConsigne = { ...constatConsigne, relance: true };
+            currentUser = `${user}${repriseConsigne(mesure)}`;
+            article = null;
+            continue;
+          }
+          constatConsigne.apres = mesure;
+          constatConsigne.retenue = 'premiere';
+        } else if (article === premiere.article) {
+          // La relance n'a rien produit d'exploitable et on est revenu à la 1re.
+          constatConsigne.apres = mesure;
+          constatConsigne.retenue = 'premiere';
+        } else {
+          // Seconde génération : on garde la meilleure, jamais une régression.
+          constatConsigne.apres = mesure;
+          if (mesure.score > premiere.mesure.score) {
+            onStep('ℹ️ La nouvelle rédaction ne se rapproche pas mieux de la consigne — première génération conservée.');
+            ({ article, composed, check } = premiere);
+            constatConsigne.retenue = 'premiere';
+          } else {
+            onStep(mesure.insuffisantes.length
+              ? `ℹ️ Après reprise, encore trop proche de l'original : ${mesure.insuffisantes.join(', ')} — à retravailler en relecture.`
+              : '✅ Après reprise, la consigne est appliquée (chapô, introduction, titres).');
+            constatConsigne.retenue = 'reprise';
+          }
+        }
       }
 
       // ── R1, volet INTERNE : reprise DÉTERMINISTE et NON BLOQUANTE ───────────
@@ -1605,6 +1666,10 @@ N'ajoute aucun AUTRE lien externe.`;
         // refuse les champs indéfinis, et un article ne doit pas échouer à
         // s'enregistrer pour une mesure absente (même raison que ci-dessus).
         constatFaq: faq,
+        // Mesure de la consigne (cibles, proximité avant/après, relance). null
+        // quand la consigne ne nomme aucune cible : jamais `undefined`, la
+        // persistance refuse les champs indéfinis.
+        constatConsigne: ciblesConsigne.length ? JSON.parse(JSON.stringify(constatConsigne)) : null,
         // RAPPORT DE LA PASSE DE GRAS, PERSISTÉ. Les messages `onStep` disparaissent
         // dès que la génération se termine — les étapes se replient et rien n'est
         // conservé. Impossible alors de savoir ce que la passe a proposé ni ce
@@ -1630,8 +1695,8 @@ N'ajoute aucun AUTRE lien externe.`;
         briefReport: reportLine,
       };
     } catch (e) {
-      console.warn(`[qat rewrite] essai ${attempt}/${maxEssaisIA}:`, e.message);
-      if (attempt >= maxEssaisIA) throw e;
+      console.warn(`[qat rewrite] essai ${attempt}/${essaisMax}:`, e.message);
+      if (attempt >= essaisMax) throw e;
       await new Promise(r => setTimeout(r, 1500 * attempt));
     }
   }
@@ -1701,6 +1766,8 @@ N'ajoute aucun AUTRE lien externe.`;
       // ou trois semaines plus tard, si la FAQ manquait déjà à la génération ou
       // si elle a été perdue en relecture.
       constatFaq:      sanitized.constatFaq || null,
+      // Mesure « la consigne a-t-elle été suivie ? » (cibles, proximité avant/après).
+      constatConsigne: sanitized.constatConsigne || null,
       grasPasse:       sanitized.boldPass || null,
       ancresDeclareesIa: Array.isArray(article.ancres_placees) ? article.ancres_placees : [],
       notesRedaction:  String(article.notes_redaction || '').trim(),
