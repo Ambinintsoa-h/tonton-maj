@@ -158,6 +158,9 @@ const SETTINGS_WHITELIST = [
   'smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'smtpFrom',
   'firebaseConfig', 'useLocalProxy', 'modelSelections',
   'googleSheetsServiceAccountJson', 'googleSheetsId',
+  // Feuille CIBLE de l'export « MAJ » (sortant) -- distincte de googleSheetsId,
+  // le Sheet de suivi lu par le cron gsheet-sync (entrant).
+  'googleSheetsMajExportId',
   'batchTuning',
   // Destinataire(s) de l'alerte « budget API bas » (sous 50 $). Un champ
   // plutot qu'une constante en dur : changer de destinataire ne doit pas
@@ -2365,6 +2368,25 @@ const sendBatchCompletionEmail = async (batchId) => {
 // Instance partagée entre le cron ci-dessous et POST /api/internal/gsheet-sync
 // (bouton "Synchroniser maintenant") -- null tant que DATA_BACKEND=firestore.
 let googleSheetSyncInstance = null;
+// Export « MAJ » vers Google Sheets (src/server/majSheetExport.js) -- même
+// partage que ci-dessus entre son cron (15 min) et POST /api/internal/maj-sheet-export.
+let majSheetExportInstance = null;
+// Clé de compte de service : réglage Paramètres en priorité (comme gsheet-sync),
+// à défaut le fichier local data/google-sheets-service-account.json. Renvoie
+// { serviceAccount } ou { error } -- ne journalise ni ne renvoie jamais la clé.
+const loadGoogleServiceAccount = (settings) => {
+  let raw = settings.googleSheetsServiceAccountJson;
+  if (!raw) {
+    try {
+      raw = fs.readFileSync(path.join(DATA_DIR, 'google-sheets-service-account.json'), 'utf8');
+    } catch { return { error: 'absente' }; }
+  }
+  try {
+    const sa = JSON.parse(raw);
+    if (!sa.client_email || !sa.private_key) return { error: 'incomplète (client_email/private_key manquants)' };
+    return { serviceAccount: sa };
+  } catch { return { error: 'illisible (JSON invalide)' }; }
+};
 // Orchestrateur "MAJ en lot" de CE processus -- exposé à
 // GET /api/internal/batch-diagnostics. null tant que DATA_BACKEND=firestore.
 let batchOrchestratorInstance = null;
@@ -2480,6 +2502,35 @@ if (DATA_BACKEND === 'mysql') {
     runGsheetSyncTick();
     setInterval(runGsheetSyncTick, 5 * 60 * 1000);
   }, 20000);
+
+  // ─── Export « MAJ » vers Google Sheets (sortant) ────────────────────────────
+  // Miroir de l'état des lots dans l'onglet « MAJ » du Sheet réglé dans
+  // Paramètres (googleSheetsMajExportId), lu par le module SEO de la console.
+  // Même modèle que le cron gsheet-sync ci-dessus, toutes les 15 min.
+  const { createMajSheetExport } = require('./src/server/majSheetExport');
+  majSheetExportInstance = createMajSheetExport({
+    getPool: getGsheetPool,
+    onLog: (msg) => console.log(msg),
+  });
+  const runMajSheetExportTick = async () => {
+    const settings = readServerSettings();
+    if (!settings.googleSheetsMajExportId) return; // pas configuré
+    const { serviceAccount, error } = loadGoogleServiceAccount(settings);
+    if (!serviceAccount) {
+      console.error(`[maj-sheet-export] Clé de compte de service ${error}`);
+      return;
+    }
+    try {
+      await majSheetExportInstance.runExport(serviceAccount, settings.googleSheetsMajExportId);
+    } catch (e) {
+      console.error('[maj-sheet-export] Export échoué :', e.message);
+    }
+  };
+  // 40 s après le boot (après la sync entrante à 20 s), puis toutes les 15 min.
+  setTimeout(() => {
+    runMajSheetExportTick();
+    setInterval(runMajSheetExportTick, 15 * 60 * 1000);
+  }, 40000);
 }
 
 // ─── Sécurité globale : empêche le proxy de crasher sur exceptions non gérées ─
@@ -3127,6 +3178,32 @@ app.post('/api/internal/gsheet-sync', requireAuth, requireRole('super_admin', 'm
   } catch (e) {
     console.error('[proxy] /api/internal/gsheet-sync erreur:', e.message);
     res.status(500).json({ error: safeError(e, 'Synchronisation Google Sheet échouée') });
+  }
+});
+
+/**
+ * POST /api/internal/maj-sheet-export — export immédiat de l'état des MAJ vers
+ * l'onglet « MAJ » du Google Sheet cible (Paramètres -> googleSheetsMajExportId).
+ * Fait exactement ce que fait le cron 15 min (src/server/majSheetExport.js).
+ */
+app.post('/api/internal/maj-sheet-export', requireAuth, requireRole('super_admin', 'manager'), async (req, res) => {
+  if (DATA_BACKEND !== 'mysql' || !majSheetExportInstance) {
+    return res.status(400).json({ error: 'Indisponible dans ce mode' });
+  }
+  const settings = readServerSettings();
+  if (!settings.googleSheetsMajExportId) {
+    return res.status(400).json({ error: 'Export MAJ non configuré -- renseigne l\'identifiant du Sheet cible dans Paramètres.' });
+  }
+  const { serviceAccount, error } = loadGoogleServiceAccount(settings);
+  if (!serviceAccount) {
+    return res.status(500).json({ error: `Clé de compte de service Google ${error} -- vérifie Paramètres.` });
+  }
+  try {
+    const result = await majSheetExportInstance.runExport(serviceAccount, settings.googleSheetsMajExportId);
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[proxy] /api/internal/maj-sheet-export erreur:', e.message);
+    res.status(500).json({ error: safeError(e, 'Export des MAJ vers Google Sheets échoué') });
   }
 });
 

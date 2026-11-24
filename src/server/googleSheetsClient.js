@@ -11,20 +11,25 @@ const jwt = require('jsonwebtoken');
 const axios = require('axios');
 
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
+// Écriture : utilisée UNIQUEMENT par l'export « MAJ » (majSheetExport.js). La
+// lecture entrante (gsheet-sync) garde son scope lecture seule, inchangé.
+const SCOPE_WRITE = 'https://www.googleapis.com/auth/spreadsheets';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
-// Jeton d'accès mis en cache ~55 min (durée réelle 1h côté Google) -- évite
+// Jetons d'accès mis en cache ~55 min (durée réelle 1h côté Google) -- évite
 // de re-signer un JWT et de ré-échanger un jeton à CHAQUE tick du cron
 // (toutes les 5 min), pour rien : le compte de service ne change jamais.
-let cachedToken = null;
-let cachedTokenExpiry = 0;
+// Un cache PAR SCOPE (et par compte) : avec un cache unique, un jeton en lecture
+// seule serait resservi à une écriture (403), ou l'inverse -- un jeton
+// d'écriture prêté à la lecture entrante élargirait ses droits sans le dire.
+const tokenCache = new Map(); // `${client_email}|${scope}` -> { token, expiry }
 
-const fetchAccessToken = async (serviceAccount) => {
+const fetchAccessToken = async (serviceAccount, scope) => {
   const now = Math.floor(Date.now() / 1000);
   const assertion = jwt.sign(
     {
       iss: serviceAccount.client_email,
-      scope: SCOPE,
+      scope,
       aud: TOKEN_URL,
       iat: now,
       exp: now + 3600,
@@ -42,11 +47,12 @@ const fetchAccessToken = async (serviceAccount) => {
   return data.access_token;
 };
 
-const getAccessToken = async (serviceAccount) => {
-  if (cachedToken && Date.now() < cachedTokenExpiry) return cachedToken;
-  const token = await fetchAccessToken(serviceAccount);
-  cachedToken = token;
-  cachedTokenExpiry = Date.now() + 55 * 60 * 1000;
+const getAccessToken = async (serviceAccount, scope = SCOPE) => {
+  const key = `${serviceAccount.client_email}|${scope}`;
+  const hit = tokenCache.get(key);
+  if (hit && Date.now() < hit.expiry) return hit.token;
+  const token = await fetchAccessToken(serviceAccount, scope);
+  tokenCache.set(key, { token, expiry: Date.now() + 55 * 60 * 1000 });
   return token;
 };
 
@@ -74,4 +80,50 @@ const fetchSheetValues = async (serviceAccount, spreadsheetIdOrUrl, range = 'A:Z
   return data.values || [];
 };
 
-module.exports = { fetchSheetValues, extractSpreadsheetId, getAccessToken };
+// ─── Écriture (export « MAJ ») ───────────────────────────────────────────────
+
+// Nom d'onglet cité pour A1 : 'Mon onglet'!A1 (apostrophes doublées).
+const quoteTab = (tab) => `'${String(tab).replace(/'/g, "''")}'`;
+
+/**
+ * REMPLACE tout le contenu d'UN onglet : values.clear puis values.update.
+ * N'écrit jamais ailleurs : chaque plage est préfixée par le nom de l'onglet,
+ * et un nom vide est refusé (une plage sans onglet viserait le premier onglet
+ * du classeur -- potentiellement celui de la rédac). L'onglet est créé s'il
+ * manque ; ni les autres onglets ni leurs cellules ne sont touchés.
+ * Écriture en RAW : une valeur qui commence par « = » reste du texte, jamais
+ * une formule évaluée (mots-clés, titres, consignes viennent d'humains).
+ *
+ * @param {object} serviceAccount
+ * @param {string} spreadsheetIdOrUrl
+ * @param {string} tabName
+ * @param {Array<Array<string|number>>} rows  en-tête incluse (ligne 1)
+ * @returns {Promise<{ rows:number }>}
+ */
+const replaceTabValues = async (serviceAccount, spreadsheetIdOrUrl, tabName, rows) => {
+  const tab = String(tabName || '').trim();
+  if (!tab) throw new Error("Nom d'onglet requis pour écrire dans le Google Sheet");
+  const spreadsheetId = extractSpreadsheetId(spreadsheetIdOrUrl);
+  if (!spreadsheetId) throw new Error('Identifiant du Google Sheet manquant');
+  const token = await getAccessToken(serviceAccount, SCOPE_WRITE);
+  const headers = { Authorization: `Bearer ${token}` };
+  const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+
+  const { data: meta } = await axios.get(`${base}?fields=sheets.properties.title`, { headers });
+  const exists = (meta.sheets || []).some((s) => s.properties && s.properties.title === tab);
+  if (!exists) {
+    await axios.post(`${base}:batchUpdate`, { requests: [{ addSheet: { properties: { title: tab } } }] }, { headers });
+  }
+
+  const clearRange = encodeURIComponent(quoteTab(tab));
+  await axios.post(`${base}/values/${clearRange}:clear`, {}, { headers });
+  const updateRange = encodeURIComponent(`${quoteTab(tab)}!A1`);
+  await axios.put(
+    `${base}/values/${updateRange}?valueInputOption=RAW`,
+    { majorDimension: 'ROWS', values: rows },
+    { headers },
+  );
+  return { rows: rows.length };
+};
+
+module.exports = { fetchSheetValues, replaceTabValues, extractSpreadsheetId, getAccessToken, SCOPE, SCOPE_WRITE };
