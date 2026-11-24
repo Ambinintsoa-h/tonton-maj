@@ -2371,6 +2371,8 @@ let googleSheetSyncInstance = null;
 // Export « MAJ » vers Google Sheets (src/server/majSheetExport.js) -- même
 // partage que ci-dessus entre son cron (15 min) et POST /api/internal/maj-sheet-export.
 let majSheetExportInstance = null;
+// Lecture de l'onglet « Commande MAJ » (src/server/commandeMajSheet.js).
+let commandeMajSyncInstance = null;
 // Clé de compte de service : réglage Paramètres en priorité (comme gsheet-sync),
 // à défaut le fichier local data/google-sheets-service-account.json. Renvoie
 // { serviceAccount } ou { error } -- ne journalise ni ne renvoie jamais la clé.
@@ -2531,6 +2533,39 @@ if (DATA_BACKEND === 'mysql') {
     runMajSheetExportTick();
     setInterval(runMajSheetExportTick, 15 * 60 * 1000);
   }, 40000);
+
+  // ─── Onglet « Commande MAJ » (entrant : la console écrit, Tonton lit) ───────
+  // Même circuit que gsheet-sync (gsheet_staged_items, lancement = clic humain
+  // sur /lots), appliqué à l'onglet « Commande MAJ » du Sheet d'export. Instance
+  // dédiée : gsheet-sync lui-même n'est pas modifié.
+  const { fetchSheetValues: fetchCommandeValues, quoteTab: quoteCommandeTab } = require('./src/server/googleSheetsClient');
+  const { COMMANDE_TAB, parseCommandeRows } = require('./src/server/commandeMajSheet');
+  commandeMajSyncInstance = createGoogleSheetSync({
+    getPool: getGsheetPool,
+    fetchSheetValuesFn: (sa, id) => fetchCommandeValues(sa, id, quoteCommandeTab(COMMANDE_TAB)),
+    parseSheetRowsFn: parseCommandeRows,
+    onLog: (msg) => console.log(msg.replace('[gsheet-sync]', '[commande-maj]')),
+  });
+  const runCommandeMajTick = async () => {
+    const settings = readServerSettings();
+    if (!settings.googleSheetsMajExportId) return; // pas configuré
+    const { serviceAccount, error } = loadGoogleServiceAccount(settings);
+    if (!serviceAccount) {
+      console.error(`[commande-maj] Clé de compte de service ${error}`);
+      return;
+    }
+    try {
+      await commandeMajSyncInstance.runSync(serviceAccount, settings.googleSheetsMajExportId);
+    } catch (e) {
+      console.error('[commande-maj] Synchronisation échouée :', e.message);
+    }
+  };
+  // 60 s après le boot (l'export de 40 s a déjà créé l'onglet s'il manquait),
+  // puis toutes les 5 min comme gsheet-sync.
+  setTimeout(() => {
+    runCommandeMajTick();
+    setInterval(runCommandeMajTick, 5 * 60 * 1000);
+  }, 60000);
 }
 
 // ─── Sécurité globale : empêche le proxy de crasher sur exceptions non gérées ─
@@ -3204,6 +3239,32 @@ app.post('/api/internal/maj-sheet-export', requireAuth, requireRole('super_admin
   } catch (e) {
     console.error('[proxy] /api/internal/maj-sheet-export erreur:', e.message);
     res.status(500).json({ error: safeError(e, 'Export des MAJ vers Google Sheets échoué') });
+  }
+});
+
+/**
+ * POST /api/internal/commande-maj-sync — lecture immédiate de l'onglet
+ * « Commande MAJ » (rempli par la console) : détecte les commandes neuves et les
+ * met en attente sur /lots. Ne lance JAMAIS de lot toute seule.
+ */
+app.post('/api/internal/commande-maj-sync', requireAuth, requireRole('super_admin', 'manager', 'cq_ia'), async (req, res) => {
+  if (DATA_BACKEND !== 'mysql' || !commandeMajSyncInstance) {
+    return res.status(400).json({ error: 'Indisponible dans ce mode' });
+  }
+  const settings = readServerSettings();
+  if (!settings.googleSheetsMajExportId) {
+    return res.status(400).json({ error: 'Sheet MAJ non configuré -- renseigne son identifiant dans Paramètres.' });
+  }
+  const { serviceAccount, error } = loadGoogleServiceAccount(settings);
+  if (!serviceAccount) {
+    return res.status(500).json({ error: `Clé de compte de service Google ${error} -- vérifie Paramètres.` });
+  }
+  try {
+    const result = await commandeMajSyncInstance.runSync(serviceAccount, settings.googleSheetsMajExportId);
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[proxy] /api/internal/commande-maj-sync erreur:', e.message);
+    res.status(500).json({ error: safeError(e, 'Lecture de l\'onglet Commande MAJ échouée') });
   }
 });
 

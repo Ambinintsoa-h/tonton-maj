@@ -16,7 +16,8 @@
  * Dépendances externes (base, écriture Sheet, horloge) injectées, comme
  * googleSheetSync.js : les tests n'appellent jamais l'API Google ni MySQL.
  */
-const { replaceTabValues: defaultReplaceTabValues } = require('./googleSheetsClient');
+const { replaceTabValues: defaultReplaceTabValues, ensureTab: defaultEnsureTab } = require('./googleSheetsClient');
+const { COMMANDE_TAB, COMMANDE_HEADER } = require('./commandeMajSheet');
 
 /** Onglet cible. Jamais autre chose : l'export n'écrit nulle part ailleurs. */
 const MAJ_TAB = 'MAJ';
@@ -147,12 +148,14 @@ const TIME_SQL = `
  * @param {object} deps
  * @param {function} deps.getPool
  * @param {function} [deps.replaceTabValuesFn] (serviceAccount, spreadsheetId, tab, rows) => Promise<{rows}>
+ * @param {function} [deps.ensureTabFn]        (serviceAccount, spreadsheetId, tab, headerRow) => Promise<{created}>
  * @param {function} [deps.onLog]
  */
 function createMajSheetExport(deps) {
   const {
     getPool,
     replaceTabValuesFn = defaultReplaceTabValues,
+    ensureTabFn = defaultEnsureTab,
     onLog = () => {},
   } = deps;
 
@@ -174,6 +177,15 @@ function createMajSheetExport(deps) {
       });
       const rows = buildRows(items, timeByArticle);
       await replaceTabValuesFn(serviceAccount, spreadsheetId, MAJ_TAB, rows);
+      // L'onglet « Commande MAJ » (rempli par la console, lu par Tonton) est créé
+      // avec son en-tête s'il manque -- et JAMAIS écrasé s'il existe. Non bloquant :
+      // l'export ci-dessus est déjà fait, un échec ici ne doit pas le faire échouer.
+      try {
+        const { created } = await ensureTabFn(serviceAccount, spreadsheetId, COMMANDE_TAB, COMMANDE_HEADER);
+        if (created) onLog(`[maj-sheet-export] onglet « ${COMMANDE_TAB} » créé`);
+      } catch (e) {
+        onLog(`[maj-sheet-export] onglet « ${COMMANDE_TAB} » non vérifié : ${e.message}`);
+      }
       onLog(`[maj-sheet-export] ${items.length} ligne(s) exportée(s) vers l'onglet « ${MAJ_TAB} »`);
       return { exported: items.length, tab: MAJ_TAB };
     })().finally(() => { running = null; });

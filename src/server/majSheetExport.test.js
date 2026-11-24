@@ -154,8 +154,9 @@ describe('createMajSheetExport', () => {
       .mockResolvedValueOnce([items])
       .mockResolvedValueOnce([timeRows]);
     const replaceTabValuesFn = jest.fn().mockResolvedValue({ rows: 0 });
+    const ensureTabFn = jest.fn().mockResolvedValue({ created: false });
     const onLog = jest.fn();
-    return { deps: { getPool: () => ({ query }), replaceTabValuesFn, onLog }, query, replaceTabValuesFn, onLog };
+    return { deps: { getPool: () => ({ query }), replaceTabValuesFn, ensureTabFn, onLog }, query, replaceTabValuesFn, ensureTabFn, onLog };
   };
 
   it('écrit l\'en-tête + les lignes dans l\'onglet « MAJ », et nulle part ailleurs', async () => {
@@ -173,6 +174,21 @@ describe('createMajSheetExport', () => {
     expect(rows[0]).toBe(HEADER);
     expect(rows[1][4]).toBe('Publié');
     expect(result).toEqual({ exported: 1, tab: 'MAJ' });
+  });
+
+  it("vérifie l'onglet « Commande MAJ » avec son en-tête, sans jamais y écrire de lignes", async () => {
+    const { deps, replaceTabValuesFn, ensureTabFn } = makeDeps();
+    await createMajSheetExport(deps).runExport({}, 'S');
+    expect(ensureTabFn).toHaveBeenCalledWith({}, 'S', 'Commande MAJ', ['N°', 'URL', 'Mot-clé cible', 'Type de MAJ', 'Consigne', 'Attribué à']);
+    // la seule écriture de lignes vise « MAJ »
+    expect(replaceTabValuesFn.mock.calls.map((c) => c[2])).toEqual(['MAJ']);
+  });
+
+  it("un échec de vérification de l'onglet « Commande MAJ » ne fait pas échouer l'export", async () => {
+    const { deps, ensureTabFn, onLog } = makeDeps();
+    ensureTabFn.mockRejectedValueOnce(new Error('boom'));
+    await expect(createMajSheetExport(deps).runExport({}, 'S')).resolves.toEqual({ exported: 1, tab: 'MAJ' });
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('non vérifié'));
   });
 
   it('ne fait que lire en base (SELECT uniquement)', async () => {

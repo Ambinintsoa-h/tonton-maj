@@ -82,3 +82,28 @@ describe('replaceTabValues', () => {
     expect(axios.put).not.toHaveBeenCalled();
   });
 });
+
+describe('ensureTab', () => {
+  const header = ['N°', 'URL'];
+
+  it('onglet absent : le crée et n\'y écrit QUE l\'en-tête', async () => {
+    axios.get.mockResolvedValue({ data: { sheets: [{ properties: { title: 'MAJ' } }] } });
+    const out = await client.ensureTab(SA, 'SHEET123', 'Commande MAJ', header);
+    expect(out).toEqual({ created: true });
+    const add = axios.post.mock.calls.find(([u]) => u.endsWith(':batchUpdate'));
+    expect(add[1]).toEqual({ requests: [{ addSheet: { properties: { title: 'Commande MAJ' } } }] });
+    expect(axios.put).toHaveBeenCalledTimes(1);
+    const [putUrl, body] = axios.put.mock.calls[0];
+    expect(decodeURIComponent(putUrl)).toContain("values/'Commande MAJ'!A1");
+    expect(body.values).toEqual([header]);
+    expect(axios.post.mock.calls.some(([u]) => u.includes(':clear'))).toBe(false);
+  });
+
+  it('onglet déjà là (rempli par la console) : aucune écriture, aucun effacement', async () => {
+    axios.get.mockResolvedValue({ data: { sheets: [{ properties: { title: 'Commande MAJ' } }] } });
+    const out = await client.ensureTab(SA, 'SHEET123', 'Commande MAJ', header);
+    expect(out).toEqual({ created: false });
+    expect(axios.put).not.toHaveBeenCalled();
+    expect(axios.post.mock.calls.some(([u]) => u.endsWith(':batchUpdate') || u.includes(':clear'))).toBe(false);
+  });
+});

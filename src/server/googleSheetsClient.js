@@ -126,4 +126,29 @@ const replaceTabValues = async (serviceAccount, spreadsheetIdOrUrl, tabName, row
   return { rows: rows.length };
 };
 
-module.exports = { fetchSheetValues, replaceTabValues, extractSpreadsheetId, getAccessToken, SCOPE, SCOPE_WRITE };
+/**
+ * Crée l'onglet s'il manque et n'y écrit l'en-tête QUE dans ce cas. Un onglet
+ * qui existe déjà n'est jamais touché : il est rempli par quelqu'un d'autre
+ * (onglet « Commande MAJ », alimenté par la console).
+ * @returns {Promise<{ created:boolean }>}
+ */
+const ensureTab = async (serviceAccount, spreadsheetIdOrUrl, tabName, headerRow) => {
+  const tab = String(tabName || '').trim();
+  if (!tab) throw new Error("Nom d'onglet requis pour écrire dans le Google Sheet");
+  const spreadsheetId = extractSpreadsheetId(spreadsheetIdOrUrl);
+  if (!spreadsheetId) throw new Error('Identifiant du Google Sheet manquant');
+  const token = await getAccessToken(serviceAccount, SCOPE_WRITE);
+  const headers = { Authorization: `Bearer ${token}` };
+  const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+  const { data: meta } = await axios.get(`${base}?fields=sheets.properties.title`, { headers });
+  if ((meta.sheets || []).some((s) => s.properties && s.properties.title === tab)) return { created: false };
+  await axios.post(`${base}:batchUpdate`, { requests: [{ addSheet: { properties: { title: tab } } }] }, { headers });
+  await axios.put(
+    `${base}/values/${encodeURIComponent(`${quoteTab(tab)}!A1`)}?valueInputOption=RAW`,
+    { majorDimension: 'ROWS', values: [headerRow] },
+    { headers },
+  );
+  return { created: true };
+};
+
+module.exports = { fetchSheetValues, replaceTabValues, ensureTab, quoteTab, extractSpreadsheetId, getAccessToken, SCOPE, SCOPE_WRITE };
