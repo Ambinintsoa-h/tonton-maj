@@ -501,3 +501,104 @@ describe('runQatRewrite — réponses non conformes', () => {
     expect(callClaudeWithProgress).not.toHaveBeenCalled();
   });
 });
+
+// ── La consigne nomme des passages : on VÉRIFIE, puis on relance une fois ────────
+// Mesuré en production le 23/11/2026 (même article, trois essais) : introduction
+// à 0,44 / 0,54 / 0,14 de proximité avec l'original, H2 changés 0 / 4 / 1 sur 9.
+// Le bloc de prompt ne suffit pas ; le code mesure et relance UNE fois.
+describe('runQatRewrite — la consigne nommée est vérifiée, puis relancée une fois', () => {
+  const CHAPO = 'Fondée en 1976 aux États-Unis et implantée en France via Ticketnet en 1997, la plateforme distribue des millions de places.';
+  const INTRO = 'Acheter une place de concert sur une billetterie en ligne semble d’une simplicité enfantine, mais le parcours reste complexe pour beaucoup.';
+  const SOURCE = `<p>${CHAPO}</p><p>${INTRO}</p>`
+    + '<h2>Ticketnet, entité française</h2><p>a</p><h2>Compte et inscription</h2><p>b</p>'
+    + '<h2>Transférer un billet</h2><p>c</p><h2>Sécurité et tarification</h2><p>d</p><h2>FAQ</h2><p>e</p>';
+  const REECRIT = '<p>Un clic suffit parfois pour réserver, mais la mécanique derrière reste méconnue des acheteurs et de leurs proches.</p>'
+    + '<p>Voici comment réserver, transférer et se faire rembourser sans stress ni mauvaise surprise sur la billetterie officielle.</p>'
+    + '<h2>Qui se cache derrière la billetterie</h2><p>a</p><h2>Créer son profil client</h2><p>b</p>'
+    + '<h2>Passer un billet à un ami</h2><p>c</p><h2>Prix dynamiques et protection</h2><p>d</p><h2>FAQ</h2><p>e</p>';
+
+  /** Génère dans l'ordre donné ; la passe de gras reçoit une réponse vide. */
+  const lancer = async (generations, extra = {}) => {
+    const file = [...generations];
+    callClaudeWithProgress.mockImplementation(async (...args) => {
+      if (/Mise en gras/i.test(String(args[4] || ''))) return reply({ passages: [] });
+      const next = file.shift();
+      if (next instanceof Error) throw next;
+      return reply(next);
+    });
+    const steps = [];
+    const r = await runQatRewrite({
+      ...baseArgs(SOURCE), depth: 'ciblee', consigneFilConducteur: true,
+      instruction: 'Change les H2 et le chapô et l\'introduction',
+      onStep: (m) => steps.push(m), ...extra,
+    });
+    return { ...r, steps };
+  };
+
+  const gen = (html) => ({ h1: 'T', article_html: html, mot_cle_retenu: 'x' });
+
+  test('génération déjà conforme : AUCUNE relance, un seul appel', async () => {
+    const { article } = await lancer([gen(REECRIT)]);
+    expect(appelsGeneration()).toBe(1);
+    expect(article.constatConsigne.relance).toBe(false);
+  });
+
+  test('cibles restées identiques : UNE relance, dont le prompt cite le texte d\'origine', async () => {
+    const { article, steps } = await lancer([gen(SOURCE), gen(REECRIT)]);
+    expect(appelsGeneration()).toBe(2);
+    const second = callClaudeWithProgress.mock.calls
+      .filter(([, , , , label]) => !/Mise en gras/i.test(String(label || '')))[1][1].messages[0].content;
+    expect(second).toMatch(/LA CONSIGNE DE L'ÉQUIPE N'A PAS ÉTÉ APPLIQUÉE/);
+    expect(second).toContain(INTRO);
+    expect(article.html).toContain('Un clic suffit');
+    expect(article.constatConsigne.relance).toBe(true);
+    expect(article.constatConsigne.retenue).toBe('reprise');
+    expect(steps.join('\n')).toMatch(/nouvelle rédaction ciblée/);
+  });
+
+  test('JAMAIS plus d\'une relance, même si elle ne change rien', async () => {
+    await lancer([gen(SOURCE), gen(SOURCE)]);
+    expect(appelsGeneration()).toBe(2);
+  });
+
+  test('une relance PIRE que la première n\'est pas retenue', async () => {
+    const un = REECRIT.replace(/<h2>[^<]*<\/h2>/g, '<h2>Ticketnet, entité française</h2>');   // chapô/intro neufs, H2 identiques
+    const { article } = await lancer([gen(un), gen(SOURCE)]);
+    expect(article.html).toContain('Un clic suffit');
+    expect(article.constatConsigne.retenue).toBe('premiere');
+  });
+
+  test('une relance illisible : la première génération est CONSERVÉE, pas d\'erreur', async () => {
+    const { article, steps } = await lancer([gen(SOURCE), { h1: 'vide' }]);
+    expect(article.html).toContain('Fondée en 1976');
+    expect(steps.join('\n')).toMatch(/première génération conservée/);
+  });
+
+  test('une relance qui perd un lien externe : la première génération est conservée', async () => {
+    const avecLien = SOURCE.replace('<p>a</p>', '<p>a <a href="https://exemple.org/x">source</a></p>');
+    const sansLien = REECRIT;   // le lien externe a disparu
+    const { article } = await lancer([gen(avecLien), gen(sansLien)], { contentHtml: avecLien, content: avecLien });
+    expect(article.html).toContain('https://exemple.org/x');
+  });
+
+  test('consigne qui ne nomme rien : aucune mesure, aucune relance', async () => {
+    const { article } = await lancer([gen(SOURCE)], { instruction: 'Mets à jour les prix 2026.' });
+    expect(appelsGeneration()).toBe(1);
+    expect(article.constatConsigne).toBeNull();
+  });
+
+  test('cible niée (« garde les H2 ») : les H2 identiques ne déclenchent rien', async () => {
+    const memesH2 = REECRIT.replace(/<h2>[^<]*<\/h2>/g, (m, i) => m).replace('Qui se cache derrière la billetterie', 'Ticketnet, entité française');
+    const { article } = await lancer([gen(SOURCE.replace(CHAPO, 'Un clic suffit parfois pour réserver, mais la mécanique derrière reste méconnue des acheteurs.').replace(INTRO, 'Voici comment réserver, transférer et se faire rembourser sans stress sur la billetterie officielle.'))],
+      { instruction: 'Garde les H2, change le chapô et l\'introduction' });
+    expect(appelsGeneration()).toBe(1);
+    expect(article.constatConsigne.cibles).toEqual(['chapo', 'intro']);
+    expect(memesH2).toBeTruthy();
+  });
+
+  test('hors MAJ ciblée (refonte) : aucune vérification', async () => {
+    const { article } = await lancer([gen(SOURCE)], { depth: 'refonte' });
+    expect(appelsGeneration()).toBe(1);
+    expect(article.constatConsigne).toBeNull();
+  });
+});
