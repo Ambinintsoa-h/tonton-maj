@@ -53,6 +53,7 @@ const settingsSlice = createSlice({
     haloscanConfigured: false,
     googleSheetsServiceAccountJson: '',
     googleSheetsId:                 '',
+    googleSheetsMajExportId:        '',
     googleSheetsConfigured:         false,
     firebaseConfig:     DEFAULT_FIREBASE_CONFIG,
     modelPricing:       DEFAULT_MODEL_PRICING,

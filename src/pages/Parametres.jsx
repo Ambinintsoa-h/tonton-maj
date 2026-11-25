@@ -143,6 +143,7 @@ export default function Parametres() {
     haloscanKey: stored.haloscanKey || '',
     googleSheetsServiceAccountJson: stored.googleSheetsServiceAccountJson || '',
     googleSheetsId: stored.googleSheetsId || '',
+    googleSheetsMajExportId: stored.googleSheetsMajExportId || '',
     modelSelections: stored.modelSelections || {},
     // Traitement en lot (Paramètres -> settings.json batchTuning) -- avant ce
     // chantier, ces 4 valeurs vivaient en dur dans le code (batchOrchestrator.js,
@@ -349,6 +350,7 @@ export default function Parametres() {
       haloscanKey: form.haloscanKey,
       googleSheetsServiceAccountJson: form.googleSheetsServiceAccountJson,
       googleSheetsId: form.googleSheetsId,
+      googleSheetsMajExportId: form.googleSheetsMajExportId,
       modelSelections: form.modelSelections,
       batchTuning: {
         concurrency:     Number(form.batchConcurrency)    || BATCH_DEFAULTS.concurrency,
@@ -427,6 +429,7 @@ export default function Parametres() {
       haloscanKey: stored.haloscanKey || '',
       googleSheetsServiceAccountJson: stored.googleSheetsServiceAccountJson || '',
       googleSheetsId: stored.googleSheetsId || '',
+    googleSheetsMajExportId: stored.googleSheetsMajExportId || '',
       modelSelections: stored.modelSelections || {},
       // Oubli corrigé le 01/10/2026 : sans ces 4 lignes, le formulaire gardait
       // les valeurs par défaut au lieu de celles enregistrées sur le serveur
@@ -1131,6 +1134,21 @@ export default function Parametres() {
             className="input-glass"
           />
           <p className="text-xs text-gray-400">Colle l'URL complète ou juste l'identifiant -- les deux marchent.</p>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium text-gray-700">Google Sheet d'export des MAJ (onglet « MAJ »)</label>
+          <input
+            type="text"
+            value={form.googleSheetsMajExportId}
+            onChange={e => set('googleSheetsMajExportId', e.target.value)}
+            placeholder="https://docs.google.com/spreadsheets/d/.../edit ou l'identifiant seul"
+            className="input-glass"
+          />
+          <p className="text-xs text-gray-400">
+            Tonton y écrit l'état des mises à jour toutes les 15 minutes, dans l'onglet « MAJ » (créé s'il manque, remplacé à chaque export).
+            Le Sheet doit être partagé en Éditeur avec l'adresse client_email de la clé ci-dessus. Vide = export désactivé.
+          </p>
         </div>
 
         <div className="flex items-center gap-3">
