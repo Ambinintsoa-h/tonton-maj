@@ -738,3 +738,141 @@ describe('recherche web guidée par la consigne', () => {
     expect(system).not.toMatch(/EXCLUT un sujet/);
   });
 });
+
+// ── LA CONSIGNE EXCLUT D'AUTRES SAISONS (25/11/2026) ───────────────────────────
+// Article réel, refonte, consigne « ne parle pas des autres saisons » : la section
+// « La saison 10 » (titre, paragraphes, tableau) est restée malgré la règle du prompt.
+// Un juge (petit modèle) liste les passages restants ; chaque citation est vérifiée
+// dans le texte ; une seule relance, avec repli sur la génération d'avant.
+describe('runQatRewrite — la consigne exclut les autres saisons : vérifiée, puis relancée une fois', () => {
+  const P_VIEUX_1 = "La dixième saison s'est achevée en mai 2023 sur un duel inédit à Bordeaux.";
+  const P_VIEUX_2 = 'Le gagnant de la saison 10 a construit sa notoriété sur la durée.';
+  const COURANT = '<h2>La finale de la saison 2026</h2><p>Les Intrépides ont remporté la finale du 29 mai 2026 sur M6.</p>';
+  const VIEUX = `<h2>La saison 10, un repère</h2><p>${P_VIEUX_1}</p><p>${P_VIEUX_2}</p>`;
+  const SOURCE = `${COURANT}${VIEUX}`;
+  const PROPRE = `${COURANT}<h2>Les participants de cette année</h2><p>Dix boulangeries ont défendu leur région pendant toute la saison.</p>`;
+  const CONSIGNE = 'Parle du gagnant de la saison 2026. Ne parle pas des autres saisons mais seulement de cette année.';
+
+  const juges = [];
+  const gen = (html) => ({ h1: 'T', article_html: html, mot_cle_retenu: 'x' });
+  const appelsJuge = () => callClaude.mock.calls.filter(([, p]) => /passages hors périmètre/.test(String((p && p.system) || ''))).length;
+
+  beforeEach(() => {
+    juges.length = 0;
+    callClaude.mockImplementation(async (_k, params) => {
+      if (/passages hors périmètre/.test(String((params && params.system) || ''))) {
+        const next = juges.shift();
+        if (next instanceof Error) throw next;
+        return { text: JSON.stringify({ passages: (next || []).map((citation) => ({ citation })) }), usage: {} };
+      }
+      return { text: '[]', usage: {} };
+    });
+  });
+
+  const lancer = async (generations, extra = {}) => {
+    const file = [...generations];
+    callClaudeWithProgress.mockImplementation(async (...args) => {
+      if (/Mise en gras/i.test(String(args[4] || ''))) return reply({ passages: [] });
+      const next = file.shift();
+      if (next instanceof Error) throw next;
+      return reply(next);
+    });
+    const steps = [];
+    const r = await runQatRewrite({
+      ...baseArgs(SOURCE), depth: 'refonte', instruction: CONSIGNE,
+      onStep: (m) => steps.push(m), ...extra,
+    });
+    return { ...r, steps };
+  };
+  const promptDe = (n) => callClaudeWithProgress.mock.calls
+    .filter(([, , , , label]) => !/Mise en gras/i.test(String(label || '')))[n][1].messages[0].content;
+
+  test('passages restants → UNE relance dont le prompt les cite ; la génération propre est retenue', async () => {
+    juges.push([P_VIEUX_1, P_VIEUX_2], []);
+    const { article, steps } = await lancer([gen(SOURCE), gen(PROPRE)]);
+    expect(appelsGeneration()).toBe(2);
+    expect(promptDe(1)).toMatch(/LA CONSIGNE EXCLUT LES AUTRES SAISONS/);
+    expect(promptDe(1)).toContain(P_VIEUX_1);
+    expect(promptDe(1)).toContain(P_VIEUX_2);
+    expect(article.html).toContain('Les participants de cette année');
+    expect(article.html).not.toContain('saison 10');
+    expect(article.constatExclusion).toMatchObject({ actif: true, relance: true, avant: 2, apres: 0 });
+    expect(steps.join('\n')).toMatch(/Après reprise, plus aucun passage/);
+  });
+
+  test("refonte ET MAJ ciblée : le contrôle ne dépend pas de l'ampleur", async () => {
+    juges.push([P_VIEUX_1], []);
+    await lancer([gen(SOURCE), gen(PROPRE)], { depth: 'ciblee', consigneFilConducteur: true });
+    expect(appelsGeneration()).toBe(2);
+  });
+
+  test('génération conforme : un juge, AUCUNE relance', async () => {
+    juges.push([]);
+    const { article } = await lancer([gen(PROPRE)]);
+    expect(appelsGeneration()).toBe(1);
+    expect(appelsJuge()).toBe(1);
+    expect(article.constatExclusion).toMatchObject({ actif: true, relance: false, avant: 0 });
+  });
+
+  test('une citation INVENTÉE par le juge ne déclenche rien', async () => {
+    juges.push(["Une phrase que le modèle a imaginée et qui ne figure nulle part dans l'article"]);
+    const { article } = await lancer([gen(PROPRE)]);
+    expect(appelsGeneration()).toBe(1);
+    expect(article.constatExclusion.avant).toBe(0);
+  });
+
+  test("JAMAIS plus d'une relance, même si les passages restent", async () => {
+    juges.push([P_VIEUX_1], [P_VIEUX_1]);
+    const { article, steps } = await lancer([gen(SOURCE), gen(SOURCE)]);
+    expect(appelsGeneration()).toBe(2);
+    expect(article.constatExclusion).toMatchObject({ relance: true, avant: 1, apres: 1 });
+    expect(article.constatExclusion.passages).toEqual([P_VIEUX_1]);
+    expect(steps.join('\n')).toMatch(/restent — à retirer en relecture/);
+  });
+
+  test("une reprise PIRE que la première n'est pas retenue", async () => {
+    const pire = `${COURANT}${VIEUX}<h2>La saison 9</h2><p>Un autre duel a eu lieu pendant la saison 9 à Lyon.</p>`;
+    juges.push([P_VIEUX_1], [P_VIEUX_1, P_VIEUX_2]);
+    const { article, steps } = await lancer([gen(SOURCE), gen(pire)]);
+    expect(article.html).not.toContain('saison 9');
+    expect(article.constatExclusion).toMatchObject({ avant: 1, apres: 1 });
+    expect(article.constatExclusion.passages).toEqual([P_VIEUX_1]);
+    expect(steps.join('\n')).toMatch(/génération précédente conservée/);
+  });
+
+  test("une reprise illisible : la première génération est CONSERVÉE, pas d'erreur", async () => {
+    juges.push([P_VIEUX_1]);
+    const { article, steps } = await lancer([gen(SOURCE), { h1: 'vide' }]);
+    expect(article.html).toContain('saison 10');
+    expect(steps.join('\n')).toMatch(/génération précédente conservée/);
+  });
+
+  test("une reprise qui perd un lien externe : le lien reste dans l'article final (règle 8)", async () => {
+    const avecLien = SOURCE.replace('sur M6.', 'sur <a href="https://exemple.org/m6">M6</a>.');
+    juges.push([P_VIEUX_1]);
+    const { article } = await lancer([gen(avecLien), gen(PROPRE)], { contentHtml: avecLien, content: avecLien });
+    expect(article.html).toContain('https://exemple.org/m6');
+    expect(article.html).not.toContain('saison 10');
+  });
+
+  test('juge en erreur : aucune relance, aucune exception (non bloquant)', async () => {
+    juges.push(new Error('overloaded'));
+    const { article } = await lancer([gen(SOURCE)]);
+    expect(appelsGeneration()).toBe(1);
+    expect(article.html).toContain('saison 10');
+    expect(article.constatExclusion.avant).toBe(0);
+  });
+
+  test("consigne qui n'exclut rien : le juge n'est JAMAIS appelé, aucun constat", async () => {
+    const { article } = await lancer([gen(SOURCE)], { instruction: 'Parle aussi des autres saisons.' });
+    expect(appelsJuge()).toBe(0);
+    expect(appelsGeneration()).toBe(1);
+    expect(article.constatExclusion).toBeNull();
+  });
+
+  test("sans consigne : le juge n'est JAMAIS appelé", async () => {
+    const { article } = await lancer([gen(SOURCE)], { instruction: '' });
+    expect(appelsJuge()).toBe(0);
+    expect(article.constatExclusion).toBeNull();
+  });
+});

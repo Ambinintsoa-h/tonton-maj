@@ -21,6 +21,9 @@ import { listArticleImages, carryOverImages } from '../utils/imageCarry';
 import { carryOverBold, constatGras, plafonnerGras, GRAS_MIN_PAR_H2, GRAS_MAX_MOTS } from '../utils/boldCarry';
 import { runBoldPass } from './agentBold';
 import { detecterCibles, mesurerCibles, repriseConsigne, MAX_RELANCES_CONSIGNE } from '../utils/consigneCibles';
+import {
+  detecterExclusionSaisons, verifierCitations, repriseExclusion, promptJugeExclusion, MAX_RELANCES_EXCLUSION,
+} from '../utils/consigneExclusion';
 import { applyLinkFollowPolicyHtml } from '../utils/export';
 import {
   phrasesTropLongues, MOTS_MAX_PHRASE, MOTS_MAX_TITRE,
@@ -701,6 +704,33 @@ export const gatherConsigneSources = async ({
  */
 const REGLE_EXCLUSION_CONSIGNE = ' Quand la consigne EXCLUT un sujet (« ne parle pas de… », « seulement de cette année »), retire de l\'article TOUT ce qui le traite — titres, paragraphes, lignes de tableau, questions de FAQ — même si cela figurait dans l\'original : ce retrait prime sur « conservé à l\'identique ». Un fait de l\'original qui ne relève plus du périmètre de la consigne n\'est pas conservé.';
 
+/**
+ * JUGE « AUTRES SAISONS » (25/11/2026) — voir `consigneExclusion.js`.
+ * Un petit modèle liste les passages de l'article généré qui développent une autre
+ * saison que celle de la consigne ; chaque citation est VÉRIFIÉE mot pour mot dans
+ * le texte, une citation inventée est écartée. Non bloquant : toute erreur → `[]`
+ * (aucune relance), le comportement d'avant.
+ * @returns {Promise<string[]>} passages vérifiés
+ */
+export const jugerPassagesExclus = async ({ consigne, html, trackCall = () => {}, modelSelections = null }) => {
+  const texte = stripHtml(html || '');
+  if (!texte.trim()) return [];
+  try {
+    const { text, usage } = await callClaude(null, {
+      system: 'Tu relis un article pour y repérer les passages hors périmètre. Réponds uniquement par un objet JSON.',
+      max_tokens: 1200,
+      model: selectModel('query_extraction', modelSelections),
+      messages: [{ role: 'user', content: promptJugeExclusion(consigne, texte) }],
+    });
+    trackCall(usage, 'query_extraction');
+    const parsed = parseJsonLoose(text) || {};
+    return verifierCitations(texte, parsed.passages);
+  } catch (e) {
+    console.warn('[qat] juge des autres saisons:', e.message);
+    return [];
+  }
+};
+
 const formatSourcesForPrompt = (sources) =>
   sources.length
     ? sources.map((s, i) => `### SOURCE ${i + 1} — ${s.title || 'sans titre'}\nURL : ${s.url}\n${(s.content || s.description || '').slice(0, 2000)}`).join('\n\n')
@@ -1266,8 +1296,18 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
   // JSON ou du verrou externe.
   const ciblesConsigne = (resolved.depth === 'ciblee' && consigneFilConducteur && instr.texte)
     ? detecterCibles(instr.texte) : [];
-  const essaisMax = maxEssaisIA + (ciblesConsigne.length ? MAX_RELANCES_CONSIGNE : 0);
-  let meilleure = null;      // meilleure génération valide jusqu'ici, gardée en repli des relances
+  // ── LA CONSIGNE EXCLUT D'AUTRES SAISONS : ON VÉRIFIE, UNE FOIS, PUIS ON RELANCE ──
+  // Voir `consigneExclusion.js`. Tous les types de MAJ (le cas mesuré le 25/11/2026
+  // était une refonte, pas une MAJ ciblée), dès qu'une consigne existe. Une relance
+  // de plus, budgétée EN PLUS comme celles de `consigneCibles`.
+  const exclusionSaisons = !!instr.texte && detecterExclusionSaisons(instr.texte);
+  const essaisMax = maxEssaisIA + (ciblesConsigne.length ? MAX_RELANCES_CONSIGNE : 0)
+    + (exclusionSaisons ? MAX_RELANCES_EXCLUSION : 0);
+  let exclRelances = 0;
+  let exclPrecedente = null;  // génération avant la relance : repli si la reprise est pire ou illisible
+  let repriseExclusionTexte = '';
+  let constatExclusion = { actif: exclusionSaisons, relance: false, avant: null, apres: null, passages: [] };
+  let meilleure = null;     // meilleure génération valide jusqu'ici, gardée en repli des relances
   let relances = 0;
   let constatConsigne = { cibles: ciblesConsigne, relance: false, relances: 0, avant: null, apres: null, retenue: null };
   // Message utilisateur de l'essai courant : enrichi à chaque rejet du détail de
@@ -1338,10 +1378,10 @@ Produis maintenant le JSON de l'article réécrit. Rien d'autre que le JSON.`;
       });
       raw = (text || '').trim();
       article = parseJsonLoose(raw);
-      if (!article?.article_html && meilleure) {
+      if (!article?.article_html && (meilleure || exclPrecedente)) {
         // La RELANCE a échoué : une génération précédente était valide, on la reprend.
         onStep('⚠️ La reprise de la consigne n\'a rien produit d\'exploitable — meilleure génération précédente conservée.');
-        article = meilleure.article;
+        article = (meilleure || exclPrecedente).article;
       } else if (!article?.article_html) {
         onStep(`⚠️ Réponse illisible ou article vide — nouvel essai (${attempt}/${essaisMax})...`);
         // La FIN du texte est ce qui compte : une troncature par max_tokens se
@@ -1375,6 +1415,12 @@ complet.`;
         // verrou rouge. Une génération précédente l'avait passé, on la reprend.
         onStep('⚠️ La reprise de la consigne a perdu un lien externe — meilleure génération précédente conservée.');
         ({ article, composed, check } = meilleure);
+      } else if (check.missing.length && !meilleure && exclPrecedente && article !== exclPrecedente.article) {
+        // Même garde pour la relance « autres saisons » : retirer une section peut
+        // emporter un lien externe (règle 8) — on retombe sur la génération d'avant.
+        onStep('⚠️ La reprise « autres saisons » a perdu un lien externe — génération précédente conservée.');
+        ({ article, composed, check } = exclPrecedente);
+        constatExclusion = { ...constatExclusion, apres: exclPrecedente.n, passages: exclPrecedente.passages };
       }
       if (check.missing.length) {
         onStep(`⚠️ ${check.missing.length} lien(s) externe(s) d'origine perdu(s) — génération rejetée, nouvel essai (${attempt}/${essaisMax})...`);
@@ -1423,7 +1469,7 @@ N'ajoute aucun AUTRE lien externe.`;
             relances += 1;
             onStep(`🔁 La consigne demandait de changer ${noms} : resté(s) trop proche(s) de l'original — nouvelle rédaction ciblée (${relances}/${MAX_RELANCES_CONSIGNE}).`);
             constatConsigne = { ...constatConsigne, relance: true, relances };
-            currentUser = `${user}${repriseConsigne(mesure)}`;
+            currentUser = `${user}${repriseConsigne(mesure)}${repriseExclusionTexte}`;
             article = null;
             continue;
           }
@@ -1437,6 +1483,37 @@ N'ajoute aucun AUTRE lien externe.`;
           onStep(meilleure.mesure.insuffisantes.length
             ? `ℹ️ Après ${relances} reprise(s), encore trop proche de l'original : ${meilleure.mesure.insuffisantes.join(', ')} — à retravailler en relecture.`
             : '✅ Après reprise, la consigne est appliquée (chapô, introduction, titres).');
+        }
+      }
+
+      // ── LA CONSIGNE EXCLUT D'AUTRES SAISONS : EN RESTE-T-IL ? ───────────────
+      // APRÈS le verrou externe et le contrôle de la consigne ciblée, AVANT R1/R2
+      // (la relance repasse par toute la chaîne). On ne re-juge pas une génération
+      // déjà jugée (repli sur `exclPrecedente`). Le juge ne bloque jamais : en cas
+      // d'erreur il rend `[]`, donc aucune relance.
+      if (exclusionSaisons && !(exclPrecedente && article === exclPrecedente.article)) {
+        onStep('Contrôle de la consigne — la génération parle-t-elle encore d\'autres saisons ?');
+        const passages = await jugerPassagesExclus({ consigne: instr.texte, html: check.html, trackCall, modelSelections });
+        if (exclRelances === 0) constatExclusion.avant = passages.length; else constatExclusion.apres = passages.length;
+        constatExclusion.passages = passages;
+        if (passages.length && exclRelances < MAX_RELANCES_EXCLUSION && attempt < essaisMax) {
+          exclRelances += 1;
+          exclPrecedente = { article, composed, check, n: passages.length, passages };
+          repriseExclusionTexte = repriseExclusion(passages);
+          constatExclusion = { ...constatExclusion, relance: true };
+          onStep(`🔁 La consigne exclut les autres saisons : ${passages.length} passage(s) en parlent encore — nouvelle rédaction ciblée.`);
+          currentUser = `${user}${repriseExclusionTexte}`;
+          article = null;
+          continue;
+        }
+        if (exclPrecedente && passages.length > exclPrecedente.n) {
+          onStep('ℹ️ La reprise n\'a pas fait mieux sur les autres saisons — génération précédente conservée.');
+          ({ article, composed, check } = exclPrecedente);
+          constatExclusion = { ...constatExclusion, apres: exclPrecedente.n, passages: exclPrecedente.passages };
+        } else if (passages.length) {
+          onStep(`ℹ️ ${passages.length} passage(s) parlant d'une autre saison restent — à retirer en relecture.`);
+        } else if (exclRelances > 0) {
+          onStep('✅ Après reprise, plus aucun passage sur une autre saison.');
         }
       }
 
@@ -1765,6 +1842,9 @@ N'ajoute aucun AUTRE lien externe.`;
         constatConsigne: ciblesConsigne.length
           ? JSON.parse(JSON.stringify(constatConsigne, (k, v) => (k === 'originaux' ? undefined : v)))
           : null,
+        // Contrôle « la consigne exclut d'autres saisons » (passages restants,
+        // relance). null si la consigne n'exclut rien : jamais `undefined`.
+        constatExclusion: exclusionSaisons ? JSON.parse(JSON.stringify(constatExclusion)) : null,
         // RAPPORT DE LA PASSE DE GRAS, PERSISTÉ. Les messages `onStep` disparaissent
         // dès que la génération se termine — les étapes se replient et rien n'est
         // conservé. Impossible alors de savoir ce que la passe a proposé ni ce
@@ -1863,7 +1943,8 @@ N'ajoute aucun AUTRE lien externe.`;
       constatFaq:      sanitized.constatFaq || null,
       // Mesure « la consigne a-t-elle été suivie ? » (cibles, proximité avant/après).
       constatConsigne: sanitized.constatConsigne || null,
-      grasPasse:       sanitized.boldPass || null,
+      constatExclusion: sanitized.constatExclusion || null,
+      grasPasse:      sanitized.boldPass || null,
       ancresDeclareesIa: Array.isArray(article.ancres_placees) ? article.ancres_placees : [],
       notesRedaction:  String(article.notes_redaction || '').trim(),
       strippedExternalLinks: sanitized.stripped,
