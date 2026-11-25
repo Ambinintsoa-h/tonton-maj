@@ -164,6 +164,20 @@ export default function PhaseGeneration({
         + `${cc.relances ? ` malgré ${cc.relances} reprise(s) automatique(s)` : ''}. À réécrire en relecture.`,
     });
   }
+  // LA CONSIGNE EXCLUAIT LES AUTRES SAISONS ET DES PASSAGES EN PARLENT ENCORE après
+  // la reprise. Même règle d'affichage : rien si c'est conforme. Les passages sont
+  // cités pour que le rédacteur les retrouve (Ctrl+F) sans relire tout l'article.
+  const ce = qatArticle?.constatExclusion;
+  const restants = ce?.apres ?? ce?.avant;
+  if (ce?.actif && restants > 0 && Array.isArray(ce.passages) && ce.passages.length) {
+    constats.push({
+      cle: 'exclusion', icone: '🎯',
+      texte: `La consigne excluait les autres saisons : ${ce.passages.length} passage(s) en parlent encore`
+        + `${ce.relance ? ' malgré une reprise automatique' : ''}. À retirer en relecture : `
+        + `${ce.passages.slice(0, 3).map((p) => `« ${p.length > 90 ? `${p.slice(0, 90)}…` : p} »`).join(' · ')}`
+        + `${ce.passages.length > 3 ? '…' : ''}`,
+    });
+  }
   // MODE AFFILIATION — le compte rendu de ce qui a été appliqué ET de ce qui ne
   // l'a pas été. Un bloc non appliqué garde son texte d'origine : sans ce
   // constat, le rédacteur croirait tout l'article à jour alors qu'une partie
