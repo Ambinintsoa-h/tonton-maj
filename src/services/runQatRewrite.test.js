@@ -36,8 +36,14 @@ jest.mock('./agent', () => {
   };
 });
 
+// La recherche web guidée par la consigne (gatherConsigneSources) appelle searchWeb :
+// simulé, jamais de réseau réel. Retour par défaut = undefined (aucune source).
+jest.mock('./search', () => ({ searchWeb: jest.fn() }));
+
 // eslint-disable-next-line import/first
 import { runQatRewrite } from './agentQat';
+// eslint-disable-next-line import/first
+import { searchWeb } from './search';
 // eslint-disable-next-line import/first
 import { callClaudeWithProgress, callClaudeStream, callClaude, scrapeSource, checkLinksLive, fetchSiteUrls } from './agent';
 
@@ -620,5 +626,115 @@ describe('runQatRewrite — la consigne nommée est vérifiée, puis relancée (
     const { article } = await lancer([gen(SOURCE)], { depth: 'refonte' });
     expect(appelsGeneration()).toBe(1);
     expect(article.constatConsigne).toBeNull();
+  });
+});
+
+// ── RECHERCHE WEB GUIDÉE PAR LA CONSIGNE (25/11/2026) ──────────────────────────
+// Article réel : consigne « parle du gagnant de la saison 2026… ». Les requêtes de
+// l'audit venaient du début de l'article, jamais de la consigne : le gagnant n'était
+// dans aucune source, le garde-fou « limite de mémoire » interdisait de l'affirmer.
+describe('recherche web guidée par la consigne', () => {
+  const OK = reply({ h1: 'T', article_html: '<h2>A</h2><p>B</p>', mot_cle_retenu: 'x' });
+  const GAGNANT = { title: 'Les Intrépides sacrés', url: 'https://exemple.fr/gagnant', content: 'Les Intrépides ont remporté la finale du 29 mai 2026.' };
+  const CONSIGNE = 'Parle de la liste des participants, du gagnant de la saison 2026 et du déroulement de cette année.';
+
+  const lancer = async (extra = {}) => {
+    callClaudeWithProgress.mockResolvedValue(OK);
+    await runQatRewrite({ ...baseArgs('<p>Ancien texte sur la saison 10.</p>'), ...extra });
+    const call = callClaudeWithProgress.mock.calls.find(([, , , , label]) => !/Mise en gras/i.test(String(label || '')));
+    return {
+      user: call[1].messages[0].content,
+      system: (call[1].system || []).map((b) => b.text).join('\n'),
+    };
+  };
+
+  test('une consigne qui réclame des faits déclenche une requête dédiée, et ses sources passent EN TÊTE', async () => {
+    callClaude.mockResolvedValue({ text: '["La meilleure boulangerie de France saison 13 gagnant finale 2026"]', usage: {} });
+    searchWeb.mockResolvedValue([GAGNANT]);
+    const { user } = await lancer({
+      instruction: CONSIGNE,
+      sources: [{ title: 'Ancien jury', url: 'https://a.test/old', content: 'Bruno Cormerais, saison 10.' }],
+    });
+    expect(searchWeb).toHaveBeenCalledWith('La meilleure boulangerie de France saison 13 gagnant finale 2026');
+    expect(user).toContain('[CONSIGNE] Les Intrépides sacrés');
+    expect(user).toContain('ont remporté la finale du 29 mai 2026');
+    expect(user.indexOf('[CONSIGNE] Les Intrépides')).toBeLessThan(user.indexOf('Ancien jury'));
+    expect(user).toMatch(/cherchées pour répondre à la consigne/);
+    expect(user).toMatch(/la règle « sans source, abstiens-toi » ne s'applique plus/);
+  });
+
+  test('la requête est écrite à partir de la CONSIGNE (Haiku la reçoit)', async () => {
+    callClaude.mockResolvedValue({ text: '[]', usage: {} });
+    await lancer({ instruction: CONSIGNE });
+    const envoye = callClaude.mock.calls[0][1].messages[0].content;
+    expect(envoye).toContain('gagnant de la saison 2026');
+    expect(envoye).toMatch(/FAITS PRÉCIS OU RÉCENTS/);
+  });
+
+  test('consigne de style : Haiku répond [] → aucune recherche, aucun bloc [CONSIGNE]', async () => {
+    callClaude.mockResolvedValue({ text: '[]', usage: {} });
+    const { user } = await lancer({ instruction: 'Change les H2 et le chapô.' });
+    expect(searchWeb).not.toHaveBeenCalled();
+    expect(user).not.toContain('[CONSIGNE]');
+    expect(user).not.toMatch(/cherchées pour répondre/);
+  });
+
+  test('sans consigne : aucun appel de requête, aucune recherche (comportement inchangé)', async () => {
+    await lancer({});
+    expect(callClaude).not.toHaveBeenCalled();
+    expect(searchWeb).not.toHaveBeenCalled();
+  });
+
+  test("une source déjà fournie par l'audit n'est pas dupliquée", async () => {
+    callClaude.mockResolvedValue({ text: '["gagnant saison 13 2026"]', usage: {} });
+    searchWeb.mockResolvedValue([GAGNANT, { title: 'Déjà là', url: 'https://a.test/old', content: 'x' }]);
+    const { user } = await lancer({
+      instruction: CONSIGNE,
+      sources: [{ title: 'Déjà là', url: 'https://a.test/old', content: 'x' }],
+    });
+    expect(user.match(/Déjà là/g)).toHaveLength(1);
+    expect(user).toContain('[CONSIGNE] Les Intrépides sacrés');
+  });
+
+  test('une recherche qui échoue ne bloque pas la génération', async () => {
+    callClaude.mockResolvedValue({ text: '["gagnant saison 13 2026"]', usage: {} });
+    searchWeb.mockRejectedValue(new Error('429'));
+    const { user } = await lancer({ instruction: CONSIGNE });
+    expect(user).not.toContain('[CONSIGNE]');
+    expect(appelsGeneration()).toBe(1);
+  });
+
+  test("l'extraction des requêtes qui échoue ne bloque pas la génération", async () => {
+    callClaude.mockRejectedValue(new Error('overloaded'));
+    await lancer({ instruction: CONSIGNE });
+    expect(searchWeb).not.toHaveBeenCalled();
+    expect(appelsGeneration()).toBe(1);
+  });
+
+  test('jamais plus de 2 requêtes ni de 4 sources ajoutées', async () => {
+    callClaude.mockResolvedValue({ text: '["a","b","c"]', usage: {} });
+    searchWeb.mockImplementation(async (q) => [1, 2, 3].map((n) => ({ title: `R-${q}-${n}`, url: `https://x.test/${q}/${n}`, content: 'c' })));
+    const { user } = await lancer({ instruction: CONSIGNE });
+    expect(searchWeb).toHaveBeenCalledTimes(2);
+    expect(user.match(/### SOURCE \d+ — \[CONSIGNE\]/g)).toHaveLength(4);
+  });
+
+  test("une exclusion (« ne parle pas des autres saisons ») prime sur « conservé à l'identique » — consigne de lot", async () => {
+    const { system } = await lancer({
+      instruction: 'Ne parle pas des autres saisons, seulement de cette année.', consigneFilConducteur: true, depth: 'ciblee',
+    });
+    expect(system).toMatch(/Quand la consigne EXCLUT un sujet/);
+    expect(system).toMatch(/ce retrait prime sur « conservé à l'identique »/);
+  });
+
+  test("la même règle est portée par la consigne de l'écran interactif", async () => {
+    const { system } = await lancer({ instruction: 'Ne parle pas des autres saisons.' });
+    expect(system).toMatch(/INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE/);
+    expect(system).toMatch(/Quand la consigne EXCLUT un sujet/);
+  });
+
+  test("sans consigne : la règle d'exclusion n'est pas ajoutée", async () => {
+    const { system } = await lancer({});
+    expect(system).not.toMatch(/EXCLUT un sujet/);
   });
 });

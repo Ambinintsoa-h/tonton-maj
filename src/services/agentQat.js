@@ -622,6 +622,85 @@ const gatherFreshnessSources = async (content, targetKeyword, onStep, trackCall,
   return { sources, queries };
 };
 
+const MAX_CONSIGNE_SEARCHES = 2;
+const MAX_CONSIGNE_SOURCES = 4;
+
+/**
+ * RECHERCHE WEB GUIDÉE PAR LA CONSIGNE (25/11/2026).
+ *
+ * Constaté sur un article réel (lemondedesartisans.fr, MAJ de « La meilleure
+ * boulangerie de France ») : consigne « parle du gagnant de la saison 2026, de la
+ * liste des participants, du déroulement de cette année ». Les 2 requêtes de
+ * `gatherFreshnessSources` sont écrites à partir du DÉBUT DE L'ARTICLE et du mot-clé
+ * — jamais de la consigne. Elles partaient sur l'ancien jury et la saison 10, et le
+ * gagnant n'était dans aucune source. Sans source datée, le garde-fou « limite de
+ * mémoire » interdit au modèle de l'affirmer : il écrivait « à confirmer » et laissait
+ * les anciennes informations. Avec une requête dédiée (« saison 13 gagnant finale 2026
+ * M6 »), le gagnant remonte dès les premiers résultats.
+ *
+ * Étape de la RÉDACTION, pas de l'audit : en phase 2 la consigne n'existe pas encore
+ * au moment de l'audit. Elle ne tourne que si la consigne réclame des faits précis ou
+ * récents (Haiku répond `[]` sinon) : une consigne de style n'ajoute aucune recherche.
+ * Non bloquante : toute erreur → aucune source de plus, comme avant.
+ *
+ * @returns {Promise<Array<{title?:string,url:string,content?:string}>>} sources NOUVELLES
+ *   (absentes de `known`), à placer en tête du bloc « sources web ».
+ */
+export const gatherConsigneSources = async ({
+  consigne, targetKeyword, content, known = [], onStep = () => {}, trackCall = () => {}, modelSelections = null,
+}) => {
+  const texte = String(consigne || '').trim();
+  if (!texte) return [];
+  const { year } = getDateContext();
+  let queries = [];
+  try {
+    const { text, usage } = await callClaude(null, {
+      system: 'Tu génères des requêtes de recherche web courtes et ciblées. Réponds uniquement par un tableau JSON de chaînes.',
+      max_tokens: 300,
+      model: selectModel('query_extraction', modelSelections),
+      messages: [{
+        role: 'user',
+        content: `Consigne de l'équipe pour la mise à jour de l'article :\n${texte.slice(0, 1500)}\n\nMot-clé cible : ${targetKeyword}\nDébut de l'article (pour nommer le sujet exact) :\n${stripHtml(content || '').slice(0, 600)}\n\nSi la consigne réclame des FAITS PRÉCIS OU RÉCENTS (gagnant, résultat, liste, calendrier, déroulement, prix, chiffres, date), donne AU MAXIMUM ${MAX_CONSIGNE_SEARCHES} requêtes web qui cherchent DIRECTEMENT ces faits : nom exact du sujet (émission, édition, saison, produit) + le fait demandé + l'année ${year} (ou celle que la consigne cite). Ne cherche PAS le contexte historique que l'article contient déjà. Si la consigne ne demande que du style, de la structure ou des reformulations, réponds []. Format : ["requête 1", "requête 2"]`,
+      }],
+    });
+    trackCall(usage, 'query_extraction');
+    const parsed = parseJsonLoose(`{"q":${text}}`) || {};
+    queries = Array.isArray(parsed.q) ? parsed.q.filter(q => typeof q === 'string' && q.trim()) : [];
+  } catch (e) {
+    console.warn('[qat] requêtes de la consigne:', e.message);
+  }
+  queries = queries.slice(0, MAX_CONSIGNE_SEARCHES);
+  if (!queries.length) return [];
+
+  onStep(`Recherche guidée par la consigne — ${queries.length} requête(s) web...`);
+  const knownUrls = new Set((known || []).map(s => s.url).filter(Boolean));
+  const batches = await Promise.allSettled(queries.map(q => searchWeb(q)));
+  const fresh = dedupeByUrl(
+    batches.flatMap(b => (b.status === 'fulfilled' ? (b.value || []) : []))
+  ).filter(s => !knownUrls.has(s.url)).slice(0, MAX_CONSIGNE_SOURCES);
+
+  const toScrape = fresh.filter(s => !s.content && s.url).slice(0, 2);
+  if (toScrape.length) {
+    const scraped = await Promise.allSettled(toScrape.map(s => scrapeSource(s.url)));
+    scraped.forEach((r, i) => {
+      if (r.status === 'fulfilled' && r.value) toScrape[i].content = r.value;
+    });
+  }
+  return fresh;
+};
+
+/**
+ * Règle ajoutée sous toute consigne de l'équipe. Constaté sur le même article :
+ * « ne parle pas des autres saisons » — la section « La saison 10, un repère
+ * historique » (titre, paragraphes, tableau) est restée, parce que le bloc « MAJ
+ * ciblée » ordonne de conserver à l'identique ce que la consigne ne vise pas, et
+ * qu'une exclusion n'est pas un « passage à changer ». Elle dit ici explicitement
+ * laquelle des deux règles l'emporte. Prompt seulement : aucune mesure en code, car
+ * « autre saison » n'a pas de définition mécanique fiable (la saison en cours est
+ * elle-même une saison).
+ */
+const REGLE_EXCLUSION_CONSIGNE = ' Quand la consigne EXCLUT un sujet (« ne parle pas de… », « seulement de cette année »), retire de l\'article TOUT ce qui le traite — titres, paragraphes, lignes de tableau, questions de FAQ — même si cela figurait dans l\'original : ce retrait prime sur « conservé à l\'identique ». Un fait de l\'original qui ne relève plus du périmètre de la consigne n\'est pas conservé.';
+
 const formatSourcesForPrompt = (sources) =>
   sources.length
     ? sources.map((s, i) => `### SOURCE ${i + 1} — ${s.title || 'sans titre'}\nURL : ${s.url}\n${(s.content || s.description || '').slice(0, 2000)}`).join('\n\n')
@@ -1053,8 +1132,8 @@ ${brief}${instr.texte
       // FIL CONDUCTEUR (consigne de ligne de lot, décision d'Andrianina du
       // 17/11/2026) : la consigne dit ce que l'article doit devenir, l'audit ne
       // fait que la compléter. Elle prime donc aussi sur ses conclusions.
-      ? `\n\n## ═══ CONSIGNE DE L'ÉQUIPE — FIL CONDUCTEUR DE CETTE MAJ ═══\n${instr.texte}\nCette consigne est le FIL CONDUCTEUR de la mise à jour : elle dit ce que l'article doit devenir, et chaque modification s'y rattache. Elle prime sur les règles générales et sur les conclusions de l'audit, sauf le verrou liens externes.`
-      : `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instr.texte}\nElle prime sur les règles générales, sauf le verrou liens externes.`)
+      ? `\n\n## ═══ CONSIGNE DE L'ÉQUIPE — FIL CONDUCTEUR DE CETTE MAJ ═══\n${instr.texte}\nCette consigne est le FIL CONDUCTEUR de la mise à jour : elle dit ce que l'article doit devenir, et chaque modification s'y rattache. Elle prime sur les règles générales et sur les conclusions de l'audit, sauf le verrou liens externes.${REGLE_EXCLUSION_CONSIGNE}`
+      : `\n\n## ═══ INSTRUCTION SPÉCIFIQUE DE L'ÉQUIPE — PRIORITÉ HAUTE ═══\n${instr.texte}\nElle prime sur les règles générales, sauf le verrou liens externes.${REGLE_EXCLUSION_CONSIGNE}`)
     : ''}`;
 
   const system = [
@@ -1138,6 +1217,22 @@ ${imageBody}`
 N'en retiens que le NÉCESSAIRE : les données périmées ou fausses à corriger et les standards d'une mise à jour. Une conclusion qui contredit la consigne, ou la dilue, ne s'applique pas.`
     : '## CONCLUSIONS DE L\'AUDIT (elles pilotent la réécriture)';
 
+  // ── Sources cherchées POUR LA CONSIGNE, placées en tête ────────────────────
+  // Voir `gatherConsigneSources` : les sources de l'audit viennent du début de
+  // l'article, pas de ce que la consigne réclame (gagnant, liste, déroulé…).
+  const consigneSources = instr.texte
+    ? await gatherConsigneSources({
+      consigne: instr.texte, targetKeyword, content: sourceHtml, known: sources, onStep, trackCall, modelSelections,
+    })
+    : [];
+  const sourcesRedaction = [
+    ...consigneSources.map(s => ({ ...s, title: `[CONSIGNE] ${s.title || 'sans titre'}` })),
+    ...sources,
+  ];
+  const consigneSourcesNote = consigneSources.length
+    ? `Les sources marquées [CONSIGNE] ont été cherchées pour répondre à la consigne de l'équipe. Si la consigne réclame un fait (gagnant, liste, déroulement, date) et qu'une de ces sources le donne, tu l'écris et tu cites cette source : la règle « sans source, abstiens-toi » ne s'applique plus, puisqu'il y en a une. Si aucune ne le donne, dis-le dans notes_redaction plutôt que de l'inventer ou de le laisser en « à confirmer ».\n`
+    : '';
+
   const user = `## ARTICLE D'ORIGINE (HTML — à réécrire)
 ${sourceHtml}
 
@@ -1151,7 +1246,7 @@ ${enteteAudit}
 ${summarizeAuditForRewrite(audit, auditSelection)}
 
 ## SOURCES WEB DISPONIBLES (pour les données récentes — ne cite jamais une source non listée ici)
-${formatSourcesForPrompt(sources)}
+${consigneSourcesNote}${formatSourcesForPrompt(sourcesRedaction)}
 
 ${redactionConstraintsBlock(targetKeyword)}
 
